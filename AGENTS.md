@@ -11,24 +11,25 @@ MaiBot 插件 `chartyr.maisya`：不改 MaiBot 一行宿主源码，以极致纯
 1. **MaiBot 宿主代码零改动。** 不改线上宿主目录下除本插件目录以外的任何文件，不改 `config/bot_config.toml`。确实需要，先说明理由，等用户单独授权。
 2. **不重启** MaiBot、适配器或服务器上任何服务。重启由用户自己做。
 3. **往线上 `plugins/` 放、改、删任何 `.py` 或 `_manifest.json` 都会触发全部插件热重载**，每次部署都要用户当次同意。开发与宿主契约测试一律在 `plugins/` 之外的独立唯一隔离目录做。
-4. **不往任何群或私聊发消息、不改任何群回复频率、不传群文件**，除非用户当次同意并指定目标会话（线上 SSH 与测试群信息见本地忽略的 `AGENTS.local.md`）。测完恢复原状并回读确认。
+4. **不往任何群或私聊发消息、不改任何群回复频率、不传群文件**，除非用户当次同意并指定目标会话（线上连接与测试群信息见本地忽略的 `AGENTS.local.md`）。测完恢复原状并回读确认。
 5. **先备份再改。** 线上改动前把旧文件与数据库备份到 `/root/backups/`。
-6. **密钥不落仓库、不打印、不写进聊天。** 服务器密钥、插件 `config.toml` 与凭据保险箱内的秘密只进不出。
+6. **密钥不落仓库、不打印、不写进聊天。** 服务器密钥、插件 `config.toml` 与凭据保险箱内的秘密只进不出；导出的专岗配方包 `.zip` 仅保留凭据句柄名，严禁带出任何秘密原文。
 7. 读 MaiBot 消息库一律只读模式：`sqlite3.connect("file:data/MaiBot.db?mode=ro", uri=True)`。
-8. 不要碰 `/root/MaiBot.disabled` 或线上其他正在运行的插件。
+8. 不要碰线上备用目录或其他正在运行的插件。
 
 ## 设计红线（剃刀五原则）
 
 1. **零工单、零旁路抢麦**：不做审批工单状态机，不在 `chat.receive.after_process` 另造旁路攒批器或中止消息（永远返回 `continue`）；一切发言统一走目标会话原生的 `planner -> reply`，不要用「她」指代 MaiBot。
-2. **万物皆档案（Profile）**：
-   - `planner` 常驻仅注册 **3 个可见工具**（`maisya_dispatch`、`maisya_runs`、`maisya_skill`）+ **2 个延迟工具**（`maisya_memory`、`maisya_schedule`），启用会话自动剔除宿主内置黑箱 `subagent*`；绝不把慢执行、搜索或 MCP 工具直接塞进 `planner`。
-   - 开箱预设 `researcher`（免容器 100% 纯只读）与 `worker`（100% 容器沙箱隔离 `/work`，受限公网封死宿主机本机、内网与云元数据网段），支持克隆派生自定义专岗（`data/profiles/<id>/`）。
+2. **万物皆档案（Profile）+ 外部数据持久化**：
+   - 仓库根目录即插件根目录（兼容宿主官方后台一键安装与点按钮更新）；全部运行期用户资产统一落插件目录外的 `<宿主根>/data/maisya/`，避开宿主更新清理插件目录机制。
+   - `planner` 常驻仅注册 **3 个可见工具**（`maisya_dispatch`、`maisya_runs`、`maisya_skill`）+ **2 个延迟工具**（`maisya_memory`、`maisya_schedule`），启用会话自动剔除宿主内置黑箱 `subagent*`；绝不把慢执行、搜索或 MCP 工具塞进 `planner`。
+   - `maisya_dispatch` 原生支持 `cancel_run_id` 原子热转向/急刹车；专岗原生支持 `NEEDS_INPUT` 挂起反问（热保留 `/work` 15 分钟供 `from_runs` 续跑）。
 3. **双道防串号验身 + 凭据硬隔离**：
    - 继承宿主 `plugin.permission` 与 `local_operator`；管理员写操作与受限专岗强制过「请求前隐藏工具 + 执行时按 `source_msg_id` 反查真实发言人（排除 `relayed_by_plugin`）」双道硬锁，绝不信任攒批后的 `context.user_id`。
    - 群友共享带 Key 能力走宿主机 MCP 进程隔离；管理员实操凭据走单次沙箱 `/run/secrets/<handle>` `0400` 只读挂载并强制出站脱敏。
-4. **有脉搏但严守社交分寸**：
-   - 后台统一脉搏循环承载随机抖动心跳（`HEARTBEAT.md`，无事即 `HEARTBEAT_OK` 静默）、延时惦记/巡检（`schedule`，无变化即 `[NO_CHANGE]` 静默）与按需开启的外部 `Webhook`。
-   - 主动触达代码级焊死三条硬闸：**睡眠时段免打扰**、**对方未回复前绝不连戳第二次**、**主动私聊仅限熟人/白名单且私聊记忆绝不外泄进群**。
+4. **有脉搏、有心境但严守社交分寸**：
+   - 后台统一脉搏循环承载随机抖动心跳（`HEARTBEAT.md` + `<= 1,500` 字环形滚动心境手账 `JOURNAL.md`，无事即 `HEARTBEAT_OK` 静默）、延时惦记/巡检（`schedule`，无变化即 `[NO_CHANGE]` 静默）与按需开启的外部 `Webhook`。
+   - `JOURNAL.md` 严守隐私隔离（公开冲浪见闻可跨会话用，具体会话感悟强制绑 `session_id` 绝不跨串）；主动触达代码级焊死「睡眠免打扰 + 对方未回绝不连戳 + 熟人私聊边界」。
 5. **零端口嵌入宿主 WebUI 扩展页**：
    - 管理台统一采用宿主 `webui.json`（`schema_version: 2`, `mode: "custom"`, `placement: "workspace"`）+ 静态 `@API` 桥接，默认零额外监听端口。
    - 严格遵守宿主 `connect-src 'none'`（自包含单文件 HTML，零外链、零 WebSocket/SSE）与每插件 `inflight <= 2`、`10s` 超时红线（「现场」页使用单路串行增量轮询，预留第 2 个并发槽给用户点击操作）。
