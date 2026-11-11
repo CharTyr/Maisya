@@ -13,14 +13,14 @@ Maisya/
 ├── maisya/                         # 5 大精悍内核模块
 │   ├── auth_vault.py               # 管理员名册继承、双道防串号验身、凭据保险箱与脱敏闸
 │   ├── profiles.py                 # 预设双底座（researcher/worker）、派生专岗热加载、脱敏 .zip 配方包导入导出、MCP 池
-│   ├── runner.py                   # 轻量运行器、cancel_run_id 热转向、NEEDS_INPUT 挂起反问、同批汇合闸（Batch Barrier）、沙箱 WorkBox
+│   ├── runner.py                   # 轻量运行器、cancel_run_id 热转向、then_profile 接力、热换模续跑、Live Steer、同批汇合闸与沙箱 WorkBox
 │   ├── memory_skills.py            # 2200字冻结 MEMORY.md、SQLite FTS5 runs 账本、SKILL.md 多卡组合与四闸复盘
 │   └── pulse.py                    # 统一后台脉搏（HEARTBEAT.md 随机心跳 + JOURNAL.md 心境手账 + schedule + 按需 Webhook + 社交分寸硬闸）
 ├── presets/                        # 开箱预设资产（首次启动释放至 <宿主根>/data/maisya/）
 │   ├── profiles/                   # researcher / worker 默认档案模板、HEARTBEAT.md 与 JOURNAL.md 模板
 │   └── skills/                     # platform-delivery 等开箱预设 SKILL.md
 ├── webui/                          # 自包含单文件玻璃盒管理台（遵守宿主 connect-src 'none'）
-│   ├── live.html                   # 1. 现场：流向圆点动画 + 专岗步骤流 + Context Map 方块地图 + 心跳与 JOURNAL 随笔
+│   ├── live.html                   # 1. 现场：流向圆点动画 + 专岗步骤流 + 后台无痕递纸条(Steer) + Context Map + 心跳与 JOURNAL 随笔
 │   ├── profiles.html               # 2. 档案：专岗卡片、配方包 .zip 导入导出、HEARTBEAT.md、MEMORY.md 与持久 workspaces
 │   ├── skills.html                 # 3. 技能与工具：技能库、草稿箱、补丁 Diff 回滚、MCP 池、定时与 Webhook
 │   └── settings.html               # 4. 设置：服务群与熟人边界、免打扰时段、管理员、模型/保险箱与沙箱自检
