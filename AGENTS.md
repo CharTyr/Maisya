@@ -23,7 +23,8 @@ MaiBot 插件 `chartyr.maisya`：不改 MaiBot 一行宿主源码，以极致纯
 2. **万物皆档案（Profile）+ 外部数据持久化**：
    - 仓库根目录即插件根目录（兼容宿主官方后台一键安装与点按钮更新）；全部运行期用户资产统一落插件目录外的 `<宿主根>/data/maisya/`，避开宿主更新清理插件目录机制。
    - `planner` 常驻仅注册 **3 个可见工具**（`maisya_dispatch`、`maisya_runs`、`maisya_skill`）+ **2 个延迟工具**（`maisya_memory`、`maisya_schedule`），启用会话自动剔除宿主内置黑箱 `subagent*`；绝不把慢执行、搜索或 MCP 工具塞进 `planner`。
-   - `maisya_dispatch` 原生支持 `cancel_run_id` 原子热转向/急刹车；专岗原生支持 `NEEDS_INPUT` 挂起反问（热保留 `/work` 15 分钟供 `from_runs` 续跑）。
+   - `maisya_dispatch` 原生支持 `cancel_run_id` 原子热转向/急刹车与 15 分钟热窗口 `resume_run_id` 原房续聊（命中缓存免重读）；专岗原生支持 `NEEDS_INPUT` 挂起反问；同名持久 `workspace` 自动加排队锁防并发写坏存档。
+   - **严禁做「强制产出物验收」**：纯文字结论永远是一等公民（无文件产出 100% 直接放行）；底层仅在专岗**主动声明附带文件句柄**时检查路径存在且非 0 字节（防拼错路径发坏附件，且报错最多提示 1 次，绝不卡死简单任务）。
 3. **双道防串号验身 + 凭据硬隔离**：
    - 继承宿主 `plugin.permission` 与 `local_operator`；管理员写操作与受限专岗强制过「请求前隐藏工具 + 执行时按 `source_msg_id` 反查真实发言人（排除 `relayed_by_plugin`）」双道硬锁，绝不信任攒批后的 `context.user_id`。
    - 群友共享带 Key 能力走宿主机 MCP 进程隔离；管理员实操凭据走单次沙箱 `/run/secrets/<handle>` `0400` 只读挂载并强制出站脱敏。
