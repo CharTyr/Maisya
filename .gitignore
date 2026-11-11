@@ -1,0 +1,19 @@
+._*
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.local-checks/
+
+# 运行时配置、保险箱、本地私密环境说明与本地数据绝不入库
+AGENTS.local.md
+plugin/CharTyr_Maisya/config.toml
+plugin/CharTyr_Maisya/config_back/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.key
+*.env
