@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Maisya · 记忆</title>
+<title>Maisya · 手账</title>
 <style>
 /* Maisya WebUI · MaiBot 千禧机械硬件设计系统 (0px 直角 / 注塑外壳 / 下沉液晶屏 / 3D 机械键帽) */
 :root {
@@ -924,11 +924,11 @@ pre, code, .mono, .num {
     <div class="mil-brand">
       <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="mil-nameplate">MAISYA</span>
-      <h1 class="mil-page-title">记忆</h1>
+      <h1 class="mil-page-title">手账</h1>
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm" data-nav="now">现场</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
-        <button type="button" class="mil-key mil-key--sm" data-nav="memory">记忆</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="memory">手账</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
       </nav>
     </div>
@@ -946,7 +946,7 @@ pre, code, .mono, .num {
   <!-- 左栏：记忆层与会话切换 -->
   <aside class="mil-panel">
     <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">LAYERS · 记忆层级</span></div>
+      <div class="mil-head-l"><span class="mil-silk">NOTEBOOK · 手账与备忘</span></div>
       <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
     </div>
     <div class="mil-field" style="margin-bottom:10px">
@@ -956,16 +956,16 @@ pre, code, .mono, .num {
     <div id="chat-chips" class="mil-screen" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
 
     <div class="mil-field" style="margin-bottom:10px">
-      <label class="mil-label" for="kind">记忆文档层</label>
+      <label class="mil-label" for="kind">手账分册</label>
       <select id="kind" class="mil-select sr-only">
-        <option value="memory">会话关系记忆</option>
-        <option value="journal">MaiBot 近况</option>
-        <option value="heartbeat">主动性与节奏</option>
+        <option value="memory">会话备忘</option>
+        <option value="journal">近期手账</option>
+        <option value="heartbeat">探索节奏</option>
       </select>
       <div style="display:flex;flex-direction:column;gap:6px">
-        <button type="button" class="mil-key" data-kind-tab="memory" aria-pressed="true" style="justify-content:flex-start">会话关系记忆 (MEMORY.md)</button>
-        <button type="button" class="mil-key" data-kind-tab="journal" aria-pressed="false" style="justify-content:flex-start">MaiBot 近况 (JOURNAL.md)</button>
-        <button type="button" class="mil-key" data-kind-tab="heartbeat" aria-pressed="false" style="justify-content:flex-start">主动性与节奏 (HEARTBEAT.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="memory" aria-pressed="true" style="justify-content:flex-start">会话备忘 (MEMORY.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="journal" aria-pressed="false" style="justify-content:flex-start">近期手账 (JOURNAL.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="heartbeat" aria-pressed="false" style="justify-content:flex-start">探索节奏 (HEARTBEAT.md)</button>
       </div>
     </div>
 
@@ -975,7 +975,7 @@ pre, code, .mono, .num {
         <span class="num" style="font-size:12px" id="mem-char-count">0 / 16000</span>
       </div>
       <div class="mil-meter"><i id="mem-meter-bar"></i></div>
-      <p class="mil-hint" style="margin-top:6px">会话关系记忆严格按会话隔离；近况保留七天；节奏用于引导周期性探索与日常主动冒泡。</p>
+      <p class="mil-hint" style="margin-top:6px">群友印象与长期聊天记忆由宿主 A_Memorix 自动沉淀；此处仅存放本会话长期置顶的办事约定、近七天后台经历手账与主动探索节奏。</p>
     </div>
   </aside>
 
@@ -984,7 +984,7 @@ pre, code, .mono, .num {
     <section class="mil-panel">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk">DOCUMENT · 记忆正文</span>
+          <span class="mil-silk">DOCUMENT · 手账正文</span>
           <span class="mil-tag" id="version">v0</span>
           <span class="mil-tag mil-tag--warn" id="dirty-tag" hidden>未保存</span>
         </div>
@@ -1012,7 +1012,7 @@ pre, code, .mono, .num {
 
     <section class="mil-panel">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">RECALL · 经历检索与自身活动</span></div>
+        <div class="mil-head-l"><span class="mil-silk">RECALL · 活动与手账检索</span></div>
         <div class="mil-head-r">
           <div class="mil-row" style="gap:6px">
             <input id="search" class="mil-input" style="width:200px" aria-label="检索关键词" placeholder="地点、关键词或线程号">
@@ -1022,11 +1022,11 @@ pre, code, .mono, .num {
       </div>
       <div class="mil-grid-2">
         <div style="min-width:0">
-          <div class="mil-label" style="margin-bottom:5px">检索命中记录</div>
+          <div class="mil-label" style="margin-bottom:5px">手账与备忘命中</div>
           <div id="search-results" class="mil-screen" style="min-height:96px;max-height:240px;overflow-y:auto"></div>
         </div>
         <div style="min-width:0">
-          <div class="mil-label" style="margin-bottom:5px">自身经历档案</div>
+          <div class="mil-label" style="margin-bottom:5px">自身活动经历</div>
           <div id="experiences" class="mil-screen" style="min-height:96px;max-height:240px;overflow-y:auto"></div>
         </div>
       </div>
@@ -1506,7 +1506,7 @@ pre, code, .mono, .num {
   }
 
   /* ════════════════════════════════════════════════════════════════
-     2. 记忆页 (memory)
+     2. 手账页 (memory)
      ════════════════════════════════════════════════════════════════ */
   if (page === "memory") {
     let expectedVersion = 0;
@@ -1543,7 +1543,7 @@ pre, code, .mono, .num {
       try {
         const r = await rpc("read", "asset", kind === "memory" ? { kind, chat_id } : { kind });
         if (seq !== memLoadSeq) return;
-        if (!r?.success) return say(r?.error || "读取记忆失败", true);
+        if (!r?.success) return say(r?.error || "读取手账失败", true);
         if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
         if (preserveDraft && prevDraft !== (r.content || "")) {
           $("#local-draft").value = prevDraft;
@@ -1584,7 +1584,7 @@ pre, code, .mono, .num {
       const query = $("#search").value.trim();
       const chat_id = $("#chat").value;
       const r = await rpc("read", "memory", { chat_id, query });
-      if (!r?.success) return say(r?.error || "读取记忆概览失败", true);
+      if (!r?.success) return say(r?.error || "读取手账概览失败", true);
       memData = r;
       const prevChat = $("#chat").value;
       const chats = r.chats || [];
@@ -1744,7 +1744,7 @@ pre, code, .mono, .num {
       const web = s.web_provider || "auto";
       const isPreset = WEB_PRESETS.includes(web);
       $("#general-fields").innerHTML = [
-        row("启用 Maisya 插件", "开启后在以下启用会话挂载能力、记忆与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
+        row("启用 Maisya 插件", "开启后在以下启用会话挂载能力、手账备忘与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
         row("启用会话白名单", "填写群号或 chat_id，用逗号分隔；非白名单会话零读取、零打扰。", `<input id="set-chats" class="mil-input mono" value="${esc(chats.join(", "))}" placeholder="群号或 stream_id，逗号分隔">`),
         row("主动程度", "控制空闲后的事后惦记与冒泡积极性。", `<select id="proactive_level" class="mil-select"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静 (quiet · 仅被动)</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>关怀 (care · 平衡)</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃 (lively · 允许偶遇)</option></select>`),
         row("全局联网来源", "默认搜索路由；自定义插件/web 别名在右侧输入。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>auto（自动探测）</option><option value="host" ${web === "host" ? "selected" : ""}>host（仅宿主原生）</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>google_search_plugin（第三方联网）</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>mcp（MCP 搜索服务）</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>plugin_api（跨插件 API）</option><option value="custom" ${!isPreset ? "selected" : ""}>自定义标识 / 别名</option></select><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:...">`),

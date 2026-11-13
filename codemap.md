@@ -45,7 +45,7 @@ Maisya/
 ├── webui/
 │   ├── now.html                    # 现场：线程、五段上下文条、待唤醒意图、步骤流、勾选立即转向递纸条与停止
 │   ├── abilities.html              # 能力：档案、技能、笔记、MCP/API、执行环境与档案包
-│   ├── memory.html                 # 记忆：近况、经历、会话记忆、工作区与统一检索
+│   ├── memory.html                 # 手账：近期手账、自身经历、会话备忘、工作区与检索
 │   ├── settings.html               # 设置：会话、按会话主动级别、熟识账号、久违阈值、沙箱、凭据、MCP/API 与事件通道
 │   ├── management.html.in          # 三个管理页共用的内联脚本（含 data-type="map" 解析）与样式源码
 │   ├── fragments/                  # 三页各自的正文源码

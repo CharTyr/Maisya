@@ -212,9 +212,9 @@ def snapshot(
                     }
                 )
             for mem_key, mem_label in (
-                ("memory", "会话关系记忆 (MEMORY.md)"),
-                ("journal", "近况 (JOURNAL.md)"),
-                ("heartbeat", "主动性与节奏 (HEARTBEAT.md)"),
+                ("memory", "会话备忘 (MEMORY.md)"),
+                ("journal", "近期手账 (JOURNAL.md)"),
+                ("heartbeat", "探索节奏 (HEARTBEAT.md)"),
             ):
                 mem_val = str(mem_ctx.get(mem_key) or "")
                 if mem_val.strip():

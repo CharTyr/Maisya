@@ -29,7 +29,7 @@ def main():
             (root / f"{page}.html", _render_management(root, css, page, title))
             for page, title in (
                 ("abilities", "能力"),
-                ("memory", "记忆"),
+                ("memory", "手账"),
                 ("settings", "设置"),
             )
         ),

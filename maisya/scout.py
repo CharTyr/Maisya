@@ -56,7 +56,7 @@ TOOL_DEFINITIONS = {
     ),
     "memory_read": definition(
         "memory_read",
-        "只读当前聊天会话的宿主长期记忆。",
+        "只读当前会话在宿主 A_Memorix 中的长期聊天记忆与群友往事。",
         {
             "query": STRING,
             "limit": {"type": "integer", "minimum": 1, "maximum": 20},
@@ -66,7 +66,7 @@ TOOL_DEFINITIONS = {
     ),
     "person_read": definition(
         "person_read",
-        "只读宿主内已知人物的档案与记忆字段。",
+        "只读宿主内已知人物的画像与记忆字段。",
         {
             "user_id": STRING,
             "person_name": STRING,
@@ -75,7 +75,7 @@ TOOL_DEFINITIONS = {
     ),
     "recall_read": definition(
         "recall_read",
-        "检索本会话可见的过往线程结论、日记与会话记忆。",
+        "检索本会话可见的 Maisya 过往线程结论、近期手账与会话办事备忘（不含宿主聊天记忆）。",
         {
             "query": {"type": "string", "minLength": 0, "maxLength": 500},
             "kind": {

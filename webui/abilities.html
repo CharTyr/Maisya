@@ -928,7 +928,7 @@ pre, code, .mono, .num {
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm" data-nav="now">现场</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
-        <button type="button" class="mil-key mil-key--sm" data-nav="memory">记忆</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="memory">手账</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
       </nav>
     </div>
@@ -1543,7 +1543,7 @@ pre, code, .mono, .num {
   }
 
   /* ════════════════════════════════════════════════════════════════
-     2. 记忆页 (memory)
+     2. 手账页 (memory)
      ════════════════════════════════════════════════════════════════ */
   if (page === "memory") {
     let expectedVersion = 0;
@@ -1580,7 +1580,7 @@ pre, code, .mono, .num {
       try {
         const r = await rpc("read", "asset", kind === "memory" ? { kind, chat_id } : { kind });
         if (seq !== memLoadSeq) return;
-        if (!r?.success) return say(r?.error || "读取记忆失败", true);
+        if (!r?.success) return say(r?.error || "读取手账失败", true);
         if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
         if (preserveDraft && prevDraft !== (r.content || "")) {
           $("#local-draft").value = prevDraft;
@@ -1621,7 +1621,7 @@ pre, code, .mono, .num {
       const query = $("#search").value.trim();
       const chat_id = $("#chat").value;
       const r = await rpc("read", "memory", { chat_id, query });
-      if (!r?.success) return say(r?.error || "读取记忆概览失败", true);
+      if (!r?.success) return say(r?.error || "读取手账概览失败", true);
       memData = r;
       const prevChat = $("#chat").value;
       const chats = r.chats || [];
@@ -1781,7 +1781,7 @@ pre, code, .mono, .num {
       const web = s.web_provider || "auto";
       const isPreset = WEB_PRESETS.includes(web);
       $("#general-fields").innerHTML = [
-        row("启用 Maisya 插件", "开启后在以下启用会话挂载能力、记忆与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
+        row("启用 Maisya 插件", "开启后在以下启用会话挂载能力、手账备忘与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
         row("启用会话白名单", "填写群号或 chat_id，用逗号分隔；非白名单会话零读取、零打扰。", `<input id="set-chats" class="mil-input mono" value="${esc(chats.join(", "))}" placeholder="群号或 stream_id，逗号分隔">`),
         row("主动程度", "控制空闲后的事后惦记与冒泡积极性。", `<select id="proactive_level" class="mil-select"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静 (quiet · 仅被动)</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>关怀 (care · 平衡)</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃 (lively · 允许偶遇)</option></select>`),
         row("全局联网来源", "默认搜索路由；自定义插件/web 别名在右侧输入。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>auto（自动探测）</option><option value="host" ${web === "host" ? "selected" : ""}>host（仅宿主原生）</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>google_search_plugin（第三方联网）</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>mcp（MCP 搜索服务）</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>plugin_api（跨插件 API）</option><option value="custom" ${!isPreset ? "selected" : ""}>自定义标识 / 别名</option></select><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:...">`),

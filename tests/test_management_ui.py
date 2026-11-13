@@ -34,7 +34,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await page.expose_function("backend", request)
                 for name, title in [
                     ("abilities", "能力"),
-                    ("memory", "记忆"),
+                    ("memory", "手账"),
                     ("settings", "设置"),
                 ]:
                     await page.evaluate(
@@ -115,6 +115,10 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         )
                         assert await page.locator('[data-profile="ui_temp"]').count() == 0
                     elif name == "memory":
+                        await expect(
+                            page.locator('[data-kind-tab="memory"]')
+                        ).to_contain_text("会话备忘")
+                        await expect(page.locator("aside")).to_contain_text("A_Memorix")
                         await page.locator("#chat").select_option("chat")
                         await expect(page.locator("#content")).to_be_enabled()
                         await page.locator("#content").fill(

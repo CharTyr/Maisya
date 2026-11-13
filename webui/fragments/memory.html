@@ -2,7 +2,7 @@
   <!-- 左栏：记忆层与会话切换 -->
   <aside class="mil-panel">
     <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">LAYERS · 记忆层级</span></div>
+      <div class="mil-head-l"><span class="mil-silk">NOTEBOOK · 手账与备忘</span></div>
       <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
     </div>
     <div class="mil-field" style="margin-bottom:10px">
@@ -12,16 +12,16 @@
     <div id="chat-chips" class="mil-screen" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
 
     <div class="mil-field" style="margin-bottom:10px">
-      <label class="mil-label" for="kind">记忆文档层</label>
+      <label class="mil-label" for="kind">手账分册</label>
       <select id="kind" class="mil-select sr-only">
-        <option value="memory">会话关系记忆</option>
-        <option value="journal">MaiBot 近况</option>
-        <option value="heartbeat">主动性与节奏</option>
+        <option value="memory">会话备忘</option>
+        <option value="journal">近期手账</option>
+        <option value="heartbeat">探索节奏</option>
       </select>
       <div style="display:flex;flex-direction:column;gap:6px">
-        <button type="button" class="mil-key" data-kind-tab="memory" aria-pressed="true" style="justify-content:flex-start">会话关系记忆 (MEMORY.md)</button>
-        <button type="button" class="mil-key" data-kind-tab="journal" aria-pressed="false" style="justify-content:flex-start">MaiBot 近况 (JOURNAL.md)</button>
-        <button type="button" class="mil-key" data-kind-tab="heartbeat" aria-pressed="false" style="justify-content:flex-start">主动性与节奏 (HEARTBEAT.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="memory" aria-pressed="true" style="justify-content:flex-start">会话备忘 (MEMORY.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="journal" aria-pressed="false" style="justify-content:flex-start">近期手账 (JOURNAL.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="heartbeat" aria-pressed="false" style="justify-content:flex-start">探索节奏 (HEARTBEAT.md)</button>
       </div>
     </div>
 
@@ -31,7 +31,7 @@
         <span class="num" style="font-size:12px" id="mem-char-count">0 / 16000</span>
       </div>
       <div class="mil-meter"><i id="mem-meter-bar"></i></div>
-      <p class="mil-hint" style="margin-top:6px">会话关系记忆严格按会话隔离；近况保留七天；节奏用于引导周期性探索与日常主动冒泡。</p>
+      <p class="mil-hint" style="margin-top:6px">群友印象与长期聊天记忆由宿主 A_Memorix 自动沉淀；此处仅存放本会话长期置顶的办事约定、近七天后台经历手账与主动探索节奏。</p>
     </div>
   </aside>
 
@@ -40,7 +40,7 @@
     <section class="mil-panel">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk">DOCUMENT · 记忆正文</span>
+          <span class="mil-silk">DOCUMENT · 手账正文</span>
           <span class="mil-tag" id="version">v0</span>
           <span class="mil-tag mil-tag--warn" id="dirty-tag" hidden>未保存</span>
         </div>
@@ -68,7 +68,7 @@
 
     <section class="mil-panel">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">RECALL · 经历检索与自身活动</span></div>
+        <div class="mil-head-l"><span class="mil-silk">RECALL · 活动与手账检索</span></div>
         <div class="mil-head-r">
           <div class="mil-row" style="gap:6px">
             <input id="search" class="mil-input" style="width:200px" aria-label="检索关键词" placeholder="地点、关键词或线程号">
@@ -78,11 +78,11 @@
       </div>
       <div class="mil-grid-2">
         <div style="min-width:0">
-          <div class="mil-label" style="margin-bottom:5px">检索命中记录</div>
+          <div class="mil-label" style="margin-bottom:5px">手账与备忘命中</div>
           <div id="search-results" class="mil-screen" style="min-height:96px;max-height:240px;overflow-y:auto"></div>
         </div>
         <div style="min-width:0">
-          <div class="mil-label" style="margin-bottom:5px">自身经历档案</div>
+          <div class="mil-label" style="margin-bottom:5px">自身活动经历</div>
           <div id="experiences" class="mil-screen" style="min-height:96px;max-height:240px;overflow-y:auto"></div>
         </div>
       </div>

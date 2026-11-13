@@ -301,7 +301,12 @@ async def test_before_planner_embeds_summary_omits_empty_blocks_and_gates_shape_
         assert "here.now" not in unescaped
         assert "maisya_later" in unescaped
         assert "maisya_shape" not in unescaped
+        assert "query_memory" in unescaped
+        assert "maisya_recall" in unescaped
         assert "<maisya_profiles>" in unescaped
+        from maisya.scout import TOOL_DEFINITIONS
+
+        assert "A_Memorix" in TOOL_DEFINITIONS["memory_read"]["function"]["description"]
         assert '"summary"' in unescaped and '"autonomous"' in unescaped
         assert "<maisya_threads>" not in unescaped
         assert "<maisya_returns>" not in unescaped

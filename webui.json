@@ -144,7 +144,7 @@
     },
     {
       "id": "memory",
-      "title": "记忆",
+      "title": "手账",
       "mode": "custom",
       "placement": "workspace",
       "entry": "webui/memory.html",
