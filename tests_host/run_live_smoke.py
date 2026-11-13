@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 SMOKE_SCRIPT = r"""
-import asyncio, importlib.metadata, json, sys, time
+import asyncio, importlib.metadata, json, sys, time, tomllib
 from pathlib import Path
 
 stage = Path(sys.argv[1]).resolve()
@@ -54,10 +54,6 @@ async def run():
     from src.config.config import model_config
 
     live_web_assigned = bool(model_config.model_task_config.web_search.model_list)
-    if not live_web_assigned and model_config.web.services:
-        model_config.model_task_config.web_search.model_list = [
-            next(iter(model_config.web.services))
-        ]
 
     t0 = time.monotonic()
     caps = HostCaps()
@@ -66,6 +62,7 @@ async def run():
         "llm_calls": 0,
         "web_search_calls": 0,
         "web_search_ok": 0,
+        "config_get_plugin_calls": 0,
         "timeout_ms_seen": [],
     }
 
@@ -80,6 +77,15 @@ async def run():
         log_phase("rpc_start", capability=cap, timeout_ms=timeout_ms, task_name=args.get("task_name"))
         if cap == "config.get":
             return {"success": True, "value": []}
+        if cap == "config.get_plugin":
+            stats["config_get_plugin_calls"] += 1
+            if args.get("plugin_name") == "xxxxx7258.google-search-plugin":
+                cfg_path = host_root / "plugins/XXXxx7258_google_search_plugin/config.toml"
+                parsed = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+                log_phase("rpc_done", capability=cap, success=True)
+                return {"success": True, "value": parsed}
+            log_phase("rpc_done", capability=cap, success=False)
+            return {"success": False, "value": None, "error": "插件未加载"}
         if cap == "llm.generate_with_tools":
             stats["llm_calls"] += 1
             try:
@@ -141,10 +147,22 @@ async def run():
         scout_text = str(row["result"].get("text") or "").strip()
         assert scout_text, row
         assert stats["web_search_calls"] >= 1, stats
-        assert stats["web_search_ok"] >= 1, stats
+        if live_web_assigned:
+            assert stats["web_search_ok"] >= 1, stats
+        else:
+            assert stats["config_get_plugin_calls"] >= 1, stats
         assert stats["llm_calls"] <= 8, stats
         assert "http://" in scout_text or "https://" in scout_text, scout_text
-        log_phase("scout_verified", web_search_calls=stats["web_search_calls"], web_search_ok=stats["web_search_ok"])
+        fetched = await plugin.runtime.web.fetch("https://www.example.com/", {"chat_id": "smoke-chat", "owner": "chat"})
+        assert fetched.get("content_kind") == "page_text", fetched
+        assert "Example Domain" in (str(fetched.get("title", "")) + str(fetched.get("content", ""))), fetched
+        log_phase(
+            "scout_verified",
+            web_search_calls=stats["web_search_calls"],
+            web_search_ok=stats["web_search_ok"],
+            config_get_plugin_calls=stats["config_get_plugin_calls"],
+            web_fetch_service=fetched.get("service"),
+        )
 
         # 2. Real maker preset planner slot routing check
         maker_profile = plugin.profiles.get("maker")
@@ -191,6 +209,7 @@ async def run():
             llm_calls=stats["llm_calls"],
             web_search_calls=stats["web_search_calls"],
             web_search_ok=stats["web_search_ok"],
+            config_get_plugin_calls=stats["config_get_plugin_calls"],
             timeout_ms_sample=stats["timeout_ms_seen"][:4],
             scout_preview=scout_text[:160],
             maker_planner_ok=True,

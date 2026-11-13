@@ -189,6 +189,7 @@ class MaisyaPlugin(MaiBotPlugin):
             self.settings.sandbox,
             self.vault,
             authorized=self._activity_authorized,
+            web_provider=lambda: self.settings.web_provider,
         )
         self.runtime.memory = self.memory
         self.runtime.permitted = self._activity_permitted

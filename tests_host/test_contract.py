@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.metadata
+import json
 import logging
 import shutil
 import socket
@@ -1225,6 +1226,128 @@ class HostContract(unittest.TestCase):
                     saved = plugin.intents.get(row["intent_id"])
                     self.assertEqual(saved["status"], "done")
                     self.assertEqual(saved["wake_status"], "accepted")
+                finally:
+                    await plugin.on_unload()
+
+        asyncio.run(run())
+
+    def test_third_party_web_search_fallback_and_config_get_plugin_with_real_sdk(self):
+        validator = ManifestValidator()
+        manifest = validator.load_from_plugin_path(PLUGIN_DIR)
+        self.assertIsNotNone(manifest, validator.errors)
+        self.assertIn("config.get_plugin", manifest.capabilities)
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                exa_secret = "contract-exa-secret-key"
+                step = 0
+                cap_names = []
+                third_party_available = True
+
+                async def rpc(method, plugin_id, payload, **kwargs):
+                    nonlocal step
+                    name, args = payload["capability"], payload["args"]
+                    cap_names.append(name)
+                    if name == "config.get":
+                        return {"success": True, "value": ["qq:Alice"]}
+                    if name == "web.search":
+                        return {"success": False, "error": "统一联网功能未启用"}
+                    if name == "config.get_plugin":
+                        self.assertEqual(
+                            args["plugin_name"], "xxxxx7258.google-search-plugin"
+                        )
+                        if not third_party_available:
+                            return {
+                                "success": False,
+                                "value": None,
+                                "error": "未找到插件配置",
+                            }
+                        return {
+                            "success": True,
+                            "value": {
+                                "plugin": {"enabled": True},
+                                "search_backend": {"default_engine": "exa"},
+                                "engines": {
+                                    "exa_enabled": True,
+                                    "exa_api_keys": [exa_secret],
+                                },
+                            },
+                        }
+                    if name == "llm.generate_with_tools":
+                        step += 1
+                        if step == 1:
+                            return {
+                                "success": True,
+                                "response": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call_web_1",
+                                        "function": {
+                                            "name": "web_search",
+                                            "arguments": {"query": "Maisya"},
+                                        },
+                                    }
+                                ],
+                            }
+                        self.assertNotIn(exa_secret, str(args["prompt"]))
+                        self.assertIn("exa.contract/doc", str(args["prompt"][-1]))
+                        return {
+                            "success": True,
+                            "response": "Confirmed via https://exa.contract/doc",
+                            "tool_calls": [],
+                        }
+                    raise AssertionError(name)
+
+                plugin = create_plugin()
+                plugin._set_context(
+                    PluginContext(
+                        PLUGIN_ID,
+                        rpc_call=rpc,
+                        paths=build_plugin_paths(PLUGIN_ID, Path(directory)),
+                    )
+                )
+                plugin.set_plugin_config(
+                    {
+                        "plugin": {"enabled": True, "config_version": "0.1.0"},
+                        "enabled_chats": ["contract-chat"],
+                    }
+                )
+                await plugin.on_load()
+                try:
+                    plugin.runtime.web._http_request = lambda m, u, **kw: (
+                        200,
+                        {"content-type": "application/json"},
+                        json.dumps(
+                            {
+                                "results": [
+                                    {
+                                        "title": f"Doc {exa_secret}",
+                                        "url": "https://exa.contract/doc",
+                                        "highlights": ["contract ok"],
+                                    }
+                                ]
+                            }
+                        ).encode(),
+                        u,
+                    )
+                    res = await plugin.agent_tool(
+                        action="start",
+                        message="Search Maisya",
+                        chat_id="contract-chat",
+                        platform="qq",
+                    )
+                    self.assertTrue(res["success"], res)
+                    self.assertIn("https://exa.contract/doc", res["result"]["text"])
+                    self.assertIn("web.search", cap_names)
+                    self.assertIn("config.get_plugin", cap_names)
+
+                    # When config.get_plugin returns {"success": False, "value": None},
+                    # real PluginContext unwraps it to None and WebRouter fails cleanly.
+                    third_party_available = False
+                    with self.assertRaises(RuntimeError):
+                        await plugin.runtime.web.search(
+                            "Maisya", 3, {"chat_id": "contract-chat", "owner": "chat"}
+                        )
                 finally:
                     await plugin.on_unload()
 

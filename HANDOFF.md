@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、坑和上线前核查；设计与规则的权威来源是根目录 `AGENTS.md`、`codemap.md` 和 `docs/` 文档。
 
-最后更新：2026-11-13（完成全量设计期望对齐、188 项本地单测/UI 测试、20 项真实宿主 SDK 契约与隔离实模 EXA 联网冒烟）。
+最后更新：2026-11-13（完成全量设计期望对齐 + `web_provider` 预设宿主优先且自动兼容第三方联网搜索插件、`194` 项本地单测/UI 测试、`21` 项真实宿主 SDK 契约与未篡改宿主配置的隔离实模联网冒烟）。
 
 ## 这是什么
 
@@ -14,12 +14,12 @@ MaiBot 插件 `chartyr.maisya`。不改 MaiBot 宿主源码，给 MaiBot 提供�
 
 | 范围 | 状态 | 依据 |
 |---|---|---|
-| M0 基座 / M1 线程 / M2 回接 | 已实现、加固、对齐并验证 | 188 项本地单测/UI 测试 + 20 项宿主 SDK 契约（含 `send.hybrid` `file` 拆条与 `before_planner` 精简） |
-| M3 maker + 工作区 + 沙箱 + 凭据 + 只读 `@API` | **真实 runsc 验收通过** | `tests_sandbox/run_isolated.py --execute` 全绿，`host_unchanged` / `backup_cleaned` 复核通过，新增 `source-checking` / `ongoing-workspace` 开箱技能与 `plugin_api` 只读跨插件接口 |
+| M0 基座 / M1 线程 / M2 回接 | 已实现、加固、对齐并验证 | 194 项本地单测/UI 测试 + 21 项宿主 SDK 契约（含 `web_provider` 回退、`send.hybrid` `file` 拆条与 `before_planner` 精简） |
+| M3 maker + 工作区 + 沙箱 + 凭据 + 只读 `@API` | **真实 runsc 验收通过** | `tests_sandbox/run_isolated.py --execute` 全绿，`host_unchanged` / `backup_cleaned` 复核通过，新增 `source-checking` / `ongoing-workspace` 开箱技能与 `plugin_api` / `services.web` |
 | M4 记忆与塑形 | 已实现并验证 | 本地单测 + `Learning._learn` 真实 LLM 冒烟 (`applied`)；含 `HEARTBEAT.md` 脾性/方向拆分 |
 | M5 意图 / Pulse / 克制主动性 | 已实现并对齐 | `session_routes` 活跃统计 + `chat_proactive_levels` + `acquaintance_users` + `longing_quiet_hours` + `serendipity` 偶遇路由 + `profile+workspace` 事件先跑线程 |
-| M6 四页管理台与三路配置合并 | 已实现并验证 | `webui/build.py --check` + 2 项 Chromium UI 测试（含五段上下文、`steer` 勾选、`data-type="map"` 设置与移动视口检查）+ `settings.base.json` 原子/三路合并 |
-| 真实模型 + EXA 联网冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`）：`scout` 调 EXA `web.search` 返回真实来源链接、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
+| M6 四页管理台与三路配置合并 | 已实现并验证 | `webui/build.py --check` + 2 项 Chromium UI 测试（含 `web_provider` 设置、`web` 健康状态、五段上下文、`steer` 勾选与移动视口检查）+ `settings.base.json` 原子/三路合并 |
+| 真实模型 + 第三方搜索插件 / EXA 联网冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开启宿主 `web_search`）：`scout` 调 `web.search` 后经 `config.get_plugin` 自动回退 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 抓取 `example.com` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | 部署到线上 `plugins/` | **未部署（红线未放行）** | `plugins/`、`src/`、`config/`、`data/` 零改动；上线部署需用户当次授权与先备份 |
 
 本地验证命令：
@@ -67,7 +67,7 @@ python3 tests_sandbox/run_isolated.py --execute
 
 ## 上线前人工核查清单（部署到线上前必看）
 
-1. **宿主 `web_search` 任务尚未分配服务（已实测确认 `live_web_assigned: false`）**：宿主 `model_config.toml` 中已有 `[web.services."EXA搜索"]`，但 `[model_task_config.web_search].model_list` 当前为空，`resolve_web_search_config()` 会将统一联网判为关闭。上线前请在 MaiBot WebUI「模型功能分配 → 统一联网」选择 `EXA搜索`。
+1. **宿主 `web_search` 与第三方联网兼容模式**：当前宿主 `[model_task_config.web_search].model_list` 为空（`live_web_assigned: false`）；Maisya 默认 `web_provider = "auto"` 会优先探测宿主统一联网，检测到未启用后自动通过 `config.get_plugin` 复用线上已启用的 `xxxxx7258.google-search-plugin`（EXA/Tavily/AnySearch/You/DeepSeek/DuckDuckGo 多引擎链与单次作用域脱敏），无须再改动宿主联网开关即可使用；若日后在 MaiBot WebUI「模型功能分配 → 统一联网」分配服务，`auto` 会自动切回宿主统一联网，也可在 Maisya 设置页手动固定 `web_provider`。
 2. **宿主 `utils` 首选模型带工具报 400 回退**：实模冒烟日志显示 `[model_task_config.utils]` 首选 `gpt-6-luna` 在 `/v1/chat/completions` 上同时传 `function tools` 与 `reasoning_effort` 会报 `400 BadRequestError` 并回退到下一模型；建议调整宿主 `utils` 模型顺序或推理参数，避免每步多一次 400 重试延迟。
 3. **沙箱镜像与防火墙准备**：若上线开启 `sandbox.enabled = true`，确认宿主已存在 `maisya-sandbox:py313`（必要时运行 `./sandbox/build_image.sh --execute`），并在用户授权后执行 `plugins/` 备份、放置与热重载。
 4. **真实平台与私聊联调项**：`share` 在真实群/私聊中的 `send.hybrid` 表现、平台 `file_ref` 实际 MCP 读取器与真实群内 `pulse` 对话效果，均须在用户当次指定测试群后再行验收。

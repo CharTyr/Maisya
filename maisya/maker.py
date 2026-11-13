@@ -16,7 +16,9 @@ from .workspaces import Workspaces, completed_thread, parent_fd, regular_open
 
 
 class AgentRuntime(Scout):
-    def __init__(self, host, root, store, settings, vault, *, authorized):
+    def __init__(
+        self, host, root, store, settings, vault, *, authorized, web_provider="auto"
+    ):
         super().__init__(host, vault.redact)
         self.store, self.vault, self.authorized = store, vault, authorized
         self.sandbox = Sandbox(
@@ -35,8 +37,16 @@ class AgentRuntime(Scout):
         self.learning = None
         self.permitted = None
         from .services import Services
+        from .web import WebRouter
 
         self.services = Services(root / "abilities/services.json", vault)
+        self.web = WebRouter(
+            host,
+            redact=vault.redact,
+            provider=web_provider,
+            services=self.services,
+            runtime=self,
+        )
 
     def available(self, profile):
         if not profile.bound:

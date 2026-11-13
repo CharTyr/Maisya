@@ -9,24 +9,25 @@
 ```text
 Maisya/
 ├── __init__.py                     # 只导出 create_plugin
-├── _manifest.json                  # 插件清单 chartyr.maisya（含 chat.open_session / send.hybrid / api.list / api.get / api.call）
+├── _manifest.json                  # 插件清单 chartyr.maisya（含 config.get_plugin / chat.open_session / send.hybrid / api.list / api.get / api.call）
 ├── webui.json                      # MaiBot WebUI v2 扩展声明（含 note.steer）
 ├── plugin.py                       # 宿主入口：生命周期、三路配置合并、Hook（before_planner 含 summary/autonomous 与条件提示）、@Tool、@API 胶水层
-├── config.example.toml             # 默认关闭的配置示例（含 chat_proactive_levels / acquaintance_users / longing_quiet_hours 等）
+├── config.example.toml             # 默认关闭的配置示例（含 web_provider / chat_proactive_levels / acquaintance_users / longing_quiet_hours 等）
 ├── maisya/
-│   ├── config.py                   # SDK 配置模型、per-chat 主动级别/熟人/久违静默阈值校验与外部数据初始化
+│   ├── config.py                   # SDK 配置模型、web_provider/per-chat 主动级别/熟人/久违静默阈值校验与外部数据初始化
 │   ├── abilities.py                # scout/maker 档案、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全档案包
-│   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、附件、MCP/模板/跨插件 API 与 planner 路由
+│   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、附件、联网路由、MCP/模板/跨插件 API 与 planner 路由
 │   ├── workspaces.py               # 安全文件访问、串行写入、原子检查点、配额与不可变附件
 │   ├── sandbox.py                  # 专用 Docker/gVisor、max_concurrent 信号量、出站规则、资源参数、取消与清理恢复
-│   ├── services.py                 # 按线程隔离的 stdio MCP 池、私有固定模板与跨插件只读 @API（list/get/call 及 SDK 解包适配）
+│   ├── services.py                 # 按线程隔离的 stdio MCP 池、私有固定模板、跨插件只读 @API 与 services.json["web"] 只读联网绑定
 │   ├── mcp_worker.py               # MCP 独立子进程的资源限制、cgroup 与降权
 │   ├── memory.py                   # 分层文件、预设技能与 HEARTBEAT.md 释放、heartbeat_parts() 解析、版本/回滚与 FTS5
 │   ├── learning.py                 # 同一工具失败后恢复时提炼短方法，状态轨迹输入与有界后台调用
-│   ├── management.py               # 四页管理 API、持久设置、版本编辑、分块档案包、服务（含 apis）与事件通道校验
+│   ├── management.py               # 四页管理 API、持久设置、版本编辑、分块档案包、服务（含 apis/web）、执行健康（含联网状态）与事件通道校验
 │   ├── incoming.py                 # 宿主认证入口的 HMAC 校验、并发锁去重、可选 profile+workspace 线程启动与 Intent 转换
 │   ├── share.py                    # 原生表达（含非管理员全员艾特过滤）与链接/图片发送、file 附件独立拆条 send.hybrid 交付
-│   ├── scout.py                    # 宿主能力 RPC 包装（显式 timeout_ms 与非标准异常归一化）、plugin_api 与 thread_later(serendipity) 定义
+│   ├── scout.py                    # 宿主能力 RPC 包装（显式 timeout_ms 与非标准异常归一化）、WebRouter 委托、plugin_api 与 thread_later 定义
+│   ├── web.py                      # 统一联网路由：宿主 web.search/fetch 预设优先，未启用时自动兼容 services.web 与第三方搜索插件（SSRF 防护+单次脱敏）
 │   ├── threads.py                  # 线程状态、输入队列、边界转向、serendipity 提议、异常防无限重拉兜底与 FTS5
 │   ├── bridge.py                   # 结果事件引用、回接组、意图认领、Replyer 事实与重试
 │   ├── intents.py                  # 意图存储：return/proactive/silent、社交闸、acquaintance_allowed、longing_ready、事件去重与延期延迟

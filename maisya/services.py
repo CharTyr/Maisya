@@ -76,6 +76,33 @@ def validate_api_entry(name, spec):
         Draft202012Validator.check_schema(schema)
 
 
+def validate_web_bindings(configuration):
+    web = configuration.get("web", {})
+    if not isinstance(web, dict) or set(web) - {"search", "fetch"}:
+        raise ValueError("联网服务绑定仅支持 search 与 fetch")
+    servers = configuration.get("servers", {})
+    apis = configuration.get("apis", {})
+    for kind, binding in web.items():
+        if not isinstance(binding, dict):
+            raise ValueError(f"联网服务 {kind} 绑定格式无效")
+        if set(binding) == {"service", "tool"}:
+            service, tool = binding["service"], binding["tool"]
+            server = servers.get(service)
+            if (
+                not isinstance(server, dict)
+                or tool not in server.get("tools", [])
+                or server.get("readonly") is not True
+            ):
+                raise ValueError("联网服务绑定仅允许 readonly=true 的只读 MCP 服务与已登记工具")
+        elif set(binding) == {"api"}:
+            api_id = binding["api"]
+            spec = apis.get(api_id)
+            if not isinstance(spec, dict) or spec.get("readonly") is not True:
+                raise ValueError("联网服务绑定仅允许 readonly=true 的已登记跨插件只读 API")
+        else:
+            raise ValueError("联网服务绑定须指定 {service, tool} 或 {api}")
+
+
 def validate(schema, arguments):
     if (
         not isinstance(schema, dict)
@@ -189,6 +216,7 @@ class Services:
             "templates",
             "inputs",
             "apis",
+            "web",
         }:
             raise ValueError("能力服务登记格式无效")
         digest = hashlib.sha256(raw).hexdigest()
@@ -203,6 +231,7 @@ class Services:
             raise ValueError("跨插件 API 登记数量或格式无效")
         for name, spec in apis.items():
             validate_api_entry(name, spec)
+        validate_web_bindings(configuration)
         self.configuration, self.digest = configuration, digest
         return configuration
 
@@ -691,3 +720,143 @@ class Services:
     async def close_sessions(self):
         for key in list(self.sessions):
             await self.sessions.pop(key).close()
+
+    @staticmethod
+    def _prepare_web_args(kind, arguments, schema):
+        call_args = dict(arguments)
+        if (
+            kind == "search"
+            and isinstance(schema, dict)
+            and schema.get("additionalProperties") is False
+            and "max_results" not in (schema.get("properties") or {})
+        ):
+            call_args.pop("max_results", None)
+        return call_args
+
+    async def call_web(self, kind, arguments, context, runtime, *, mode="any"):
+        if self.closed:
+            raise RuntimeError("能力服务正在关闭")
+        configuration = self.load()
+        binding = (configuration.get("web") or {}).get(kind)
+        if not isinstance(binding, dict):
+            if mode == "any":
+                return None
+            raise RuntimeError(f"services.web 尚未绑定 {kind}")
+        if "service" in binding and "tool" in binding:
+            if mode not in {"any", "mcp"}:
+                raise RuntimeError(f"services.web.{kind} 未绑定为 mcp 模式")
+            service, tool = binding["service"], binding["tool"]
+            config = (configuration.get("servers") or {}).get(service)
+            if (
+                not isinstance(config, dict)
+                or tool not in config.get("tools", [])
+                or config.get("readonly") is not True
+            ):
+                raise PermissionError("联网 MCP 服务仅允许 readonly=true 的只读工具")
+            if config.get("access", "everyone") == "admins":
+                if context.get("owner") == "self" or runtime is None or not await completed_thread(runtime.authorized, context):
+                    raise PermissionError("该只读联网 MCP 服务需要当前管理员授权")
+            thread_id = context.get("thread_id") or "web"
+            lock = self.locks.setdefault((service, thread_id), asyncio.Lock())
+            async with lock:
+                session = await self._session(
+                    service,
+                    {"chat_id": context.get("chat_id", ""), "thread_id": thread_id},
+                    config,
+                )
+                if tool not in session.tools:
+                    raise PermissionError("MCP 未提供登记的联网工具")
+                schema = session.tools[tool].get("inputSchema", {})
+                call_args = self._prepare_web_args(kind, arguments, schema)
+                await completed_thread(validate, schema, call_args)
+                try:
+                    result = await session.request(
+                        "tools/call", {"name": tool, "arguments": call_args}
+                    )
+                    if result.get("isError"):
+                        raise RuntimeError("MCP 联网工具执行失败")
+                except BaseException:
+                    for session_key in list(self.sessions):
+                        if self.sessions[session_key] is session:
+                            self.sessions.pop(session_key)
+                    await session.close()
+                    raise
+            parts = []
+            for item in result.get("content", []):
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(self.vault.redact(item.get("text", "")))[:16000])
+                elif (
+                    isinstance(item, dict)
+                    and item.get("type") == "resource"
+                    and isinstance(item.get("resource"), dict)
+                    and "text" in item["resource"]
+                ):
+                    parts.append(
+                        str(self.vault.redact(item["resource"]["text"]))[:16000]
+                    )
+            joined = "\n".join(parts).strip()
+            try:
+                parsed = json.loads(joined)
+                if isinstance(parsed, dict):
+                    return self.vault.redact(parsed)
+            except ValueError:
+                pass
+            if kind == "fetch":
+                return {
+                    "url": arguments["url"],
+                    "title": arguments["url"],
+                    "content": joined[:16000],
+                    "content_kind": "page_text",
+                    "service": f"mcp:{service}:{tool}",
+                }
+            return {
+                "query": arguments["query"],
+                "results": [],
+                "summary": joined[:16000],
+                "content_kind": "search_results",
+                "service": f"mcp:{service}:{tool}",
+            }
+
+        if "api" in binding:
+            if mode not in {"any", "plugin_api"}:
+                raise RuntimeError(f"services.web.{kind} 未绑定为 plugin_api 模式")
+            api_id = binding["api"]
+            spec = (configuration.get("apis") or {}).get(api_id)
+            if not isinstance(spec, dict) or spec.get("readonly") is not True:
+                raise PermissionError("联网 API 仅允许 readonly=true 的只读接口")
+            if spec.get("access", "everyone") == "admins":
+                if context.get("owner") == "self" or runtime is None or not await completed_thread(runtime.authorized, context):
+                    raise PermissionError("该只读联网 API 需要当前管理员授权")
+            call_args = self._prepare_web_args(kind, arguments, spec.get("schema"))
+            if "schema" in spec:
+                await completed_thread(validate, spec["schema"], call_args)
+            if runtime is None or runtime.host is None:
+                raise RuntimeError("跨插件 API 调用缺少宿主上下文")
+            raw = await call_capability(
+                runtime.host,
+                "api.call",
+                timeout_ms=30000,
+                api_name=spec["api_name"],
+                version=spec.get("version", ""),
+                args=call_args,
+            )
+            value = self.vault.redact(_unwrap_api_result(raw, "result"))
+            if isinstance(value, dict):
+                return value
+            if kind == "fetch":
+                return {
+                    "url": arguments["url"],
+                    "title": arguments["url"],
+                    "content": str(value)[:16000],
+                    "content_kind": "page_text",
+                    "service": f"plugin_api:{api_id}",
+                }
+            return {
+                "query": arguments["query"],
+                "results": [],
+                "summary": str(value)[:16000],
+                "content_kind": "search_results",
+                "service": f"plugin_api:{api_id}",
+            }
+
+        raise ValueError("未知联网服务绑定方式")

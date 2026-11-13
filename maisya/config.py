@@ -24,6 +24,10 @@ class Settings(PluginConfigBase):
     agent_max_active: int = Field(default=8, ge=1, le=32)
     thread_idle_seconds: int = Field(default=900, ge=0, le=86400)
     thread_context_chars: int = Field(default=48000, ge=24000, le=256000)
+    web_provider: str = Field(
+        default="auto",
+        pattern=r"^(auto|host|google_search_plugin|mcp|plugin_api)$",
+    )
     sleep_window: str = Field(default="", pattern=r"^$|^\d{1,2}-\d{1,2}$")
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     chat_proactive_levels: dict[str, str] = Field(default_factory=dict)

@@ -4,6 +4,7 @@ agent_timeout = 180
 agent_max_active = 8
 thread_idle_seconds = 900
 thread_context_chars = 48000
+web_provider = "auto"
 sleep_window = ""
 proactive_level = "care"
 longing_quiet_hours = 72

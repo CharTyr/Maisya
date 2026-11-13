@@ -92,12 +92,20 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         assert await page.locator("img").count() == 0
                     else:
                         await expect(page.locator("#proactive_level")).to_be_visible()
+                        await expect(page.locator("#web_provider")).to_be_visible()
                         await page.locator("#proactive_level").select_option("quiet")
+                        await page.locator("#web_provider").select_option(
+                            "google_search_plugin"
+                        )
                         await page.locator("#save-settings").click()
                         await expect(page.locator("#feedback")).to_contain_text(
                             "已保存"
                         )
                         assert plugin.settings.proactive_level == "quiet"
+                        assert plugin.settings.web_provider == "google_search_plugin"
+                        await expect(page.locator("#health")).to_contain_text(
+                            "联网来源：google_search_plugin"
+                        )
                         await page.locator("#vault-handle").fill("drawing")
                         await page.locator("#vault-value").fill(
                             "ui-private-secret-value"

@@ -11,7 +11,7 @@ from dataclasses import asdict
 
 from .config import Settings
 from .memory import MemoryLayers
-from .services import validate_api_entry
+from .services import validate_api_entry, validate_web_bindings
 from .vault import atomic_private_write
 from .workspaces import completed_thread, regular_open
 
@@ -233,6 +233,7 @@ class Management:
                 "quarantined": len(self.plugin.runtime.files.quarantines),
                 "bytes": await completed_thread(self.plugin.runtime.files.usage),
                 "limit": self.plugin.runtime.files.total_bytes,
+                "web": await self.plugin.runtime.web.status(),
             }
         elif section == "package":
             async with self.lock:
@@ -361,7 +362,7 @@ class Management:
             self.plugin.vault.contains_secret(raw)
             or len(raw) > 48000
             or not isinstance(config, dict)
-            or set(config) - {"servers", "templates", "inputs", "apis"}
+            or set(config) - {"servers", "templates", "inputs", "apis", "web"}
         ):
             raise ValueError("服务登记只接受结构化配置和凭据句柄")
         if not isinstance(config.get("servers", {}), dict) or not isinstance(
@@ -418,6 +419,7 @@ class Management:
                 raise ValueError("固定模板含未知配置项")
             for handle in template.get("secrets", []):
                 self.plugin.vault._validate_handle(handle)
+        validate_web_bindings(config)
 
     def _upload(self, options):
         self.transfers = {

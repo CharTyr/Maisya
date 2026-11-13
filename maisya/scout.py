@@ -238,9 +238,14 @@ def safe_url(url):
 
 
 class Scout:
-    def __init__(self, host, redact=lambda value: value):
+    def __init__(self, host, redact=lambda value: value, *, web=None):
         self.host = host
         self.redact = redact
+        if web is None:
+            from .web import WebRouter
+
+            web = WebRouter(host, redact=redact)
+        self.web = web
 
     async def step(self, profile: Profile, history):
         instructions = (
@@ -287,26 +292,13 @@ class Scout:
         ):
             raise PermissionError("自身探索线程不能读取某个聊天会话的私有资料")
         if name == "web_search":
-            result = checked(
-                await call_capability(
-                    self.host,
-                    "web.search",
-                    timeout_ms=70000,
-                    query=arguments["query"],
-                    max_results=arguments.get("max_results", 5),
-                ),
-                "result",
+            result = await self.web.search(
+                arguments["query"],
+                arguments.get("max_results", 5),
+                context,
             )
         elif name == "web_fetch":
-            result = checked(
-                await call_capability(
-                    self.host,
-                    "web.fetch",
-                    timeout_ms=70000,
-                    url=safe_url(arguments["url"]),
-                ),
-                "result",
-            )
+            result = await self.web.fetch(arguments["url"], context)
         elif name == "chat_read":
             messages = checked(
                 await call_capability(
