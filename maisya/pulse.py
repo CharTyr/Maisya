@@ -6,6 +6,8 @@ import json
 import logging
 import sqlite3
 
+from .scout import call_capability
+
 
 class Pulse:
     def __init__(
@@ -19,11 +21,21 @@ class Pulse:
         sleep_window="",
         proactive_level="care",
         redact=lambda v: v,
+        routes=None,
+        memory=None,
+        profiles=None,
+        plugin_enabled=lambda: True,
+        heartbeat_interval=3600,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
         self.sleep_window, self.redact = sleep_window, redact
         self.proactive_level = proactive_level
+        self.routes = routes
+        self.memory = memory
+        self.profiles = profiles
+        self.plugin_enabled = plugin_enabled
+        self.heartbeat_interval = heartbeat_interval
         self.task = None
         self.closing = False
 
@@ -33,6 +45,7 @@ class Pulse:
         await self._returns()
         if self.intents is not None:
             await self._intents()
+        await self._heartbeat()
 
     async def _returns(self):
         batches = await asyncio.to_thread(self.bridge.claim_ready, self.enabled)
@@ -134,7 +147,11 @@ class Pulse:
         )
         if status == "accepted" and row["kind"] == "proactive":
             await asyncio.to_thread(self.intents.mark_proactive, target)
-        done = "done" if status == "accepted" else "failed"
+        done = (
+            "done"
+            if status == "accepted"
+            else ("deferred" if status in {"session_missing", "uncertain"} else "failed")
+        )
         await asyncio.to_thread(self.intents.finish, row["intent_id"], done, status)
 
     async def _silent(self, row):
@@ -225,19 +242,125 @@ class Pulse:
 
     async def _wake(self, chat_id, intent, *, reason, metadata):
         try:
-            result = await self.host.call_capability(
+            result = await call_capability(
+                self.host,
                 "maisaka.proactive.trigger",
+                timeout_ms=30000,
                 stream_id=chat_id,
                 intent=intent,
                 reason=reason,
                 metadata=metadata,
             )
+            if (
+                isinstance(result, dict)
+                and not result.get("success", True)
+                and "未找到已存在的聊天流" in str(result.get("error", ""))
+            ):
+                reopened = await self._reopen_session(chat_id)
+                if reopened:
+                    result = await call_capability(
+                        self.host,
+                        "maisaka.proactive.trigger",
+                        timeout_ms=30000,
+                        stream_id=chat_id,
+                        intent=intent,
+                        reason=reason,
+                        metadata=metadata,
+                    )
+                if (
+                    isinstance(result, dict)
+                    and not result.get("success", True)
+                    and "未找到已存在的聊天流" in str(result.get("error", ""))
+                ):
+                    return "session_missing"
             accepted = bool(result) and (
                 not isinstance(result, dict) or result.get("success", True)
             )
             return "accepted" if accepted else "rejected"
         except (RuntimeError, OSError, ValueError, TypeError):
             return "uncertain"
+
+    async def _reopen_session(self, chat_id):
+        if not callable(self.routes):
+            return False
+        route = await asyncio.to_thread(self.routes, chat_id)
+        if not route or not route.get("platform"):
+            return False
+        if route["chat_type"] == "group" and not route.get("group_id"):
+            return False
+        if route["chat_type"] == "private" and not route.get("user_id"):
+            return False
+        args = {
+            "platform": route["platform"],
+            "chat_type": route["chat_type"],
+            "user_id": route.get("user_id", ""),
+            "group_id": route.get("group_id", ""),
+        }
+        if route.get("account_id"):
+            args["account_id"] = route["account_id"]
+        if route.get("scope"):
+            args["scope"] = route["scope"]
+        opened = await call_capability(
+            self.host, "chat.open_session", timeout_ms=15000, **args
+        )
+        return bool(opened) and (
+            not isinstance(opened, dict) or opened.get("success", True)
+        )
+
+    def _claim_heartbeat(self, now):
+        with self.intents.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT last_proactive FROM social_state WHERE chat_id='__self_heartbeat__'"
+            ).fetchone()
+            last_run = row["last_proactive"] if row else 0.0
+            if now - last_run < self.heartbeat_interval:
+                return False
+            db.execute(
+                "INSERT INTO social_state (chat_id, locked, last_proactive) "
+                "VALUES ('__self_heartbeat__', 0, ?) ON CONFLICT(chat_id) DO UPDATE SET "
+                "last_proactive=excluded.last_proactive",
+                (now,),
+            )
+        return True
+
+    async def _heartbeat(self):
+        if (
+            self.closing
+            or not self.plugin_enabled()
+            or self.memory is None
+            or self.profiles is None
+            or self.engine is None
+            or self.intents is None
+            or self.proactive_level == "quiet"
+            or self.intents.in_sleep_window(self.sleep_window)
+            or self.engine.tasks
+        ):
+            return
+        try:
+            heartbeat = await asyncio.to_thread(self.memory.read, "heartbeat")
+            plan = str(heartbeat.get("content") or "").strip()
+            if not plan:
+                return
+            now = self.intents.clock()
+            if not await asyncio.to_thread(self._claim_heartbeat, now):
+                return
+            scout = await asyncio.to_thread(self.profiles.get, "scout")
+            if not scout.autonomous:
+                return
+            await self.engine.start(
+                scout,
+                "按自身节奏做一次轻量公开探索并记录近况（不涉及任何具体会话私有信息）：\n"
+                + plan,
+                chat_id="self",
+                platform="self",
+                user_id="",
+                owner="self",
+                wait_seconds=0,
+                workspace="heartbeat",
+            )
+        except (ValueError, PermissionError, RuntimeError, OSError, sqlite3.Error):
+            return
 
     def start(self):
         if self.task is None:

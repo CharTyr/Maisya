@@ -28,6 +28,7 @@ SANDBOX_TOOLS = READONLY_TOOLS | {
     "mcp_call",
     "credential_call",
 }
+ALLOWED_TASKS = frozenset({"utils", "planner", "replyer", "fast_model", "vlm"})
 DEFAULT_INSTRUCTIONS = (
     "你是 MaiBot 调度的只读探索能力。根据当前要求自主查证，保留出处，区分事实和推断。"
     "普通细节自行决定；只有核心输入缺失才用 ask_user 提问一次。直接给出有用的文字结论。"
@@ -41,6 +42,7 @@ class Profile:
     title: str = "探索者"
     model: str = ""
     fallback_models: tuple[str, ...] = ()
+    task: str = "utils"
     environment: str = "readonly"
     tools: tuple[str, ...] = tuple(sorted(READONLY_TOOLS))
     access: str = "everyone"
@@ -108,6 +110,7 @@ class Profiles:
             "title",
             "model",
             "fallback_models",
+            "task",
             "environment",
             "tools",
             "access",
@@ -121,6 +124,9 @@ class Profiles:
             "allow_chats",
         }:
             raise ValueError("档案包含未声明字段，凭据只能使用句柄绑定")
+        task = config.get("task", "utils")
+        if not isinstance(task, str) or task not in ALLOWED_TASKS:
+            raise ValueError("能力档案模型任务槽位无效")
         environment = config.get("environment", "readonly")
         if environment not in {"readonly", "sandbox"}:
             raise ValueError("能力档案执行环境无效")
@@ -191,6 +197,7 @@ class Profiles:
             title=str(config.get("title", profile_id)),
             model=config.get("model", ""),
             fallback_models=tuple(fallback),
+            task=task,
             tools=tuple(tools),
             access=config.get("access", "everyone"),
             instructions=(directory / "PROFILE.md").read_text(),

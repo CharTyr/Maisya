@@ -34,6 +34,12 @@ class Intents:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS incoming_events (event_key TEXT PRIMARY KEY,digest TEXT,intent_id TEXT)"
             )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS session_routes ("
+                "session_id TEXT PRIMARY KEY, platform TEXT NOT NULL, "
+                "chat_type TEXT NOT NULL, group_id TEXT NOT NULL, user_id TEXT NOT NULL, "
+                "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL)"
+            )
 
     def _intent(self, row):
         result = dict(row)
@@ -99,8 +105,8 @@ class Intents:
                 start, end = self._day_bounds(now)
                 used = db.execute(
                     "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
-                    "AND source!='later' AND created>=? AND created<? "
-                    "AND status!='cancelled'",
+                    "AND source IN ('afterglow','serendipity','longing','later') "
+                    "AND created>=? AND created<? AND status!='cancelled'",
                     (start, end),
                 ).fetchone()["count"]
                 if used >= 1:
@@ -195,26 +201,28 @@ class Intents:
                 (chat_id,),
             )
 
+    def in_sleep_window(self, sleep_window="", *, now=None):
+        now = self.clock() if now is None else now
+        hour = (int(now) + 8 * 3600) % 86400 // 3600
+        if not sleep_window:
+            return False
+        try:
+            start, end = (int(part) for part in sleep_window.split("-", 1))
+        except (TypeError, ValueError):
+            return False
+        return (
+            0 <= start <= 24
+            and 0 <= end <= 24
+            and start != end
+            and (start <= hour < end if start < end else hour >= start or hour < end)
+        )
+
     def social_gate(self, target, *, sleep_window="", now=None):
         if not CHAT_TARGET.match(target):
             return False, "invalid_target"
         chat_id = target.split(":", 1)[1]
-        now = self.clock() if now is None else now
-        hour = (int(now) + 8 * 3600) % 86400 // 3600
-        if sleep_window:
-            try:
-                start, end = (int(part) for part in sleep_window.split("-", 1))
-            except (TypeError, ValueError):
-                start, end = -1, -1
-            if (
-                0 <= start <= 24
-                and 0 <= end <= 24
-                and start != end
-                and (
-                    start <= hour < end if start < end else hour >= start or hour < end
-                )
-            ):
-                return False, "sleep_window"
+        if self.in_sleep_window(sleep_window, now=now):
+            return False, "sleep_window"
         with self.store.connect() as db:
             state = db.execute(
                 "SELECT locked FROM social_state WHERE chat_id=?", (chat_id,)
@@ -229,7 +237,13 @@ class Intents:
                 "SELECT 1 FROM trusted_sources WHERE session_id=? AND relayed=0 LIMIT 1",
                 (chat_id,),
             ).fetchone()
-        return row is not None
+            if row is not None:
+                return True
+            route = db.execute(
+                "SELECT 1 FROM session_routes WHERE session_id=? LIMIT 1",
+                (chat_id,),
+            ).fetchone()
+        return route is not None
 
     def mark_proactive(self, target):
         chat_id = target.split(":", 1)[1]

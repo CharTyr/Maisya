@@ -23,3 +23,4 @@ memory_mib = 512
 work_mib = 256
 timeout = 60
 output_bytes = 2097152
+max_concurrent = 2

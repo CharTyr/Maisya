@@ -177,6 +177,18 @@ def checked(result, field=None):
     return result.get(field, result) if field and isinstance(result, dict) else result
 
 
+async def call_capability(host, name: str, *, timeout_ms: int | None = None, **kwargs):
+    """Call a host capability with an explicit timeout while supporting legacy rpc mocks."""
+    if timeout_ms is None:
+        return await host.call_capability(name, **kwargs)
+    try:
+        return await host.call_capability(name, timeout_ms=timeout_ms, **kwargs)
+    except TypeError as error:
+        if "timeout_ms" not in str(error):
+            raise
+        return await host.call_capability(name, **kwargs)
+
+
 def safe_url(url):
     parts = urlsplit(url)
     if (
@@ -213,8 +225,10 @@ class Scout:
         prompt = [{"role": "system", "content": instructions}] + history
         for model in (profile.model, *profile.fallback_models):
             try:
-                result = await self.host.call_capability(
+                result = await call_capability(
+                    self.host,
                     "llm.generate_with_tools",
+                    timeout_ms=90000,
                     prompt=prompt,
                     tools=[
                         TOOL_DEFINITIONS[name]
@@ -225,7 +239,7 @@ class Scout:
                             "thread_later",
                         )
                     ],
-                    task_name="utils",
+                    task_name=profile.task,
                     model_name=model,
                     max_tokens=4096,
                 )
@@ -249,8 +263,10 @@ class Scout:
             raise PermissionError("自身探索线程不能读取某个聊天会话的私有资料")
         if name == "web_search":
             result = checked(
-                await self.host.call_capability(
+                await call_capability(
+                    self.host,
                     "web.search",
+                    timeout_ms=70000,
                     query=arguments["query"],
                     max_results=arguments.get("max_results", 5),
                 ),
@@ -258,15 +274,20 @@ class Scout:
             )
         elif name == "web_fetch":
             result = checked(
-                await self.host.call_capability(
-                    "web.fetch", url=safe_url(arguments["url"])
+                await call_capability(
+                    self.host,
+                    "web.fetch",
+                    timeout_ms=70000,
+                    url=safe_url(arguments["url"]),
                 ),
                 "result",
             )
         elif name == "chat_read":
             messages = checked(
-                await self.host.call_capability(
+                await call_capability(
+                    self.host,
                     "message.get_recent",
+                    timeout_ms=15000,
                     chat_id=chat_id,
                     limit=arguments.get("limit", 20),
                     include_binary_data=False,
@@ -284,8 +305,10 @@ class Scout:
             ]
         elif name in {"message_read", "image_read"}:
             raw = checked(
-                await self.host.call_capability(
+                await call_capability(
+                    self.host,
                     "message.get_by_id",
+                    timeout_ms=30000 if name == "image_read" else 15000,
                     message_id=arguments["message_id"],
                     chat_id=chat_id,
                     include_binary_data=name == "image_read",
@@ -314,8 +337,10 @@ class Scout:
                 elif decoded.startswith(b"RIFF") and decoded[8:12] == b"WEBP":
                     image_format = "webp"
                 result = checked(
-                    await self.host.call_capability(
+                    await call_capability(
+                        self.host,
                         "llm.generate_for_image",
+                        timeout_ms=60000,
                         prompt=arguments["question"],
                         image_base64=binary,
                         image_format=image_format,
@@ -326,8 +351,10 @@ class Scout:
                 result = self._message_text(raw)
         elif name == "memory_read":
             result = checked(
-                await self.host.call_capability(
+                await call_capability(
+                    self.host,
                     "knowledge.search",
+                    timeout_ms=15000,
                     query=arguments["query"],
                     chat_id=chat_id,
                     limit=5,

@@ -31,6 +31,7 @@ if __package__:
         allowed,
         filter_tools,
         normalize_admins,
+        strip_mention_all,
     )
     from .maisya.vault import (
         Vault,
@@ -60,6 +61,7 @@ else:
         allowed,
         filter_tools,
         normalize_admins,
+        strip_mention_all,
     )
     from maisya.vault import (
         Vault,
@@ -71,6 +73,26 @@ else:
 
 
 PLUGIN_ID = "chartyr.maisya"
+
+
+def _merge_settings_dict(base: dict, saved: dict, file_cfg: dict) -> dict:
+    merged = {}
+    for key in set(saved) | set(file_cfg):
+        if key not in file_cfg:
+            merged[key] = saved[key]
+        elif key not in saved:
+            merged[key] = file_cfg[key]
+        elif (
+            isinstance(base.get(key), dict)
+            and isinstance(saved.get(key), dict)
+            and isinstance(file_cfg.get(key), dict)
+        ):
+            merged[key] = _merge_settings_dict(base[key], saved[key], file_cfg[key])
+        elif key not in base or file_cfg[key] != base[key]:
+            merged[key] = file_cfg[key]
+        else:
+            merged[key] = saved[key]
+    return merged
 
 
 class MaisyaPlugin(MaiBotPlugin):
@@ -99,15 +121,38 @@ class MaisyaPlugin(MaiBotPlugin):
         self._turn_sources = {}
 
     async def on_load(self):
-        self.settings = Settings.model_validate(self.get_plugin_config_data())
+        file_settings = Settings.model_validate(self.get_plugin_config_data())
+        file_dump = file_settings.model_dump()
+        self.settings = file_settings
         self.data_root = await asyncio.to_thread(
             initialize_data, self.ctx.paths.data_dir
         )
         saved_settings = await asyncio.to_thread(
             MemoryLayers._bytes, self.data_root / "settings.json"
         )
+        base_settings = await asyncio.to_thread(
+            MemoryLayers._bytes, self.data_root / "settings.base.json"
+        )
         if saved_settings:
-            self.settings = Settings.model_validate_json(saved_settings)
+            saved_dump = Settings.model_validate_json(saved_settings).model_dump()
+            if base_settings:
+                base_dump = Settings.model_validate_json(base_settings).model_dump()
+                merged = _merge_settings_dict(base_dump, saved_dump, file_dump)
+            else:
+                merged = saved_dump
+            self.settings = Settings.model_validate(merged)
+            self.set_plugin_config(merged)
+            if merged != saved_dump:
+                await asyncio.to_thread(
+                    atomic_private_write,
+                    self.data_root / "settings.json",
+                    json.dumps(merged, ensure_ascii=False).encode(),
+                )
+        await asyncio.to_thread(
+            atomic_private_write,
+            self.data_root / "settings.base.json",
+            json.dumps(file_dump, ensure_ascii=False).encode(),
+        )
         self.vault = await asyncio.to_thread(Vault, self.data_root / "vault")
         self.messages = await asyncio.to_thread(
             MessageStore, self.data_root / "maisya.db"
@@ -160,6 +205,10 @@ class MaisyaPlugin(MaiBotPlugin):
             sleep_window=getattr(self.settings, "sleep_window", ""),
             proactive_level=getattr(self.settings, "proactive_level", "care"),
             redact=self.vault.redact,
+            routes=self.messages.route_for,
+            memory=self.memory,
+            profiles=self.profiles,
+            plugin_enabled=lambda: self.settings.plugin.enabled,
         )
         self.pulse.start()
         self.sharing = Share(
@@ -315,12 +364,20 @@ class MaisyaPlugin(MaiBotPlugin):
                         await self.engine.stop(thread_id, chat_id=row["chat_id"])
                 if sandbox_changed and self.runtime:
                     await self.runtime.configure(settings.sandbox)
-            if self.data_root and (self.data_root / "settings.json").exists():
-                await asyncio.to_thread(
-                    atomic_private_write,
-                    self.data_root / "settings.json",
-                    json.dumps(settings.model_dump(), ensure_ascii=False).encode(),
-                )
+            if self.data_root:
+                encoded = json.dumps(settings.model_dump(), ensure_ascii=False).encode()
+                if (self.data_root / "settings.json").exists():
+                    await asyncio.to_thread(
+                        atomic_private_write,
+                        self.data_root / "settings.json",
+                        encoded,
+                    )
+                if version not in (0, "", None):
+                    await asyncio.to_thread(
+                        atomic_private_write,
+                        self.data_root / "settings.base.json",
+                        encoded,
+                    )
 
     def enabled_for(self, session_id, platform):
         return self.settings.plugin.enabled and (
@@ -638,6 +695,9 @@ class MaisyaPlugin(MaiBotPlugin):
                         ref_msg_ids=ref_msg_ids,
                         target_chat_id=chat_id if row["owner"] == "self" else None,
                         target_platform=platform,
+                        is_admin=bool(
+                            source_msg_id and self.authorize(source_msg_id, chat_id, platform)
+                        ),
                     )
                 elif action == "stop":
                     if (
@@ -999,7 +1059,11 @@ class MaisyaPlugin(MaiBotPlugin):
                     raise ValueError("线程已停止，不能安排续接")
             due = self.intents.clock() + in_seconds
             intent_kind = "proactive" if kind == "proactive" else "return"
-            intent_source = source if kind == "proactive" else "later"
+            intent_source = (
+                ("afterglow" if source == "later" else source)
+                if kind == "proactive"
+                else "later"
+            )
             row = await asyncio.to_thread(
                 self.intents.schedule,
                 kind=intent_kind,
@@ -1009,7 +1073,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 reason=reason,
                 thread_id=thread_id,
                 payload={"platform": platform},
-                bypass_limits=True,
+                bypass_limits=intent_kind != "proactive",
             )
             result = self.vault.redact(row)
             return {
@@ -1455,7 +1519,7 @@ class MaisyaPlugin(MaiBotPlugin):
     @HookHandler(
         "send_service.before_send",
         name="maisya_redact",
-        description="移除出站消息中的已知凭据",
+        description="移除出站消息中的已知凭据与非管理员全体提及",
         mode=HookMode.BLOCKING,
         error_policy=ErrorPolicy.ABORT,
     )
@@ -1464,9 +1528,40 @@ class MaisyaPlugin(MaiBotPlugin):
             return {"action": "continue"}
         message = kwargs.get("message")
         sanitized = self.vault.redact(message)
-        if sanitized == message:
+        modified = {}
+        session_id = str(
+            kwargs.get("session_id")
+            or kwargs.get("stream_id")
+            or (message.get("session_id") if isinstance(message, dict) else "")
+            or ""
+        )
+        platform = str(
+            kwargs.get("platform")
+            or (message.get("platform") if isinstance(message, dict) else "")
+            or ""
+        ).lower()
+        if not platform and session_id and self.messages:
+            platform = await asyncio.to_thread(self.messages.platform_for, session_id)
+        if session_id and self.enabled_for(session_id, platform):
+            sources = [
+                *self._turn_sources.get(session_id, []),
+                *self._pending_sources.get(session_id, []),
+            ]
+            is_admin = await asyncio.to_thread(
+                lambda: any(self.authorize(item, session_id, platform) for item in sources)
+            )
+            if not is_admin:
+                sanitized = strip_mention_all(sanitized)
+                for key in ("segments", "processed_plain_text"):
+                    if key in kwargs:
+                        cleaned = strip_mention_all(self.vault.redact(kwargs[key]))
+                        if cleaned != kwargs[key]:
+                            modified[key] = cleaned
+        if sanitized != message:
+            modified["message"] = sanitized
+        if not modified:
             return {"action": "continue"}
-        return {"action": "continue", "modified_kwargs": {"message": sanitized}}
+        return {"action": "continue", "modified_kwargs": modified}
 
 
 def create_plugin():

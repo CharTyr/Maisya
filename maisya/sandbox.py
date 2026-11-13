@@ -54,6 +54,7 @@ class SandboxSettings(BaseModel):
     work_mib: int = Field(default=256, ge=16, le=2048)
     timeout: int = Field(default=60, ge=1, le=180)
     output_bytes: int = Field(default=2097152, ge=1024, le=8388608)
+    max_concurrent: int = Field(default=2, ge=1, le=8)
 
     @model_validator(mode="after")
     def validate_boundary(self):
@@ -227,7 +228,7 @@ class Sandbox:
         self.closing = False
         self.instance_lock = None
         self.error = "沙箱未启用"
-        self.slot = asyncio.Semaphore(1)
+        self.slot = asyncio.Semaphore(settings.max_concurrent)
         with store.connect() as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS executions (thread_id TEXT, revision INTEGER, call_id TEXT, container TEXT, status TEXT, result TEXT, PRIMARY KEY(thread_id, revision, call_id))"

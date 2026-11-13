@@ -11,7 +11,7 @@ from dataclasses import replace
 
 from .abilities import Profile
 from .sandbox import Sandbox
-from .scout import Scout, checked, safe_url, validate_arguments
+from .scout import Scout, call_capability, checked, safe_url, validate_arguments
 from .workspaces import Workspaces, completed_thread, parent_fd, regular_open
 
 
@@ -67,6 +67,7 @@ class AgentRuntime(Scout):
                 instructions=live.instructions,
                 model=live.model,
                 fallback_models=live.fallback_models,
+                task=live.task,
                 skills=live.skills,
             )
             methods = await completed_thread(self.memory.methods, profile)
@@ -144,8 +145,10 @@ class AgentRuntime(Scout):
         imported = []
         for reference_index, message_id in enumerate(references):
             raw = checked(
-                await self.host.call_capability(
+                await call_capability(
+                    self.host,
                     "message.get_by_id",
+                    timeout_ms=30000,
                     message_id=message_id,
                     chat_id=row["chat_id"],
                     include_binary_data=True,

@@ -13,6 +13,10 @@ PRIVATE_KEY = re.compile(
     r"-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]+?-----END (?P=kind)-----"
 )
 VAULT_COMMAND = re.compile(r"^/vault(?:\s|$)")
+MENTION_ALL_TEXT = re.compile(
+    r"@全体成员|@所有人|\[CQ:at,qq=all(?:,[^\]]*)?\]", re.IGNORECASE
+)
+MENTION_ALL_TARGETS = frozenset({"all", "全体成员", "所有人"})
 
 
 def alias(message_id: str) -> str:
@@ -35,11 +39,15 @@ class Message:
     user_id: str
     is_plugin_relayed: bool
     is_local_operator: bool = False
+    group_id: str = ""
+    account_id: str = ""
+    scope: str = ""
 
     @classmethod
     def from_event(cls, event: dict) -> "Message":
         info = event.get("message_info") or {}
         config = info.get("additional_config") or {}
+        group_info = info.get("group_info")
         platform = str(event.get("platform") or "").strip().lower()
         return cls(
             str(event.get("message_id") or "").strip(),
@@ -48,7 +56,83 @@ class Message:
             str((info.get("user_info") or {}).get("user_id") or "").strip(),
             bool(config.get("relayed_by_plugin")),
             platform == "bot_console" and config.get("is_local_operator") is True,
+            str((group_info or {}).get("group_id") or "").strip()
+            if isinstance(group_info, dict)
+            else "",
+            str(info.get("account_id") or config.get("account_id") or "").strip(),
+            str(info.get("scope") or config.get("scope") or "").strip(),
         )
+
+
+def _strip_text_mentions(text: str) -> str:
+    if not MENTION_ALL_TEXT.search(text):
+        return text
+    lines = []
+    for line in text.splitlines(keepends=True):
+        if MENTION_ALL_TEXT.search(line):
+            suffix = "\n" if line.endswith("\n") else ""
+            body = line[:-1] if suffix else line
+            body = re.sub(r"[ \t]{2,}", " ", MENTION_ALL_TEXT.sub(" ", body)).strip(
+                " \t"
+            )
+            lines.append(body + suffix)
+        else:
+            lines.append(line)
+    return "".join(lines)
+
+
+def _is_mention_all_segment(item) -> bool:
+    if not isinstance(item, dict) or item.get("type") != "at":
+        return False
+    data = item.get("data")
+    if isinstance(data, dict):
+        target = str(
+            data.get("target_user_id")
+            or data.get("user_id")
+            or data.get("qq")
+            or data.get("id")
+            or ""
+        )
+    else:
+        target = str(data or "")
+    return target.strip().lower() in MENTION_ALL_TARGETS
+
+
+def strip_mention_all(value):
+    if isinstance(value, str):
+        return _strip_text_mentions(value)
+    if isinstance(value, list):
+        cleaned = []
+        changed = False
+        for item in value:
+            if _is_mention_all_segment(item):
+                changed = True
+                continue
+            updated = strip_mention_all(item)
+            if updated is not item and updated != item:
+                changed = True
+            cleaned.append(updated)
+        return cleaned if changed else value
+    if isinstance(value, dict):
+        updated = dict(value)
+        changed = False
+        for key in (
+            "processed_plain_text",
+            "display_message",
+            "text",
+            "content",
+            "data",
+            "segments",
+            "raw_message",
+            "message_sequence",
+        ):
+            if key in updated:
+                nxt = strip_mention_all(updated[key])
+                if nxt != updated[key]:
+                    updated[key] = nxt
+                    changed = True
+        return updated if changed else value
+    return value
 
 
 class MessageStore:
@@ -71,6 +155,12 @@ class MessageStore:
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trusted_alias ON trusted_sources(alias, session_id, platform)"
             )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS session_routes ("
+                "session_id TEXT PRIMARY KEY, platform TEXT NOT NULL, "
+                "chat_type TEXT NOT NULL, group_id TEXT NOT NULL, user_id TEXT NOT NULL, "
+                "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL)"
+            )
         path.chmod(0o600)
 
     def record(self, message: Message) -> None:
@@ -78,6 +168,7 @@ class MessageStore:
             (message.message_id, message.session_id, message.platform, message.user_id)
         ):
             raise ValueError("incomplete message identity")
+        now = time.time()
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
                 "INSERT INTO trusted_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
@@ -93,12 +184,34 @@ class MessageStore:
                     message.user_id,
                     message.is_plugin_relayed,
                     message.is_local_operator,
-                    time.time(),
+                    now,
                 ),
             )
+            if not message.is_plugin_relayed:
+                chat_type = "group" if message.group_id else "private"
+                route_user = "" if message.group_id else message.user_id
+                db.execute(
+                    "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "platform=excluded.platform, chat_type=excluded.chat_type, "
+                    "group_id=excluded.group_id, user_id=excluded.user_id, "
+                    "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
+                    "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
+                    "updated=excluded.updated",
+                    (
+                        message.session_id,
+                        message.platform,
+                        chat_type,
+                        message.group_id,
+                        route_user,
+                        message.account_id,
+                        message.scope,
+                        now,
+                    ),
+                )
             db.execute(
                 "DELETE FROM trusted_sources WHERE received < ?",
-                (time.time() - self.max_age,),
+                (now - self.max_age,),
             )
             db.execute(
                 "DELETE FROM trusted_sources WHERE rowid IN "
@@ -134,7 +247,31 @@ class MessageStore:
                 "SELECT DISTINCT platform FROM trusted_sources WHERE session_id=?",
                 (session_id,),
             ).fetchall()
-        return rows[0][0] if len(rows) == 1 else ""
+            if len(rows) == 1:
+                return rows[0][0]
+            route = db.execute(
+                "SELECT platform FROM session_routes WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        return route[0] if route else ""
+
+    def route_for(self, session_id: str) -> dict | None:
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute(
+                "SELECT platform, chat_type, group_id, user_id, account_id, scope "
+                "FROM session_routes WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "platform": row[0],
+            "chat_type": row[1],
+            "group_id": row[2],
+            "user_id": row[3],
+            "account_id": row[4],
+            "scope": row[5],
+        }
 
 
 def normalize_admins(permissions) -> set[str]:

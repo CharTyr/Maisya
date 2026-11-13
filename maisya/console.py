@@ -87,7 +87,9 @@ def snapshot(
                 "roles": sizes,
                 "archived": bool(row["summary"]),
             }
-            selected["model"] = profile.get("model") or "utils"
+            selected["model"] = (
+                profile.get("model") or profile.get("task") or "utils"
+            )
             selected["tools"] = profile.get("tools", [])
             records = db.execute(
                 "SELECT seq,kind,revision,payload,at FROM thread_events WHERE thread_id=? AND seq>? ORDER BY seq LIMIT 30",

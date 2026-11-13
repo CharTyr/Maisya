@@ -4,7 +4,7 @@ import asyncio
 import json
 import sqlite3
 
-from .scout import TOOL_DEFINITIONS, checked
+from .scout import TOOL_DEFINITIONS, call_capability, checked
 from .workspaces import completed_thread
 
 
@@ -105,7 +105,7 @@ class Learning:
 
     async def _learn(self, row, trace):
         try:
-            async with self.slot, asyncio.timeout(10):
+            async with self.slot, asyncio.timeout(45):
                 old = await completed_thread(
                     self.memory.read, "notes", target=row["profile"]
                 )
@@ -113,8 +113,10 @@ class Learning:
                     await completed_thread(self._receipt, row, "full")
                     return
                 response = checked(
-                    await self.host.call_capability(
+                    await call_capability(
+                        self.host,
                         "llm.generate_with_tools",
+                        timeout_ms=40000,
                         prompt=[
                             {
                                 "role": "system",
