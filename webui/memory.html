@@ -1,25 +1,405 @@
 <!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Maisya · 记忆</title><style>
-:root{color-scheme:light;--paper:var(--maibot-background,#f8f8f5);--panel:var(--maibot-card,#fff);--ink:var(--maibot-foreground,#252922);--muted:var(--maibot-muted-foreground,#74786f);--line:var(--maibot-border,#e0e3d9);--accent:#4d6540;--wash:#edf1e7;--danger:#a43c32}
-:root.dark{color-scheme:dark;--paper:var(--maibot-background,#1d201b);--panel:var(--maibot-card,#242820);--ink:var(--maibot-foreground,#edf0e6);--muted:var(--maibot-muted-foreground,#a3ac98);--line:var(--maibot-border,#3a4134);--accent:#acc394;--wash:#303b29;--danger:#e79c91}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select,textarea{font:inherit;color:inherit;max-width:100%}button,select{cursor:pointer}button,input,select,textarea{border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:8px 11px}button:disabled{opacity:.5;cursor:default}button:active{transform:scale(.98)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button.primary{background:var(--accent);color:var(--panel);border-color:var(--accent)}.danger{color:var(--danger)}header{padding:24px 28px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:20px}h1{font-size:24px;letter-spacing:-.7px;margin:0}h2{font-size:17px;margin:0 0 16px}.eyebrow{font-size:11px;letter-spacing:1.8px;color:var(--muted)}p{margin:7px 0}.hint,small{font-size:12px;color:var(--muted);overflow-wrap:anywhere}nav{display:flex;gap:6px;flex-wrap:wrap}nav button{border-color:transparent;background:transparent}nav button[aria-current=true]{background:var(--wash);border-color:var(--line)}main{max-width:1320px;margin:auto;padding:24px 28px 50px}.columns{display:grid;grid-template-columns:245px minmax(0,1fr);gap:24px}aside{min-width:0}.list{display:flex;flex-direction:column;gap:6px;margin:14px 0}.list button{text-align:left;overflow-wrap:anywhere}.list button[aria-current=true]{border-color:var(--accent);background:var(--wash)}section.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px;min-width:0;margin-bottom:20px}.toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:12px 0}.toolbar label{margin:0}label{display:block;font-size:12px;margin:12px 0 6px}input:not([type=checkbox]),select{width:100%}textarea{display:block;width:100%;resize:vertical;min-height:280px;line-height:1.8;font-family:ui-monospace,SFMono-Regular,monospace}textarea[data-type=map]{min-height:84px;line-height:1.55;font-size:12px}#content{min-height:360px}#package-text{min-height:110px}.toolbar select{width:auto;max-width:260px}.toolbar input{width:170px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px}.grid label{min-width:0}.wide{grid-column:1/-1}details{border-top:1px solid var(--line);padding-top:12px;margin-top:18px}summary{cursor:pointer;font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.8 ui-monospace,SFMono-Regular,monospace;margin:12px 0}.entry{padding:12px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}.entry strong{font-weight:550}.entry p{font-size:13px;white-space:pre-wrap}.status{min-height:24px;margin:12px 0;color:var(--muted);overflow-wrap:anywhere}.status.error{color:var(--danger)}.version{font-size:12px;color:var(--muted);margin-left:auto}.workspace{border:1px solid var(--line);padding:9px;margin:8px 0;border-radius:6px}[hidden]{display:none!important}
-@media(max-width:700px){header{padding:18px;align-items:flex-start;flex-direction:column;gap:10px}main{padding:18px 14px}.columns{grid-template-columns:1fr;gap:8px}.list{flex-direction:row;overflow:auto}.list button{flex-shrink:0}.grid{grid-template-columns:1fr}.card{padding:16px!important}.toolbar{gap:7px}.toolbar select{max-width:100%}#content{min-height:300px}h1{font-size:22px}}
-@media(prefers-reduced-motion:reduce){button:active{transform:none}}
+<html lang="zh-CN" data-dashboard-style="millennium"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Maisya · 记忆</title><style>
+:root{
+  --maibot-background:hsl(42 20% 91%);
+  --maibot-surface:hsl(42 24% 96%);
+  --maibot-foreground:hsl(24 10% 18%);
+  --maibot-muted:hsl(30 7% 44%);
+  --maibot-soft:hsl(40 16% 86%);
+  --maibot-border:hsl(36 12% 77%);
+  --maibot-primary:hsl(11 76% 58%);
+  --maibot-primary-foreground:hsl(42 40% 98%);
+  --maibot-danger:hsl(2 68% 52%);
+  --maibot-radius:8px;
+  --maibot-font-body:"PingFang SC","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --maibot-font-display:"PingFang SC","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --maibot-font-mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+  --mil-on:#1f8a5b;
+  --mil-on-ink:#f2fcf7;
+  --mil-warn:#d97706;
+  --mil-screen:#e5eadf;
+  --mil-screen-line:rgba(28,44,32,.08);
+  --mil-screen-ink:#1c2c20;
+  --mil-bevel:inset 0 1px 0 rgba(255,255,255,.78),0 1px 2px rgba(42,35,28,.08);
+  --mil-inset:inset 0 1px 2px rgba(42,35,28,.09);
+  --mil-engraved:rgba(255,255,255,.65);
+  color-scheme:light;
+  font-family:var(--maibot-font-body);
+  background:var(--maibot-background);
+  color:var(--maibot-foreground);
+  font-synthesis:none;
+}
+:root.dark{
+  --maibot-background:hsl(24 10% 11%);
+  --maibot-surface:hsl(24 9% 15%);
+  --maibot-foreground:hsl(40 18% 90%);
+  --maibot-muted:hsl(34 8% 62%);
+  --maibot-soft:hsl(24 9% 19%);
+  --maibot-border:hsl(26 9% 25%);
+  --maibot-primary:hsl(12 76% 62%);
+  --maibot-primary-foreground:hsl(24 14% 11%);
+  --maibot-danger:hsl(4 72% 60%);
+  --mil-on:#2fb97c;
+  --mil-on-ink:#072417;
+  --mil-warn:#f59e0b;
+  --mil-screen:#121913;
+  --mil-screen-line:rgba(167,243,190,.07);
+  --mil-screen-ink:#b9f3c7;
+  --mil-bevel:inset 0 1px 0 rgba(255,255,255,.06),0 2px 6px rgba(0,0,0,.35);
+  --mil-inset:inset 0 1px 3px rgba(0,0,0,.38);
+  --mil-engraved:rgba(255,255,255,.06);
+  color-scheme:dark;
+}
+:root[data-dashboard-style="modern"]{
+  --maibot-background:hsl(36 22% 96%);
+  --maibot-surface:hsl(0 0% 100%);
+  --maibot-foreground:hsl(220 18% 16%);
+  --maibot-muted:hsl(220 10% 46%);
+  --maibot-soft:hsl(36 16% 92%);
+  --maibot-border:hsl(30 12% 86%);
+  --maibot-primary:hsl(18 82% 52%);
+  --maibot-primary-foreground:hsl(0 0% 100%);
+  --maibot-danger:hsl(2 70% 52%);
+  --maibot-radius:12px;
+  --mil-on:#10b981;
+  --mil-on-ink:#ffffff;
+  --mil-screen:hsl(220 20% 96%);
+  --mil-screen-line:rgba(15,23,42,.05);
+  --mil-screen-ink:hsl(220 20% 18%);
+  --mil-bevel:0 1px 3px rgba(15,23,42,.05),0 6px 18px rgba(15,23,42,.04);
+  --mil-inset:inset 0 1px 2px rgba(15,23,42,.05);
+  --mil-engraved:transparent;
+}
+:root.dark[data-dashboard-style="modern"]{
+  --maibot-background:hsl(222 18% 9%);
+  --maibot-surface:hsl(222 16% 13%);
+  --maibot-foreground:hsl(220 20% 94%);
+  --maibot-muted:hsl(220 12% 62%);
+  --maibot-soft:hsl(222 15% 18%);
+  --maibot-border:hsl(222 14% 23%);
+  --maibot-primary:hsl(20 88% 58%);
+  --maibot-primary-foreground:hsl(222 20% 10%);
+  --maibot-danger:hsl(2 74% 62%);
+  --mil-on:#34d399;
+  --mil-on-ink:#062319;
+  --mil-screen:hsl(222 20% 10%);
+  --mil-screen-line:rgba(255,255,255,.04);
+  --mil-screen-ink:hsl(210 25% 88%);
+  --mil-bevel:0 2px 10px rgba(0,0,0,.36);
+  --mil-inset:inset 0 1px 2px rgba(0,0,0,.34);
+}
+:root[data-dashboard-style="future-retro"]{
+  --maibot-background:hsl(44 33% 93%);
+  --maibot-surface:hsl(45 45% 98%);
+  --maibot-foreground:hsl(215 28% 14%);
+  --maibot-muted:hsl(215 14% 40%);
+  --maibot-soft:hsl(42 26% 87%);
+  --maibot-border:hsl(215 28% 18%);
+  --maibot-primary:hsl(14 82% 53%);
+  --maibot-primary-foreground:hsl(45 50% 98%);
+  --maibot-danger:hsl(0 72% 48%);
+  --maibot-radius:2px;
+  --mil-on:#0f766e;
+  --mil-on-ink:#f0fdfa;
+  --mil-screen:#14231e;
+  --mil-screen-line:rgba(126,245,196,.09);
+  --mil-screen-ink:#a7f3d0;
+  --mil-bevel:2px 2px 0 hsl(215 28% 18%);
+  --mil-inset:inset 0 0 0 1px hsl(215 28% 18% / .16);
+  --mil-engraved:transparent;
+}
+:root.dark[data-dashboard-style="future-retro"]{
+  --maibot-background:hsl(172 20% 8%);
+  --maibot-surface:hsl(172 18% 12%);
+  --maibot-foreground:hsl(45 30% 92%);
+  --maibot-muted:hsl(168 12% 62%);
+  --maibot-soft:hsl(172 16% 17%);
+  --maibot-border:hsl(162 24% 38%);
+  --maibot-primary:hsl(16 86% 58%);
+  --maibot-primary-foreground:hsl(172 24% 8%);
+  --mil-on:#2dd4bf;
+  --mil-on-ink:#072320;
+  --mil-screen:#09110f;
+  --mil-screen-line:rgba(45,212,191,.09);
+  --mil-screen-ink:#99f6e4;
+  --mil-bevel:2px 2px 0 rgba(0,0,0,.55);
+  --mil-inset:inset 0 0 0 1px rgba(45,212,191,.18);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;min-height:100%;background:var(--maibot-background);color:var(--maibot-foreground);font-family:var(--maibot-font-body)}
+body{overflow-x:hidden}
+button,input,select,textarea{font:inherit}
+[hidden]{display:none!important}
+.page-shell{max-width:1320px;margin:0 auto;padding:12px 16px 28px;display:flex;flex-direction:column;gap:12px}
+.frame-head{
+  display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:14px;
+  padding:12px 16px;
+  background:var(--maibot-surface);
+  border:1px solid var(--maibot-border);
+  border-radius:var(--maibot-radius);
+  box-shadow:var(--mil-bevel);
+}
+.head-left{display:flex;flex-direction:column;gap:3px;min-width:0}
+.head-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.eyebrow{
+  font-family:var(--maibot-font-mono);
+  font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--maibot-primary);
+}
+.conn-pill{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:3px 9px;
+  border-radius:999px;
+  border:1px solid var(--maibot-border);
+  background:var(--maibot-soft);
+  font-size:11.5px;color:var(--maibot-muted);font-weight:600;
+}
+[data-status-light]{
+  width:8px;height:8px;border-radius:999px;flex-shrink:0;
+  background:var(--mil-warn);
+  box-shadow:0 0 0 1px rgba(0,0,0,.18),0 0 6px rgba(217,119,6,.35);
+  transition:background-color .16s ease,box-shadow .16s ease;
+}
+[data-status-light][data-status="on"]{
+  background:#22c55e;
+  box-shadow:0 0 0 1px rgba(0,0,0,.18),0 0 8px rgba(34,197,94,.48);
+}
+[data-status-light][data-status="error"]{
+  background:var(--maibot-danger);
+  box-shadow:0 0 0 1px rgba(0,0,0,.2),0 0 8px rgba(239,68,68,.5);
+}
+h1{
+  margin:0;
+  font-family:var(--maibot-font-display);
+  font-size:20px;line-height:1.25;font-weight:700;letter-spacing:-.01em;
+  text-shadow:0 1px 0 var(--mil-engraved);
+}
+h2{
+  margin:0;
+  font-family:var(--maibot-font-display);
+  font-size:14.5px;line-height:1.35;font-weight:700;
+  color:var(--maibot-foreground);
+}
+nav.workspace-tabs{
+  display:inline-flex;flex-wrap:wrap;gap:6px;
+  padding:4px;
+  border:1px solid var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 1px);
+  background:var(--maibot-soft);
+  box-shadow:var(--mil-inset);
+}
+nav.workspace-tabs button{
+  min-height:32px;padding:6px 14px;
+  border:1px solid transparent;
+  border-radius:calc(var(--maibot-radius) - 3px);
+  background:transparent;color:var(--maibot-foreground);
+  font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:background-color .14s ease,border-color .14s ease,color .14s ease;
+}
+nav.workspace-tabs button[aria-current="true"]{
+  background:var(--maibot-primary);
+  border-color:var(--maibot-primary);
+  color:var(--maibot-primary-foreground);
+  box-shadow:var(--mil-bevel);
+}
+main{display:flex;flex-direction:column;gap:12px;min-width:0}
+.columns{
+  display:grid;
+  grid-template-columns:minmax(256px,312px) minmax(0,1fr);
+  gap:14px;
+  align-items:start;
+}
+.columns > div{display:flex;flex-direction:column;gap:12px;min-width:0}
+:where(.card,.maibot-card){
+  background:var(--maibot-surface);
+  border:1px solid var(--maibot-border);
+  border-radius:var(--maibot-radius);
+  box-shadow:var(--mil-bevel);
+  padding:15px 16px;
+  display:flex;flex-direction:column;gap:10px;
+  min-width:0;
+}
+aside.card{gap:10px}
+:where(.maibot-button,button){
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  min-height:34px;padding:6px 13px;
+  border:1px solid var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--maibot-soft);
+  color:var(--maibot-foreground);
+  box-shadow:var(--mil-bevel);
+  font-size:12.5px;font-weight:600;line-height:1.25;
+  cursor:pointer;
+  transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .08s ease;
+}
+.maibot-button-primary,button.primary{
+  background:var(--maibot-primary);
+  border-color:var(--maibot-primary);
+  color:var(--maibot-primary-foreground);
+}
+.maibot-button-danger,button.danger{
+  background:var(--maibot-surface);
+  border-color:var(--maibot-danger);
+  color:var(--maibot-danger);
+}
+button[aria-current="true"]:not(.nav-tab){
+  background:var(--maibot-soft);
+  border-color:var(--maibot-primary);
+  box-shadow:inset 3px 0 0 var(--maibot-primary),var(--mil-bevel);
+  color:var(--maibot-foreground);
+}
+:where(.maibot-button,button):disabled{opacity:.48;cursor:not-allowed}
+:where(.maibot-button,button):active:not(:disabled){transform:translateY(1px)}
+@media (hover:hover) and (pointer:fine){
+  nav.workspace-tabs button:hover:not([aria-current="true"]):not(:disabled){background:var(--maibot-surface)}
+  :where(.maibot-button,button:not(.nav-tab)):hover:not(:disabled){filter:brightness(.97)}
+  .maibot-button-danger:hover:not(:disabled),button.danger:hover:not(:disabled){background:var(--maibot-danger);color:var(--maibot-primary-foreground)}
+}
+.maibot-input,.maibot-select,input:not([type="checkbox"]):not([type="file"]),select,textarea{
+  width:100%;max-width:100%;min-width:0;
+  padding:8px 10px;
+  border:1px solid var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--maibot-background);
+  color:var(--maibot-foreground);
+  box-shadow:var(--mil-inset);
+  font-size:13px;line-height:1.5;
+  transition:border-color .14s ease,box-shadow .14s ease,background-color .14s ease;
+}
+.maibot-select,select{overflow:hidden;text-overflow:ellipsis}
+input[type="file"]{
+  width:100%;min-width:0;padding:6px;
+  border:1px dashed var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--maibot-background);
+  font-size:12px;color:var(--maibot-muted);
+}
+:where(input,select,textarea):focus-visible{
+  outline:2px solid var(--maibot-primary);
+  outline-offset:1px;
+}
+textarea{min-height:220px;resize:vertical;font-family:var(--maibot-font-mono);font-size:12.5px;line-height:1.6}
+#package-text,#local-draft,#service-config,#webhook-config{min-height:150px}
+label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--maibot-muted);min-width:0}
+label.check-row{
+  flex-direction:row;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 11px;
+  border:1px solid var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--maibot-background);
+  color:var(--maibot-foreground);
+  cursor:pointer;
+}
+label.check-row input[type="checkbox"]{
+  width:17px;height:17px;flex-shrink:0;accent-color:var(--maibot-primary);cursor:pointer;
+}
+label.wide,.wide{grid-column:1 / -1}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar h2{margin-right:auto}
+.toolbar select{width:auto;max-width:100%;min-width:170px}
+.list{display:flex;flex-direction:column;gap:6px}
+.list button{justify-content:flex-start;text-align:left;width:100%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:10px;min-width:0}
+.hint{margin:0;font-size:12px;color:var(--maibot-muted);line-height:1.55;overflow-wrap:anywhere}
+.version{
+  font-family:var(--maibot-font-mono);font-size:11.5px;font-weight:600;
+  color:var(--mil-on);
+  padding:2px 8px;border-radius:999px;
+  background:var(--maibot-soft);border:1px solid var(--maibot-border);
+}
+.status{
+  margin:0;padding:8px 12px;min-height:0;
+  border-radius:calc(var(--maibot-radius) - 2px);
+  border:1px solid var(--mil-on);
+  background:var(--maibot-surface);
+  color:var(--mil-on);
+  font-size:12.5px;font-weight:600;
+  overflow-wrap:anywhere;
+}
+.status:empty{display:none}
+.status.error{border-color:var(--maibot-danger);color:var(--maibot-danger)}
+pre{
+  margin:0;padding:10px 12px;max-width:100%;min-width:0;
+  border:1px solid var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--mil-screen);
+  background-image:repeating-linear-gradient(0deg,transparent,transparent 23px,var(--mil-screen-line) 24px);
+  color:var(--mil-screen-ink);
+  box-shadow:var(--mil-inset);
+  font-family:var(--maibot-font-mono);
+  font-size:12px;line-height:1.6;
+  white-space:pre-wrap;overflow-wrap:anywhere;
+  overflow-x:auto;
+}
+details{
+  max-width:100%;min-width:0;
+  border:1px solid var(--maibot-border);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--maibot-background);
+  padding:10px 12px;
+}
+details > summary{
+  cursor:pointer;font-size:12.5px;font-weight:700;color:var(--maibot-foreground);
+  list-style:none;display:flex;align-items:center;justify-content:space-between;
+}
+details > summary::-webkit-details-marker{display:none}
+details > :not(summary){margin-top:10px}
+.entry{
+  padding:10px 12px;margin-top:8px;
+  border:1px solid var(--maibot-border);
+  border-left:3px solid var(--maibot-primary);
+  border-radius:calc(var(--maibot-radius) - 2px);
+  background:var(--maibot-background);
+  display:flex;flex-direction:column;gap:5px;
+}
+.entry strong{font-family:var(--maibot-font-mono);font-size:12px;color:var(--maibot-foreground);word-break:break-all}
+.entry p{margin:0;font-size:12.5px;line-height:1.55;color:var(--maibot-muted);white-space:pre-wrap;word-break:break-word}
+@media (max-width:860px){
+  .page-shell{padding:10px}
+  .columns,.grid{grid-template-columns:minmax(0,1fr)}
+  .toolbar select{width:100%;min-width:0}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
 </style></head>
-<body data-page="memory"><header><div><div class="eyebrow">MAISYA</div><h1>记忆</h1><p class="hint" id="connection">正在连接…</p></div><nav aria-label="工作区"><button data-nav="now">现场</button><button data-nav="abilities">能力</button><button data-nav="memory">记忆</button><button data-nav="settings">设置</button></nav></header><main><p id="feedback" class="status" role="status" aria-live="polite"></p><div class="columns"><aside><h2>记忆层</h2><label for="chat">会话</label><select id="chat"></select><label for="kind">正文</label><select id="kind"><option value="memory">会话关系记忆</option><option value="journal">MaiBot 近况</option><option value="heartbeat">主动性与节奏</option></select><p class="hint">会话记忆只在原会话使用。近况来自公开的自身活动，保留七天。</p></aside><div><section class="card"><div class="toolbar"><h2>正文</h2><span class="version" id="version"></span></div><label for="content">内容</label><textarea id="content" maxlength="16000" spellcheck="false"></textarea><div class="toolbar"><button class="primary" id="save">保存修改</button><button id="reload" type="button">读取最新</button><select id="history" aria-label="历史版本"></select><button id="restore">回滚到所选版本</button></div><details id="draft-panel" hidden><summary>读取最新版本前的草稿</summary><textarea id="local-draft" readonly aria-label="保留的本地草稿"></textarea></details><p class="hint">保存会保留版本；读取最新时，原草稿保留在下方。</p></section><section class="card"><h2>查找经历</h2><div class="toolbar"><input id="search" aria-label="检索关键词" placeholder="地点、发现或线程编号"><button id="search-button">检索</button></div><div id="search-results"></div><h2>自身经历</h2><div id="experiences"></div></section><section class="card"><h2>持续工作区</h2><div id="workspaces" class="toolbar"></div><div id="workspace-files" class="toolbar"></div><pre id="workspace-content"></pre><details><summary>意图与自动笔记</summary><div id="intent-list"></div><pre id="learning"></pre></details></section></div></div></main><script>
+<body data-page="memory">
+<div class="page-shell maibot-page">
+<header class="frame-head">
+  <div class="head-left">
+    <div class="head-meta">
+      <span class="eyebrow">MAISYA WORKSPACE</span>
+      <span class="conn-pill" role="status"><span id="conn-light" data-status-light data-status="warn" aria-hidden="true"></span><span id="connection">正在连接…</span></span>
+    </div>
+    <h1>记忆</h1>
+  </div>
+  <nav class="workspace-tabs" aria-label="工作区">
+    <button class="nav-tab" type="button" data-nav="now">现场</button>
+    <button class="nav-tab" type="button" data-nav="abilities">能力</button>
+    <button class="nav-tab" type="button" data-nav="memory">记忆</button>
+    <button class="nav-tab" type="button" data-nav="settings">设置</button>
+  </nav>
+</header>
+<main><p id="feedback" class="status" role="status" aria-live="polite"></p><div class="columns"><aside class="card maibot-card"><h2>记忆层</h2><label for="chat">会话</label><select id="chat" class="maibot-select"></select><label for="kind">正文</label><select id="kind" class="maibot-select"><option value="memory">会话关系记忆</option><option value="journal">MaiBot 近况</option><option value="heartbeat">主动性与节奏</option></select><p class="hint">会话记忆只在原会话使用。近况来自公开的自身活动，保留七天。</p></aside><div><section class="card maibot-card"><div class="toolbar"><h2>正文</h2><span class="version maibot-badge" id="version"></span></div><label for="content">内容</label><textarea id="content" class="maibot-input" maxlength="16000" spellcheck="false"></textarea><div class="toolbar"><button class="primary maibot-button maibot-button-primary" id="save" type="button">保存修改</button><button id="reload" class="maibot-button" type="button">读取最新</button><select id="history" class="maibot-select" aria-label="历史版本"></select><button id="restore" class="maibot-button" type="button">回滚到所选版本</button></div><details id="draft-panel" hidden><summary>读取最新版本前的草稿</summary><textarea id="local-draft" class="maibot-input" readonly aria-label="保留的本地草稿"></textarea></details><p class="hint">保存会保留版本；读取最新时，原草稿保留在下方。</p></section><section class="card maibot-card"><h2>查找经历</h2><div class="toolbar"><input id="search" class="maibot-input" style="flex:1 1 220px" aria-label="检索关键词" placeholder="地点、发现或线程编号"><button id="search-button" class="maibot-button maibot-button-primary" type="button">检索</button></div><div id="search-results"></div><h2>自身经历</h2><div id="experiences"></div></section><section class="card maibot-card"><h2>持续工作区</h2><div id="workspaces" class="toolbar"></div><div id="workspace-files" class="toolbar"></div><pre id="workspace-content"></pre><details><summary>意图与自动笔记</summary><div id="intent-list"></div><pre id="learning"></pre></details></section></div></div></main>
+</div>
+<script>
 (()=>{'use strict';
 const $=id=>document.getElementById(id),pageKind=document.body.dataset.page;
 let busy=false,current=null,currentVersion=0,selected='scout',settings=null,settingsVersion='',servicesVersion='';
 let activeOptions=null,webhooksVersion='';const drafts=new Map();
 const text=(id,value)=>{$(id).textContent=String(value??'');};
-const theme=ctx=>document.documentElement.classList.toggle('dark',ctx?.theme==='dark');
+const theme=ctx=>{
+  document.documentElement.classList.toggle('dark',ctx?.theme==='dark');
+  document.documentElement.dataset.dashboardStyle=ctx?.dashboardStyle||ctx?.style||'millennium';
+};
+const setConn=(status,label)=>{const l=$('conn-light');if(l)l.dataset.status=status;text('connection',label);};
 window.addEventListener('maibot:context',event=>theme(event.detail));
 function feedback(value,error=false){text('feedback',value);$('feedback').classList.toggle('error',error);}
 async function query(section,options={}){const r=await window.maibot.query('read',{section,payload:JSON.stringify(options)});if(!r.success)throw Error(r.error||'读取失败');return r;}
 async function action(name,options={}){const r=await window.maibot.action('write',{action:name,payload:JSON.stringify(options)});if(!r.success)throw Error(r.error||'保存失败');return r;}
-async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=true);text('connection','正在处理…');feedback('');try{await fn();}catch(error){feedback(error.message||'操作失败，请重试',true);}finally{busy=false;document.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);text('connection','已连接');}}
+async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=true);setConn('warn','正在处理…');feedback('');let ok=true;try{await fn();}catch(error){ok=false;setConn('error','操作未完成');feedback(error.message||'操作失败，请重试',true);}finally{busy=false;document.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);if(ok)setConn('on','已连接');}}
 document.querySelectorAll('[data-nav]').forEach(button=>{button.setAttribute('aria-current',String(button.dataset.nav===pageKind));button.onclick=()=>run(()=>window.maibot.navigate(button.dataset.nav));});
-function makeButton(label,handler,attribute,value){const button=document.createElement('button');button.type='button';button.textContent=label;if(attribute)button.dataset[attribute]=value;button.onclick=()=>run(handler);return button;}
+function makeButton(label,handler,attribute,value){const button=document.createElement('button');button.type='button';button.className='maibot-button';button.textContent=label;if(attribute)button.dataset[attribute]=value;button.onclick=()=>run(handler);return button;}
 function remember(){if(current&&$('content').value!==current.content)drafts.set(JSON.stringify(activeOptions),{text:$('content').value,version:currentVersion});}
 function assetOptions(){if(pageKind==='abilities'){const kind=$('document').value;return {kind:kind==='config'||kind==='profile'?'profile':kind,target:kind==='skill'?$('skill-id').value:selected,...(kind==='config'?{document:'profile.toml'}:{})};}return {kind:$('kind').value,...($('kind').value==='memory'?{chat_id:$('chat').value}:{})};}
 async function loadAsset(){const options=assetOptions();if(options.kind==='skill'&&!options.target)return;current=await query('asset',options);activeOptions=options;currentVersion=current.version;const draft=drafts.get(JSON.stringify(options));$('content').value=draft?.text??current.content;if(draft)currentVersion=draft.version;text('version','版本 '+currentVersion+(draft?' · 已恢复草稿':''));$('history').replaceChildren();current.history.forEach(row=>{const option=document.createElement('option');option.value=row.version;option.textContent='版本 '+row.version+' · '+new Date(row.updated*1000).toLocaleString();$('history').append(option);});}
@@ -38,9 +418,8 @@ function ensureWebOption(val,labelText){const sel=$('web_provider');if(!sel||!va
 const getPath=(object,path)=>path.split('.').reduce((value,key)=>value[key],object);
 function setPath(object,path,value){const keys=path.split('.'),last=keys.pop();keys.reduce((item,key)=>item[key],object)[last]=value;}
 function parseField(input){if(input.dataset.type==='boolean')return input.checked;if(input.dataset.type==='number')return Number(input.value);if(input.dataset.type==='array')return input.value.split(/[,\n]/).map(value=>value.trim()).filter(Boolean);if(input.dataset.type==='map'){const out={};input.value.split('\n').map(line=>line.trim()).filter(Boolean).forEach(line=>{const idx=line.indexOf('=');if(idx>0){const k=line.slice(0,idx).trim(),v=line.slice(idx+1).trim();if(k&&v)out[k]=v;}});return out;}return input.value;}
-async function initializeSettings(){const data=await query('settings');settings=data.settings;settingsVersion=data.version;text('admins',data.admins.join('、')||'宿主尚未配置管理员');text('handles',data.handles.join('、')||'还没有凭据');Object.entries(labels).forEach(([key,label])=>{const wrap=document.createElement('label');wrap.append(document.createTextNode(label));const value=getPath(settings,key);let input,kind=Array.isArray(value)?'array':(typeof value==='object'&&value!==null?'map':typeof value);if(selectOptions[key]){input=document.createElement('select');selectOptions[key].forEach(([val,textLabel])=>{const option=document.createElement('option');option.value=val;option.textContent=textLabel;input.append(option);});if(value&&![...input.options].some(o=>o.value===value)){const custom=document.createElement('option');custom.value=value;custom.textContent='自定义：'+value;input.append(custom);}input.value=value;}else if(kind==='map'){input=document.createElement('textarea');input.rows=3;input.placeholder='chat_id=lively';input.value=Object.entries(value).map(([k,v])=>k+'='+v).join('\n');}else{input=document.createElement('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':'text';if(input.type==='checkbox')input.checked=value;else input.value=Array.isArray(value)?value.join(', '):value;}input.id=key.replaceAll('.','_');input.dataset.path=key;input.dataset.type=kind;wrap.append(input);if(key==='web_provider'){const customInput=document.createElement('input');customInput.id='web_provider_custom';customInput.placeholder='或直接填入 plugin:ID / web:别名 / mcp:名 / plugin_api:名';customInput.value=selectOptions.web_provider.some(([v])=>v===value)?'':String(value||'');customInput.oninput=()=>{const v=customInput.value.trim();if(v){ensureWebOption(v,'自定义：'+v);input.value=v;}};input.onchange=()=>{if(selectOptions.web_provider.some(([v])=>v===input.value))customInput.value='';else customInput.value=input.value;};wrap.append(customInput);}$(key.startsWith('sandbox.')?'sandbox-fields':'general-fields').append(wrap);});$('save-settings').onclick=()=>run(async()=>{const next=structuredClone(settings);document.querySelectorAll('[data-path]').forEach(input=>setPath(next,input.dataset.path,parseField(input)));const result=await action('settings',{settings:next,expected_version:settingsVersion});settings=result.settings;settingsVersion=result.version;feedback('设置已保存。');await health();});$('save-vault').onclick=()=>run(async()=>{const value=$('vault-value').value;$('vault-value').value='';const data=await action('vault',{handle:$('vault-handle').value.trim(),value});text('handles',data.handles.join('、'));feedback('凭据已保存。');});$('delete-vault').onclick=()=>run(async()=>{const data=await action('vault',{handle:$('vault-handle').value.trim(),delete:true});text('handles',data.handles.join('、')||'还没有凭据');feedback('凭据已删除。');});const services=await query('services');servicesVersion=services.version;$('service-config').value=JSON.stringify(services.configuration,null,2);$('save-services').onclick=()=>run(async()=>{const result=await action('services',{configuration:JSON.parse($('service-config').value),expected_version:servicesVersion});servicesVersion=result.version;feedback('服务登记已保存。');});$('check').onclick=()=>run(health);const webhooks=await query('webhooks');webhooksVersion=webhooks.version;$('webhook-config').value=JSON.stringify(webhooks.configuration,null,2);$('save-webhooks').onclick=()=>run(async()=>{const result=await action('webhooks',{configuration:JSON.parse($('webhook-config').value),expected_version:webhooksVersion});webhooksVersion=result.version;feedback('事件通道已保存。');});if(!$('intent-chat').value&&settings.enabled_chats?.length)$('intent-chat').value=settings.enabled_chats[0];if(settings.heartbeat_profile)$('intent-profile').value=settings.heartbeat_profile;$('schedule-intent').onclick=()=>run(async()=>{const prompt=$('intent-prompt').value.trim();await action('schedule_intent',{chat_id:$('intent-chat').value.trim(),profile:$('intent-profile').value.trim()||'scout',workspace:$('intent-workspace').value.trim(),in_seconds:Number($('intent-in').value||60),every_seconds:Number($('intent-every').value||0),prompt,reason:prompt});$('intent-prompt').value='';await loadIntents();feedback('工作流计划已加入队列。');});await health();await loadIntents();const disc=await loadDiscovery();(disc.plugins||[]).forEach(p=>{if(p.id)ensureWebOption('plugin:'+p.id,'插件：'+p.id);});(disc.apis||[]).forEach(a=>{if(a.name)ensureWebOption('plugin_api:'+a.name,'插件 API：'+a.name);});const chatList=$('intent-chat-list');if(chatList){const allChats=[...new Set([...(settings.enabled_chats||[]),...(disc.streams||[]).map(s=>s.stream_id).filter(Boolean)])];chatList.replaceChildren();allChats.forEach(c=>{const o=document.createElement('option');o.value=c;chatList.append(o);});}}
+async function initializeSettings(){const data=await query('settings');settings=data.settings;settingsVersion=data.version;text('admins',data.admins.join('、')||'宿主尚未配置管理员');text('handles',data.handles.join('、')||'还没有凭据');Object.entries(labels).forEach(([key,label])=>{const wrap=document.createElement('label');wrap.append(document.createTextNode(label));const value=getPath(settings,key);let input,kind=Array.isArray(value)?'array':(typeof value==='object'&&value!==null?'map':typeof value);if(selectOptions[key]){input=document.createElement('select');input.className='maibot-select';selectOptions[key].forEach(([val,textLabel])=>{const option=document.createElement('option');option.value=val;option.textContent=textLabel;input.append(option);});if(value&&![...input.options].some(o=>o.value===value)){const custom=document.createElement('option');custom.value=value;custom.textContent='自定义：'+value;input.append(custom);}input.value=value;}else if(kind==='map'){input=document.createElement('textarea');input.className='maibot-input';input.rows=3;input.placeholder='chat_id=lively';input.value=Object.entries(value).map(([k,v])=>k+'='+v).join('\n');wrap.className='wide';}else{input=document.createElement('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':'text';if(input.type==='checkbox'){input.checked=value;wrap.className='check-row';}else{input.className='maibot-input';input.value=Array.isArray(value)?value.join(', '):value;}}input.id=key.replaceAll('.','_');input.dataset.path=key;input.dataset.type=kind;wrap.append(input);if(key==='web_provider'){wrap.className='wide';const customInput=document.createElement('input');customInput.className='maibot-input';customInput.id='web_provider_custom';customInput.placeholder='或直接填入 plugin:ID / web:别名 / mcp:名 / plugin_api:名';customInput.value=selectOptions.web_provider.some(([v])=>v===value)?'':String(value||'');customInput.oninput=()=>{const v=customInput.value.trim();if(v){ensureWebOption(v,'自定义：'+v);input.value=v;}};input.onchange=()=>{if(selectOptions.web_provider.some(([v])=>v===input.value))customInput.value='';else customInput.value=input.value;};wrap.append(customInput);}$(key.startsWith('sandbox.')?'sandbox-fields':'general-fields').append(wrap);});$('save-settings').onclick=()=>run(async()=>{const next=structuredClone(settings);document.querySelectorAll('[data-path]').forEach(input=>setPath(next,input.dataset.path,parseField(input)));const result=await action('settings',{settings:next,expected_version:settingsVersion});settings=result.settings;settingsVersion=result.version;feedback('设置已保存。');await health();});$('save-vault').onclick=()=>run(async()=>{const value=$('vault-value').value;$('vault-value').value='';const data=await action('vault',{handle:$('vault-handle').value.trim(),value});text('handles',data.handles.join('、'));feedback('凭据已保存。');});$('delete-vault').onclick=()=>run(async()=>{const data=await action('vault',{handle:$('vault-handle').value.trim(),delete:true});text('handles',data.handles.join('、')||'还没有凭据');feedback('凭据已删除。');});const services=await query('services');servicesVersion=services.version;$('service-config').value=JSON.stringify(services.configuration,null,2);$('save-services').onclick=()=>run(async()=>{const result=await action('services',{configuration:JSON.parse($('service-config').value),expected_version:servicesVersion});servicesVersion=result.version;feedback('服务登记已保存。');});$('check').onclick=()=>run(health);const webhooks=await query('webhooks');webhooksVersion=webhooks.version;$('webhook-config').value=JSON.stringify(webhooks.configuration,null,2);$('save-webhooks').onclick=()=>run(async()=>{const result=await action('webhooks',{configuration:JSON.parse($('webhook-config').value),expected_version:webhooksVersion});webhooksVersion=result.version;feedback('事件通道已保存。');});if(!$('intent-chat').value&&settings.enabled_chats?.length)$('intent-chat').value=settings.enabled_chats[0];if(settings.heartbeat_profile)$('intent-profile').value=settings.heartbeat_profile;$('schedule-intent').onclick=()=>run(async()=>{const prompt=$('intent-prompt').value.trim();await action('schedule_intent',{chat_id:$('intent-chat').value.trim(),profile:$('intent-profile').value.trim()||'scout',workspace:$('intent-workspace').value.trim(),in_seconds:Number($('intent-in').value||60),every_seconds:Number($('intent-every').value||0),prompt,reason:prompt});$('intent-prompt').value='';await loadIntents();feedback('工作流计划已加入队列。');});await health();await loadIntents();const disc=await loadDiscovery();(disc.plugins||[]).forEach(p=>{if(p.id)ensureWebOption('plugin:'+p.id,'插件：'+p.id);});(disc.apis||[]).forEach(a=>{if(a.name)ensureWebOption('plugin_api:'+a.name,'插件 API：'+a.name);});const chatList=$('intent-chat-list');if(chatList){const allChats=[...new Set([...(settings.enabled_chats||[]),...(disc.streams||[]).map(s=>s.stream_id).filter(Boolean)])];chatList.replaceChildren();allChats.forEach(c=>{const o=document.createElement('option');o.value=c;chatList.append(o);});}}
 async function health(){const data=await query('health');const w=data.web;(w?.custom_providers||[]).forEach(n=>ensureWebOption('web:'+n,'自定义 web：'+n));const webLine=w?'\n联网来源：'+w.provider+(w.third_party_enabled?' · 第三方搜索可用（'+(w.third_party_engines.join('/')||'无可用引擎')+'）':'')+(w.services_bound?.length?' · 已绑定 services.web('+w.services_bound.join(',')+')':'')+(w.custom_providers?.length?' · 自定义 web('+w.custom_providers.join(',')+')':''):'';text('health',(data.ready?'执行器已就绪':data.error||'执行器尚未启用')+'\n'+Math.round(data.bytes/1048576)+' / '+Math.round(data.limit/1048576)+' MiB 持久文件 · '+data.running+' 个容器 · '+data.quarantined+' 个隔离副本'+webLine);}
-(async()=>{if(!window.maibot){text('connection','请从 MaiBot 管理台打开');return;}await window.maibot.ready;theme(window.maibot.context);await run(pageKind==='abilities'?initializeAbilities:pageKind==='memory'?initializeMemory:initializeSettings);})();
+(async()=>{if(!window.maibot){setConn('warn','请从 MaiBot 管理台打开');return;}await window.maibot.ready;theme(window.maibot.context);await run(pageKind==='abilities'?initializeAbilities:pageKind==='memory'?initializeMemory:initializeSettings);})();
 })();
 </script></body></html>
-
