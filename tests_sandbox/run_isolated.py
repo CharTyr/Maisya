@@ -196,6 +196,9 @@ finally:
  else:
   shutil.rmtree(stage)
   emit('isolated_directory_cleaned',cleaned=not stage.exists())
+  if status == 0 and backup.exists():
+   shutil.rmtree(backup)
+   emit('backup_cleaned',cleaned=not backup.exists())
 sys.exit(status)
 """
 
