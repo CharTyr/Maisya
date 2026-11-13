@@ -151,6 +151,10 @@ button, input, select, textarea {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 h1, h2, h3, h4, p {
   margin: 0;
 }
@@ -434,6 +438,7 @@ pre, code, .mono, .num {
 .mil-key--on,
 .mil-key[aria-pressed="true"],
 .mil-key[aria-current="page"],
+.mil-key[aria-current="true"],
 .mil-key[aria-selected="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);

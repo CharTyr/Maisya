@@ -158,6 +158,10 @@ button, input, select, textarea {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 h1, h2, h3, h4, p {
   margin: 0;
 }
@@ -441,6 +445,7 @@ pre, code, .mono, .num {
 .mil-key--on,
 .mil-key[aria-pressed="true"],
 .mil-key[aria-current="page"],
+.mil-key[aria-current="true"],
 .mil-key[aria-selected="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);
@@ -1536,7 +1541,7 @@ pre, code, .mono, .num {
 
       <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
         <label class="mil-label" for="message">给原线程递纸条 / 补充方向（按线程独立暂存草稿）</label>
-        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="补充约束、指正路线，或让正在工作的线程立即转向"></textarea>
+        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="补充约束、指正路线，或让正在工作的线程立即转向（Ctrl/Cmd + Enter 发送）"></textarea>
         <div class="mil-row" style="justify-content:space-between">
           <label class="mil-switch">
             <input type="checkbox" id="steer">
@@ -1583,7 +1588,7 @@ pre, code, .mono, .num {
     </div>
     <div class="mil-field" style="margin-bottom:10px">
       <label class="mil-label" for="launch-prompt">任务提示词</label>
-      <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="交代要查证、创作或持续推进的事情"></textarea>
+      <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="交代要查证、创作或持续推进的事情（Ctrl/Cmd + Enter 发起）"></textarea>
     </div>
     <div class="mil-row" style="justify-content:space-between">
       <div class="mil-row" id="launch-chat-chips"></div>
@@ -2196,7 +2201,11 @@ pre, code, .mono, .num {
     });
     const host = $("#threads");
     if (!list.length) {
-      host.innerHTML = `<p class="mil-hint">${all.length ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>`;
+      const hasFilter = Boolean(state.chatFilter || state.thFilter !== "all");
+      host.innerHTML = `<div style="padding:10px">
+        <p class="mil-hint">${all.length || hasFilter ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>
+        ${hasFilter ? `<button type="button" class="mil-key mil-key--sm" id="clear-th-filters" style="margin-top:8px">清除筛选</button>` : ""}
+      </div>`;
       return;
     }
     host.innerHTML = list.map((t) => {
@@ -2404,8 +2413,10 @@ pre, code, .mono, .num {
       refresh(true);
       return;
     }
-    if (ev.target.closest("#flow-all-chats")) {
+    if (ev.target.closest("#flow-all-chats") || ev.target.closest("#clear-th-filters")) {
       state.chatFilter = "";
+      state.thFilter = "all";
+      document.querySelectorAll("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.thFilter === "all")));
       switchThread("");
       refresh(true);
       return;
@@ -2512,6 +2523,18 @@ pre, code, .mono, .num {
 
   $("#message").addEventListener("input", () => {
     if (state.threadId) localDrafts[state.threadId] = $("#message").value;
+  });
+  $("#message").addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+      ev.preventDefault();
+      $("#send-note").click();
+    }
+  });
+  $("#launch-prompt").addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+      ev.preventDefault();
+      $("#launch-btn").click();
+    }
   });
 
   $("#send-note").onclick = () => enqueueAction(async () => {

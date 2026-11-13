@@ -158,6 +158,10 @@ button, input, select, textarea {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 h1, h2, h3, h4, p {
   margin: 0;
 }
@@ -441,6 +445,7 @@ pre, code, .mono, .num {
 .mil-key--on,
 .mil-key[aria-pressed="true"],
 .mil-key[aria-current="page"],
+.mil-key[aria-current="true"],
 .mil-key[aria-selected="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);
@@ -953,6 +958,7 @@ pre, code, .mono, .num {
         <div class="mil-head-l">
           <span class="mil-silk">DOCUMENT · 记忆正文</span>
           <span class="mil-tag" id="version">v0</span>
+          <span class="mil-tag mil-tag--warn" id="dirty-tag" hidden>未保存</span>
         </div>
         <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
       </div>
@@ -1076,6 +1082,19 @@ pre, code, .mono, .num {
     const led = $("#mgmt-led");
     if (led) led.className = `mil-led${isErr ? " mil-led--bad" : ""}`;
   }
+
+  function setDirty(flag) {
+    const tag = $("#dirty-tag");
+    if (tag) tag.hidden = !flag;
+  }
+
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      ev.preventDefault();
+      if (page === "settings") $("#save-settings")?.click();
+      else $("#save")?.click();
+    }
+  });
 
   function versionHistory(history, current) {
     const sel = $("#history");
@@ -1208,6 +1227,7 @@ pre, code, .mono, .num {
         $("#content").value = r.content || "";
         expectedVersion = Number(r.version || 0);
         $("#version").textContent = `v${expectedVersion}`;
+        setDirty(false);
         versionHistory(r.history, expectedVersion);
         if ($("#document").value === "config") syncVisualFromToml();
       } finally {
@@ -1316,12 +1336,14 @@ pre, code, .mono, .num {
       loadAsset(false);
     });
     $("#content").addEventListener("input", () => {
+      setDirty(true);
       if ($("#document").value === "config") syncVisualFromToml();
     });
 
     ["cfg-title", "cfg-env", "cfg-access", "cfg-task", "cfg-model-name", "cfg-web"].forEach((id) => {
       const key = { "cfg-title": "title", "cfg-env": "environment", "cfg-access": "access", "cfg-task": "task", "cfg-model-name": "model_name", "cfg-web": "web_provider" }[id];
       $(`#${id}`).addEventListener("input", () => {
+        setDirty(true);
         const val = $(`#${id}`).value.trim();
         writeTomlKey(key, (val || (key !== "model_name" && key !== "web_provider")) ? tomlStr(val) : null);
       });
@@ -1329,15 +1351,18 @@ pre, code, .mono, .num {
     ["cfg-steps", "cfg-temp"].forEach((id) => {
       const key = id === "cfg-steps" ? "max_steps" : "temperature";
       $(`#${id}`).addEventListener("input", () => {
+        setDirty(true);
         const val = $(`#${id}`).value.trim();
         writeTomlKey(key, val === "" ? null : String(Number(val)));
       });
     });
     $("#cfg-visual").addEventListener("change", (ev) => {
       if (ev.target.matches("[data-cfg-tool]")) {
+        setDirty(true);
         const tools = $$("[data-cfg-tool]:checked").map((x) => x.dataset.cfgTool);
         writeTomlKey("tools", tomlArr(tools));
       } else if (ev.target.matches("[data-cfg-skill]")) {
+        setDirty(true);
         const skills = $$("[data-cfg-skill]:checked").map((x) => x.dataset.cfgSkill);
         writeTomlKey("skills", tomlArr(skills));
       }
@@ -1499,6 +1524,7 @@ pre, code, .mono, .num {
         $("#content").value = r.content || "";
         expectedVersion = Number(r.version || 0);
         $("#version").textContent = `v${expectedVersion}`;
+        setDirty(false);
         versionHistory(r.history, expectedVersion);
         updateMeter();
       } finally {
@@ -1583,6 +1609,7 @@ pre, code, .mono, .num {
       const wsBtn = ev.target.closest("[data-ws]");
       if (wsBtn) {
         const wsid = wsBtn.dataset.ws;
+        $$("[data-ws]").forEach((b) => b.setAttribute("aria-current", String(b === wsBtn)));
         const r = await rpc("read", "workspace", { workspace_id: wsid });
         if (!r?.success) return say(r?.error || "读取工作区失败", true);
         $("#workspace-files").innerHTML = (r.files || []).map((f) =>
@@ -1593,6 +1620,7 @@ pre, code, .mono, .num {
       }
       const fileBtn = ev.target.closest("[data-ws-path]");
       if (fileBtn) {
+        $$("[data-ws-path]").forEach((b) => b.setAttribute("aria-current", String(b === fileBtn)));
         const r = await rpc("read", "workspace", { workspace_id: fileBtn.dataset.wsId, path: fileBtn.dataset.wsPath });
         if (!r?.success) return say(r?.error || "读取文件失败", true);
         $("#workspace-content").textContent = r.text || "";
@@ -1609,7 +1637,7 @@ pre, code, .mono, .num {
 
     $("#chat").addEventListener("change", () => { say(""); loadAsset(false); });
     $("#kind").addEventListener("change", () => { say(""); loadAsset(false); });
-    $("#content").addEventListener("input", updateMeter);
+    $("#content").addEventListener("input", () => { setDirty(true); updateMeter(); });
     $("#save").onclick = async () => {
       const kind = $("#kind").value;
       const body = { kind, content: $("#content").value, expected_version: expectedVersion };
@@ -1641,6 +1669,12 @@ pre, code, .mono, .num {
       say(`已回滚至 v${ver}`);
     };
     $("#search-button").onclick = loadOverview;
+    $("#search").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        loadOverview();
+      }
+    });
 
     Promise.resolve(window.maibot?.ready).then(async () => {
       applyTheme();
@@ -1765,6 +1799,7 @@ pre, code, .mono, .num {
       }
       const handleBtn = ev.target.closest("[data-pick-handle]");
       if (handleBtn) {
+        $$("[data-pick-handle]").forEach((b) => b.setAttribute("aria-current", String(b === handleBtn)));
         $("#vault-handle").value = handleBtn.dataset.pickHandle;
         return;
       }
@@ -1827,9 +1862,20 @@ pre, code, .mono, .num {
       renderHandles(r.handles);
       say(`已删除句柄 ${handle}`);
     };
+    function prettyJsonField(sel, label) {
+      try {
+        const obj = JSON.parse($(sel).value);
+        $(sel).value = JSON.stringify(obj, null, 2);
+        say(`${label} JSON 格式有效，已美化。`);
+      } catch (e) {
+        say(`${label} JSON 语法错误：${e?.message || "格式无效"}`, true);
+      }
+    }
+    $("#format-services").onclick = () => prettyJsonField("#service-config", "服务登记");
+    $("#format-webhooks").onclick = () => prettyJsonField("#webhook-config", "事件通道");
     $("#save-services").onclick = async () => {
       let configuration;
-      try { configuration = JSON.parse($("#service-config").value); } catch { return say("服务登记 JSON 格式无效", true); }
+      try { configuration = JSON.parse($("#service-config").value); } catch (e) { return say(`服务登记 JSON 格式无效：${e?.message || ""}`, true); }
       const r = await rpc("write", "services", { configuration, expected_version: svcVersion });
       if (!r?.success) return say(r?.error || "保存服务失败", true);
       svcVersion = r.version;
@@ -1838,13 +1884,19 @@ pre, code, .mono, .num {
     };
     $("#save-webhooks").onclick = async () => {
       let configuration;
-      try { configuration = JSON.parse($("#webhook-config").value); } catch { return say("事件通道 JSON 格式无效", true); }
+      try { configuration = JSON.parse($("#webhook-config").value); } catch (e) { return say(`事件通道 JSON 格式无效：${e?.message || ""}`, true); }
       const r = await rpc("write", "webhooks", { configuration, expected_version: whVersion });
       if (!r?.success) return say(r?.error || "保存事件通道失败", true);
       whVersion = r.version;
       say("事件通道已保存。");
       await loadWebhooks();
     };
+    $("#intent-prompt").addEventListener("keydown", (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+        ev.preventDefault();
+        $("#schedule-intent").click();
+      }
+    });
     $("#schedule-intent").onclick = async () => {
       const r = await rpc("write", "schedule_intent", {
         chat_id: $("#intent-chat").value.trim(),
