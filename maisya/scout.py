@@ -178,15 +178,28 @@ def checked(result, field=None):
 
 
 async def call_capability(host, name: str, *, timeout_ms: int | None = None, **kwargs):
-    """Call a host capability with an explicit timeout while supporting legacy rpc mocks."""
-    if timeout_ms is None:
-        return await host.call_capability(name, **kwargs)
+    """Call a host capability with an explicit timeout while normalizing non-standard RPC exceptions."""
     try:
-        return await host.call_capability(name, timeout_ms=timeout_ms, **kwargs)
-    except TypeError as error:
-        if "timeout_ms" not in str(error):
-            raise
-        return await host.call_capability(name, **kwargs)
+        if timeout_ms is None:
+            return await host.call_capability(name, **kwargs)
+        try:
+            return await host.call_capability(name, timeout_ms=timeout_ms, **kwargs)
+        except TypeError as error:
+            if "timeout_ms" not in str(error):
+                raise
+            return await host.call_capability(name, **kwargs)
+    except (
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        TimeoutError,
+        PermissionError,
+    ):
+        raise
+    except Exception as error:
+        raise RuntimeError(str(error) or "宿主能力调用失败") from error
 
 
 def safe_url(url):

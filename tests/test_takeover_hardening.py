@@ -10,8 +10,8 @@ from test_foundation import event, loaded
 from maisya.abilities import Profile, Profiles
 from maisya.learning import Learning
 from maisya.sandbox import Sandbox, SandboxSettings
-from maisya.scout import Scout
-from maisya.threads import ThreadStore
+from maisya.scout import Scout, call_capability
+from maisya.threads import ThreadEngine, ThreadStore
 from maisya.trust import Message, MessageStore, strip_mention_all
 
 
@@ -417,3 +417,46 @@ async def test_sandbox_settings_max_concurrent_default_and_semaphore(tmp_path):
     async with sb.slot:
         async with sb.slot:
             assert sb.slot.locked()
+
+
+@pytest.mark.asyncio
+async def test_call_capability_normalizes_custom_rpc_exception():
+    class FakeRPCError(Exception):
+        pass
+
+    class Host:
+        async def call_capability(self, name, timeout_ms=None, **kwargs):
+            raise FakeRPCError("transport timeout")
+
+    with pytest.raises(RuntimeError, match="transport timeout"):
+        await call_capability(Host(), "web.search", timeout_ms=5000, query="python")
+
+
+@pytest.mark.asyncio
+async def test_thread_engine_never_infinite_loops_on_unexpected_exception(tmp_path):
+    class UnexpectedError(Exception):
+        pass
+
+    calls = 0
+
+    class BrokenRuntime:
+        async def step(self, profile, history):
+            nonlocal calls
+            calls += 1
+            raise UnexpectedError("non-runtime exception")
+
+    store = ThreadStore(tmp_path / "threads.db")
+    engine = ThreadEngine(store, BrokenRuntime(), max_steps=4, timeout=10)
+    started = await engine.start(
+        Profile(id="scout", instructions="test", access="everyone"),
+        "hello",
+        chat_id="chat-1",
+        platform="qq",
+        user_id="alice",
+        wait_seconds=5,
+    )
+    await engine.drain()
+    row = store.get(started["thread_id"], "chat-1")
+    assert calls == 1
+    assert row["state"] == "idle"
+    assert "error" in row["result"]

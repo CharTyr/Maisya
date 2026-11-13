@@ -1022,14 +1022,7 @@ class ThreadEngine:
                     {"reason": "explicit_steering"},
                 )
             raise
-        except (
-            RuntimeError,
-            ValueError,
-            OSError,
-            TypeError,
-            KeyError,
-            sqlite3.Error,
-        ) as error:
+        except Exception as error:
             safe_errors = {
                 "当前能力档案的模型均未返回可用结果",
                 "线程达到本轮探索步数上限",

@@ -153,15 +153,7 @@ class Learning:
         except asyncio.CancelledError:
             await completed_thread(self._receipt, row, "interrupted")
             raise
-        except (
-            ValueError,
-            TypeError,
-            KeyError,
-            RuntimeError,
-            OSError,
-            TimeoutError,
-            sqlite3.Error,
-        ):
+        except Exception:
             await completed_thread(self._receipt, row, "rejected")
 
     async def drain(self):

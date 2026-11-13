@@ -371,7 +371,9 @@ class Pulse:
             await asyncio.sleep(1)
             try:
                 await self.tick()
-            except (sqlite3.Error, OSError, RuntimeError):
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 logging.getLogger(__name__).warning(
                     "Maisya 回接检查暂未完成，结果保留在线程中。"
                 )
