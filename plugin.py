@@ -1505,16 +1505,71 @@ class MaisyaPlugin(MaiBotPlugin):
                 redact=self.vault.redact,
                 memory=self.memory,
             )
-            result["profiles"] = (
+            profile_ids = (
                 sorted(
                     item.name
                     for item in self.profiles.path.iterdir()
-                    if item.is_dir() and not item.name.startswith(".")
+                    if item.is_dir() and not item.name.startswith(".") and not item.is_symlink()
                 )
                 if self.profiles and self.profiles.path.exists()
                 else []
             )
+            profile_cards = []
+            for pid in profile_ids[:100]:
+                try:
+                    card = self.profiles.get(pid)
+                    profile_cards.append(
+                        {
+                            "id": card.id,
+                            "title": card.title or card.id,
+                            "environment": card.environment,
+                            "access": card.access,
+                            "autonomous": card.autonomous,
+                        }
+                    )
+                except (ValueError, OSError):
+                    profile_cards.append(
+                        {
+                            "id": pid,
+                            "title": pid,
+                            "environment": "readonly",
+                            "access": "everyone",
+                            "autonomous": True,
+                        }
+                    )
+
+            def _daily_proactive_used():
+                if not self.intents:
+                    return 0
+                now = self.intents.clock()
+                start, end = self.intents._day_bounds(now)
+                with self.intents.store.connect() as db:
+                    return db.execute(
+                        "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
+                        "AND source IN ('afterglow','serendipity','longing','later') "
+                        "AND created>=? AND created<? AND status!='cancelled'",
+                        (start, end),
+                    ).fetchone()["count"]
+
+            result["profiles"] = profile_ids
+            result["profile_cards"] = profile_cards
             result["enabled_chats"] = list(self.settings.enabled_chats)
+            result["pulse"] = {
+                "enabled": bool(self.settings.plugin.enabled),
+                "proactive_level": self.settings.proactive_level,
+                "sleep_window": self.settings.sleep_window,
+                "in_sleep": bool(
+                    self.intents
+                    and self.intents.in_sleep_window(self.settings.sleep_window)
+                ),
+                "daily_limit": int(self.settings.daily_proactive_limit),
+                "daily_used": await asyncio.to_thread(_daily_proactive_used),
+                "heartbeat_interval_minutes": int(
+                    self.settings.heartbeat_interval_minutes
+                ),
+                "heartbeat_profile": self.settings.heartbeat_profile,
+                "web_provider": self.settings.web_provider,
+            }
             return self.vault.redact(result)
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as error:
             return {

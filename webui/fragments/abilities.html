@@ -1,1 +1,146 @@
-<div class="columns"><aside class="card maibot-card"><h2>能力档案</h2><div id="profiles" class="list"></div><label for="new-id">新能力编号</label><input id="new-id" class="maibot-input" placeholder="例如 artist"><div class="toolbar"><button id="clone" class="maibot-button" type="button">从所选能力克隆</button><button id="delete-profile" class="danger maibot-button maibot-button-danger" type="button">删除所选能力</button></div><p class="hint">说明与笔记用于调整做法；模型、工具、技能和权限在配置中设置。</p></aside><div><section class="card maibot-card"><div class="toolbar"><label for="document">编辑</label><select id="document" class="maibot-select"><option value="profile">能力说明</option><option value="config">模型与权限配置</option><option value="notes">方法笔记</option><option value="skill">全局技能</option></select></div><div class="toolbar"><label for="skill-id">技能编号，仅编辑技能时填写</label><button id="delete-skill" class="danger maibot-button maibot-button-danger" type="button">删除该技能</button></div><input id="skill-id" class="maibot-input" list="skill-list" placeholder="例如 source-checking"><datalist id="skill-list"></datalist></section><section class="card maibot-card"><div class="toolbar"><h2>正文</h2><span class="version maibot-badge" id="version"></span></div><label for="content">内容</label><textarea id="content" class="maibot-input" maxlength="65536" spellcheck="false"></textarea><div class="toolbar"><button class="primary maibot-button maibot-button-primary" id="save" type="button">保存修改</button><button id="reload" class="maibot-button" type="button">读取最新</button><select id="history" class="maibot-select" aria-label="历史版本"></select><button id="restore" class="maibot-button" type="button">回滚到所选版本</button></div><details id="draft-panel" hidden><summary>读取最新版本前的草稿</summary><textarea id="local-draft" class="maibot-input" readonly aria-label="保留的本地草稿"></textarea></details><p class="hint">保存会保留版本；读取最新时，原草稿保留在下方。</p></section><section class="card maibot-card"><h2>档案包</h2><div class="toolbar"><button id="export" class="maibot-button" type="button">导出所选能力</button></div><details id="package-panel"><summary>包文本与导入</summary><p class="hint">包文本可复制到另一份 Maisya 导入；ZIP 文件也可直接选择。服务与凭据在本机重新绑定。</p><textarea id="package-text" class="maibot-input" aria-label="档案包文本"></textarea><div class="toolbar"><button id="select-package" class="maibot-button" type="button">选中包文本</button></div><label for="import-id">导入后的新能力编号</label><input id="import-id" class="maibot-input" placeholder="例如 imported-artist"><div class="toolbar"><button id="import" class="maibot-button" type="button">导入包文本</button><input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 档案包"></div></details></section><section class="card maibot-card"><div class="toolbar"><h2>宿主发现（只读参考）</h2><button id="refresh-discovery" class="maibot-button" type="button">刷新宿主信息</button></div><p class="hint">profile.toml 可填 model_name、temperature、max_tokens、max_steps、web_provider（如 plugin:插件ID / web:别名 / mcp:服务 / plugin_api:接口）、secrets 与 sandbox_targets。</p><pre id="discovery-info">正在读取宿主可用模型与插件…</pre></section></div></div>
+<div class="mil-split">
+  <!-- 左栏：能力档案名册 -->
+  <aside class="mil-panel">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">PROFILES · 能力名册</span></div>
+      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+    </div>
+    <div id="profiles" class="mil-screen ab-roster" style="margin-bottom:10px"></div>
+    <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+      <div class="mil-field">
+        <label class="mil-label" for="new-id">新建或克隆档案编号（仅英文/数字/下划线）</label>
+        <input id="new-id" class="mil-input mono" placeholder="例如 painter">
+      </div>
+      <div class="mil-row">
+        <button id="clone" class="mil-key mil-key--sm" type="button">从所选能力克隆</button>
+        <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除所选能力</button>
+      </div>
+      <p class="mil-hint">能力档案控制某个独立 Agent 的人设说明、模型、工具权限与方法笔记。</p>
+    </div>
+  </aside>
+
+  <!-- 右栏：档案与技能工作台 -->
+  <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">EDITOR · 档案与技能工作台</span>
+          <span class="mil-tag" id="version">v0</span>
+        </div>
+        <div class="mil-head-r">
+          <div class="mil-seg" role="tablist" aria-label="编辑文档类型">
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="profile" aria-pressed="true">能力说明</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="config" aria-pressed="false">模型与权限配置</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="notes" aria-pressed="false">方法笔记</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="skill" aria-pressed="false">全局技能</button>
+          </div>
+          <select id="document" class="mil-select sr-only" aria-label="编辑文档类型">
+            <option value="profile">能力说明</option>
+            <option value="config">模型与权限配置</option>
+            <option value="notes">方法笔记</option>
+            <option value="skill">全局技能</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 技能选择器（编辑全局技能时高亮） -->
+      <div id="skill-bar" class="mil-screen" style="margin-bottom:10px" hidden>
+        <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
+          <span class="mil-label">已登记全局技能（点击快速载入，或输入新编号创建）</span>
+          <button id="delete-skill" class="mil-key mil-key--sm mil-key--danger" type="button">删除该技能</button>
+        </div>
+        <div class="mil-row" id="skill-chips" style="margin-bottom:6px"></div>
+        <input id="skill-id" class="mil-input mono" list="skill-list" placeholder="输入或选择技能编号，例如 daily-briefing">
+        <datalist id="skill-list"></datalist>
+      </div>
+
+      <!-- profile.toml 可视化配置器 -->
+      <div id="cfg-visual" class="mil-screen" style="margin-bottom:10px" hidden>
+        <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
+          <span class="mil-silk">VISUAL CONFIG · 可视化能力配置（实时同步下方 TOML）</span>
+          <span class="mil-hint">常见字段直接点选；复杂数组仍在下方源码完整保留</span>
+        </div>
+        <div class="mil-grid-2" style="margin-bottom:8px">
+          <div class="mil-field"><label class="mil-label" for="cfg-title">显示标题</label><input id="cfg-title" class="mil-input"></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-env">运行环境</label><select id="cfg-env" class="mil-select"><option value="readonly">readonly（无容器轻量环境）</option><option value="sandbox">sandbox（Docker 隔离沙箱）</option></select></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-access">调用权限</label><select id="cfg-access" class="mil-select"><option value="everyone">everyone（所有人与自主探索）</option><option value="admins">admins（仅管理员消息或控制台）</option><option value="listed">listed（仅白名单用户/会话）</option></select></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-task">宿主模型槽位 (task)</label><select id="cfg-task" class="mil-select"><option value="utils">utils（工具模型）</option><option value="planner">planner（主规划模型）</option><option value="replyer">replyer（回复模型）</option><option value="fast_model">fast_model（快速模型）</option><option value="vlm">vlm（视觉模型）</option></select></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-model-name">覆盖模型名 (model_name，可留空走槽位)</label><input id="cfg-model-name" class="mil-input mono" placeholder="如 step-5-preview"></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-web">联网来源覆盖 (web_provider)</label><input id="cfg-web" class="mil-input mono" placeholder="留空随全局，或填 plugin:... / web:..."></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-steps">最大步数 (max_steps)</label><input id="cfg-steps" class="mil-input mono" type="number" min="1" max="64" placeholder="16"></div>
+          <div class="mil-field"><label class="mil-label" for="cfg-temp">采样温度 (temperature)</label><input id="cfg-temp" class="mil-input mono" type="number" step="0.05" min="0" max="2" placeholder="0.3"></div>
+        </div>
+        <div class="mil-field" style="margin-bottom:8px">
+          <span class="mil-label">工具白名单 (tools)</span>
+          <div class="mil-row" id="cfg-tools"></div>
+        </div>
+        <div class="mil-field">
+          <span class="mil-label">绑定全局技能 (skills)</span>
+          <div class="mil-row" id="cfg-skills"></div>
+        </div>
+      </div>
+
+      <!-- 正文编辑器与版本控制 -->
+      <div class="mil-field" style="margin-bottom:10px">
+        <div class="mil-row" style="justify-content:space-between">
+          <label class="mil-label" for="content">文档正文</label>
+          <span class="mil-hint" id="editor-hint">修改后请点击保存，每次保存均保留历史版本。</span>
+        </div>
+        <textarea id="content" class="mil-textarea mil-textarea--code" rows="12" maxlength="65536" spellcheck="false"></textarea>
+      </div>
+
+      <div class="mil-row" style="justify-content:space-between">
+        <div class="mil-row">
+          <button class="mil-key mil-key--hot" id="save" type="button">保存修改</button>
+          <button class="mil-key" id="reload" type="button">读取最新</button>
+        </div>
+        <div class="mil-row">
+          <select id="history" class="mil-select" style="width:auto;min-width:150px" aria-label="历史版本"></select>
+          <button class="mil-key" id="restore" type="button">回滚到所选版本</button>
+        </div>
+      </div>
+
+      <details id="draft-panel" style="margin-top:10px" hidden>
+        <summary class="mil-label" style="cursor:pointer">读取最新版本前保留的本地草稿</summary>
+        <textarea id="local-draft" class="mil-textarea mil-textarea--code" style="margin-top:6px" rows="5" readonly aria-label="保留的本地草稿"></textarea>
+      </details>
+    </section>
+
+    <div class="mil-grid-2">
+      <!-- 档案包导入导出 -->
+      <section class="mil-panel">
+        <div class="mil-head">
+          <div class="mil-head-l"><span class="mil-silk">PACKAGE · 档案包导入导出</span></div>
+          <div class="mil-head-r"><button id="export" class="mil-key mil-key--sm" type="button">导出所选能力</button></div>
+        </div>
+        <details id="package-panel" open>
+          <summary class="mil-label" style="cursor:pointer;margin-bottom:8px">包文本与 ZIP 导入（凭据句柄需在本机重新绑定）</summary>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="4" aria-label="档案包文本" placeholder="点击「导出所选能力」生成包文本，或粘贴来自其他 Maisya 的包文本"></textarea>
+            <div class="mil-row">
+              <button id="select-package" class="mil-key mil-key--sm" type="button">选中包文本</button>
+              <input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 档案包" style="font-size:12px;max-width:100%">
+            </div>
+            <div class="mil-row">
+              <input id="import-id" class="mil-input mono" style="flex:1 1 140px" placeholder="导入后的新能力编号，例如 imported-artist">
+              <button id="import" class="mil-key mil-key--sm mil-key--hot" type="button">导入包文本</button>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <!-- 宿主发现 -->
+      <section class="mil-panel">
+        <div class="mil-head">
+          <div class="mil-head-l"><span class="mil-silk">DISCOVERY · 宿主环境探测</span></div>
+          <div class="mil-head-r"><button id="refresh-discovery" class="mil-key mil-key--sm" type="button">刷新宿主信息</button></div>
+        </div>
+        <div id="discovery-cards" class="mil-screen" style="margin-bottom:8px"></div>
+        <details>
+          <summary class="mil-label" style="cursor:pointer">原始探测清单</summary>
+          <pre id="discovery-info" class="mil-pre" style="margin-top:6px;max-height:180px">正在读取宿主可用模型与插件…</pre>
+        </details>
+      </section>
+    </div>
+  </div>
+</div>

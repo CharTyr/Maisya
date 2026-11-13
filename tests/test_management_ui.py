@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 from playwright.async_api import async_playwright, expect
@@ -48,6 +49,27 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     await expect(page.locator("h1")).to_have_text(title)
                     if name == "abilities":
                         await page.locator('[data-profile="scout"]').click()
+                        await page.locator('[data-doc-tab="config"]').click()
+                        await expect(page.locator("#content")).to_be_enabled()
+                        await expect(page.locator("#feedback")).not_to_contain_text(
+                            "未知记忆层"
+                        )
+                        await expect(page.locator("#cfg-visual")).to_be_visible()
+                        await expect(page.locator("#cfg-title")).to_have_value("探索者")
+                        await page.locator('[data-cfg-tool="workspace_file"]').check()
+                        await expect(page.locator("#content")).to_have_value(
+                            re.compile("workspace_file")
+                        )
+                        await page.locator("#save").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
+                        assert (
+                            "workspace_file"
+                            in plugin.memory.read(
+                                "profile", target="scout", document="profile.toml"
+                            )["content"]
+                        )
                         await page.locator("#document").select_option("notes")
                         await expect(page.locator("#content")).to_be_enabled()
                         await page.locator("#content").fill("先核对原始来源。")

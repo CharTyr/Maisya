@@ -5,739 +5,2510 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maisya · 现场</title>
 <style>
-:root{
-  --maibot-background:hsl(42 20% 91%);
-  --maibot-surface:hsl(42 24% 96%);
-  --maibot-foreground:hsl(24 10% 18%);
-  --maibot-muted:hsl(30 7% 44%);
-  --maibot-soft:hsl(40 16% 86%);
-  --maibot-border:hsl(36 12% 77%);
-  --maibot-primary:hsl(11 76% 58%);
-  --maibot-primary-foreground:hsl(42 40% 98%);
-  --maibot-danger:hsl(2 68% 52%);
-  --maibot-radius:8px;
-  --maibot-font-body:"PingFang SC","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --maibot-font-display:"PingFang SC","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --maibot-font-mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
-  --mil-on:#1f8a5b;
-  --mil-on-ink:#f2fcf7;
-  --mil-warn:#d97706;
-  --mil-screen:#e5eadf;
-  --mil-screen-line:rgba(28,44,32,.08);
-  --mil-screen-ink:#1c2c20;
-  --mil-bevel:inset 0 1px 0 rgba(255,255,255,.78),0 1px 2px rgba(42,35,28,.08);
-  --mil-inset:inset 0 1px 2px rgba(42,35,28,.09);
-  --mil-engraved:rgba(255,255,255,.65);
-  color-scheme:light;
-  font-family:var(--maibot-font-body);
-  color:var(--maibot-foreground);
-  background:var(--maibot-background);
-  font-synthesis:none;
-}
-:root.dark{
-  --maibot-background:hsl(24 10% 11%);
-  --maibot-surface:hsl(24 9% 15%);
-  --maibot-foreground:hsl(40 18% 90%);
-  --maibot-muted:hsl(34 8% 62%);
-  --maibot-soft:hsl(24 9% 19%);
-  --maibot-border:hsl(26 9% 25%);
-  --maibot-primary:hsl(12 76% 62%);
-  --maibot-primary-foreground:hsl(24 14% 11%);
-  --maibot-danger:hsl(4 72% 60%);
-  --mil-on:#2fb97c;
-  --mil-on-ink:#072417;
-  --mil-warn:#f59e0b;
-  --mil-screen:#121913;
-  --mil-screen-line:rgba(167,243,190,.07);
-  --mil-screen-ink:#b9f3c7;
-  --mil-bevel:inset 0 1px 0 rgba(255,255,255,.06),0 2px 6px rgba(0,0,0,.35);
-  --mil-inset:inset 0 1px 3px rgba(0,0,0,.38);
-  --mil-engraved:rgba(255,255,255,.06);
-  color-scheme:dark;
-}
-:root[data-dashboard-style="modern"]{
-  --maibot-background:hsl(36 22% 96%);
-  --maibot-surface:hsl(0 0% 100%);
-  --maibot-foreground:hsl(220 18% 16%);
-  --maibot-muted:hsl(220 10% 46%);
-  --maibot-soft:hsl(36 16% 92%);
-  --maibot-border:hsl(30 12% 86%);
-  --maibot-primary:hsl(18 82% 52%);
-  --maibot-primary-foreground:hsl(0 0% 100%);
-  --maibot-danger:hsl(2 70% 52%);
-  --maibot-radius:12px;
-  --mil-on:#10b981;
-  --mil-on-ink:#ffffff;
-  --mil-screen:hsl(220 20% 96%);
-  --mil-screen-line:rgba(15,23,42,.05);
-  --mil-screen-ink:hsl(220 20% 18%);
-  --mil-bevel:0 1px 3px rgba(15,23,42,.05),0 6px 18px rgba(15,23,42,.04);
-  --mil-inset:inset 0 1px 2px rgba(15,23,42,.05);
-  --mil-engraved:transparent;
-}
-:root.dark[data-dashboard-style="modern"]{
-  --maibot-background:hsl(222 18% 9%);
-  --maibot-surface:hsl(222 16% 13%);
-  --maibot-foreground:hsl(220 20% 94%);
-  --maibot-muted:hsl(220 12% 62%);
-  --maibot-soft:hsl(222 15% 18%);
-  --maibot-border:hsl(222 14% 23%);
-  --maibot-primary:hsl(20 88% 58%);
-  --maibot-primary-foreground:hsl(222 20% 10%);
-  --maibot-danger:hsl(2 74% 62%);
-  --mil-on:#34d399;
-  --mil-on-ink:#062319;
-  --mil-screen:hsl(222 20% 10%);
-  --mil-screen-line:rgba(255,255,255,.04);
-  --mil-screen-ink:hsl(210 25% 88%);
-  --mil-bevel:0 2px 10px rgba(0,0,0,.36);
-  --mil-inset:inset 0 1px 2px rgba(0,0,0,.34);
-}
-:root[data-dashboard-style="future-retro"]{
-  --maibot-background:hsl(44 33% 93%);
-  --maibot-surface:hsl(45 45% 98%);
-  --maibot-foreground:hsl(215 28% 14%);
-  --maibot-muted:hsl(215 14% 40%);
-  --maibot-soft:hsl(42 26% 87%);
-  --maibot-border:hsl(215 28% 18%);
-  --maibot-primary:hsl(14 82% 53%);
-  --maibot-primary-foreground:hsl(45 50% 98%);
-  --maibot-danger:hsl(0 72% 48%);
-  --maibot-radius:2px;
-  --mil-on:#0f766e;
-  --mil-on-ink:#f0fdfa;
-  --mil-screen:#14231e;
-  --mil-screen-line:rgba(126,245,196,.09);
-  --mil-screen-ink:#a7f3d0;
-  --mil-bevel:2px 2px 0 hsl(215 28% 18%);
-  --mil-inset:inset 0 0 0 1px hsl(215 28% 18% / .16);
-  --mil-engraved:transparent;
-}
-:root.dark[data-dashboard-style="future-retro"]{
-  --maibot-background:hsl(172 20% 8%);
-  --maibot-surface:hsl(172 18% 12%);
-  --maibot-foreground:hsl(45 30% 92%);
-  --maibot-muted:hsl(168 12% 62%);
-  --maibot-soft:hsl(172 16% 17%);
-  --maibot-border:hsl(162 24% 38%);
-  --maibot-primary:hsl(16 86% 58%);
-  --maibot-primary-foreground:hsl(172 24% 8%);
-  --maibot-danger:hsl(2 78% 60%);
-  --mil-on:#2dd4bf;
-  --mil-on-ink:#072320;
-  --mil-screen:#09110f;
-  --mil-screen-line:rgba(45,212,191,.09);
-  --mil-screen-ink:#99f6e4;
-  --mil-bevel:2px 2px 0 rgba(0,0,0,.55);
-  --mil-inset:inset 0 0 0 1px rgba(45,212,191,.18);
-}
-*{box-sizing:border-box}
-html,body{height:100%;margin:0;padding:0;background:var(--maibot-background);color:var(--maibot-foreground);font-family:var(--maibot-font-body)}
-body{overflow-x:hidden}
-button,input,select,textarea{font:inherit}
-[hidden]{display:none!important}
-.app{max-width:1360px;height:100dvh;margin:0 auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
-.frame-head{
-  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
-  padding:12px 16px;
-  background:var(--maibot-surface);
-  border:1px solid var(--maibot-border);
-  border-radius:var(--maibot-radius);
-  box-shadow:var(--mil-bevel);
-  flex-shrink:0;
-}
-.head-title{display:flex;flex-direction:column;gap:2px;min-width:0}
-.eyebrow{
-  font-family:var(--maibot-font-mono);
-  font-size:10.5px;
-  font-weight:700;
-  letter-spacing:.11em;
-  text-transform:uppercase;
-  color:var(--maibot-primary);
-}
-h1{
-  margin:0;
-  font-family:var(--maibot-font-display);
-  font-size:20px;
-  line-height:1.25;
-  font-weight:700;
-  letter-spacing:-.01em;
-  text-shadow:0 1px 0 var(--mil-engraved);
-}
-.sub{margin:0;color:var(--maibot-muted);font-size:12.5px;line-height:1.45}
-.connection{
-  display:inline-flex;align-items:center;gap:8px;
-  padding:6px 12px;
-  border-radius:calc(var(--maibot-radius) - 2px);
-  border:1px solid var(--maibot-border);
-  background:var(--maibot-soft);
-  box-shadow:var(--mil-inset);
-  color:var(--maibot-foreground);
-  font-size:12px;
-  font-weight:600;
-  white-space:nowrap;
-}
-[data-status-light]{
-  width:9px;height:9px;border-radius:999px;flex-shrink:0;
-  background:var(--mil-warn);
-  box-shadow:0 0 0 1px rgba(0,0,0,.18),0 0 6px rgba(217,119,6,.35);
-  transition:background-color .16s ease,box-shadow .16s ease;
-}
-[data-status-light][data-status="on"]{
-  background:#22c55e;
-  box-shadow:0 0 0 1px rgba(0,0,0,.18),0 0 8px rgba(34,197,94,.48);
-}
-[data-status-light][data-status="error"]{
-  background:var(--maibot-danger);
-  box-shadow:0 0 0 1px rgba(0,0,0,.2),0 0 8px rgba(239,68,68,.5);
-}
-.layout{
-  flex:1;min-height:0;
-  display:grid;
-  grid-template-columns:348px minmax(0,1fr);
-  gap:12px;
-}
-aside,.detail{
-  background:var(--maibot-surface);
-  border:1px solid var(--maibot-border);
-  border-radius:var(--maibot-radius);
-  box-shadow:var(--mil-bevel);
-  min-height:0;
-  display:flex;
-  flex-direction:column;
-  overflow:hidden;
-}
-.aside-bar{
-  padding:10px 12px;
-  border-bottom:1px solid var(--maibot-border);
-  background:var(--maibot-soft);
-  display:flex;flex-direction:column;gap:8px;
-}
-.filters{
-  display:grid;
-  grid-template-columns:auto minmax(0,1fr);
-  gap:8px;
-  align-items:center;
-}
-.filters label{
-  font-size:11.5px;
-  font-weight:700;
-  color:var(--maibot-muted);
-  letter-spacing:.04em;
-  white-space:nowrap;
-}
-.maibot-input,.maibot-select{
-  width:100%;min-width:0;
-  padding:7px 10px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-background);
-  color:var(--maibot-foreground);
-  box-shadow:var(--mil-inset);
-  font-size:12.5px;
-  line-height:1.4;
-  transition:border-color .14s ease,box-shadow .14s ease,background-color .14s ease;
-}
-.maibot-input:focus-visible,.maibot-select:focus-visible{
-  outline:2px solid var(--maibot-primary);
-  outline-offset:1px;
-}
-.launcher{
-  padding:10px 12px;
-  border-bottom:1px solid var(--maibot-border);
-  background:var(--maibot-surface);
-  display:flex;flex-direction:column;gap:7px;
-}
-.launcher-title{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-  font-size:11.5px;font-weight:700;color:var(--maibot-muted);
-  text-transform:uppercase;letter-spacing:.06em;
-}
-.launcher-row{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:6px;
-}
-.launcher textarea{
-  min-height:56px;max-height:130px;resize:vertical;
-  font-size:12.5px;
-}
-.launcher-actions{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-}
-.launcher-actions .maibot-button{flex:1}
-.maibot-button{
-  display:inline-flex;align-items:center;justify-content:center;gap:6px;
-  min-height:34px;padding:6px 13px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-soft);
-  color:var(--maibot-foreground);
-  box-shadow:var(--mil-bevel);
-  font-size:12.5px;font-weight:600;line-height:1.2;
-  cursor:pointer;
-  transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .08s ease;
-}
-.maibot-button-sm{min-height:28px;padding:4px 10px;font-size:11.5px}
-.maibot-button-primary{
-  background:var(--maibot-primary);
-  border-color:var(--maibot-primary);
-  color:var(--maibot-primary-foreground);
-}
-.maibot-button-danger{
-  background:var(--maibot-surface);
-  border-color:var(--maibot-danger);
-  color:var(--maibot-danger);
-}
-.maibot-button:disabled{opacity:.48;cursor:not-allowed}
-.maibot-button:active:not(:disabled){transform:translateY(1px)}
-@media (hover:hover) and (pointer:fine){
-  .maibot-button:hover:not(:disabled){filter:brightness(.97)}
-  .maibot-button-danger:hover:not(:disabled){background:var(--maibot-danger);color:var(--maibot-primary-foreground)}
-  .thread:hover{background:var(--maibot-soft);border-color:var(--maibot-border)}
-}
-.thread-list{
-  flex:1;overflow-y:auto;
-  padding:8px;
-  display:flex;flex-direction:column;gap:6px;
-}
-.thread{
-  width:100%;text-align:left;
-  padding:10px 11px;
-  border:1px solid transparent;
-  border-radius:calc(var(--maibot-radius) - 1px);
-  background:var(--maibot-background);
-  box-shadow:var(--mil-inset);
-  display:flex;flex-direction:column;gap:5px;
-  cursor:pointer;
-  transition:background-color .14s ease,border-color .14s ease,color .14s ease;
-}
-.thread[aria-current="true"]{
-  background:var(--maibot-soft);
-  border-color:var(--maibot-primary);
-  box-shadow:inset 3px 0 0 var(--maibot-primary),var(--mil-bevel);
-}
-.thread-title{
-  display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:13.5px;font-weight:700;color:var(--maibot-foreground);
-}
-.thread-meta{
-  display:flex;justify-content:space-between;align-items:center;gap:8px;
-  font-family:var(--maibot-font-mono);
-  font-size:11px;color:var(--maibot-muted);
-}
-.thread-state{
-  padding:1px 7px;
-  border-radius:999px;
-  background:var(--maibot-surface);
-  border:1px solid var(--maibot-border);
-  color:var(--maibot-foreground);
-  font-family:var(--maibot-font-body);
-  font-size:10.5px;font-weight:600;
-  white-space:nowrap;
-}
-.thread[aria-current="true"] .thread-state{
-  border-color:var(--mil-on);
-  color:var(--mil-on);
-}
-aside footer{
-  padding:8px 12px;
-  border-top:1px solid var(--maibot-border);
-  background:var(--maibot-soft);
-  color:var(--maibot-muted);
-  font-size:11px;
-  font-family:var(--maibot-font-mono);
-}
-.detail-head{
-  padding:13px 16px;
-  border-bottom:1px solid var(--maibot-border);
-  background:var(--maibot-soft);
-  display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
-  flex-shrink:0;
-}
-.detail-head > div{min-width:0}
-.detail-head .stop{flex-shrink:0;white-space:nowrap}
-h2{
-  margin:3px 0 4px;
-  font-family:var(--maibot-font-display);
-  font-size:17px;line-height:1.35;font-weight:700;
-  word-break:break-word;
-}
-.detail-meta{
-  margin:0;
-  font-family:var(--maibot-font-mono);
-  font-size:11.5px;
-  color:var(--maibot-muted);
-  overflow-wrap:anywhere;
-}
-.content{
-  flex:1;overflow-y:auto;
-  padding:14px 16px;
-  display:flex;flex-direction:column;gap:12px;
-}
-.panel-box{
-  padding:12px 14px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 1px);
-  background:var(--maibot-background);
-  box-shadow:var(--mil-inset);
-}
-.context-line{
-  display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
-  font-family:var(--maibot-font-mono);
-  font-size:11.5px;
-  color:var(--maibot-muted);
-}
-.context-bar{
-  height:8px;margin-top:8px;
-  display:flex;overflow:hidden;
-  border-radius:999px;
-  background:var(--maibot-soft);
-  border:1px solid var(--maibot-border);
-}
-.context-bar span{height:100%;transition:width .25s ease}
-.role-system{background:#4f6d9a}
-.role-memory{background:#1f8a5b}
-.role-user{background:#c5842a}
-.role-assistant{background:var(--maibot-primary)}
-.role-tool{background:#7c5ca6}
-.legend{
-  display:flex;flex-wrap:wrap;gap:10px;
-  margin-top:8px;
-  font-size:11px;color:var(--maibot-muted);
-}
-.legend span{display:inline-flex;align-items:center;gap:5px}
-.legend i{width:8px;height:8px;border-radius:2px;display:inline-block}
-.result{
-  padding:12px 14px;
-  border:1px solid var(--maibot-border);
-  border-left:3px solid var(--mil-on);
-  border-radius:calc(var(--maibot-radius) - 1px);
-  background:var(--maibot-surface);
-  box-shadow:var(--mil-bevel);
-}
-.result h3,.stream h3{
-  margin:0;
-  font-size:12px;font-weight:700;
-  letter-spacing:.04em;text-transform:uppercase;
-  color:var(--maibot-muted);
-}
-.result pre{
-  margin:8px 0 0;
-  white-space:pre-wrap;word-break:break-word;
-  font-size:13.5px;line-height:1.75;
-  font-family:var(--maibot-font-body);
-  color:var(--maibot-foreground);
-}
-.stream{
-  display:flex;flex-direction:column;gap:8px;
-}
-.stream-head{
-  display:flex;justify-content:space-between;align-items:center;gap:8px;
-}
-.follow{min-height:28px;padding:4px 11px;font-size:11.5px}
-.follow[aria-pressed="true"]{
-  background:var(--mil-on);
-  border-color:var(--mil-on);
-  color:var(--mil-on-ink);
-}
-.events-screen{
-  display:flex;flex-direction:column;gap:6px;
-  padding:10px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 1px);
-  background:var(--mil-screen);
-  background-image:repeating-linear-gradient(0deg,transparent,transparent 23px,var(--mil-screen-line) 24px);
-  color:var(--mil-screen-ink);
-  box-shadow:var(--mil-inset);
-}
-.events-screen:empty{display:none}
-.event{
-  border:1px solid rgba(128,128,128,.24);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-surface);
-  color:var(--maibot-foreground);
-  padding:8px 11px;
-}
-.event summary{
-  list-style:none;cursor:pointer;
-  display:flex;justify-content:space-between;align-items:center;gap:10px;
-  font-size:12.5px;font-weight:700;
-}
-.event summary::-webkit-details-marker{display:none}
-.event time{
-  font-family:var(--maibot-font-mono);
-  font-size:11px;font-weight:500;
-  color:var(--maibot-muted);
-  white-space:nowrap;
-}
-.event pre{
-  margin:8px 0 0;padding-top:8px;
-  border-top:1px dashed var(--maibot-border);
-  white-space:pre-wrap;word-break:break-word;
-  font-family:var(--maibot-font-mono);
-  font-size:12px;line-height:1.55;
-  color:var(--maibot-foreground);
-}
-.event button{margin-top:8px}
-.intent-line{
-  margin:0;min-height:18px;
-  font-family:var(--maibot-font-mono);
-  font-size:11.5px;color:var(--maibot-muted);
-}
-.composer{
-  border-top:1px solid var(--maibot-border);
-  padding:12px 16px;
-  background:var(--maibot-soft);
-  display:flex;flex-direction:column;gap:8px;
-  flex-shrink:0;
-}
-.composer label[for="message"]{
-  font-size:12px;font-weight:700;color:var(--maibot-foreground);
-}
-.composer textarea{min-height:66px;max-height:170px;resize:vertical}
-.composer-bottom{
-  display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
-  font-size:12px;color:var(--maibot-muted);
-}
-.composer-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.steer-toggle{
-  display:inline-flex;align-items:center;gap:6px;
-  font-size:12px;color:var(--maibot-foreground);
-  cursor:pointer;white-space:nowrap;
-}
-.steer-toggle input{accent-color:var(--maibot-primary)}
-.feedback{
-  margin:0;min-height:17px;
-  font-size:12px;font-weight:600;
-  color:var(--mil-on);
-}
-.feedback.error{color:var(--maibot-danger)}
-.empty{
-  padding:32px 16px;margin:auto;text-align:center;
-  color:var(--maibot-muted);font-size:13px;line-height:1.65;max-width:340px;
-}
-@media (max-width:900px){
-  .app{height:auto;min-height:100dvh;overflow:visible;padding:10px}
-  .layout{grid-template-columns:1fr;min-height:auto}
-  aside{max-height:none}
-  .thread-list{max-height:240px}
-  .detail{min-height:520px;overflow:visible}
-  .content{overflow:visible}
-  .launcher-row{grid-template-columns:1fr}
-  .composer-bottom{flex-direction:column;align-items:stretch}
-  .composer-actions{justify-content:space-between}
-}
-@media (prefers-reduced-motion:reduce){
-  *{transition:none!important;animation:none!important}
+/* Maisya WebUI · MaiBot 千禧机械硬件设计系统 (0px 直角 / 注塑外壳 / 下沉液晶屏 / 3D 机械键帽) */
+:root {
+  --mil-shell: #ddd4bf;
+  --mil-panel: #ebe4d2;
+  --mil-well: #cfc6af;
+  --mil-screen: #fbf9f0;
+  --mil-screen-shade: rgba(112, 104, 90, 0.14);
+  --mil-screen-grid: rgba(130, 124, 112, 0.08);
+  --mil-scope: #403c37;
+  --mil-scope-ink: #e5f3e9;
+  --mil-scope-grid: rgba(255, 255, 255, 0.075);
+  --mil-ink: #322d2a;
+  --mil-muted: #766f66;
+  --mil-print: #5f5849;
+  --mil-line: #5a544a;
+  --mil-rule: #d3cec0;
+  --mil-hi: #f6f1e3;
+  --mil-lo: #bdb39c;
+  --mil-drop: #9c927b;
+  --mil-vent: #afa58d;
+  --mil-key: #f3eee1;
+  --mil-key-hi: #fdfbf5;
+  --mil-key-side: #cbbfa8;
+  --mil-on: #8fd6a0;
+  --mil-on-side: #5fa873;
+  --mil-on-ink: #253323;
+  --mil-hot: #f08a5d;
+  --mil-hot-side: #c2643c;
+  --mil-hot-ink: #3a241a;
+  --mil-danger: #c2452f;
+  --mil-danger-side: #8f3020;
+  --mil-danger-ink: #fff8f5;
+  --mil-warn: #ffd84a;
+  --mil-warn-ink: #3d3210;
+  --mil-led: #8fd6a0;
+  --mil-led-run: #ffd84a;
+  --mil-led-bad: #f08a5d;
+  --mil-meter: #5fa873;
+  --mil-raise: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 5px 0 var(--mil-drop);
+  --mil-sunk: inset 3px 3px 0 var(--mil-screen-shade), -1px -1px 0 1px var(--mil-lo), 1px 1px 0 1px var(--mil-hi);
+  --mil-grain-shell: radial-gradient(rgba(90, 84, 74, 0.1) 1px, transparent 1px);
+  --mil-grain-panel: radial-gradient(rgba(90, 84, 74, 0.065) 1px, transparent 1px);
+  --mil-lcd-grid: linear-gradient(var(--mil-screen-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-screen-grid) 1px, transparent 1px);
+  --mil-radius: 0px;
+  --mil-font-display: var(--maibot-font-display, "Departure Mono", "Ark Pixel 12px SC", ui-monospace, monospace);
+  --mil-font-body: var(--maibot-font-body, "Ark Pixel 12px SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+  --mil-font-mono: var(--maibot-font-mono, "Departure Mono", "JetBrains Mono", ui-monospace, monospace);
+  /* 上下文分布色板 */
+  --ctx-system: #74ba85;
+  --ctx-memory: #6da3d4;
+  --ctx-user: #e7be46;
+  --ctx-assistant: #9e89d4;
+  --ctx-tool: #f08a5d;
+  --ctx-free: #e5decb;
+  color-scheme: light;
+}
+
+:root.dark {
+  --mil-shell: #2f2c28;
+  --mil-panel: #3a3631;
+  --mil-well: #25221f;
+  --mil-screen: #1e221e;
+  --mil-screen-shade: rgba(0, 0, 0, 0.42);
+  --mil-screen-grid: rgba(143, 214, 160, 0.055);
+  --mil-scope: #181c18;
+  --mil-scope-ink: #b9e7c5;
+  --mil-scope-grid: rgba(143, 214, 160, 0.075);
+  --mil-ink: #eee9de;
+  --mil-muted: #a0988a;
+  --mil-print: #b3ab9c;
+  --mil-line: #171513;
+  --mil-rule: #3c423b;
+  --mil-hi: #524d46;
+  --mil-lo: #24211d;
+  --mil-drop: #141210;
+  --mil-vent: #645e55;
+  --mil-key: #4d4841;
+  --mil-key-hi: #605a52;
+  --mil-key-side: #302c27;
+  --mil-on: #8fd6a0;
+  --mil-on-side: #5fa873;
+  --mil-on-ink: #1e2a20;
+  --mil-hot: #f08a5d;
+  --mil-hot-side: #a9522e;
+  --mil-hot-ink: #2c1e16;
+  --mil-danger: #c2452f;
+  --mil-danger-side: #7d2517;
+  --mil-danger-ink: #fff;
+  --mil-warn: #ffd84a;
+  --mil-warn-ink: #29220a;
+  --mil-led: #8fd6a0;
+  --mil-led-run: #ffd84a;
+  --mil-led-bad: #f08a5d;
+  --mil-meter: #8fd6a0;
+  --mil-grain-shell: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  --mil-grain-panel: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  --ctx-system: #5da56f;
+  --ctx-memory: #568ec2;
+  --ctx-user: #cfa334;
+  --ctx-assistant: #836ec0;
+  --ctx-tool: #de784b;
+  --ctx-free: #2a302a;
+  color-scheme: dark;
+}
+
+/* 当宿主切换为 modern 风格时平滑适配其毛玻璃卡片语义 */
+:root[data-dashboard-style="modern"] {
+  --mil-shell: var(--maibot-background, #f6f7fb);
+  --mil-panel: var(--maibot-surface, #ffffff);
+  --mil-well: var(--maibot-muted, #f0f2f7);
+  --mil-screen: var(--maibot-surface, #ffffff);
+  --mil-screen-shade: rgba(15, 23, 42, 0.04);
+  --mil-screen-grid: transparent;
+  --mil-ink: var(--maibot-foreground, #1f2329);
+  --mil-muted: var(--maibot-muted-foreground, #667085);
+  --mil-print: var(--maibot-muted-foreground, #667085);
+  --mil-line: var(--maibot-border, #d8dee8);
+  --mil-rule: var(--maibot-border, #e5e9f0);
+  --mil-hi: transparent;
+  --mil-lo: transparent;
+  --mil-drop: rgba(15, 23, 42, 0.08);
+  --mil-key: var(--maibot-surface, #ffffff);
+  --mil-key-hi: transparent;
+  --mil-key-side: var(--maibot-border, #d8dee8);
+  --mil-raise: 0 2px 10px rgba(15, 23, 42, 0.06);
+  --mil-sunk: inset 0 1px 3px rgba(15, 23, 42, 0.05);
+  --mil-grain-shell: none;
+  --mil-grain-panel: none;
+  --mil-radius: 10px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background-color: var(--mil-shell);
+  background-image: var(--mil-grain-shell);
+  background-size: 5px 5px;
+  color: var(--mil-ink);
+  font-family: var(--mil-font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+h1, h2, h3, h4, p {
+  margin: 0;
+}
+
+pre, code, .mono, .num {
+  font-family: var(--mil-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: var(--mil-well);
+  border-left: 1px solid var(--mil-line);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--mil-lo);
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+}
+
+/* ───────────── 机身外壳容器 ───────────── */
+
+.mil-shell {
+  max-width: 1460px;
+  margin: 0 auto;
+  padding: 12px 14px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 顶部机箱控制条 */
+.mil-topbar {
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--mil-raise);
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mil-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mil-spectrum {
+  display: grid;
+  grid-template-columns: repeat(3, 8px);
+  height: 22px;
+  border: 2px solid var(--mil-line);
+  flex-shrink: 0;
+}
+.mil-spectrum i {
+  display: block;
+}
+.mil-spectrum i:nth-child(1) { background: var(--mil-on); }
+.mil-spectrum i:nth-child(2) { background: var(--mil-warn); }
+.mil-spectrum i:nth-child(3) { background: var(--mil-hot); }
+
+.mil-nameplate {
+  font-family: var(--mil-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  background: var(--mil-line);
+  color: var(--mil-key);
+  font-synthesis: none;
+  flex-shrink: 0;
+}
+
+.mil-page-title {
+  font-family: var(--mil-font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  font-synthesis: none;
+}
+
+.mil-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mil-top-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mil-led-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  font-family: var(--mil-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 方形电源 / 状态 LED（绝对不用圆点） */
+.mil-led {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-led);
+  box-shadow: 0 0 0 1px var(--mil-lo);
+  flex-shrink: 0;
+}
+.mil-led--run {
+  background: var(--mil-led-run);
+  animation: mil-pulse 1.1s steps(2, end) infinite;
+}
+.mil-led--bad {
+  background: var(--mil-led-bad);
+}
+.mil-led--off {
+  background: var(--mil-well);
+}
+
+@keyframes mil-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ───────────── 模块面板 ───────────── */
+
+.mil-panel {
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--mil-raise);
+  padding: 12px 14px 14px;
+  min-width: 0;
+}
+
+.mil-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 2px solid var(--mil-lo);
+  box-shadow: 0 2px 0 var(--mil-hi);
+}
+
+.mil-head-l {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mil-silk {
+  font-family: var(--mil-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mil-print);
+  font-synthesis: none;
+}
+
+.mil-head-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--mil-ink);
+}
+
+.mil-head-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 模压散热百叶窗 */
+.mil-vent {
+  display: inline-block;
+  width: 34px;
+  height: 10px;
+  flex-shrink: 0;
+  background: repeating-linear-gradient(90deg, var(--mil-vent) 0 2px, transparent 2px 6px);
+}
+
+/* ───────────── 内嵌下沉式液晶屏 & 示波器屏 ───────────── */
+
+.mil-screen {
+  background-color: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--mil-sunk);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.mil-scope {
+  background-color: var(--mil-scope);
+  background-image: linear-gradient(var(--mil-scope-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-scope-grid) 1px, transparent 1px);
+  background-size: 12px 12px;
+  color: var(--mil-scope-ink);
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: inset 3px 3px 0 rgba(0, 0, 0, 0.36);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+/* ───────────── 立体机械键帽 ───────────── */
+
+.mil-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 33px;
+  padding: 4px 12px 8px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+  transition: transform 80ms steps(2, end), background-color 120ms ease, box-shadow 80ms steps(2, end);
+}
+
+.mil-key--sm {
+  min-height: 27px;
+  padding: 2px 9px 6px;
+  font-size: 12px;
+}
+
+.mil-key--hot {
+  background: var(--mil-hot);
+  color: var(--mil-hot-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-hot-side), inset 2px 2px 0 rgba(255, 255, 255, 0.3);
+}
+
+.mil-key--danger {
+  background: var(--mil-danger);
+  color: var(--mil-danger-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-danger-side), inset 2px 2px 0 rgba(255, 255, 255, 0.22);
+}
+
+.mil-key--on,
+.mil-key[aria-pressed="true"],
+.mil-key[aria-current="page"],
+.mil-key[aria-selected="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 6px;
+  padding-bottom: 4px;
+  transform: translateY(2px);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.mil-key:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mil-key:not(:disabled):hover {
+    filter: brightness(1.03);
+  }
+}
+
+.mil-key:not(:disabled):active {
+  transform: translateY(3px);
+  padding-top: 6px;
+  padding-bottom: 4px;
+  box-shadow: inset 0 -1px 0 var(--mil-key-side);
+}
+
+.mil-key:focus-visible,
+.mil-input:focus-visible,
+.mil-select:focus-visible,
+.mil-textarea:focus-visible,
+.mil-switch input:focus-visible + span {
+  outline: 2px solid var(--mil-hot);
+  outline-offset: 2px;
+}
+
+/* 分段键帽组（无间隙串联） */
+.mil-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+.mil-seg .mil-key {
+  margin-left: -2px;
+}
+.mil-seg .mil-key:first-child {
+  margin-left: 0;
+}
+
+/* ───────────── 表单控件 ───────────── */
+
+.mil-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mil-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mil-print);
+  letter-spacing: 0.04em;
+}
+
+.mil-input,
+.mil-select,
+.mil-textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  font-size: 13px;
+}
+
+.mil-textarea {
+  resize: vertical;
+  min-height: 110px;
+  line-height: 1.5;
+}
+
+.mil-textarea--code {
+  font-family: var(--mil-font-mono);
+  font-size: 12.5px;
+}
+
+/* 方形拨动开关 */
+.mil-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.mil-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.mil-switch-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  flex-shrink: 0;
+  transition: background-color 140ms ease;
+}
+.mil-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+  transition: transform 140ms steps(3, end), background-color 140ms ease;
+}
+.mil-switch input:checked + .mil-switch-track {
+  background: var(--mil-on);
+}
+.mil-switch input:checked + .mil-switch-track::after {
+  transform: translateX(20px);
+  background: var(--mil-key-hi);
+}
+.mil-switch-txt {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* 勾选方框芯片 */
+.mil-chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mil-chk input {
+  accent-color: var(--mil-on-side);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+/* ───────────── 分段液晶槽进度条 & 标签徽章 ───────────── */
+
+.mil-meter {
+  height: 14px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  overflow: hidden;
+  padding: 1px;
+}
+.mil-meter > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: repeating-linear-gradient(90deg, var(--mil-meter) 0 8px, transparent 8px 10px);
+  transition: width 240ms ease;
+}
+.mil-meter--warn > i {
+  background: repeating-linear-gradient(90deg, var(--mil-warn) 0 8px, transparent 8px 10px);
+}
+.mil-meter--hot > i {
+  background: repeating-linear-gradient(90deg, var(--mil-hot) 0 8px, transparent 8px 10px);
+}
+
+.mil-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  color: var(--mil-ink);
+  font-family: var(--mil-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.mil-tag--ok { background: var(--mil-on); color: var(--mil-on-ink); }
+.mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
+.mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
+.mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+
+.mil-hint {
+  font-size: 12px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mil-feedback {
+  min-height: 20px;
+  padding: 6px 10px;
+  border: 2px dashed var(--mil-rule);
+  background: var(--mil-screen);
+  font-size: 12.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.mil-feedback:empty {
+  display: none;
+}
+.mil-feedback--err {
+  border-style: solid;
+  border-color: var(--mil-danger);
+  color: var(--mil-danger);
+}
+.mil-feedback--ok {
+  border-style: solid;
+  border-color: var(--mil-on-side);
+  background: rgba(143, 214, 160, 0.16);
+}
+
+.mil-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  font-family: var(--mil-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ───────────── 通用网格、工具条、弹窗抽屉 ───────────── */
+
+.mil-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mil-grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.mil-split {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.mil-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(24, 22, 19, 0.56);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.mil-scrim[hidden] {
+  display: none;
+}
+
+.mil-modal {
+  width: min(760px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 8px 0 var(--mil-drop);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 900px) {
+  .mil-grid-2,
+  .mil-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .mil-shell {
+    padding: 8px 8px 20px;
+    gap: 10px;
+  }
+  .mil-topbar {
+    padding: 8px 10px;
+  }
+  .mil-panel {
+    padding: 10px 10px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mil-led--run {
+    animation: none;
+  }
+  .mil-key,
+  .mil-switch-track,
+  .mil-switch-track::after,
+  .mil-meter > i {
+    transition: none;
+  }
+}
+
+/* ───────────── 现场页专用布局与 Aisya 交互样式 ───────────── */
+
+/* 1. 处理流向图 (FLOW) */
+.flow-box {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+  padding: 6px 2px;
+}
+
+.fl-svg, .fl-sky {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.fl-svg path {
+  fill: none;
+  stroke: var(--mil-lo);
+  stroke-width: 2px;
+  stroke-dasharray: 4 3;
+}
+.fl-svg path.on {
+  stroke: var(--mil-on-side);
+  stroke-width: 2.5px;
+  stroke-dasharray: none;
+}
+
+.pkt {
+  fill: var(--mil-on);
+  stroke: var(--mil-line);
+  stroke-width: 1.5px;
+}
+.pkt.hot { fill: var(--mil-hot); }
+.pkt.warn { fill: var(--mil-warn); }
+.pkt.held {
+  animation: mil-pulse 0.9s steps(2, end) infinite;
+}
+
+.fl-col {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fl-col-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mil-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--mil-print);
+  padding: 0 2px 4px;
+  border-bottom: 2px dashed var(--mil-rule);
+}
+
+.fl-node {
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px 9px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  color: var(--mil-ink);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  transition: transform 80ms steps(2, end), background-color 120ms ease;
+}
+
+.fl-node--static {
+  cursor: default;
+}
+
+.fl-node.on {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  box-shadow: inset 0 -2px 0 var(--mil-on-side);
+}
+
+.fl-node.run {
+  border-color: var(--mil-hot-side);
+  box-shadow: inset 3px 0 0 var(--mil-hot);
+}
+
+.fl-node-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fl-node-name {
+  font-weight: 700;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-node-sub {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.fl-node.on .fl-node-sub {
+  color: var(--mil-on-ink);
+  opacity: 0.86;
+}
+
+/* 2. 当前动态条与遥测数字 */
+.strip-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.strip-grid > .mil-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.strip-screen {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 1;
+}
+
+.strip-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.strip-state {
+  font-family: var(--mil-font-display);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+}
+
+.strip-steps {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--mil-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.strip-steps li {
+  overflow-wrap: anywhere;
+}
+
+.strip-leds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 2px dashed var(--mil-rule);
+  font-size: 12px;
+}
+
+.strip-led-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  flex: 1;
+}
+
+.kpi-cell {
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.kpi-val {
+  font-family: var(--mil-font-display);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-synthesis: none;
+}
+
+.kpi-lbl {
+  font-size: 11.5px;
+  color: var(--mil-print);
+  font-weight: 700;
+}
+
+/* 3. 上下文窗口 (CONTEXT MAP / WAFER GRID / OSCILLOSCOPE) */
+.ctx-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.ctx-board {
+  position: relative;
+  min-height: 224px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  padding: 2px;
+}
+
+.ctx-map-stage {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  overflow: hidden;
+  background: var(--ctx-free);
+}
+
+.cm-tile {
+  position: absolute;
+  border: 1.5px solid var(--mil-line);
+  padding: 3px 5px;
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+  color: #1f1c19;
+  font-size: 11px;
+  line-height: 1.2;
+}
+.cm-tile[data-cat="system"] { background: var(--ctx-system); }
+.cm-tile[data-cat="memory"] { background: var(--ctx-memory); }
+.cm-tile[data-cat="user"] { background: var(--ctx-user); }
+.cm-tile[data-cat="assistant"] { background: var(--ctx-assistant); color: #191624; }
+.cm-tile[data-cat="tool"] { background: var(--ctx-tool); }
+.cm-tile[data-cat="free"] {
+  background: var(--ctx-free);
+  color: var(--mil-muted);
+  cursor: default;
+}
+.cm-tile.dim { opacity: 0.28; }
+.cm-tile b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.cm-tile span {
+  font-family: var(--mil-font-mono);
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.cm-grid {
+  display: grid;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px;
+  background: var(--mil-screen);
+}
+.cm-cell {
+  aspect-ratio: 1;
+  border: 1px solid rgba(90, 84, 74, 0.35);
+  background: var(--ctx-free);
+  cursor: pointer;
+  padding: 0;
+}
+.cm-cell[data-cat="system"] { background: var(--ctx-system); }
+.cm-cell[data-cat="memory"] { background: var(--ctx-memory); }
+.cm-cell[data-cat="user"] { background: var(--ctx-user); }
+.cm-cell[data-cat="assistant"] { background: var(--ctx-assistant); }
+.cm-cell[data-cat="tool"] { background: var(--ctx-tool); }
+.cm-cell[data-cat="free"] { cursor: default; }
+.cm-cell.dim { opacity: 0.24; }
+
+.cm-tip {
+  position: fixed;
+  z-index: 980;
+  pointer-events: none;
+  max-width: 280px;
+  padding: 6px 8px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  box-shadow: 0 4px 0 var(--mil-drop);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cm-tip[hidden] { display: none; }
+
+.ctx-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ctx-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--mil-line);
+}
+
+.ctx-items {
+  display: flex;
+  flex-direction: column;
+  max-height: 158px;
+  overflow-y: auto;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+}
+
+.ci-row {
+  width: 100%;
+  border: 0;
+  border-bottom: 2px dashed var(--mil-rule);
+  background: transparent;
+  color: var(--mil-ink);
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.ci-row:last-child { border-bottom: 0; }
+.ci-row-name {
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-row-bar {
+  grid-column: 2 / 4;
+  height: 4px;
+  background: var(--mil-well);
+}
+.ci-row-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--mil-meter);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ci-row:hover {
+    background: rgba(143, 214, 160, 0.22);
+  }
+}
+
+.scope-svg {
+  width: 100%;
+  height: 96px;
+  display: block;
+}
+
+/* 4. 处理记录与详情检查器 */
+.thread-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.thread-row {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 2px dashed var(--mil-rule);
+  background: transparent;
+  color: var(--mil-ink);
+  padding: 9px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.thread-row:last-child { border-bottom: 0; }
+.thread-row.on {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+@media (hover: hover) and (pointer: fine) {
+  .thread-row:not(.on):hover {
+    background: rgba(143, 214, 160, 0.16);
+  }
+}
+
+.thread-title {
+  font-weight: 700;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.thread-excerpt {
+  font-size: 12px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.thread-row.on .thread-excerpt {
+  color: var(--mil-on-ink);
+  opacity: 0.86;
+}
+
+.inspector-h2 {
+  font-family: var(--mil-font-display);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.events-box {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.ev-det {
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  padding: 6px 9px;
+}
+.ev-det summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ev-det pre {
+  margin: 8px 0 4px;
+  padding: 8px;
+  border: 1px dashed var(--mil-rule);
+  background: var(--mil-panel);
+  font-family: var(--mil-font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.launch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 960px) {
+  .flow-box {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .fl-svg, .fl-sky {
+    display: none;
+  }
+  .strip-grid,
+  .ctx-layout,
+  .launch-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>
 </head>
 <body>
-<main class="app maibot-page">
-<header class="frame-head">
-  <div class="head-title">
-    <div class="eyebrow">MAISYA WORKSPACE</div>
-    <h1>现场</h1>
-    <p class="sub">查看线程的上下文、步骤与实时结果，随时递纸条补充方向。</p>
-  </div>
-  <div class="connection" role="status">
-    <span id="conn-light" data-status-light data-status="warn" aria-hidden="true"></span>
-    <span id="connection">正在连接</span>
-  </div>
-</header>
-<div class="layout">
-  <aside aria-label="线程导航">
-    <div class="aside-bar">
-      <div class="filters">
-        <label for="chat">会话筛选</label>
-        <select id="chat" class="maibot-select"><option value="">全部会话</option></select>
+<div class="mil-shell">
+
+  <!-- 顶部机箱控制条 -->
+  <header class="mil-topbar">
+    <div class="mil-brand">
+      <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="mil-nameplate">MAISYA</span>
+      <h1 class="mil-page-title">现场</h1>
+      <nav class="mil-nav" aria-label="Maisya 工作区页面">
+        <button type="button" class="mil-key mil-key--sm" aria-current="page" data-nav="now">现场</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="memory">记忆</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
+      </nav>
+    </div>
+    <div class="mil-top-right">
+      <div class="mil-led-pill" id="top-led-pill">
+        <span class="mil-led" id="top-led"></span>
+        <span id="top-state-text">待命</span>
+      </div>
+      <button type="button" class="mil-key mil-key--hot" id="open-launch">+ 发起工作流</button>
+    </div>
+  </header>
+
+  <!-- 1. 处理流向 (FLOW) -->
+  <section class="mil-panel" id="flow-panel" aria-label="处理流向">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span class="mil-silk">FLOW · 处理流向</span>
+        <span class="mil-hint" id="flow-filter-hint">点击会话筛选 · 点击线程定位</span>
+      </div>
+      <div class="mil-head-r">
+        <button type="button" class="mil-key mil-key--sm" id="flow-all-chats" aria-pressed="true">全部会话</button>
+        <span class="mil-vent" aria-hidden="true"></span>
       </div>
     </div>
-    <form class="launcher" id="launcher" aria-label="直接发起工作流">
-      <div class="launcher-title"><span>直接发起工作流</span></div>
-      <div class="launcher-row">
-        <input id="launch-profile" class="maibot-input" list="launch-profile-list" value="scout" placeholder="能力档案" aria-label="能力档案">
+    <div class="flow-box" id="flow">
+      <svg class="fl-svg" aria-hidden="true"></svg>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>01 会话来源</span><span class="num" id="fl-cnt-chat">0</span></div>
+        <div id="fl-chats"></div>
+      </div>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>02 脉搏闸门</span><span class="num" id="fl-cnt-gate">PULSE</span></div>
+        <div id="fl-gate"></div>
+      </div>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>03 能力执行器</span><span class="num" id="fl-cnt-prof">0</span></div>
+        <div id="fl-profiles"></div>
+      </div>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>04 线程与交付</span><span class="num" id="fl-cnt-th">0</span></div>
+        <div id="fl-threads"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 当前动态 + 实时读数 -->
+  <section class="strip-grid" aria-label="实时状态与读数">
+    <div class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">STATUS · 当前动态</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div class="mil-screen strip-screen">
+        <div class="strip-main">
+          <div>
+            <div class="strip-state" id="now-headline">待命</div>
+            <div class="mil-hint" id="now-subline">尚未选中活动线程</div>
+          </div>
+          <div class="mil-row" id="now-badges"></div>
+        </div>
+        <ol class="strip-steps" id="now-steps"></ol>
+        <div class="strip-leds" id="now-leds"></div>
+      </div>
+    </div>
+
+    <div class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">TELEMETRY · 实时读数</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-cell"><span class="kpi-lbl">活动线程</span><span class="kpi-val" id="kpi-active">0</span></div>
+        <div class="kpi-cell"><span class="kpi-lbl">24h 线程</span><span class="kpi-val" id="kpi-today">0</span></div>
+        <div class="kpi-cell"><span class="kpi-lbl">结果交付</span><span class="kpi-val" id="kpi-deliv">0</span></div>
+        <div class="kpi-cell"><span class="kpi-lbl">待唤醒意图</span><span class="kpi-val" id="kpi-intent">0</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 上下文窗口 (方块 / 方格 + 示波器) -->
+  <section class="mil-panel" id="ctx-panel" aria-label="上下文窗口">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span class="mil-silk">CONTEXT · 上下文窗口</span>
+        <span class="mil-tag" id="ctx-health">未选线程</span>
+      </div>
+      <div class="mil-head-r">
+        <div class="mil-seg" role="group" aria-label="上下文视图模式">
+          <button type="button" class="mil-key mil-key--sm" data-ctx-view="map" aria-pressed="true">方块</button>
+          <button type="button" class="mil-key mil-key--sm" data-ctx-view="grid" aria-pressed="false">方格</button>
+        </div>
+        <span class="mil-vent" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <div class="mil-row" id="ctx-threads" style="margin-bottom:10px"></div>
+
+    <div class="mil-screen" style="margin-bottom:10px">
+      <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
+        <strong class="num" id="ctx-readout">0 / 48.0K 字符 (0%)</strong>
+        <span class="mil-hint" id="ctx-meta">点击方块、方格或右侧条目可阅读脱敏原文</span>
+      </div>
+      <div class="mil-meter" id="ctx-meter"><i id="ctx-meter-bar"></i></div>
+      <div class="ctx-cats" id="ctx-cats" style="margin-top:8px"></div>
+    </div>
+
+    <div class="ctx-layout">
+      <div class="ctx-board" id="ctx-board">
+        <div class="ctx-map-stage" id="ctx-map"></div>
+        <div class="cm-grid" id="ctx-grid" hidden></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+        <div class="mil-scope">
+          <div class="mil-row" style="justify-content:space-between;margin-bottom:4px">
+            <span class="mil-silk" style="color:var(--mil-scope-ink)">TREND · 轮次上下文增长</span>
+            <span class="num" style="font-size:11px" id="ctx-spark-label">—</span>
+          </div>
+          <svg class="scope-svg" id="ctx-spark" viewBox="0 0 320 96" preserveAspectRatio="none" aria-label="上下文历史趋势折线"></svg>
+        </div>
+        <div class="ctx-items" id="ctx-items"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 处理记录 + 线程详情与递纸条 -->
+  <section class="mil-split" aria-label="处理记录与线程详情">
+    <div class="mil-panel" id="threads-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">THREADS · 处理记录</span></div>
+        <div class="mil-head-r">
+          <div class="mil-seg" id="th-filters" role="group" aria-label="线程状态筛选">
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="all" aria-pressed="true">全部</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="active" aria-pressed="false">运行中</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="delivered" aria-pressed="false">已交付</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="error" aria-pressed="false">异常</button>
+          </div>
+        </div>
+      </div>
+      <div class="mil-screen thread-list" id="threads">
+        <p class="mil-hint">正在读取线程记录…</p>
+      </div>
+    </div>
+
+    <div class="mil-panel" id="inspector-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">INSPECTOR · 线程现场</span>
+          <span class="mil-tag" id="ins-state-tag">—</span>
+        </div>
+        <div class="mil-head-r" id="ins-meta-tags"></div>
+      </div>
+
+      <div class="mil-screen" style="margin-bottom:10px">
+        <h2 class="inspector-h2" id="title">等待选择线程</h2>
+        <div class="mil-hint" id="meta" style="margin-top:4px"></div>
+        <pre class="mil-pre" id="result-box" style="margin-top:8px;max-height:160px" hidden></pre>
+        <div class="mil-row" id="deliveries-row" style="margin-top:8px"></div>
+      </div>
+
+      <div class="mil-field" style="margin-bottom:10px">
+        <span class="mil-label">步骤时间线（支持分页读取超长工具结果）</span>
+        <div class="events-box" id="events">
+          <p class="mil-hint">选择一条线程后展示执行事件。</p>
+        </div>
+      </div>
+
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+        <label class="mil-label" for="message">给原线程递纸条 / 补充方向（按线程独立暂存草稿）</label>
+        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="补充约束、指正路线，或让正在工作的线程立即转向"></textarea>
+        <div class="mil-row" style="justify-content:space-between">
+          <label class="mil-switch">
+            <input type="checkbox" id="steer">
+            <span class="mil-switch-track"></span>
+            <span class="mil-switch-txt">立即转向（优先切到新方向）</span>
+          </label>
+          <div class="mil-row">
+            <button type="button" class="mil-key mil-key--hot" id="send-note">递纸条</button>
+            <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
+          </div>
+        </div>
+        <div class="mil-feedback" id="feedback" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 发起新工作流控制台 -->
+  <section class="mil-panel" id="launch-panel" aria-label="发起工作流">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span class="mil-silk">LAUNCH · 发起工作流</span>
+        <span class="mil-hint">由管理员直接从现场调起任意能力档案或持久工作区</span>
+      </div>
+      <div class="mil-head-r">
+        <div class="mil-row" id="launch-profile-chips"></div>
+        <span class="mil-vent" aria-hidden="true"></span>
+      </div>
+    </div>
+    <div class="launch-grid" style="margin-bottom:10px">
+      <div class="mil-field">
+        <label class="mil-label" for="launch-profile">能力档案</label>
+        <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
         <datalist id="launch-profile-list"></datalist>
-        <input id="launch-chat" class="maibot-input" list="launch-chat-list" placeholder="会话 chat_id" aria-label="目标会话">
+      </div>
+      <div class="mil-field">
+        <label class="mil-label" for="launch-chat">目标会话（支持 self 自身活动）</label>
+        <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="输入 chat_id 或 self">
         <datalist id="launch-chat-list"></datalist>
       </div>
-      <input id="launch-workspace" class="maibot-input" placeholder="可选工作区（如 digest）" aria-label="工作区">
-      <textarea id="launch-prompt" class="maibot-input" maxlength="16000" placeholder="直接在此输入任务提示词，无需群聊触发…"></textarea>
-      <div class="launcher-actions">
-        <button class="maibot-button maibot-button-primary" id="launch-run" type="submit">发起工作流</button>
+      <div class="mil-field">
+        <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
+        <input id="launch-workspace" class="mil-input mono" placeholder="例如 digest_daily">
       </div>
-      <p class="feedback" id="launch-feedback" role="status" aria-live="polite"></p>
-    </form>
-    <nav class="thread-list" id="threads" aria-label="线程列表"><p class="empty">正在读取线程…</p></nav>
-    <footer>最近 60 个线程 · 自动更新</footer>
-  </aside>
-  <section class="detail" aria-label="线程详情">
-    <div class="empty" id="welcome">选择一个线程，查看它的过程与结果。</div>
-    <div id="detail-head" class="detail-head" hidden>
-      <div>
-        <div class="eyebrow" id="profile"></div>
-        <h2 id="title"></h2>
-        <p class="detail-meta" id="meta"></p>
-      </div>
-      <button class="maibot-button maibot-button-danger stop" id="stop" type="button">停止线程</button>
     </div>
-    <div class="content" id="content" hidden>
-      <section class="panel-box context" aria-label="上下文构成">
-        <div class="context-line"><span id="context-label"></span><span id="context-archive"></span></div>
-        <div class="context-bar" role="img" aria-label="上下文使用情况">
-          <span class="role-system" id="bar-system"></span>
-          <span class="role-memory" id="bar-memory"></span>
-          <span class="role-user" id="bar-user"></span>
-          <span class="role-assistant" id="bar-assistant"></span>
-          <span class="role-tool" id="bar-tool"></span>
-        </div>
-        <div class="legend">
-          <span><i class="role-system"></i>指令</span>
-          <span><i class="role-memory"></i>记忆</span>
-          <span><i class="role-user"></i>输入</span>
-          <span><i class="role-assistant"></i>模型</span>
-          <span><i class="role-tool"></i>工具</span>
-          <span id="model"></span>
-        </div>
-      </section>
-      <section class="result" id="result" hidden><h3>当前结果</h3><pre id="result-text"></pre></section>
-      <section class="stream">
-        <div class="stream-head">
-          <h3>过程</h3>
-          <button class="maibot-button maibot-button-sm follow" id="follow" type="button" aria-pressed="true">跟随最新</button>
-        </div>
-        <div class="events-screen" id="events"></div>
-      </section>
-      <p class="intent-line" id="intents"></p>
+    <div class="mil-field" style="margin-bottom:10px">
+      <label class="mil-label" for="launch-prompt">任务提示词</label>
+      <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="交代要查证、创作或持续推进的事情"></textarea>
     </div>
-    <form class="composer" id="composer" hidden>
-      <label for="message">补充方向</label>
-      <textarea id="message" class="maibot-input" maxlength="16000" placeholder="补充一个线索，或告诉它接下来往哪里走。"></textarea>
-      <div class="composer-bottom">
-        <span>在原线程继续，结果保留在线程中。</span>
-        <div class="composer-actions">
-          <label class="steer-toggle" for="steer"><input type="checkbox" id="steer">立即转向（温和收束当前步骤）</label>
-          <button class="maibot-button maibot-button-primary" type="submit" id="send">递纸条</button>
-        </div>
-      </div>
-      <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
-    </form>
+    <div class="mil-row" style="justify-content:space-between">
+      <div class="mil-row" id="launch-chat-chips"></div>
+      <button type="button" class="mil-key mil-key--hot" id="launch-run">直接发起工作流</button>
+    </div>
+    <div class="mil-feedback" id="launch-feedback" style="margin-top:8px" aria-live="polite"></div>
   </section>
+
 </div>
-</main>
+
+<!-- 悬浮提示 & 上下文条目原文阅读器 -->
+<div class="cm-tip" id="cm-tip" hidden></div>
+
+<div class="mil-scrim" id="ctx-scrim" hidden>
+  <div class="mil-modal" role="dialog" aria-modal="true" aria-labelledby="ctx-modal-title">
+    <div class="mil-head" style="margin-bottom:0">
+      <div class="mil-head-l">
+        <span class="mil-tag" id="ctx-modal-cat">—</span>
+        <strong id="ctx-modal-title">上下文条目</strong>
+      </div>
+      <div class="mil-head-r">
+        <span class="num mil-hint" id="ctx-modal-chars">0 字符</span>
+        <button type="button" class="mil-key mil-key--sm" id="ctx-modal-close">关闭</button>
+      </div>
+    </div>
+    <pre class="mil-pre" id="ctx-modal-body" style="max-height:56vh"></pre>
+  </div>
+</div>
+
 <script>
 (() => {
-  const $ = id => document.getElementById(id);
-  const states = {active:'正在探索',waiting:'等待输入',idle:'可继续',closed:'已停止'};
-  const kinds = {opened:'开启线程',input:'收到补充',tools:'调用工具',result:'得到结果',question:'等待必要输入',stopped:'停止线程',redirect:'更新方向',context_archive:'归档完整历史',context_checkpoint:'保存上下文',continued:'继续探索'};
-  let selected='', cursor=0, filter='', polling=false, requested=false, timer, busy=false, following=true, fingerprint='', generation=0, stopped=false;
-  const seen = new Set(), chats = new Set(), drafts = new Map();
-  const text = (id,value) => { $(id).textContent=value; };
-  const theme = context => {
-    document.documentElement.classList.toggle('dark', context?.theme==='dark');
-    const style = context?.dashboardStyle || context?.style || 'millennium';
-    document.documentElement.dataset.dashboardStyle = style;
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+  const $ = (sel) => document.querySelector(sel);
+
+  const CATS = {
+    system: { name: "能力说明", color: "var(--ctx-system)" },
+    memory: { name: "记忆层", color: "var(--ctx-memory)" },
+    user: { name: "输入", color: "var(--ctx-user)" },
+    assistant: { name: "推理结论", color: "var(--ctx-assistant)" },
+    tool: { name: "工具调用", color: "var(--ctx-tool)" },
+    free: { name: "剩余空间", color: "var(--ctx-free)" },
   };
-  const setConn = (status, label) => {
-    const light = $('conn-light');
-    if (light) light.dataset.status = status;
-    text('connection', label);
+  const STATE_LABEL = {
+    active: ["运行中", "mil-tag--hot", "mil-led--run"],
+    waiting: ["等待回复", "mil-tag--warn", "mil-led--run"],
+    idle: ["待命", "mil-tag--ok", ""],
+    closed: ["已结束", "", "mil-led--off"],
   };
-  window.addEventListener('maibot:context', event => theme(event.detail));
-  function feedback(value,error=false) { text('feedback',value); $('feedback').classList.toggle('error',error); text('launch-feedback',value); $('launch-feedback').classList.toggle('error',error); }
-  function syncLauncher(data) {
-    const plist=$('launch-profile-list');
-    if(plist&&Array.isArray(data.profiles)){plist.replaceChildren();data.profiles.forEach(p=>{const o=document.createElement('option');o.value=p;plist.append(o);});if(!$('launch-profile').value.trim())$('launch-profile').value=data.profiles.includes('scout')?'scout':(data.profiles[0]||'scout');}
-    const clist=$('launch-chat-list'), csel=$('chat');
-    const existing=new Set([...csel.options].map(o=>o.value));
-    const allChats=[...new Set([...(data.enabled_chats||[]),...chats])];
-    if(clist){clist.replaceChildren();allChats.forEach(c=>{const o=document.createElement('option');o.value=c;clist.append(o);});}
-    (data.enabled_chats||[]).forEach(c=>{chats.add(c);if(!existing.has(c)){existing.add(c);const o=document.createElement('option');o.value=c;o.textContent=c;o.title=c;csel.append(o);}});
-    if(!$('launch-chat').value.trim()&&allChats.length)$('launch-chat').value=filter||allChats[0];
+
+  let state = {
+    threadId: "",
+    chatFilter: "",
+    thFilter: "all",
+    ctxView: "map",
+    ctxCat: "all",
+    cursor: 0,
+    events: [],
+    lastSnap: null,
+  };
+  const localDrafts = {};
+  const rollNums = new WeakMap();
+  let queryQueue = Promise.resolve();
+  let actionQueue = Promise.resolve();
+  let timer = null;
+  let lastTriggerTarget = null;
+  let lastSnapshotAt = 0;
+
+  // 严格保证 query <= 1 并发、总请求 <= 2 并发
+  const enqueueQuery = (fn) => {
+    const p = queryQueue.then(fn, fn);
+    queryQueue = p.catch(() => {});
+    return p;
+  };
+  const enqueueAction = (fn) => {
+    const p = actionQueue.then(fn, fn);
+    actionQueue = p.catch(() => {});
+    return p;
+  };
+
+  function applyTheme(ctx) {
+    const c = ctx || window.maibot?.context || {};
+    const theme = c.theme === "dark" ? "dark" : "light";
+    document.documentElement.className = theme === "dark" ? "dark" : "";
+    const styleName = c.dashboardStyle || "millennium";
+    document.documentElement.setAttribute("data-dashboard-style", styleName);
   }
-  function choose(id) {
-    if(selected)drafts.set(selected,$('message').value);
-    selected=id; cursor=0; generation++; seen.clear(); $('events').replaceChildren(); fingerprint='';
-    $('message').value=drafts.get(id)||'';
-    feedback(''); refresh();
+  applyTheme();
+  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
+
+  const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+  function fmtTime(ts) {
+    if (!ts) return "—";
+    const d = new Date(Number(ts) * 1000);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
-  function list(rows) {
-    const next=JSON.stringify([rows,selected]); if(next===fingerprint) return; fingerprint=next;
-    const focus=document.activeElement?.dataset.thread;
-    $('threads').replaceChildren();
-    if(!rows.length){const p=document.createElement('p');p.className='empty';p.textContent='还没有线程。MaiBot 调用能力后，过程会出现在这里。';$('threads').append(p);}
-    rows.forEach(row=>{
-      chats.add(row.chat_id);
-      const button=document.createElement('button');button.type='button';button.className='thread';button.dataset.thread=row.thread_id;
-      button.setAttribute('aria-current',String(row.thread_id===selected));button.title=row.title+'\n'+row.chat_id;
-      const title=document.createElement('span');title.className='thread-title';title.textContent=row.title;
-      const meta=document.createElement('span');meta.className='thread-meta';
-      const profile=document.createElement('span');profile.textContent=row.profile+' · '+row.chat_id.slice(0,12);
-      const state=document.createElement('span');state.className='thread-state';state.textContent=row.has_error?'运行中断':states[row.state]||row.state;
-      meta.append(profile,state);button.append(title,meta);button.addEventListener('click',()=>choose(row.thread_id));$('threads').append(button);
+  function fmtK(n) {
+    const v = Number(n || 0);
+    return v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v);
+  }
+
+  // Aisya roll() 数字平滑跳变（respects reduced-motion）
+  function roll(el, target, format = (v) => String(Math.round(v))) {
+    if (!el) return;
+    const to = Number(target || 0);
+    const from = rollNums.get(el) ?? to;
+    rollNums.set(el, to);
+    if (calm() || from === to) {
+      el.textContent = format(to);
+      return;
+    }
+    const t0 = performance.now();
+    const dur = 240;
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - k, 3);
+      el.textContent = format(from + (to - from) * eased);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /* ───────────── 流向图 SVG 连线与信号脉冲（移植 Aisya flight.js） ───────────── */
+
+  let activeTrips = [];
+  let flightRaf = 0;
+
+  function drawFlowLines() {
+    const box = $("#flow");
+    const svg = box?.querySelector(":scope > .fl-svg");
+    if (!box || !svg) return;
+    if (window.innerWidth <= 960) {
+      svg.innerHTML = "";
+      return;
+    }
+    const br = box.getBoundingClientRect();
+    svg.setAttribute("viewBox", `0 0 ${br.width} ${br.height}`);
+    const cols = [...box.querySelectorAll(".fl-col")];
+    if (cols.length < 4) return;
+    const paths = [];
+    const anchor = (el, side) => {
+      const r = el.getBoundingClientRect();
+      return {
+        x: (side === "R" ? r.right : r.left) - br.left,
+        y: r.top + r.height / 2 - br.top,
+      };
+    };
+    const curve = (a, b, key, on) => {
+      const dx = Math.max(24, (b.x - a.x) * 0.48);
+      paths.push(`<path data-k="${esc(key)}" class="${on ? "on" : ""}" d="M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}"/>`);
+    };
+    const chats = [...box.querySelectorAll("#fl-chats .fl-node")];
+    const gate = box.querySelector("#fl-gate .fl-node");
+    const profs = [...box.querySelectorAll("#fl-profiles .fl-node")];
+    const ths = [...box.querySelectorAll("#fl-threads .fl-node")];
+    if (gate) {
+      const gl = anchor(gate, "L");
+      const gr = anchor(gate, "R");
+      chats.forEach((c, i) => curve(anchor(c, "R"), gl, `cg-${i}`, c.classList.contains("on") || c.classList.contains("run")));
+      profs.forEach((p, i) => curve(gr, anchor(p, "L"), `gp-${i}`, p.classList.contains("run") || p.classList.contains("on")));
+    }
+    if (profs.length && ths.length) {
+      ths.forEach((t, ti) => {
+        const pid = t.dataset.prof;
+        const match = profs.find((p) => p.dataset.flowProfile === pid) || profs[0];
+        if (match) curve(anchor(match, "R"), anchor(t, "L"), `pt-${ti}`, t.classList.contains("run") || t.classList.contains("on"));
+      });
+    }
+    svg.innerHTML = paths.join("");
+  }
+
+  function emitFlightPackets() {
+    if (calm() || document.hidden || window.innerWidth <= 960) return;
+    const box = $("#flow");
+    if (!box) return;
+    const wires = [...box.querySelectorAll(".fl-svg path.on")];
+    if (!wires.length) return;
+    let sky = box.querySelector(":scope > .fl-sky");
+    if (!sky) {
+      sky = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      sky.setAttribute("class", "fl-sky");
+      sky.setAttribute("aria-hidden", "true");
+      box.append(sky);
+    }
+    const r = box.getBoundingClientRect();
+    sky.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+    wires.slice(0, 3).forEach((w) => {
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("width", "7");
+      rect.setAttribute("height", "7");
+      rect.setAttribute("class", "pkt");
+      sky.append(rect);
+      activeTrips.push({ el: rect, key: w.dataset.k, t0: performance.now(), ms: 720 });
     });
-    const existing=new Set([...$('chat').options].map(item=>item.value));
-    chats.forEach(chat=>{if(!existing.has(chat)){const option=document.createElement('option');option.value=chat;option.textContent=chat;option.title=chat;$('chat').append(option);}});
-    if(focus) [...$('threads').children].find(item=>item.dataset.thread===focus)?.focus({preventScroll:true});
+    if (!flightRaf) flightRaf = requestAnimationFrame(tickFlight);
   }
-  function detail(data) {
-    const row=data.selected;if(!row)return;
-    ['detail-head','content','composer'].forEach(id=>$(id).hidden=false);$('welcome').hidden=true;
-    const item=data.threads.find(item=>item.thread_id===selected);
-    text('title',item?.title||row.thread_id);text('profile',row.profile+' / '+(states[row.state]||row.state));text('meta',row.chat_id+' · '+row.thread_id);
-    const ctx=row.context, used=Math.round(ctx.chars/1000*10)/10;
-    text('context-label',ctx.messages+' 条上下文 · '+used+'k / '+Math.round(ctx.limit/1000)+'k 字符');text('context-archive',ctx.archived?'早期原文已归档':'');
-    const roleCap=Math.max(ctx.limit,ctx.chars,1);['system','memory','user','assistant','tool'].forEach(role=>$('bar-'+role).style.width=Math.min(100,100*(ctx.roles[role]||0)/roleCap)+'%');text('model','模型 '+row.model);
-    const output=row.result.text||row.result.question||row.result.error||'';$('result').hidden=!output;text('result-text',output);
-    $('stop').disabled=busy||row.state==='closed';$('message').disabled=busy||row.state==='closed';$('send').disabled=busy||row.state==='closed';$('steer').disabled=busy||row.state==='closed';
-    data.events.forEach(event=>{
-      if(seen.has(event.seq))return;seen.add(event.seq);
-      const block=document.createElement('details');block.className='event';block.dataset.event=String(event.seq);
-      const summary=document.createElement('summary'), time=document.createElement('time');time.textContent=new Date(event.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-      summary.append(document.createTextNode(kinds[event.kind]||event.kind),time);
-      const body=document.createElement('pre');try{body.textContent=JSON.stringify(JSON.parse(event.text),null,2);}catch{body.textContent=event.text;}
-      block.append(summary,body);if(event.truncated){const more=document.createElement('button');more.type='button';more.className='maibot-button maibot-button-sm';more.textContent='读取完整步骤';let offset=0,whole='';more.addEventListener('click',async()=>{if(busy)return;busy=true;more.disabled=true;const target=selected;try{const part=await window.maibot.query('event',{thread_id:target,event_seq:event.seq,offset});if(!part.success)throw new Error(part.error||'读取失败');if(target!==selected)return;whole+=part.text;body.textContent=whole;offset=part.next_offset;more.hidden=offset===null;more.textContent='继续读取';}catch(error){feedback(error.message,true);}finally{busy=false;more.disabled=false;refresh();}});block.append(more);}
-      $('events').append(block);
+
+  function tickFlight(now) {
+    flightRaf = 0;
+    const box = $("#flow");
+    activeTrips = activeTrips.filter((tr) => {
+      const p = box?.querySelector(`.fl-svg path[data-k="${CSS.escape(tr.key)}"]`);
+      const k = Math.min(1, (now - tr.t0) / tr.ms);
+      if (!p || !tr.el.isConnected || k >= 1) {
+        tr.el.remove();
+        return false;
+      }
+      const pt = p.getPointAtLength(p.getTotalLength() * k);
+      tr.el.setAttribute("x", (pt.x - 3.5).toFixed(1));
+      tr.el.setAttribute("y", (pt.y - 3.5).toFixed(1));
+      return true;
     });
-    while($('events').children.length>200)$('events').firstElementChild.remove();
-    cursor=data.cursor;
-    const deliveries=data.deliveries||[];const latest=deliveries[0];
-    const deliveryMsg=latest?(latest.route==='reply'?'结果已交给原生回复':({sent:'准确载荷已发送',uncertain:'发送回执未确认，请先核对原会话',failed:'发送未成功，请核对原会话',preparing:'正在准备交付',sending:'正在发送准确载荷',cancelled:'已取消交付'}[latest.status]||latest.status)):(data.intents.length?'回接记录 '+data.intents.length+' 条':'');
-    const pendingIntents=(data.scheduled_intents||[]).filter(item=>item.status==='pending'||item.status==='claimed');
-    const intentMsg=pendingIntents.length?'待唤醒 '+pendingIntents.length+' 条'+(pendingIntents[0].reason?'（'+pendingIntents[0].reason.slice(0,40)+'）':''):'';
-    text('intents',[deliveryMsg,intentMsg].filter(Boolean).join(' · '));
-    if(following)$('content').scrollTop=$('content').scrollHeight;
+    if (activeTrips.length) flightRaf = requestAnimationFrame(tickFlight);
   }
-  async function refresh() {
-    if(stopped||document.hidden)return;if(polling){requested=true;return;}clearTimeout(timer);polling=true;requested=false;
-    const version=generation, target=selected;
-    try {
-      const data=await window.maibot.query('snapshot',{thread_id:target,chat_id:filter,cursor});
-      if(!data.success)throw new Error(data.error||'读取失败');
-      if(version!==generation){requested=true;return;}
-      list(data.threads);syncLauncher(data);setConn('on','已连接 · 自动更新');
-      if(!selected&&data.threads.length){selected=data.threads[0].thread_id;generation++;requested=true;return;}
-      if(target===selected)detail(data);
-    } catch(error) {setConn('error','连接暂时中断');feedback(error.message,true);}
-    finally {polling=false;if(!stopped)timer=setTimeout(refresh,requested?0:1800);}
+
+  function renderFlow(snap) {
+    const threads = snap.threads || [];
+    const pulse = snap.pulse || {};
+    const cards = snap.profile_cards?.length
+      ? snap.profile_cards
+      : (snap.profiles || []).map((id) => ({ id, title: id, environment: "readonly", autonomous: true }));
+    const enabledChats = new Set(snap.enabled_chats || []);
+    threads.forEach((t) => { if (t.chat_id) enabledChats.add(t.chat_id); });
+    const chats = [...enabledChats].slice(0, 8);
+    $("#fl-cnt-chat").textContent = String(chats.length);
+    $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter));
+    $("#flow-filter-hint").textContent = state.chatFilter
+      ? `当前按会话筛选：${state.chatFilter}`
+      : "点击会话筛选全页 · 点击线程直接检视";
+
+    $("#fl-chats").innerHTML = chats.length
+      ? chats.map((cid) => {
+          const activeHere = threads.some((t) => t.chat_id === cid && (t.state === "active" || t.state === "waiting"));
+          const on = state.chatFilter === cid;
+          const label = cid === "self" ? "自身活动 (self)" : cid;
+          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-flow-chat="${esc(cid)}">
+            <span class="fl-node-top"><span class="fl-node-name">${esc(label)}</span><span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span></span>
+            <span class="fl-node-sub">${threads.filter((t) => t.chat_id === cid).length} 条记录</span>
+          </button>`;
+        }).join("")
+      : `<div class="fl-node fl-node--static"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;
+
+    const levelMap = { quiet: "安静 (仅被动)", care: "关怀 (平衡)", lively: "活跃 (可冒泡)" };
+    const dailyPct = pulse.daily_limit ? Math.min(100, Math.round(((pulse.daily_used || 0) / pulse.daily_limit) * 100)) : 0;
+    $("#fl-gate").innerHTML = `<div class="fl-node fl-node--static${pulse.enabled !== false ? " on" : ""}">
+      <span class="fl-node-top"><span class="fl-node-name">${esc(levelMap[pulse.proactive_level] || "关怀")}</span><span class="mil-led ${pulse.in_sleep ? "mil-led--off" : ""}"></span></span>
+      <span class="fl-node-sub">今日主动 ${pulse.daily_used || 0} / ${pulse.daily_limit ?? 1} · 待唤醒 ${snap.stats?.pending_intents ?? (snap.scheduled_intents || []).length}</span>
+      <div class="mil-meter" style="margin-top:4px"><i style="width:${dailyPct}%"></i></div>
+      <span class="fl-node-sub">联网：${esc(pulse.web_provider || "auto")}</span>
+    </div>`;
+
+    $("#fl-cnt-prof").textContent = String(cards.length);
+    $("#fl-profiles").innerHTML = cards.slice(0, 6).map((p) => {
+      const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
+      const selectedMatch = snap.selected?.profile === p.id;
+      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" data-flow-profile="${esc(p.id)}">
+        <span class="fl-node-top"><span class="fl-node-name">${esc(p.title || p.id)}</span><span class="mil-tag">${esc(p.environment === "sandbox" ? "沙箱" : "只读")}</span></span>
+        <span class="fl-node-sub mono">${esc(p.id)}${p.autonomous ? " · 可自主" : " · 需授权"}</span>
+      </button>`;
+    }).join("");
+
+    const shownThreads = threads.slice(0, 5);
+    $("#fl-cnt-th").textContent = String(threads.length);
+    $("#fl-threads").innerHTML = shownThreads.length
+      ? shownThreads.map((t) => {
+          const st = STATE_LABEL[t.state] || ["未知", "", ""];
+          const on = t.thread_id === state.threadId;
+          return `<button type="button" class="fl-node${on ? " on" : ""}${t.state === "active" || t.state === "waiting" ? " run" : ""}" data-flow-thread="${esc(t.thread_id)}" data-prof="${esc(t.profile)}">
+            <span class="fl-node-top"><span class="fl-node-name">${esc(t.title)}</span><span class="mil-led ${st[2]}"></span></span>
+            <span class="fl-node-sub">${esc(t.profile)} · ${t.delivered ? "已交付" : st[0]}</span>
+          </button>`;
+        }).join("")
+      : `<div class="fl-node fl-node--static"><span class="fl-node-name">暂无线程</span><span class="fl-node-sub">下方可随时发起</span></div>`;
+
+    requestAnimationFrame(() => {
+      drawFlowLines();
+      if (threads.some((t) => t.state === "active" || t.state === "waiting")) emitFlightPackets();
+    });
   }
-  async function action(name,args) {
-    if(busy)return;busy=true;feedback('正在处理…');$('send').disabled=true;$('stop').disabled=true;$('steer').disabled=true;$('launch-run').disabled=true;
-    const target=selected;let created='';
-    try {const result=await window.maibot.action(name,args);if(!result.success)throw new Error(result.error||'操作未完成');if(name==='note'&&!args.thread_id&&result.thread_id){created=result.thread_id;$('launch-prompt').value='';return;}if(name==='note'&&drafts.get(target)?.trim()===args.message)drafts.delete(target);if(target===selected){if(name==='note'&&$('message').value.trim()===args.message){$('message').value='';$('steer').checked=false;}feedback(name==='note'?(args.steer?'已通知原线程转向。':'纸条已递入原线程。'):'线程已停止。');}}
-    catch(error){feedback(error.message+'；如已超时，请刷新核对后再操作。',true);}
-    finally{busy=false;$('launch-run').disabled=false;if(created){choose(created);feedback('工作流线程已发起。');}else refresh();}
+
+  /* ───────────── 2. 当前动态条与计数器 ───────────── */
+
+  function renderStrip(snap) {
+    const sel = snap.selected;
+    const threads = snap.threads || [];
+    const activeThreads = threads.filter((t) => t.state === "active" || t.state === "waiting");
+    const hasErr = Boolean(sel?.result?.error) || (snap.stats?.error_count || 0) > 0;
+    const pulse = snap.pulse || {};
+
+    const topLed = $("#top-led");
+    const topTxt = $("#top-state-text");
+    if (activeThreads.length) {
+      topLed.className = "mil-led mil-led--run";
+      topTxt.textContent = `${activeThreads.length} 个线程处理中`;
+    } else if (pulse.enabled === false) {
+      topLed.className = "mil-led mil-led--off";
+      topTxt.textContent = "插件未启用";
+    } else {
+      topLed.className = "mil-led";
+      topTxt.textContent = "系统在线";
+    }
+
+    if (activeThreads.length) {
+      $("#now-headline").textContent = `${activeThreads.length} 个线程正在推进`;
+      $("#now-subline").textContent = `${activeThreads[0].title}（${activeThreads[0].profile} · ${activeThreads[0].chat_id}）`;
+    } else if (sel) {
+      const st = STATE_LABEL[sel.state] || ["就绪", "", ""];
+      $("#now-headline").textContent = sel.result?.error ? "线程出错" : `最近：${st[0]}`;
+      $("#now-subline").textContent = `${threads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${sel.chat_id}`;
+    } else {
+      $("#now-headline").textContent = "待命";
+      $("#now-subline").textContent = "等待群聊触发或由管理员直接发起工作流";
+    }
+
+    const badges = [];
+    if (sel?.model) badges.push(`<span class="mil-tag">模型 ${esc(sel.model)}</span>`);
+    if (sel?.workspace) badges.push(`<span class="mil-tag mil-tag--warn">工作区 ${esc(sel.workspace)}</span>`);
+    if (sel?.revision) badges.push(`<span class="mil-tag">第 ${sel.revision} 轮</span>`);
+    $("#now-badges").innerHTML = badges.join("");
+
+    const evs = state.events.slice(-3);
+    $("#now-steps").innerHTML = evs.length
+      ? evs.map((e) => `<li><span class="mono">[${esc(e.kind)}]</span> ${esc(String(e.text || "").replace(/\s+/g, " ").slice(0, 90))}</li>`).join("")
+      : `<li>暂无最新步骤日志</li>`;
+
+    $("#now-leds").innerHTML = `
+      <span class="strip-led-item"><span class="mil-led ${pulse.enabled === false ? "mil-led--off" : ""}"></span>插件${pulse.enabled === false ? "未启用" : "已就绪"}</span>
+      <span class="strip-led-item"><span class="mil-led ${pulse.in_sleep ? "mil-led--off" : "mil-led"}"></span>${pulse.in_sleep ? "睡眠静默中" : `心跳 ${pulse.heartbeat_interval_minutes || 60}m`}</span>
+      <span class="strip-led-item"><span class="mil-led ${hasErr ? "mil-led--bad" : ""}"></span>${hasErr ? "含异常线程" : "链路正常"}</span>
+    `;
+
+    const stats = snap.stats || {};
+    roll($("#kpi-active"), stats.active_count ?? activeThreads.length);
+    roll($("#kpi-today"), stats.today_threads ?? threads.length);
+    roll($("#kpi-deliv"), stats.today_deliveries ?? 0);
+    roll($("#kpi-intent"), stats.pending_intents ?? (snap.scheduled_intents || []).length);
   }
-  $('chat').addEventListener('change',()=>{filter=$('chat').value;choose('');});
-  $('launcher').addEventListener('submit',event=>{event.preventDefault();const message=$('launch-prompt').value.trim();if(!message){feedback('写一句任务提示词。',true);$('launch-prompt').focus();return;}const profile=$('launch-profile').value.trim()||'scout',chat_id=$('launch-chat').value.trim()||filter,workspace=$('launch-workspace').value.trim();action('note',{thread_id:'',message,profile,...(chat_id?{chat_id}:{}),...(workspace?{workspace}:{})});});
-  $('message').addEventListener('input',()=>{if(selected)drafts.set(selected,$('message').value);});
-  $('composer').addEventListener('submit',event=>{event.preventDefault();const message=$('message').value.trim();if(!message){feedback('写一句补充方向。',true);$('message').focus();return;}const steer=$('steer').checked;action('note',{thread_id:selected,message,...(steer?{steer:true}:{})});});
-  $('stop').addEventListener('click',()=>action('stop',{thread_id:selected}));
-  $('follow').addEventListener('click',()=>{following=!following;$('follow').setAttribute('aria-pressed',String(following));text('follow',following?'跟随最新':'已暂停跟随');});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-  window.addEventListener('pagehide',()=>{stopped=true;clearTimeout(timer);});
-  (async()=>{if(!window.maibot){setConn('warn','等待宿主管理台');text('welcome','请从 MaiBot 管理台的 Maisya 工作区打开此页。');return;}await window.maibot.ready;theme(window.maibot.context);refresh();})();
+
+  /* ───────────── 3. 上下文窗口：正方化树图 & 400格晶圆（移植 Aisya ctxmap.js） ───────────── */
+
+  function squarify(items, x, y, w, h) {
+    if (!items.length || w <= 0 || h <= 0) return [];
+    const total = items.reduce((s, d) => s + d.value, 0);
+    if (total <= 0) return [];
+    const scaled = items.map((d) => ({ ...d, area: (d.value / total) * w * h }));
+    const out = [];
+    const worst = (row, side) => {
+      if (!row.length || side <= 0) return Infinity;
+      const sum = row.reduce((s, d) => s + d.area, 0);
+      const s2 = sum * sum;
+      const side2 = side * side;
+      let maxA = 0, minA = Infinity;
+      for (const d of row) { if (d.area > maxA) maxA = d.area; if (d.area < minA) minA = d.area; }
+      return Math.max((side2 * maxA) / s2, s2 / (side2 * minA));
+    };
+    const lay = (row, rx, ry, rw, rh) => {
+      const sum = row.reduce((s, d) => s + d.area, 0);
+      if (rw >= rh) {
+        const cw = rh > 0 ? sum / rh : 0;
+        let cy = ry;
+        for (const d of row) {
+          const ch = cw > 0 ? d.area / cw : 0;
+          out.push({ item: d, x: rx, y: cy, w: cw, h: ch });
+          cy += ch;
+        }
+        return { x: rx + cw, y: ry, w: Math.max(0, rw - cw), h: rh };
+      }
+      const ch = rw > 0 ? sum / rw : 0;
+      let cx = rx;
+      for (const d of row) {
+        const cw = ch > 0 ? d.area / ch : 0;
+        out.push({ item: d, x: cx, y: ry, w: cw, h: ch });
+        cx += cw;
+      }
+      return { x: rx, y: ry + ch, w: rw, h: Math.max(0, rh - ch) };
+    };
+    let rem = [...scaled];
+    let row = [];
+    let box = { x, y, w, h };
+    while (rem.length) {
+      const next = rem[0];
+      const side = Math.min(box.w, box.h);
+      if (!row.length || worst([...row, next], side) <= worst(row, side)) {
+        row.push(next);
+        rem.shift();
+      } else {
+        box = lay(row, box.x, box.y, box.w, box.h);
+        row = [];
+      }
+    }
+    if (row.length) lay(row, box.x, box.y, box.w, box.h);
+    return out;
+  }
+
+  let currentCtxItems = [];
+  function showCtxTip(ev, text) {
+    const tip = $("#cm-tip");
+    tip.textContent = text;
+    tip.hidden = false;
+    tip.style.left = Math.min(window.innerWidth - 290, ev.clientX + 12) + "px";
+    tip.style.top = Math.min(window.innerHeight - 70, ev.clientY + 12) + "px";
+  }
+  function hideCtxTip() {
+    $("#cm-tip").hidden = true;
+  }
+
+  function openCtxModal(item) {
+    if (!item || item.cat === "free") return;
+    lastTriggerTarget = document.activeElement;
+    const cat = CATS[item.cat] || { name: item.cat };
+    $("#ctx-modal-cat").textContent = cat.name;
+    $("#ctx-modal-title").textContent = item.label || "上下文片段";
+    $("#ctx-modal-chars").textContent = `${item.chars || 0} 字符`;
+    $("#ctx-modal-body").textContent = item.preview || "（暂无可展示预览）";
+    $("#ctx-scrim").hidden = false;
+    $("#ctx-modal-close").focus();
+  }
+  function closeCtxModal() {
+    $("#ctx-scrim").hidden = true;
+    if (lastTriggerTarget && typeof lastTriggerTarget.focus === "function") {
+      lastTriggerTarget.focus();
+    }
+  }
+
+  function renderSparkline(points, limit) {
+    const svg = $("#ctx-spark");
+    const lbl = $("#ctx-spark-label");
+    if (!svg) return;
+    if (!points || !points.length) {
+      svg.innerHTML = `<text x="12" y="52" fill="#9bc2a5" font-size="12">暂无历史轮次轨迹</text>`;
+      lbl.textContent = "—";
+      return;
+    }
+    const maxV = Math.max(limit || 48000, ...points.map((p) => p.chars || 0), 1);
+    const W = 320, H = 96, pad = 10;
+    const coords = points.map((p, idx) => {
+      const x = points.length === 1 ? W / 2 : pad + (idx / (points.length - 1)) * (W - pad * 2);
+      const y = H - pad - ((p.chars || 0) / maxV) * (H - pad * 2);
+      return [x, y, p];
+    });
+    const lineD = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const areaD = `${lineD} L${coords[coords.length - 1][0].toFixed(1)},${H - pad} L${coords[0][0].toFixed(1)},${H - pad} Z`;
+    const dots = coords.map(([x, y]) => `<rect x="${(x - 2.5).toFixed(1)}" y="${(y - 2.5).toFixed(1)}" width="5" height="5" fill="#ffd84a"/>`).join("");
+    svg.innerHTML = `
+      <line x1="0" y1="${H - pad}" x2="${W}" y2="${H - pad}" stroke="rgba(143,214,160,0.35)" stroke-width="1"/>
+      <path d="${areaD}" fill="rgba(143,214,160,0.18)"/>
+      <path d="${lineD}" fill="none" stroke="#8fd6a0" stroke-width="2.5"/>
+      ${dots}
+    `;
+    const latest = points[points.length - 1];
+    lbl.textContent = `${points.length} 轮 · 当前 ${fmtK(latest.chars)}`;
+  }
+
+  function renderContext(snap) {
+    const threads = snap.threads || [];
+    $("#ctx-threads").innerHTML = threads.slice(0, 8).map((t) =>
+      `<button type="button" class="mil-key mil-key--sm" data-ctx-thread="${esc(t.thread_id)}" aria-pressed="${String(t.thread_id === state.threadId)}">${esc(t.profile)} · ${esc(String(t.title || t.thread_id).slice(0, 14))}</button>`
+    ).join("") || `<span class="mil-hint">暂无可选线程</span>`;
+
+    const sel = snap.selected;
+    const ctx = sel?.context;
+    if (!sel || !ctx) {
+      $("#ctx-readout").textContent = "0 / 48.0K 字符 (0%)";
+      $("#ctx-health").textContent = "未选线程";
+      $("#ctx-health").className = "mil-tag";
+      $("#ctx-meter").className = "mil-meter";
+      $("#ctx-meter-bar").style.width = "0%";
+      $("#ctx-cats").innerHTML = "";
+      $("#ctx-map").innerHTML = `<p class="mil-hint" style="padding:16px">选择一条线程后展示上下文构成。</p>`;
+      $("#ctx-grid").innerHTML = "";
+      $("#ctx-items").innerHTML = `<p class="mil-hint" style="padding:10px">暂无上下文条目。</p>`;
+      renderSparkline([], 48000);
+      return;
+    }
+
+    const used = Number(ctx.chars || 0);
+    const limit = Math.max(Number(ctx.limit || 48000), used, 1);
+    const pct = Math.min(100, Math.round((used / limit) * 100));
+    $("#ctx-readout").textContent = `已用 ${fmtK(used)} / ${fmtK(limit)} 字符 (${pct}%) · ${ctx.messages || 0} 条消息`;
+    $("#ctx-meter-bar").style.width = `${pct}%`;
+    $("#ctx-meter").className = `mil-meter${pct >= 88 ? " mil-meter--hot" : pct >= 70 ? " mil-meter--warn" : ""}`;
+    const health = $("#ctx-health");
+    if (ctx.archived) {
+      health.textContent = "已归档早期历史";
+      health.className = "mil-tag mil-tag--warn";
+    } else if (pct >= 85) {
+      health.textContent = "接近归档线";
+      health.className = "mil-tag mil-tag--hot";
+    } else {
+      health.textContent = "健康";
+      health.className = "mil-tag mil-tag--ok";
+    }
+
+    const roles = ctx.roles || {};
+    const catKeys = ["system", "memory", "user", "assistant", "tool"];
+    const catTotals = Object.fromEntries(catKeys.map((k) => [k, Number(roles[k] || 0)]));
+    $("#ctx-cats").innerHTML = [
+      `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="all" aria-pressed="${String(state.ctxCat === "all")}">全部 (${fmtK(used)})</button>`,
+      ...catKeys.map((k) => {
+        const meta = CATS[k];
+        return `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="${k}" aria-pressed="${String(state.ctxCat === k)}"><i class="ctx-swatch" style="background:${meta.color}"></i>${meta.name} ${fmtK(catTotals[k])}</button>`;
+      }),
+    ].join("");
+
+    // 构造明细列表（如后端未提供 items 时用角色汇总补足）
+    let items = Array.isArray(ctx.items) && ctx.items.length ? ctx.items.map((x) => ({ ...x, value: Math.max(1, Number(x.chars || 0)) })) : [];
+    if (!items.length) {
+      items = catKeys
+        .filter((k) => catTotals[k] > 0)
+        .map((k) => ({ id: `role-${k}`, cat: k, label: CATS[k].name, chars: catTotals[k], value: catTotals[k], preview: `${CATS[k].name}共占 ${catTotals[k]} 字符。` }));
+    }
+    currentCtxItems = items;
+
+    const free = Math.max(0, limit - used);
+    const mapInputs = [...items];
+    if (free > 0 && state.ctxCat === "all") {
+      mapInputs.push({ id: "free-space", cat: "free", label: "剩余可用空间", chars: free, value: free, preview: "" });
+    }
+    const stage = $("#ctx-map");
+    const grid = $("#ctx-grid");
+    stage.hidden = state.ctxView !== "map";
+    grid.hidden = state.ctxView !== "grid";
+
+    if (state.ctxView === "map") {
+      const w = stage.clientWidth || 540;
+      const h = stage.clientHeight || 220;
+      const rects = squarify(mapInputs, 0, 0, w, h);
+      stage.innerHTML = rects.map((r, idx) => {
+        const dim = state.ctxCat !== "all" && r.item.cat !== state.ctxCat;
+        const showTitle = r.w >= 54 && r.h >= 24;
+        return `<button type="button" class="cm-tile${dim ? " dim" : ""}" data-cat="${esc(r.item.cat)}" data-item-idx="${idx}" style="left:${r.x.toFixed(1)}px;top:${r.y.toFixed(1)}px;width:${r.w.toFixed(1)}px;height:${r.h.toFixed(1)}px" title="${esc(r.item.label)}: ${r.item.chars} 字符">${showTitle ? `<b>${esc(r.item.label)}</b><span>${fmtK(r.item.chars)}</span>` : ""}</button>`;
+      }).join("");
+      stage._rectItems = rects.map((r) => r.item);
+    } else {
+      // 400 格晶圆分配
+      const cells = [];
+      const alloc = [];
+      let totalCells = 0;
+      mapInputs.forEach((it, idx) => {
+        const count = it.cat === "free" ? 0 : Math.max(1, Math.round((it.value / limit) * 400));
+        alloc.push({ it, idx, count });
+        totalCells += count;
+      });
+      while (totalCells > 400) {
+        const largest = alloc.reduce((a, b) => (b.count > a.count ? b : a));
+        if (largest.count <= 1) break;
+        largest.count--;
+        totalCells--;
+      }
+      alloc.forEach(({ it, idx, count }) => {
+        for (let i = 0; i < count; i++) cells.push({ cat: it.cat, label: it.label, chars: it.chars, idx });
+      });
+      while (cells.length < 400) cells.push({ cat: "free", label: "剩余空间", chars: free, idx: -1 });
+      grid.innerHTML = cells.map((c) => {
+        const dim = state.ctxCat !== "all" && c.cat !== state.ctxCat;
+        return `<button type="button" class="cm-cell${dim ? " dim" : ""}" data-cat="${esc(c.cat)}" data-cell-idx="${c.idx}" aria-label="${esc(c.label)}"></button>`;
+      }).join("");
+      grid._mapInputs = mapInputs;
+    }
+
+    const filteredRows = items
+      .filter((it) => state.ctxCat === "all" || it.cat === state.ctxCat)
+      .sort((a, b) => b.chars - a.chars);
+    const maxItemChars = Math.max(1, ...filteredRows.map((x) => x.chars));
+    $("#ctx-items").innerHTML = filteredRows.length
+      ? filteredRows.map((it) => {
+          const origIdx = currentCtxItems.indexOf(it);
+          const pctW = Math.max(3, Math.round((it.chars / maxItemChars) * 100));
+          return `<button type="button" class="ci-row" data-ci-idx="${origIdx}">
+            <span class="ctx-swatch" style="background:${(CATS[it.cat] || CATS.free).color}"></span>
+            <span class="ci-row-name">${esc(it.label)}</span>
+            <span class="num" style="font-size:11.5px">${it.chars}</span>
+            <span class="ci-row-bar"><i style="width:${pctW}%"></i></span>
+          </button>`;
+        }).join("")
+      : `<p class="mil-hint" style="padding:10px">该分类下暂无上下文段落。</p>`;
+
+    renderSparkline(ctx.history_points || [], limit);
+  }
+
+  /* ───────────── 4. 处理记录列表与线程详情工作台 ───────────── */
+
+  function renderThreads(snap) {
+    const all = snap.threads || [];
+    const list = all.filter((t) => {
+      if (state.thFilter === "active") return t.state === "active" || t.state === "waiting";
+      if (state.thFilter === "delivered") return Boolean(t.delivered);
+      if (state.thFilter === "error") return Boolean(t.has_error);
+      return true;
+    });
+    const host = $("#threads");
+    if (!list.length) {
+      host.innerHTML = `<p class="mil-hint">${all.length ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>`;
+      return;
+    }
+    host.innerHTML = list.map((t) => {
+      const st = STATE_LABEL[t.state] || ["未知", "", ""];
+      const on = t.thread_id === state.threadId;
+      return `<button type="button" class="thread-row${on ? " on" : ""}" data-thread="${esc(t.thread_id)}">
+        <div class="mil-row" style="justify-content:space-between;gap:6px">
+          <div class="mil-row" style="gap:6px;min-width:0">
+            <span class="mil-led ${t.has_error ? "mil-led--bad" : st[2]}"></span>
+            <span class="thread-title">${esc(t.title || t.thread_id)}</span>
+          </div>
+          <span class="mil-tag ${st[1]}">${st[0]}</span>
+        </div>
+        ${t.excerpt ? `<div class="thread-excerpt">${esc(t.excerpt)}</div>` : ""}
+        <div class="mil-row" style="justify-content:space-between;font-size:11px">
+          <span class="mono">${esc(t.profile)} · ${esc(t.chat_id)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span>
+          <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
+        </div>
+      </button>`;
+    }).join("");
+  }
+
+  function renderInspector(snap) {
+    const sel = snap.selected;
+    const stopBtn = $("#stop");
+    if (!sel) {
+      $("#title").textContent = "等待选择线程";
+      $("#meta").textContent = "点击上方流向图或左侧处理记录中的任意线程查看详情。";
+      $("#ins-state-tag").textContent = "—";
+      $("#ins-state-tag").className = "mil-tag";
+      $("#ins-meta-tags").innerHTML = "";
+      $("#result-box").hidden = true;
+      $("#deliveries-row").innerHTML = "";
+      $("#events").innerHTML = `<p class="mil-hint">选择一条线程后展示执行事件。</p>`;
+      stopBtn.disabled = true;
+      return;
+    }
+
+    const rowSummary = (snap.threads || []).find((t) => t.thread_id === sel.thread_id);
+    const st = STATE_LABEL[sel.state] || [sel.state || "未知", "", ""];
+    $("#title").textContent = rowSummary?.title || sel.thread_id;
+    $("#meta").textContent = `${sel.thread_id} · 会话 ${sel.chat_id} · 能力 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
+    $("#ins-state-tag").textContent = st[0];
+    $("#ins-state-tag").className = `mil-tag ${st[1]}`;
+    $("#ins-meta-tags").innerHTML = [
+      sel.model ? `<span class="mil-tag">${esc(sel.model)}</span>` : "",
+      sel.workspace ? `<span class="mil-tag mil-tag--warn">${esc(sel.workspace)}</span>` : "",
+      `<span class="mil-tag">工具 ${(sel.tools || []).length} 个</span>`,
+    ].filter(Boolean).join("");
+    stopBtn.disabled = sel.state === "closed";
+
+    const resBox = $("#result-box");
+    const resText = sel.result?.error ? `错误：${sel.result.error}` : (sel.result?.text || "");
+    if (resText) {
+      resBox.hidden = false;
+      resBox.textContent = resText;
+    } else {
+      resBox.hidden = true;
+    }
+
+    const tags = [];
+    (snap.deliveries || []).forEach((d) => {
+      tags.push(`<span class="mil-tag mil-tag--ok">交付 [${esc(d.route)}] ${esc(d.status)}</span>`);
+    });
+    (snap.intents || []).forEach((i) => {
+      tags.push(`<span class="mil-tag">回接 R${i.revision}: ${i.consumed ? "已回接" : "待回接"} (${esc(i.wake_status || "queued")})</span>`);
+    });
+    (snap.scheduled_intents || []).slice(0, 3).forEach((si) => {
+      tags.push(`<span class="mil-tag mil-tag--warn">计划 [${esc(si.kind)}] ${esc(si.reason)}</span>`);
+    });
+    $("#deliveries-row").innerHTML = tags.join("");
+  }
+
+  function renderEventsAppend(newEvents) {
+    const box = $("#events");
+    if (!newEvents?.length) {
+      if (!state.events.length) box.innerHTML = `<p class="mil-hint">暂无步骤事件。</p>`;
+      return;
+    }
+    if (box.querySelector(".mil-hint")) box.innerHTML = "";
+    newEvents.forEach((ev) => {
+      const det = document.createElement("details");
+      det.className = "ev-det";
+      det.setAttribute("data-event", String(ev.seq));
+      const sum = document.createElement("summary");
+      sum.innerHTML = `<span class="mil-tag">#${ev.seq} ${esc(ev.kind)}</span><span class="num">R${ev.revision} · ${fmtTime(ev.at)}</span>`;
+      const pre = document.createElement("pre");
+      pre.textContent = ev.text || "";
+      det.append(sum, pre);
+      if (ev.truncated) {
+        const readBtn = document.createElement("button");
+        readBtn.type = "button";
+        readBtn.className = "mil-key mil-key--sm";
+        readBtn.textContent = "读取完整步骤";
+        let fullText = "";
+        let nextOffset = 0;
+        const loadMore = () => enqueueQuery(async () => {
+          const r = await window.maibot.query("event", {
+            thread_id: state.threadId,
+            event_seq: ev.seq,
+            offset: nextOffset,
+          });
+          if (!r?.success) {
+            $("#feedback").textContent = r?.error || "读取完整步骤失败";
+            $("#feedback").className = "mil-feedback mil-feedback--err";
+            return;
+          }
+          fullText += r.text || "";
+          pre.textContent = fullText;
+          nextOffset = r.next_offset;
+          if (nextOffset === null || nextOffset === undefined) {
+            readBtn.remove();
+          } else {
+            readBtn.textContent = "继续读取";
+          }
+        });
+        readBtn.onclick = loadMore;
+        det.append(readBtn);
+      }
+      box.append(det);
+    });
+  }
+
+  function renderLaunchAssist(snap) {
+    const profiles = snap.profiles || [];
+    const chats = snap.enabled_chats || [];
+    $("#launch-profile-list").innerHTML = profiles.map((p) => `<option value="${esc(p)}">`).join("");
+    $("#launch-chat-list").innerHTML = ["self", ...chats].map((c) => `<option value="${esc(c)}">`).join("");
+    $("#launch-profile-chips").innerHTML = profiles.slice(0, 6).map((p) =>
+      `<button type="button" class="mil-key mil-key--sm" data-pick-profile="${esc(p)}">${esc(p)}</button>`
+    ).join("");
+    $("#launch-chat-chips").innerHTML = [...chats.slice(0, 4), "self"].map((c) =>
+      `<button type="button" class="mil-key mil-key--sm" data-pick-chat="${esc(c)}">${c === "self" ? "自身活动 self" : esc(c)}</button>`
+    ).join("");
+    const lc = $("#launch-chat");
+    if (!lc.value && chats.length) lc.value = chats[0];
+  }
+
+  function switchThread(nextId) {
+    const prevId = state.threadId;
+    if (prevId) localDrafts[prevId] = $("#message").value;
+    state.threadId = nextId || "";
+    state.cursor = 0;
+    state.events = [];
+    $("#events").innerHTML = `<p class="mil-hint">正在读取步骤…</p>`;
+    $("#message").value = localDrafts[state.threadId] || "";
+    $("#feedback").textContent = "";
+    $("#feedback").className = "mil-feedback";
+  }
+
+  async function refresh(reset = false) {
+    const reqThread = state.threadId;
+    const reqChat = state.chatFilter;
+    const reqCursor = reset ? 0 : state.cursor;
+    const snap = await enqueueQuery(() => window.maibot.query("snapshot", {
+      thread_id: reqThread,
+      chat_id: reqChat,
+      cursor: reqCursor,
+    }));
+    if (!snap?.success) {
+      $("#feedback").textContent = snap?.error || "现场快照读取失败";
+      $("#feedback").className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    lastSnapshotAt = Date.now();
+    state.lastSnap = snap;
+    const firstId = snap.threads?.[0]?.thread_id || "";
+    if (!state.threadId && firstId) {
+      switchThread(firstId);
+      return refresh(true);
+    }
+    if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
+      switchThread(firstId);
+      return refresh(true);
+    }
+    if (typeof snap.cursor === "number") state.cursor = snap.cursor;
+    if (snap.events?.length) {
+      state.events.push(...snap.events);
+      renderEventsAppend(snap.events);
+    } else if (reset) {
+      renderEventsAppend([]);
+    }
+    renderFlow(snap);
+    renderStrip(snap);
+    renderContext(snap);
+    renderThreads(snap);
+    renderInspector(snap);
+    renderLaunchAssist(snap);
+  }
+
+  /* ───────────── 事件交互绑定 ───────────── */
+
+  document.addEventListener("click", (ev) => {
+    const navBtn = ev.target.closest("[data-nav]");
+    if (navBtn) {
+      const p = navBtn.dataset.nav;
+      if (p !== "now" && window.maibot?.navigate) window.maibot.navigate(p);
+      return;
+    }
+    const flowChat = ev.target.closest("[data-flow-chat]");
+    if (flowChat) {
+      const cid = flowChat.dataset.flowChat;
+      state.chatFilter = state.chatFilter === cid ? "" : cid;
+      switchThread("");
+      refresh(true);
+      return;
+    }
+    if (ev.target.closest("#flow-all-chats")) {
+      state.chatFilter = "";
+      switchThread("");
+      refresh(true);
+      return;
+    }
+    const flowProf = ev.target.closest("[data-flow-profile]");
+    if (flowProf) {
+      const pid = flowProf.dataset.flowProfile;
+      $("#launch-profile").value = pid;
+      const match = (state.lastSnap?.threads || []).find((t) => t.profile === pid);
+      if (match) {
+        switchThread(match.thread_id);
+        refresh(true);
+      }
+      return;
+    }
+    const flowTh = ev.target.closest("[data-flow-thread],[data-thread],[data-ctx-thread]");
+    if (flowTh) {
+      const tid = flowTh.dataset.flowThread || flowTh.dataset.thread || flowTh.dataset.ctxThread;
+      if (tid && tid !== state.threadId) {
+        switchThread(tid);
+        refresh(true);
+      }
+      return;
+    }
+    const ctxViewBtn = ev.target.closest("[data-ctx-view]");
+    if (ctxViewBtn) {
+      state.ctxView = ctxViewBtn.dataset.ctxView;
+      document.querySelectorAll("[data-ctx-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === ctxViewBtn)));
+      if (state.lastSnap) renderContext(state.lastSnap);
+      return;
+    }
+    const ctxCatBtn = ev.target.closest("[data-ctx-cat]");
+    if (ctxCatBtn) {
+      state.ctxCat = ctxCatBtn.dataset.ctxCat;
+      if (state.lastSnap) renderContext(state.lastSnap);
+      return;
+    }
+    const thFilterBtn = ev.target.closest("[data-th-filter]");
+    if (thFilterBtn) {
+      state.thFilter = thFilterBtn.dataset.thFilter;
+      document.querySelectorAll("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === thFilterBtn)));
+      if (state.lastSnap) renderThreads(state.lastSnap);
+      return;
+    }
+    const tile = ev.target.closest(".cm-tile");
+    if (tile) {
+      const item = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
+      openCtxModal(item);
+      return;
+    }
+    const cell = ev.target.closest(".cm-cell");
+    if (cell) {
+      const idx = Number(cell.dataset.cellIdx);
+      const item = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
+      openCtxModal(item);
+      return;
+    }
+    const ci = ev.target.closest("[data-ci-idx]");
+    if (ci) {
+      openCtxModal(currentCtxItems[Number(ci.dataset.ciIdx)]);
+      return;
+    }
+    const pickProf = ev.target.closest("[data-pick-profile]");
+    if (pickProf) {
+      $("#launch-profile").value = pickProf.dataset.pickProfile;
+      return;
+    }
+    const pickChat = ev.target.closest("[data-pick-chat]");
+    if (pickChat) {
+      $("#launch-chat").value = pickChat.dataset.pickChat;
+      return;
+    }
+  });
+
+  $("#ctx-board").addEventListener("mousemove", (ev) => {
+    const tile = ev.target.closest(".cm-tile");
+    const cell = ev.target.closest(".cm-cell");
+    if (tile) {
+      const it = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
+      if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
+    } else if (cell) {
+      const idx = Number(cell.dataset.cellIdx);
+      const it = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
+      if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
+    } else {
+      hideCtxTip();
+    }
+  });
+  $("#ctx-board").addEventListener("mouseleave", hideCtxTip);
+
+  $("#ctx-modal-close").onclick = closeCtxModal;
+  $("#ctx-scrim").addEventListener("click", (ev) => {
+    if (ev.target === $("#ctx-scrim")) closeCtxModal();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !$("#ctx-scrim").hidden) closeCtxModal();
+  });
+
+  $("#open-launch").onclick = () => {
+    const panel = $("#launch-panel");
+    panel.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "center" });
+    $("#launch-prompt").focus();
+  };
+
+  $("#message").addEventListener("input", () => {
+    if (state.threadId) localDrafts[state.threadId] = $("#message").value;
+  });
+
+  $("#send-note").onclick = () => enqueueAction(async () => {
+    const fb = $("#feedback");
+    if (!state.threadId) {
+      fb.textContent = "请先选择一条线程。";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    const text = $("#message").value.trim();
+    if (!text) {
+      fb.textContent = "请填写要递给线程的内容。";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    const r = await window.maibot.action("note", {
+      thread_id: state.threadId,
+      message: text,
+      steer: Boolean($("#steer").checked),
+    });
+    if (!r?.success) {
+      fb.textContent = r?.error || "递纸条失败";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    localDrafts[state.threadId] = "";
+    $("#message").value = "";
+    fb.textContent = "纸条已递入原线程。";
+    fb.className = "mil-feedback mil-feedback--ok";
+    refresh(false);
+  });
+
+  $("#stop").onclick = () => enqueueAction(async () => {
+    const fb = $("#feedback");
+    if (!state.threadId) return;
+    const r = await window.maibot.action("stop", { thread_id: state.threadId });
+    if (!r?.success) {
+      fb.textContent = r?.error || "停止失败";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    fb.textContent = "线程已停止。";
+    fb.className = "mil-feedback mil-feedback--ok";
+    refresh(false);
+  });
+
+  $("#launch-run").onclick = () => enqueueAction(async () => {
+    const fb = $("#launch-feedback");
+    const profile = $("#launch-profile").value.trim() || "scout";
+    const chatId = $("#launch-chat").value.trim();
+    const workspace = $("#launch-workspace").value.trim();
+    const message = $("#launch-prompt").value.trim();
+    if (!chatId || !message) {
+      fb.textContent = "请填写目标会话与任务提示词。";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    const r = await window.maibot.action("note", {
+      thread_id: "",
+      message,
+      profile,
+      chat_id: chatId,
+      workspace,
+      steer: false,
+    });
+    if (!r?.success) {
+      fb.textContent = r?.error || "工作流发起失败";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    $("#launch-prompt").value = "";
+    fb.textContent = "工作流线程已发起。";
+    fb.className = "mil-feedback mil-feedback--ok";
+    if (r.thread_id) switchThread(r.thread_id);
+    refresh(true);
+  });
+
+  window.addEventListener("resize", () => {
+    drawFlowLines();
+    if (state.lastSnap && state.ctxView === "map") renderContext(state.lastSnap);
+  });
+
+  Promise.resolve(window.maibot?.ready).then(() => {
+    applyTheme();
+    refresh(true);
+    timer = setInterval(() => {
+      if (!document.hidden && Date.now() - lastSnapshotAt >= 1800) refresh(false);
+    }, 2400);
+  });
 })();
 </script>
 </body>

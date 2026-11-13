@@ -1,0 +1,1741 @@
+<!doctype html>
+<html lang="zh-CN" data-dashboard-style="millennium">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maisya · 现场</title>
+<style>
+{{MILLENNIUM_CSS}}
+
+/* ───────────── 现场页专用布局与 Aisya 交互样式 ───────────── */
+
+/* 1. 处理流向图 (FLOW) */
+.flow-box {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+  padding: 6px 2px;
+}
+
+.fl-svg, .fl-sky {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.fl-svg path {
+  fill: none;
+  stroke: var(--mil-lo);
+  stroke-width: 2px;
+  stroke-dasharray: 4 3;
+}
+.fl-svg path.on {
+  stroke: var(--mil-on-side);
+  stroke-width: 2.5px;
+  stroke-dasharray: none;
+}
+
+.pkt {
+  fill: var(--mil-on);
+  stroke: var(--mil-line);
+  stroke-width: 1.5px;
+}
+.pkt.hot { fill: var(--mil-hot); }
+.pkt.warn { fill: var(--mil-warn); }
+.pkt.held {
+  animation: mil-pulse 0.9s steps(2, end) infinite;
+}
+
+.fl-col {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fl-col-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mil-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--mil-print);
+  padding: 0 2px 4px;
+  border-bottom: 2px dashed var(--mil-rule);
+}
+
+.fl-node {
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px 9px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  color: var(--mil-ink);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  transition: transform 80ms steps(2, end), background-color 120ms ease;
+}
+
+.fl-node--static {
+  cursor: default;
+}
+
+.fl-node.on {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  box-shadow: inset 0 -2px 0 var(--mil-on-side);
+}
+
+.fl-node.run {
+  border-color: var(--mil-hot-side);
+  box-shadow: inset 3px 0 0 var(--mil-hot);
+}
+
+.fl-node-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fl-node-name {
+  font-weight: 700;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-node-sub {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.fl-node.on .fl-node-sub {
+  color: var(--mil-on-ink);
+  opacity: 0.86;
+}
+
+/* 2. 当前动态条与遥测数字 */
+.strip-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.strip-grid > .mil-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.strip-screen {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 1;
+}
+
+.strip-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.strip-state {
+  font-family: var(--mil-font-display);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+}
+
+.strip-steps {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--mil-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.strip-steps li {
+  overflow-wrap: anywhere;
+}
+
+.strip-leds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 2px dashed var(--mil-rule);
+  font-size: 12px;
+}
+
+.strip-led-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  flex: 1;
+}
+
+.kpi-cell {
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.kpi-val {
+  font-family: var(--mil-font-display);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-synthesis: none;
+}
+
+.kpi-lbl {
+  font-size: 11.5px;
+  color: var(--mil-print);
+  font-weight: 700;
+}
+
+/* 3. 上下文窗口 (CONTEXT MAP / WAFER GRID / OSCILLOSCOPE) */
+.ctx-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.ctx-board {
+  position: relative;
+  min-height: 224px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  padding: 2px;
+}
+
+.ctx-map-stage {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  overflow: hidden;
+  background: var(--ctx-free);
+}
+
+.cm-tile {
+  position: absolute;
+  border: 1.5px solid var(--mil-line);
+  padding: 3px 5px;
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+  color: #1f1c19;
+  font-size: 11px;
+  line-height: 1.2;
+}
+.cm-tile[data-cat="system"] { background: var(--ctx-system); }
+.cm-tile[data-cat="memory"] { background: var(--ctx-memory); }
+.cm-tile[data-cat="user"] { background: var(--ctx-user); }
+.cm-tile[data-cat="assistant"] { background: var(--ctx-assistant); color: #191624; }
+.cm-tile[data-cat="tool"] { background: var(--ctx-tool); }
+.cm-tile[data-cat="free"] {
+  background: var(--ctx-free);
+  color: var(--mil-muted);
+  cursor: default;
+}
+.cm-tile.dim { opacity: 0.28; }
+.cm-tile b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.cm-tile span {
+  font-family: var(--mil-font-mono);
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.cm-grid {
+  display: grid;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px;
+  background: var(--mil-screen);
+}
+.cm-cell {
+  aspect-ratio: 1;
+  border: 1px solid rgba(90, 84, 74, 0.35);
+  background: var(--ctx-free);
+  cursor: pointer;
+  padding: 0;
+}
+.cm-cell[data-cat="system"] { background: var(--ctx-system); }
+.cm-cell[data-cat="memory"] { background: var(--ctx-memory); }
+.cm-cell[data-cat="user"] { background: var(--ctx-user); }
+.cm-cell[data-cat="assistant"] { background: var(--ctx-assistant); }
+.cm-cell[data-cat="tool"] { background: var(--ctx-tool); }
+.cm-cell[data-cat="free"] { cursor: default; }
+.cm-cell.dim { opacity: 0.24; }
+
+.cm-tip {
+  position: fixed;
+  z-index: 980;
+  pointer-events: none;
+  max-width: 280px;
+  padding: 6px 8px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  box-shadow: 0 4px 0 var(--mil-drop);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cm-tip[hidden] { display: none; }
+
+.ctx-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ctx-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--mil-line);
+}
+
+.ctx-items {
+  display: flex;
+  flex-direction: column;
+  max-height: 158px;
+  overflow-y: auto;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+}
+
+.ci-row {
+  width: 100%;
+  border: 0;
+  border-bottom: 2px dashed var(--mil-rule);
+  background: transparent;
+  color: var(--mil-ink);
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.ci-row:last-child { border-bottom: 0; }
+.ci-row-name {
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-row-bar {
+  grid-column: 2 / 4;
+  height: 4px;
+  background: var(--mil-well);
+}
+.ci-row-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--mil-meter);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ci-row:hover {
+    background: rgba(143, 214, 160, 0.22);
+  }
+}
+
+.scope-svg {
+  width: 100%;
+  height: 96px;
+  display: block;
+}
+
+/* 4. 处理记录与详情检查器 */
+.thread-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.thread-row {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 2px dashed var(--mil-rule);
+  background: transparent;
+  color: var(--mil-ink);
+  padding: 9px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.thread-row:last-child { border-bottom: 0; }
+.thread-row.on {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+@media (hover: hover) and (pointer: fine) {
+  .thread-row:not(.on):hover {
+    background: rgba(143, 214, 160, 0.16);
+  }
+}
+
+.thread-title {
+  font-weight: 700;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.thread-excerpt {
+  font-size: 12px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.thread-row.on .thread-excerpt {
+  color: var(--mil-on-ink);
+  opacity: 0.86;
+}
+
+.inspector-h2 {
+  font-family: var(--mil-font-display);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.events-box {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.ev-det {
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  padding: 6px 9px;
+}
+.ev-det summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ev-det pre {
+  margin: 8px 0 4px;
+  padding: 8px;
+  border: 1px dashed var(--mil-rule);
+  background: var(--mil-panel);
+  font-family: var(--mil-font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.launch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 960px) {
+  .flow-box {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .fl-svg, .fl-sky {
+    display: none;
+  }
+  .strip-grid,
+  .ctx-layout,
+  .launch-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>
+</head>
+<body>
+<div class="mil-shell">
+
+  <!-- 顶部机箱控制条 -->
+  <header class="mil-topbar">
+    <div class="mil-brand">
+      <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="mil-nameplate">MAISYA</span>
+      <h1 class="mil-page-title">现场</h1>
+      <nav class="mil-nav" aria-label="Maisya 工作区页面">
+        <button type="button" class="mil-key mil-key--sm" aria-current="page" data-nav="now">现场</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="memory">记忆</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
+      </nav>
+    </div>
+    <div class="mil-top-right">
+      <div class="mil-led-pill" id="top-led-pill">
+        <span class="mil-led" id="top-led"></span>
+        <span id="top-state-text">待命</span>
+      </div>
+      <button type="button" class="mil-key mil-key--hot" id="open-launch">+ 发起工作流</button>
+    </div>
+  </header>
+
+  <!-- 1. 处理流向 (FLOW) -->
+  <section class="mil-panel" id="flow-panel" aria-label="处理流向">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span class="mil-silk">FLOW · 处理流向</span>
+        <span class="mil-hint" id="flow-filter-hint">点击会话筛选 · 点击线程定位</span>
+      </div>
+      <div class="mil-head-r">
+        <button type="button" class="mil-key mil-key--sm" id="flow-all-chats" aria-pressed="true">全部会话</button>
+        <span class="mil-vent" aria-hidden="true"></span>
+      </div>
+    </div>
+    <div class="flow-box" id="flow">
+      <svg class="fl-svg" aria-hidden="true"></svg>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>01 会话来源</span><span class="num" id="fl-cnt-chat">0</span></div>
+        <div id="fl-chats"></div>
+      </div>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>02 脉搏闸门</span><span class="num" id="fl-cnt-gate">PULSE</span></div>
+        <div id="fl-gate"></div>
+      </div>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>03 能力执行器</span><span class="num" id="fl-cnt-prof">0</span></div>
+        <div id="fl-profiles"></div>
+      </div>
+      <div class="fl-col">
+        <div class="fl-col-h"><span>04 线程与交付</span><span class="num" id="fl-cnt-th">0</span></div>
+        <div id="fl-threads"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 当前动态 + 实时读数 -->
+  <section class="strip-grid" aria-label="实时状态与读数">
+    <div class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">STATUS · 当前动态</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div class="mil-screen strip-screen">
+        <div class="strip-main">
+          <div>
+            <div class="strip-state" id="now-headline">待命</div>
+            <div class="mil-hint" id="now-subline">尚未选中活动线程</div>
+          </div>
+          <div class="mil-row" id="now-badges"></div>
+        </div>
+        <ol class="strip-steps" id="now-steps"></ol>
+        <div class="strip-leds" id="now-leds"></div>
+      </div>
+    </div>
+
+    <div class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">TELEMETRY · 实时读数</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-cell"><span class="kpi-lbl">活动线程</span><span class="kpi-val" id="kpi-active">0</span></div>
+        <div class="kpi-cell"><span class="kpi-lbl">24h 线程</span><span class="kpi-val" id="kpi-today">0</span></div>
+        <div class="kpi-cell"><span class="kpi-lbl">结果交付</span><span class="kpi-val" id="kpi-deliv">0</span></div>
+        <div class="kpi-cell"><span class="kpi-lbl">待唤醒意图</span><span class="kpi-val" id="kpi-intent">0</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 上下文窗口 (方块 / 方格 + 示波器) -->
+  <section class="mil-panel" id="ctx-panel" aria-label="上下文窗口">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span class="mil-silk">CONTEXT · 上下文窗口</span>
+        <span class="mil-tag" id="ctx-health">未选线程</span>
+      </div>
+      <div class="mil-head-r">
+        <div class="mil-seg" role="group" aria-label="上下文视图模式">
+          <button type="button" class="mil-key mil-key--sm" data-ctx-view="map" aria-pressed="true">方块</button>
+          <button type="button" class="mil-key mil-key--sm" data-ctx-view="grid" aria-pressed="false">方格</button>
+        </div>
+        <span class="mil-vent" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <div class="mil-row" id="ctx-threads" style="margin-bottom:10px"></div>
+
+    <div class="mil-screen" style="margin-bottom:10px">
+      <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
+        <strong class="num" id="ctx-readout">0 / 48.0K 字符 (0%)</strong>
+        <span class="mil-hint" id="ctx-meta">点击方块、方格或右侧条目可阅读脱敏原文</span>
+      </div>
+      <div class="mil-meter" id="ctx-meter"><i id="ctx-meter-bar"></i></div>
+      <div class="ctx-cats" id="ctx-cats" style="margin-top:8px"></div>
+    </div>
+
+    <div class="ctx-layout">
+      <div class="ctx-board" id="ctx-board">
+        <div class="ctx-map-stage" id="ctx-map"></div>
+        <div class="cm-grid" id="ctx-grid" hidden></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+        <div class="mil-scope">
+          <div class="mil-row" style="justify-content:space-between;margin-bottom:4px">
+            <span class="mil-silk" style="color:var(--mil-scope-ink)">TREND · 轮次上下文增长</span>
+            <span class="num" style="font-size:11px" id="ctx-spark-label">—</span>
+          </div>
+          <svg class="scope-svg" id="ctx-spark" viewBox="0 0 320 96" preserveAspectRatio="none" aria-label="上下文历史趋势折线"></svg>
+        </div>
+        <div class="ctx-items" id="ctx-items"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 处理记录 + 线程详情与递纸条 -->
+  <section class="mil-split" aria-label="处理记录与线程详情">
+    <div class="mil-panel" id="threads-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">THREADS · 处理记录</span></div>
+        <div class="mil-head-r">
+          <div class="mil-seg" id="th-filters" role="group" aria-label="线程状态筛选">
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="all" aria-pressed="true">全部</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="active" aria-pressed="false">运行中</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="delivered" aria-pressed="false">已交付</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="error" aria-pressed="false">异常</button>
+          </div>
+        </div>
+      </div>
+      <div class="mil-screen thread-list" id="threads">
+        <p class="mil-hint">正在读取线程记录…</p>
+      </div>
+    </div>
+
+    <div class="mil-panel" id="inspector-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">INSPECTOR · 线程现场</span>
+          <span class="mil-tag" id="ins-state-tag">—</span>
+        </div>
+        <div class="mil-head-r" id="ins-meta-tags"></div>
+      </div>
+
+      <div class="mil-screen" style="margin-bottom:10px">
+        <h2 class="inspector-h2" id="title">等待选择线程</h2>
+        <div class="mil-hint" id="meta" style="margin-top:4px"></div>
+        <pre class="mil-pre" id="result-box" style="margin-top:8px;max-height:160px" hidden></pre>
+        <div class="mil-row" id="deliveries-row" style="margin-top:8px"></div>
+      </div>
+
+      <div class="mil-field" style="margin-bottom:10px">
+        <span class="mil-label">步骤时间线（支持分页读取超长工具结果）</span>
+        <div class="events-box" id="events">
+          <p class="mil-hint">选择一条线程后展示执行事件。</p>
+        </div>
+      </div>
+
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+        <label class="mil-label" for="message">给原线程递纸条 / 补充方向（按线程独立暂存草稿）</label>
+        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="补充约束、指正路线，或让正在工作的线程立即转向"></textarea>
+        <div class="mil-row" style="justify-content:space-between">
+          <label class="mil-switch">
+            <input type="checkbox" id="steer">
+            <span class="mil-switch-track"></span>
+            <span class="mil-switch-txt">立即转向（优先切到新方向）</span>
+          </label>
+          <div class="mil-row">
+            <button type="button" class="mil-key mil-key--hot" id="send-note">递纸条</button>
+            <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
+          </div>
+        </div>
+        <div class="mil-feedback" id="feedback" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 发起新工作流控制台 -->
+  <section class="mil-panel" id="launch-panel" aria-label="发起工作流">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span class="mil-silk">LAUNCH · 发起工作流</span>
+        <span class="mil-hint">由管理员直接从现场调起任意能力档案或持久工作区</span>
+      </div>
+      <div class="mil-head-r">
+        <div class="mil-row" id="launch-profile-chips"></div>
+        <span class="mil-vent" aria-hidden="true"></span>
+      </div>
+    </div>
+    <div class="launch-grid" style="margin-bottom:10px">
+      <div class="mil-field">
+        <label class="mil-label" for="launch-profile">能力档案</label>
+        <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
+        <datalist id="launch-profile-list"></datalist>
+      </div>
+      <div class="mil-field">
+        <label class="mil-label" for="launch-chat">目标会话（支持 self 自身活动）</label>
+        <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="输入 chat_id 或 self">
+        <datalist id="launch-chat-list"></datalist>
+      </div>
+      <div class="mil-field">
+        <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
+        <input id="launch-workspace" class="mil-input mono" placeholder="例如 digest_daily">
+      </div>
+    </div>
+    <div class="mil-field" style="margin-bottom:10px">
+      <label class="mil-label" for="launch-prompt">任务提示词</label>
+      <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="交代要查证、创作或持续推进的事情"></textarea>
+    </div>
+    <div class="mil-row" style="justify-content:space-between">
+      <div class="mil-row" id="launch-chat-chips"></div>
+      <button type="button" class="mil-key mil-key--hot" id="launch-run">直接发起工作流</button>
+    </div>
+    <div class="mil-feedback" id="launch-feedback" style="margin-top:8px" aria-live="polite"></div>
+  </section>
+
+</div>
+
+<!-- 悬浮提示 & 上下文条目原文阅读器 -->
+<div class="cm-tip" id="cm-tip" hidden></div>
+
+<div class="mil-scrim" id="ctx-scrim" hidden>
+  <div class="mil-modal" role="dialog" aria-modal="true" aria-labelledby="ctx-modal-title">
+    <div class="mil-head" style="margin-bottom:0">
+      <div class="mil-head-l">
+        <span class="mil-tag" id="ctx-modal-cat">—</span>
+        <strong id="ctx-modal-title">上下文条目</strong>
+      </div>
+      <div class="mil-head-r">
+        <span class="num mil-hint" id="ctx-modal-chars">0 字符</span>
+        <button type="button" class="mil-key mil-key--sm" id="ctx-modal-close">关闭</button>
+      </div>
+    </div>
+    <pre class="mil-pre" id="ctx-modal-body" style="max-height:56vh"></pre>
+  </div>
+</div>
+
+<script>
+(() => {
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+  const $ = (sel) => document.querySelector(sel);
+
+  const CATS = {
+    system: { name: "能力说明", color: "var(--ctx-system)" },
+    memory: { name: "记忆层", color: "var(--ctx-memory)" },
+    user: { name: "输入", color: "var(--ctx-user)" },
+    assistant: { name: "推理结论", color: "var(--ctx-assistant)" },
+    tool: { name: "工具调用", color: "var(--ctx-tool)" },
+    free: { name: "剩余空间", color: "var(--ctx-free)" },
+  };
+  const STATE_LABEL = {
+    active: ["运行中", "mil-tag--hot", "mil-led--run"],
+    waiting: ["等待回复", "mil-tag--warn", "mil-led--run"],
+    idle: ["待命", "mil-tag--ok", ""],
+    closed: ["已结束", "", "mil-led--off"],
+  };
+
+  let state = {
+    threadId: "",
+    chatFilter: "",
+    thFilter: "all",
+    ctxView: "map",
+    ctxCat: "all",
+    cursor: 0,
+    events: [],
+    lastSnap: null,
+  };
+  const localDrafts = {};
+  const rollNums = new WeakMap();
+  let queryQueue = Promise.resolve();
+  let actionQueue = Promise.resolve();
+  let timer = null;
+  let lastTriggerTarget = null;
+  let lastSnapshotAt = 0;
+
+  // 严格保证 query <= 1 并发、总请求 <= 2 并发
+  const enqueueQuery = (fn) => {
+    const p = queryQueue.then(fn, fn);
+    queryQueue = p.catch(() => {});
+    return p;
+  };
+  const enqueueAction = (fn) => {
+    const p = actionQueue.then(fn, fn);
+    actionQueue = p.catch(() => {});
+    return p;
+  };
+
+  function applyTheme(ctx) {
+    const c = ctx || window.maibot?.context || {};
+    const theme = c.theme === "dark" ? "dark" : "light";
+    document.documentElement.className = theme === "dark" ? "dark" : "";
+    const styleName = c.dashboardStyle || "millennium";
+    document.documentElement.setAttribute("data-dashboard-style", styleName);
+  }
+  applyTheme();
+  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
+
+  const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+  function fmtTime(ts) {
+    if (!ts) return "—";
+    const d = new Date(Number(ts) * 1000);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  function fmtK(n) {
+    const v = Number(n || 0);
+    return v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v);
+  }
+
+  // Aisya roll() 数字平滑跳变（respects reduced-motion）
+  function roll(el, target, format = (v) => String(Math.round(v))) {
+    if (!el) return;
+    const to = Number(target || 0);
+    const from = rollNums.get(el) ?? to;
+    rollNums.set(el, to);
+    if (calm() || from === to) {
+      el.textContent = format(to);
+      return;
+    }
+    const t0 = performance.now();
+    const dur = 240;
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - k, 3);
+      el.textContent = format(from + (to - from) * eased);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /* ───────────── 流向图 SVG 连线与信号脉冲（移植 Aisya flight.js） ───────────── */
+
+  let activeTrips = [];
+  let flightRaf = 0;
+
+  function drawFlowLines() {
+    const box = $("#flow");
+    const svg = box?.querySelector(":scope > .fl-svg");
+    if (!box || !svg) return;
+    if (window.innerWidth <= 960) {
+      svg.innerHTML = "";
+      return;
+    }
+    const br = box.getBoundingClientRect();
+    svg.setAttribute("viewBox", `0 0 ${br.width} ${br.height}`);
+    const cols = [...box.querySelectorAll(".fl-col")];
+    if (cols.length < 4) return;
+    const paths = [];
+    const anchor = (el, side) => {
+      const r = el.getBoundingClientRect();
+      return {
+        x: (side === "R" ? r.right : r.left) - br.left,
+        y: r.top + r.height / 2 - br.top,
+      };
+    };
+    const curve = (a, b, key, on) => {
+      const dx = Math.max(24, (b.x - a.x) * 0.48);
+      paths.push(`<path data-k="${esc(key)}" class="${on ? "on" : ""}" d="M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}"/>`);
+    };
+    const chats = [...box.querySelectorAll("#fl-chats .fl-node")];
+    const gate = box.querySelector("#fl-gate .fl-node");
+    const profs = [...box.querySelectorAll("#fl-profiles .fl-node")];
+    const ths = [...box.querySelectorAll("#fl-threads .fl-node")];
+    if (gate) {
+      const gl = anchor(gate, "L");
+      const gr = anchor(gate, "R");
+      chats.forEach((c, i) => curve(anchor(c, "R"), gl, `cg-${i}`, c.classList.contains("on") || c.classList.contains("run")));
+      profs.forEach((p, i) => curve(gr, anchor(p, "L"), `gp-${i}`, p.classList.contains("run") || p.classList.contains("on")));
+    }
+    if (profs.length && ths.length) {
+      ths.forEach((t, ti) => {
+        const pid = t.dataset.prof;
+        const match = profs.find((p) => p.dataset.flowProfile === pid) || profs[0];
+        if (match) curve(anchor(match, "R"), anchor(t, "L"), `pt-${ti}`, t.classList.contains("run") || t.classList.contains("on"));
+      });
+    }
+    svg.innerHTML = paths.join("");
+  }
+
+  function emitFlightPackets() {
+    if (calm() || document.hidden || window.innerWidth <= 960) return;
+    const box = $("#flow");
+    if (!box) return;
+    const wires = [...box.querySelectorAll(".fl-svg path.on")];
+    if (!wires.length) return;
+    let sky = box.querySelector(":scope > .fl-sky");
+    if (!sky) {
+      sky = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      sky.setAttribute("class", "fl-sky");
+      sky.setAttribute("aria-hidden", "true");
+      box.append(sky);
+    }
+    const r = box.getBoundingClientRect();
+    sky.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+    wires.slice(0, 3).forEach((w) => {
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("width", "7");
+      rect.setAttribute("height", "7");
+      rect.setAttribute("class", "pkt");
+      sky.append(rect);
+      activeTrips.push({ el: rect, key: w.dataset.k, t0: performance.now(), ms: 720 });
+    });
+    if (!flightRaf) flightRaf = requestAnimationFrame(tickFlight);
+  }
+
+  function tickFlight(now) {
+    flightRaf = 0;
+    const box = $("#flow");
+    activeTrips = activeTrips.filter((tr) => {
+      const p = box?.querySelector(`.fl-svg path[data-k="${CSS.escape(tr.key)}"]`);
+      const k = Math.min(1, (now - tr.t0) / tr.ms);
+      if (!p || !tr.el.isConnected || k >= 1) {
+        tr.el.remove();
+        return false;
+      }
+      const pt = p.getPointAtLength(p.getTotalLength() * k);
+      tr.el.setAttribute("x", (pt.x - 3.5).toFixed(1));
+      tr.el.setAttribute("y", (pt.y - 3.5).toFixed(1));
+      return true;
+    });
+    if (activeTrips.length) flightRaf = requestAnimationFrame(tickFlight);
+  }
+
+  function renderFlow(snap) {
+    const threads = snap.threads || [];
+    const pulse = snap.pulse || {};
+    const cards = snap.profile_cards?.length
+      ? snap.profile_cards
+      : (snap.profiles || []).map((id) => ({ id, title: id, environment: "readonly", autonomous: true }));
+    const enabledChats = new Set(snap.enabled_chats || []);
+    threads.forEach((t) => { if (t.chat_id) enabledChats.add(t.chat_id); });
+    const chats = [...enabledChats].slice(0, 8);
+    $("#fl-cnt-chat").textContent = String(chats.length);
+    $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter));
+    $("#flow-filter-hint").textContent = state.chatFilter
+      ? `当前按会话筛选：${state.chatFilter}`
+      : "点击会话筛选全页 · 点击线程直接检视";
+
+    $("#fl-chats").innerHTML = chats.length
+      ? chats.map((cid) => {
+          const activeHere = threads.some((t) => t.chat_id === cid && (t.state === "active" || t.state === "waiting"));
+          const on = state.chatFilter === cid;
+          const label = cid === "self" ? "自身活动 (self)" : cid;
+          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-flow-chat="${esc(cid)}">
+            <span class="fl-node-top"><span class="fl-node-name">${esc(label)}</span><span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span></span>
+            <span class="fl-node-sub">${threads.filter((t) => t.chat_id === cid).length} 条记录</span>
+          </button>`;
+        }).join("")
+      : `<div class="fl-node fl-node--static"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;
+
+    const levelMap = { quiet: "安静 (仅被动)", care: "关怀 (平衡)", lively: "活跃 (可冒泡)" };
+    const dailyPct = pulse.daily_limit ? Math.min(100, Math.round(((pulse.daily_used || 0) / pulse.daily_limit) * 100)) : 0;
+    $("#fl-gate").innerHTML = `<div class="fl-node fl-node--static${pulse.enabled !== false ? " on" : ""}">
+      <span class="fl-node-top"><span class="fl-node-name">${esc(levelMap[pulse.proactive_level] || "关怀")}</span><span class="mil-led ${pulse.in_sleep ? "mil-led--off" : ""}"></span></span>
+      <span class="fl-node-sub">今日主动 ${pulse.daily_used || 0} / ${pulse.daily_limit ?? 1} · 待唤醒 ${snap.stats?.pending_intents ?? (snap.scheduled_intents || []).length}</span>
+      <div class="mil-meter" style="margin-top:4px"><i style="width:${dailyPct}%"></i></div>
+      <span class="fl-node-sub">联网：${esc(pulse.web_provider || "auto")}</span>
+    </div>`;
+
+    $("#fl-cnt-prof").textContent = String(cards.length);
+    $("#fl-profiles").innerHTML = cards.slice(0, 6).map((p) => {
+      const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
+      const selectedMatch = snap.selected?.profile === p.id;
+      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" data-flow-profile="${esc(p.id)}">
+        <span class="fl-node-top"><span class="fl-node-name">${esc(p.title || p.id)}</span><span class="mil-tag">${esc(p.environment === "sandbox" ? "沙箱" : "只读")}</span></span>
+        <span class="fl-node-sub mono">${esc(p.id)}${p.autonomous ? " · 可自主" : " · 需授权"}</span>
+      </button>`;
+    }).join("");
+
+    const shownThreads = threads.slice(0, 5);
+    $("#fl-cnt-th").textContent = String(threads.length);
+    $("#fl-threads").innerHTML = shownThreads.length
+      ? shownThreads.map((t) => {
+          const st = STATE_LABEL[t.state] || ["未知", "", ""];
+          const on = t.thread_id === state.threadId;
+          return `<button type="button" class="fl-node${on ? " on" : ""}${t.state === "active" || t.state === "waiting" ? " run" : ""}" data-flow-thread="${esc(t.thread_id)}" data-prof="${esc(t.profile)}">
+            <span class="fl-node-top"><span class="fl-node-name">${esc(t.title)}</span><span class="mil-led ${st[2]}"></span></span>
+            <span class="fl-node-sub">${esc(t.profile)} · ${t.delivered ? "已交付" : st[0]}</span>
+          </button>`;
+        }).join("")
+      : `<div class="fl-node fl-node--static"><span class="fl-node-name">暂无线程</span><span class="fl-node-sub">下方可随时发起</span></div>`;
+
+    requestAnimationFrame(() => {
+      drawFlowLines();
+      if (threads.some((t) => t.state === "active" || t.state === "waiting")) emitFlightPackets();
+    });
+  }
+
+  /* ───────────── 2. 当前动态条与计数器 ───────────── */
+
+  function renderStrip(snap) {
+    const sel = snap.selected;
+    const threads = snap.threads || [];
+    const activeThreads = threads.filter((t) => t.state === "active" || t.state === "waiting");
+    const hasErr = Boolean(sel?.result?.error) || (snap.stats?.error_count || 0) > 0;
+    const pulse = snap.pulse || {};
+
+    const topLed = $("#top-led");
+    const topTxt = $("#top-state-text");
+    if (activeThreads.length) {
+      topLed.className = "mil-led mil-led--run";
+      topTxt.textContent = `${activeThreads.length} 个线程处理中`;
+    } else if (pulse.enabled === false) {
+      topLed.className = "mil-led mil-led--off";
+      topTxt.textContent = "插件未启用";
+    } else {
+      topLed.className = "mil-led";
+      topTxt.textContent = "系统在线";
+    }
+
+    if (activeThreads.length) {
+      $("#now-headline").textContent = `${activeThreads.length} 个线程正在推进`;
+      $("#now-subline").textContent = `${activeThreads[0].title}（${activeThreads[0].profile} · ${activeThreads[0].chat_id}）`;
+    } else if (sel) {
+      const st = STATE_LABEL[sel.state] || ["就绪", "", ""];
+      $("#now-headline").textContent = sel.result?.error ? "线程出错" : `最近：${st[0]}`;
+      $("#now-subline").textContent = `${threads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${sel.chat_id}`;
+    } else {
+      $("#now-headline").textContent = "待命";
+      $("#now-subline").textContent = "等待群聊触发或由管理员直接发起工作流";
+    }
+
+    const badges = [];
+    if (sel?.model) badges.push(`<span class="mil-tag">模型 ${esc(sel.model)}</span>`);
+    if (sel?.workspace) badges.push(`<span class="mil-tag mil-tag--warn">工作区 ${esc(sel.workspace)}</span>`);
+    if (sel?.revision) badges.push(`<span class="mil-tag">第 ${sel.revision} 轮</span>`);
+    $("#now-badges").innerHTML = badges.join("");
+
+    const evs = state.events.slice(-3);
+    $("#now-steps").innerHTML = evs.length
+      ? evs.map((e) => `<li><span class="mono">[${esc(e.kind)}]</span> ${esc(String(e.text || "").replace(/\s+/g, " ").slice(0, 90))}</li>`).join("")
+      : `<li>暂无最新步骤日志</li>`;
+
+    $("#now-leds").innerHTML = `
+      <span class="strip-led-item"><span class="mil-led ${pulse.enabled === false ? "mil-led--off" : ""}"></span>插件${pulse.enabled === false ? "未启用" : "已就绪"}</span>
+      <span class="strip-led-item"><span class="mil-led ${pulse.in_sleep ? "mil-led--off" : "mil-led"}"></span>${pulse.in_sleep ? "睡眠静默中" : `心跳 ${pulse.heartbeat_interval_minutes || 60}m`}</span>
+      <span class="strip-led-item"><span class="mil-led ${hasErr ? "mil-led--bad" : ""}"></span>${hasErr ? "含异常线程" : "链路正常"}</span>
+    `;
+
+    const stats = snap.stats || {};
+    roll($("#kpi-active"), stats.active_count ?? activeThreads.length);
+    roll($("#kpi-today"), stats.today_threads ?? threads.length);
+    roll($("#kpi-deliv"), stats.today_deliveries ?? 0);
+    roll($("#kpi-intent"), stats.pending_intents ?? (snap.scheduled_intents || []).length);
+  }
+
+  /* ───────────── 3. 上下文窗口：正方化树图 & 400格晶圆（移植 Aisya ctxmap.js） ───────────── */
+
+  function squarify(items, x, y, w, h) {
+    if (!items.length || w <= 0 || h <= 0) return [];
+    const total = items.reduce((s, d) => s + d.value, 0);
+    if (total <= 0) return [];
+    const scaled = items.map((d) => ({ ...d, area: (d.value / total) * w * h }));
+    const out = [];
+    const worst = (row, side) => {
+      if (!row.length || side <= 0) return Infinity;
+      const sum = row.reduce((s, d) => s + d.area, 0);
+      const s2 = sum * sum;
+      const side2 = side * side;
+      let maxA = 0, minA = Infinity;
+      for (const d of row) { if (d.area > maxA) maxA = d.area; if (d.area < minA) minA = d.area; }
+      return Math.max((side2 * maxA) / s2, s2 / (side2 * minA));
+    };
+    const lay = (row, rx, ry, rw, rh) => {
+      const sum = row.reduce((s, d) => s + d.area, 0);
+      if (rw >= rh) {
+        const cw = rh > 0 ? sum / rh : 0;
+        let cy = ry;
+        for (const d of row) {
+          const ch = cw > 0 ? d.area / cw : 0;
+          out.push({ item: d, x: rx, y: cy, w: cw, h: ch });
+          cy += ch;
+        }
+        return { x: rx + cw, y: ry, w: Math.max(0, rw - cw), h: rh };
+      }
+      const ch = rw > 0 ? sum / rw : 0;
+      let cx = rx;
+      for (const d of row) {
+        const cw = ch > 0 ? d.area / ch : 0;
+        out.push({ item: d, x: cx, y: ry, w: cw, h: ch });
+        cx += cw;
+      }
+      return { x: rx, y: ry + ch, w: rw, h: Math.max(0, rh - ch) };
+    };
+    let rem = [...scaled];
+    let row = [];
+    let box = { x, y, w, h };
+    while (rem.length) {
+      const next = rem[0];
+      const side = Math.min(box.w, box.h);
+      if (!row.length || worst([...row, next], side) <= worst(row, side)) {
+        row.push(next);
+        rem.shift();
+      } else {
+        box = lay(row, box.x, box.y, box.w, box.h);
+        row = [];
+      }
+    }
+    if (row.length) lay(row, box.x, box.y, box.w, box.h);
+    return out;
+  }
+
+  let currentCtxItems = [];
+  function showCtxTip(ev, text) {
+    const tip = $("#cm-tip");
+    tip.textContent = text;
+    tip.hidden = false;
+    tip.style.left = Math.min(window.innerWidth - 290, ev.clientX + 12) + "px";
+    tip.style.top = Math.min(window.innerHeight - 70, ev.clientY + 12) + "px";
+  }
+  function hideCtxTip() {
+    $("#cm-tip").hidden = true;
+  }
+
+  function openCtxModal(item) {
+    if (!item || item.cat === "free") return;
+    lastTriggerTarget = document.activeElement;
+    const cat = CATS[item.cat] || { name: item.cat };
+    $("#ctx-modal-cat").textContent = cat.name;
+    $("#ctx-modal-title").textContent = item.label || "上下文片段";
+    $("#ctx-modal-chars").textContent = `${item.chars || 0} 字符`;
+    $("#ctx-modal-body").textContent = item.preview || "（暂无可展示预览）";
+    $("#ctx-scrim").hidden = false;
+    $("#ctx-modal-close").focus();
+  }
+  function closeCtxModal() {
+    $("#ctx-scrim").hidden = true;
+    if (lastTriggerTarget && typeof lastTriggerTarget.focus === "function") {
+      lastTriggerTarget.focus();
+    }
+  }
+
+  function renderSparkline(points, limit) {
+    const svg = $("#ctx-spark");
+    const lbl = $("#ctx-spark-label");
+    if (!svg) return;
+    if (!points || !points.length) {
+      svg.innerHTML = `<text x="12" y="52" fill="#9bc2a5" font-size="12">暂无历史轮次轨迹</text>`;
+      lbl.textContent = "—";
+      return;
+    }
+    const maxV = Math.max(limit || 48000, ...points.map((p) => p.chars || 0), 1);
+    const W = 320, H = 96, pad = 10;
+    const coords = points.map((p, idx) => {
+      const x = points.length === 1 ? W / 2 : pad + (idx / (points.length - 1)) * (W - pad * 2);
+      const y = H - pad - ((p.chars || 0) / maxV) * (H - pad * 2);
+      return [x, y, p];
+    });
+    const lineD = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const areaD = `${lineD} L${coords[coords.length - 1][0].toFixed(1)},${H - pad} L${coords[0][0].toFixed(1)},${H - pad} Z`;
+    const dots = coords.map(([x, y]) => `<rect x="${(x - 2.5).toFixed(1)}" y="${(y - 2.5).toFixed(1)}" width="5" height="5" fill="#ffd84a"/>`).join("");
+    svg.innerHTML = `
+      <line x1="0" y1="${H - pad}" x2="${W}" y2="${H - pad}" stroke="rgba(143,214,160,0.35)" stroke-width="1"/>
+      <path d="${areaD}" fill="rgba(143,214,160,0.18)"/>
+      <path d="${lineD}" fill="none" stroke="#8fd6a0" stroke-width="2.5"/>
+      ${dots}
+    `;
+    const latest = points[points.length - 1];
+    lbl.textContent = `${points.length} 轮 · 当前 ${fmtK(latest.chars)}`;
+  }
+
+  function renderContext(snap) {
+    const threads = snap.threads || [];
+    $("#ctx-threads").innerHTML = threads.slice(0, 8).map((t) =>
+      `<button type="button" class="mil-key mil-key--sm" data-ctx-thread="${esc(t.thread_id)}" aria-pressed="${String(t.thread_id === state.threadId)}">${esc(t.profile)} · ${esc(String(t.title || t.thread_id).slice(0, 14))}</button>`
+    ).join("") || `<span class="mil-hint">暂无可选线程</span>`;
+
+    const sel = snap.selected;
+    const ctx = sel?.context;
+    if (!sel || !ctx) {
+      $("#ctx-readout").textContent = "0 / 48.0K 字符 (0%)";
+      $("#ctx-health").textContent = "未选线程";
+      $("#ctx-health").className = "mil-tag";
+      $("#ctx-meter").className = "mil-meter";
+      $("#ctx-meter-bar").style.width = "0%";
+      $("#ctx-cats").innerHTML = "";
+      $("#ctx-map").innerHTML = `<p class="mil-hint" style="padding:16px">选择一条线程后展示上下文构成。</p>`;
+      $("#ctx-grid").innerHTML = "";
+      $("#ctx-items").innerHTML = `<p class="mil-hint" style="padding:10px">暂无上下文条目。</p>`;
+      renderSparkline([], 48000);
+      return;
+    }
+
+    const used = Number(ctx.chars || 0);
+    const limit = Math.max(Number(ctx.limit || 48000), used, 1);
+    const pct = Math.min(100, Math.round((used / limit) * 100));
+    $("#ctx-readout").textContent = `已用 ${fmtK(used)} / ${fmtK(limit)} 字符 (${pct}%) · ${ctx.messages || 0} 条消息`;
+    $("#ctx-meter-bar").style.width = `${pct}%`;
+    $("#ctx-meter").className = `mil-meter${pct >= 88 ? " mil-meter--hot" : pct >= 70 ? " mil-meter--warn" : ""}`;
+    const health = $("#ctx-health");
+    if (ctx.archived) {
+      health.textContent = "已归档早期历史";
+      health.className = "mil-tag mil-tag--warn";
+    } else if (pct >= 85) {
+      health.textContent = "接近归档线";
+      health.className = "mil-tag mil-tag--hot";
+    } else {
+      health.textContent = "健康";
+      health.className = "mil-tag mil-tag--ok";
+    }
+
+    const roles = ctx.roles || {};
+    const catKeys = ["system", "memory", "user", "assistant", "tool"];
+    const catTotals = Object.fromEntries(catKeys.map((k) => [k, Number(roles[k] || 0)]));
+    $("#ctx-cats").innerHTML = [
+      `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="all" aria-pressed="${String(state.ctxCat === "all")}">全部 (${fmtK(used)})</button>`,
+      ...catKeys.map((k) => {
+        const meta = CATS[k];
+        return `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="${k}" aria-pressed="${String(state.ctxCat === k)}"><i class="ctx-swatch" style="background:${meta.color}"></i>${meta.name} ${fmtK(catTotals[k])}</button>`;
+      }),
+    ].join("");
+
+    // 构造明细列表（如后端未提供 items 时用角色汇总补足）
+    let items = Array.isArray(ctx.items) && ctx.items.length ? ctx.items.map((x) => ({ ...x, value: Math.max(1, Number(x.chars || 0)) })) : [];
+    if (!items.length) {
+      items = catKeys
+        .filter((k) => catTotals[k] > 0)
+        .map((k) => ({ id: `role-${k}`, cat: k, label: CATS[k].name, chars: catTotals[k], value: catTotals[k], preview: `${CATS[k].name}共占 ${catTotals[k]} 字符。` }));
+    }
+    currentCtxItems = items;
+
+    const free = Math.max(0, limit - used);
+    const mapInputs = [...items];
+    if (free > 0 && state.ctxCat === "all") {
+      mapInputs.push({ id: "free-space", cat: "free", label: "剩余可用空间", chars: free, value: free, preview: "" });
+    }
+    const stage = $("#ctx-map");
+    const grid = $("#ctx-grid");
+    stage.hidden = state.ctxView !== "map";
+    grid.hidden = state.ctxView !== "grid";
+
+    if (state.ctxView === "map") {
+      const w = stage.clientWidth || 540;
+      const h = stage.clientHeight || 220;
+      const rects = squarify(mapInputs, 0, 0, w, h);
+      stage.innerHTML = rects.map((r, idx) => {
+        const dim = state.ctxCat !== "all" && r.item.cat !== state.ctxCat;
+        const showTitle = r.w >= 54 && r.h >= 24;
+        return `<button type="button" class="cm-tile${dim ? " dim" : ""}" data-cat="${esc(r.item.cat)}" data-item-idx="${idx}" style="left:${r.x.toFixed(1)}px;top:${r.y.toFixed(1)}px;width:${r.w.toFixed(1)}px;height:${r.h.toFixed(1)}px" title="${esc(r.item.label)}: ${r.item.chars} 字符">${showTitle ? `<b>${esc(r.item.label)}</b><span>${fmtK(r.item.chars)}</span>` : ""}</button>`;
+      }).join("");
+      stage._rectItems = rects.map((r) => r.item);
+    } else {
+      // 400 格晶圆分配
+      const cells = [];
+      const alloc = [];
+      let totalCells = 0;
+      mapInputs.forEach((it, idx) => {
+        const count = it.cat === "free" ? 0 : Math.max(1, Math.round((it.value / limit) * 400));
+        alloc.push({ it, idx, count });
+        totalCells += count;
+      });
+      while (totalCells > 400) {
+        const largest = alloc.reduce((a, b) => (b.count > a.count ? b : a));
+        if (largest.count <= 1) break;
+        largest.count--;
+        totalCells--;
+      }
+      alloc.forEach(({ it, idx, count }) => {
+        for (let i = 0; i < count; i++) cells.push({ cat: it.cat, label: it.label, chars: it.chars, idx });
+      });
+      while (cells.length < 400) cells.push({ cat: "free", label: "剩余空间", chars: free, idx: -1 });
+      grid.innerHTML = cells.map((c) => {
+        const dim = state.ctxCat !== "all" && c.cat !== state.ctxCat;
+        return `<button type="button" class="cm-cell${dim ? " dim" : ""}" data-cat="${esc(c.cat)}" data-cell-idx="${c.idx}" aria-label="${esc(c.label)}"></button>`;
+      }).join("");
+      grid._mapInputs = mapInputs;
+    }
+
+    const filteredRows = items
+      .filter((it) => state.ctxCat === "all" || it.cat === state.ctxCat)
+      .sort((a, b) => b.chars - a.chars);
+    const maxItemChars = Math.max(1, ...filteredRows.map((x) => x.chars));
+    $("#ctx-items").innerHTML = filteredRows.length
+      ? filteredRows.map((it) => {
+          const origIdx = currentCtxItems.indexOf(it);
+          const pctW = Math.max(3, Math.round((it.chars / maxItemChars) * 100));
+          return `<button type="button" class="ci-row" data-ci-idx="${origIdx}">
+            <span class="ctx-swatch" style="background:${(CATS[it.cat] || CATS.free).color}"></span>
+            <span class="ci-row-name">${esc(it.label)}</span>
+            <span class="num" style="font-size:11.5px">${it.chars}</span>
+            <span class="ci-row-bar"><i style="width:${pctW}%"></i></span>
+          </button>`;
+        }).join("")
+      : `<p class="mil-hint" style="padding:10px">该分类下暂无上下文段落。</p>`;
+
+    renderSparkline(ctx.history_points || [], limit);
+  }
+
+  /* ───────────── 4. 处理记录列表与线程详情工作台 ───────────── */
+
+  function renderThreads(snap) {
+    const all = snap.threads || [];
+    const list = all.filter((t) => {
+      if (state.thFilter === "active") return t.state === "active" || t.state === "waiting";
+      if (state.thFilter === "delivered") return Boolean(t.delivered);
+      if (state.thFilter === "error") return Boolean(t.has_error);
+      return true;
+    });
+    const host = $("#threads");
+    if (!list.length) {
+      host.innerHTML = `<p class="mil-hint">${all.length ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>`;
+      return;
+    }
+    host.innerHTML = list.map((t) => {
+      const st = STATE_LABEL[t.state] || ["未知", "", ""];
+      const on = t.thread_id === state.threadId;
+      return `<button type="button" class="thread-row${on ? " on" : ""}" data-thread="${esc(t.thread_id)}">
+        <div class="mil-row" style="justify-content:space-between;gap:6px">
+          <div class="mil-row" style="gap:6px;min-width:0">
+            <span class="mil-led ${t.has_error ? "mil-led--bad" : st[2]}"></span>
+            <span class="thread-title">${esc(t.title || t.thread_id)}</span>
+          </div>
+          <span class="mil-tag ${st[1]}">${st[0]}</span>
+        </div>
+        ${t.excerpt ? `<div class="thread-excerpt">${esc(t.excerpt)}</div>` : ""}
+        <div class="mil-row" style="justify-content:space-between;font-size:11px">
+          <span class="mono">${esc(t.profile)} · ${esc(t.chat_id)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span>
+          <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
+        </div>
+      </button>`;
+    }).join("");
+  }
+
+  function renderInspector(snap) {
+    const sel = snap.selected;
+    const stopBtn = $("#stop");
+    if (!sel) {
+      $("#title").textContent = "等待选择线程";
+      $("#meta").textContent = "点击上方流向图或左侧处理记录中的任意线程查看详情。";
+      $("#ins-state-tag").textContent = "—";
+      $("#ins-state-tag").className = "mil-tag";
+      $("#ins-meta-tags").innerHTML = "";
+      $("#result-box").hidden = true;
+      $("#deliveries-row").innerHTML = "";
+      $("#events").innerHTML = `<p class="mil-hint">选择一条线程后展示执行事件。</p>`;
+      stopBtn.disabled = true;
+      return;
+    }
+
+    const rowSummary = (snap.threads || []).find((t) => t.thread_id === sel.thread_id);
+    const st = STATE_LABEL[sel.state] || [sel.state || "未知", "", ""];
+    $("#title").textContent = rowSummary?.title || sel.thread_id;
+    $("#meta").textContent = `${sel.thread_id} · 会话 ${sel.chat_id} · 能力 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
+    $("#ins-state-tag").textContent = st[0];
+    $("#ins-state-tag").className = `mil-tag ${st[1]}`;
+    $("#ins-meta-tags").innerHTML = [
+      sel.model ? `<span class="mil-tag">${esc(sel.model)}</span>` : "",
+      sel.workspace ? `<span class="mil-tag mil-tag--warn">${esc(sel.workspace)}</span>` : "",
+      `<span class="mil-tag">工具 ${(sel.tools || []).length} 个</span>`,
+    ].filter(Boolean).join("");
+    stopBtn.disabled = sel.state === "closed";
+
+    const resBox = $("#result-box");
+    const resText = sel.result?.error ? `错误：${sel.result.error}` : (sel.result?.text || "");
+    if (resText) {
+      resBox.hidden = false;
+      resBox.textContent = resText;
+    } else {
+      resBox.hidden = true;
+    }
+
+    const tags = [];
+    (snap.deliveries || []).forEach((d) => {
+      tags.push(`<span class="mil-tag mil-tag--ok">交付 [${esc(d.route)}] ${esc(d.status)}</span>`);
+    });
+    (snap.intents || []).forEach((i) => {
+      tags.push(`<span class="mil-tag">回接 R${i.revision}: ${i.consumed ? "已回接" : "待回接"} (${esc(i.wake_status || "queued")})</span>`);
+    });
+    (snap.scheduled_intents || []).slice(0, 3).forEach((si) => {
+      tags.push(`<span class="mil-tag mil-tag--warn">计划 [${esc(si.kind)}] ${esc(si.reason)}</span>`);
+    });
+    $("#deliveries-row").innerHTML = tags.join("");
+  }
+
+  function renderEventsAppend(newEvents) {
+    const box = $("#events");
+    if (!newEvents?.length) {
+      if (!state.events.length) box.innerHTML = `<p class="mil-hint">暂无步骤事件。</p>`;
+      return;
+    }
+    if (box.querySelector(".mil-hint")) box.innerHTML = "";
+    newEvents.forEach((ev) => {
+      const det = document.createElement("details");
+      det.className = "ev-det";
+      det.setAttribute("data-event", String(ev.seq));
+      const sum = document.createElement("summary");
+      sum.innerHTML = `<span class="mil-tag">#${ev.seq} ${esc(ev.kind)}</span><span class="num">R${ev.revision} · ${fmtTime(ev.at)}</span>`;
+      const pre = document.createElement("pre");
+      pre.textContent = ev.text || "";
+      det.append(sum, pre);
+      if (ev.truncated) {
+        const readBtn = document.createElement("button");
+        readBtn.type = "button";
+        readBtn.className = "mil-key mil-key--sm";
+        readBtn.textContent = "读取完整步骤";
+        let fullText = "";
+        let nextOffset = 0;
+        const loadMore = () => enqueueQuery(async () => {
+          const r = await window.maibot.query("event", {
+            thread_id: state.threadId,
+            event_seq: ev.seq,
+            offset: nextOffset,
+          });
+          if (!r?.success) {
+            $("#feedback").textContent = r?.error || "读取完整步骤失败";
+            $("#feedback").className = "mil-feedback mil-feedback--err";
+            return;
+          }
+          fullText += r.text || "";
+          pre.textContent = fullText;
+          nextOffset = r.next_offset;
+          if (nextOffset === null || nextOffset === undefined) {
+            readBtn.remove();
+          } else {
+            readBtn.textContent = "继续读取";
+          }
+        });
+        readBtn.onclick = loadMore;
+        det.append(readBtn);
+      }
+      box.append(det);
+    });
+  }
+
+  function renderLaunchAssist(snap) {
+    const profiles = snap.profiles || [];
+    const chats = snap.enabled_chats || [];
+    $("#launch-profile-list").innerHTML = profiles.map((p) => `<option value="${esc(p)}">`).join("");
+    $("#launch-chat-list").innerHTML = ["self", ...chats].map((c) => `<option value="${esc(c)}">`).join("");
+    $("#launch-profile-chips").innerHTML = profiles.slice(0, 6).map((p) =>
+      `<button type="button" class="mil-key mil-key--sm" data-pick-profile="${esc(p)}">${esc(p)}</button>`
+    ).join("");
+    $("#launch-chat-chips").innerHTML = [...chats.slice(0, 4), "self"].map((c) =>
+      `<button type="button" class="mil-key mil-key--sm" data-pick-chat="${esc(c)}">${c === "self" ? "自身活动 self" : esc(c)}</button>`
+    ).join("");
+    const lc = $("#launch-chat");
+    if (!lc.value && chats.length) lc.value = chats[0];
+  }
+
+  function switchThread(nextId) {
+    const prevId = state.threadId;
+    if (prevId) localDrafts[prevId] = $("#message").value;
+    state.threadId = nextId || "";
+    state.cursor = 0;
+    state.events = [];
+    $("#events").innerHTML = `<p class="mil-hint">正在读取步骤…</p>`;
+    $("#message").value = localDrafts[state.threadId] || "";
+    $("#feedback").textContent = "";
+    $("#feedback").className = "mil-feedback";
+  }
+
+  async function refresh(reset = false) {
+    const reqThread = state.threadId;
+    const reqChat = state.chatFilter;
+    const reqCursor = reset ? 0 : state.cursor;
+    const snap = await enqueueQuery(() => window.maibot.query("snapshot", {
+      thread_id: reqThread,
+      chat_id: reqChat,
+      cursor: reqCursor,
+    }));
+    if (!snap?.success) {
+      $("#feedback").textContent = snap?.error || "现场快照读取失败";
+      $("#feedback").className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    lastSnapshotAt = Date.now();
+    state.lastSnap = snap;
+    const firstId = snap.threads?.[0]?.thread_id || "";
+    if (!state.threadId && firstId) {
+      switchThread(firstId);
+      return refresh(true);
+    }
+    if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
+      switchThread(firstId);
+      return refresh(true);
+    }
+    if (typeof snap.cursor === "number") state.cursor = snap.cursor;
+    if (snap.events?.length) {
+      state.events.push(...snap.events);
+      renderEventsAppend(snap.events);
+    } else if (reset) {
+      renderEventsAppend([]);
+    }
+    renderFlow(snap);
+    renderStrip(snap);
+    renderContext(snap);
+    renderThreads(snap);
+    renderInspector(snap);
+    renderLaunchAssist(snap);
+  }
+
+  /* ───────────── 事件交互绑定 ───────────── */
+
+  document.addEventListener("click", (ev) => {
+    const navBtn = ev.target.closest("[data-nav]");
+    if (navBtn) {
+      const p = navBtn.dataset.nav;
+      if (p !== "now" && window.maibot?.navigate) window.maibot.navigate(p);
+      return;
+    }
+    const flowChat = ev.target.closest("[data-flow-chat]");
+    if (flowChat) {
+      const cid = flowChat.dataset.flowChat;
+      state.chatFilter = state.chatFilter === cid ? "" : cid;
+      switchThread("");
+      refresh(true);
+      return;
+    }
+    if (ev.target.closest("#flow-all-chats")) {
+      state.chatFilter = "";
+      switchThread("");
+      refresh(true);
+      return;
+    }
+    const flowProf = ev.target.closest("[data-flow-profile]");
+    if (flowProf) {
+      const pid = flowProf.dataset.flowProfile;
+      $("#launch-profile").value = pid;
+      const match = (state.lastSnap?.threads || []).find((t) => t.profile === pid);
+      if (match) {
+        switchThread(match.thread_id);
+        refresh(true);
+      }
+      return;
+    }
+    const flowTh = ev.target.closest("[data-flow-thread],[data-thread],[data-ctx-thread]");
+    if (flowTh) {
+      const tid = flowTh.dataset.flowThread || flowTh.dataset.thread || flowTh.dataset.ctxThread;
+      if (tid && tid !== state.threadId) {
+        switchThread(tid);
+        refresh(true);
+      }
+      return;
+    }
+    const ctxViewBtn = ev.target.closest("[data-ctx-view]");
+    if (ctxViewBtn) {
+      state.ctxView = ctxViewBtn.dataset.ctxView;
+      document.querySelectorAll("[data-ctx-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === ctxViewBtn)));
+      if (state.lastSnap) renderContext(state.lastSnap);
+      return;
+    }
+    const ctxCatBtn = ev.target.closest("[data-ctx-cat]");
+    if (ctxCatBtn) {
+      state.ctxCat = ctxCatBtn.dataset.ctxCat;
+      if (state.lastSnap) renderContext(state.lastSnap);
+      return;
+    }
+    const thFilterBtn = ev.target.closest("[data-th-filter]");
+    if (thFilterBtn) {
+      state.thFilter = thFilterBtn.dataset.thFilter;
+      document.querySelectorAll("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === thFilterBtn)));
+      if (state.lastSnap) renderThreads(state.lastSnap);
+      return;
+    }
+    const tile = ev.target.closest(".cm-tile");
+    if (tile) {
+      const item = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
+      openCtxModal(item);
+      return;
+    }
+    const cell = ev.target.closest(".cm-cell");
+    if (cell) {
+      const idx = Number(cell.dataset.cellIdx);
+      const item = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
+      openCtxModal(item);
+      return;
+    }
+    const ci = ev.target.closest("[data-ci-idx]");
+    if (ci) {
+      openCtxModal(currentCtxItems[Number(ci.dataset.ciIdx)]);
+      return;
+    }
+    const pickProf = ev.target.closest("[data-pick-profile]");
+    if (pickProf) {
+      $("#launch-profile").value = pickProf.dataset.pickProfile;
+      return;
+    }
+    const pickChat = ev.target.closest("[data-pick-chat]");
+    if (pickChat) {
+      $("#launch-chat").value = pickChat.dataset.pickChat;
+      return;
+    }
+  });
+
+  $("#ctx-board").addEventListener("mousemove", (ev) => {
+    const tile = ev.target.closest(".cm-tile");
+    const cell = ev.target.closest(".cm-cell");
+    if (tile) {
+      const it = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
+      if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
+    } else if (cell) {
+      const idx = Number(cell.dataset.cellIdx);
+      const it = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
+      if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
+    } else {
+      hideCtxTip();
+    }
+  });
+  $("#ctx-board").addEventListener("mouseleave", hideCtxTip);
+
+  $("#ctx-modal-close").onclick = closeCtxModal;
+  $("#ctx-scrim").addEventListener("click", (ev) => {
+    if (ev.target === $("#ctx-scrim")) closeCtxModal();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !$("#ctx-scrim").hidden) closeCtxModal();
+  });
+
+  $("#open-launch").onclick = () => {
+    const panel = $("#launch-panel");
+    panel.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "center" });
+    $("#launch-prompt").focus();
+  };
+
+  $("#message").addEventListener("input", () => {
+    if (state.threadId) localDrafts[state.threadId] = $("#message").value;
+  });
+
+  $("#send-note").onclick = () => enqueueAction(async () => {
+    const fb = $("#feedback");
+    if (!state.threadId) {
+      fb.textContent = "请先选择一条线程。";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    const text = $("#message").value.trim();
+    if (!text) {
+      fb.textContent = "请填写要递给线程的内容。";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    const r = await window.maibot.action("note", {
+      thread_id: state.threadId,
+      message: text,
+      steer: Boolean($("#steer").checked),
+    });
+    if (!r?.success) {
+      fb.textContent = r?.error || "递纸条失败";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    localDrafts[state.threadId] = "";
+    $("#message").value = "";
+    fb.textContent = "纸条已递入原线程。";
+    fb.className = "mil-feedback mil-feedback--ok";
+    refresh(false);
+  });
+
+  $("#stop").onclick = () => enqueueAction(async () => {
+    const fb = $("#feedback");
+    if (!state.threadId) return;
+    const r = await window.maibot.action("stop", { thread_id: state.threadId });
+    if (!r?.success) {
+      fb.textContent = r?.error || "停止失败";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    fb.textContent = "线程已停止。";
+    fb.className = "mil-feedback mil-feedback--ok";
+    refresh(false);
+  });
+
+  $("#launch-run").onclick = () => enqueueAction(async () => {
+    const fb = $("#launch-feedback");
+    const profile = $("#launch-profile").value.trim() || "scout";
+    const chatId = $("#launch-chat").value.trim();
+    const workspace = $("#launch-workspace").value.trim();
+    const message = $("#launch-prompt").value.trim();
+    if (!chatId || !message) {
+      fb.textContent = "请填写目标会话与任务提示词。";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    const r = await window.maibot.action("note", {
+      thread_id: "",
+      message,
+      profile,
+      chat_id: chatId,
+      workspace,
+      steer: false,
+    });
+    if (!r?.success) {
+      fb.textContent = r?.error || "工作流发起失败";
+      fb.className = "mil-feedback mil-feedback--err";
+      return;
+    }
+    $("#launch-prompt").value = "";
+    fb.textContent = "工作流线程已发起。";
+    fb.className = "mil-feedback mil-feedback--ok";
+    if (r.thread_id) switchThread(r.thread_id);
+    refresh(true);
+  });
+
+  window.addEventListener("resize", () => {
+    drawFlowLines();
+    if (state.lastSnap && state.ctxView === "map") renderContext(state.lastSnap);
+  });
+
+  Promise.resolve(window.maibot?.ready).then(() => {
+    applyTheme();
+    refresh(true);
+    timer = setInterval(() => {
+      if (!document.hidden && Date.now() - lastSnapshotAt >= 1800) refresh(false);
+    }, 2400);
+  });
+})();
+</script>
+</body>
+</html>

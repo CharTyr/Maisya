@@ -1,425 +1,992 @@
-<!DOCTYPE html>
-<html lang="zh-CN" data-dashboard-style="millennium"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Maisya · {{TITLE}}</title><style>
-:root{
-  --maibot-background:hsl(42 20% 91%);
-  --maibot-surface:hsl(42 24% 96%);
-  --maibot-foreground:hsl(24 10% 18%);
-  --maibot-muted:hsl(30 7% 44%);
-  --maibot-soft:hsl(40 16% 86%);
-  --maibot-border:hsl(36 12% 77%);
-  --maibot-primary:hsl(11 76% 58%);
-  --maibot-primary-foreground:hsl(42 40% 98%);
-  --maibot-danger:hsl(2 68% 52%);
-  --maibot-radius:8px;
-  --maibot-font-body:"PingFang SC","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --maibot-font-display:"PingFang SC","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --maibot-font-mono:"JetBrains Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
-  --mil-on:#1f8a5b;
-  --mil-on-ink:#f2fcf7;
-  --mil-warn:#d97706;
-  --mil-screen:#e5eadf;
-  --mil-screen-line:rgba(28,44,32,.08);
-  --mil-screen-ink:#1c2c20;
-  --mil-bevel:inset 0 1px 0 rgba(255,255,255,.78),0 1px 2px rgba(42,35,28,.08);
-  --mil-inset:inset 0 1px 2px rgba(42,35,28,.09);
-  --mil-engraved:rgba(255,255,255,.65);
-  color-scheme:light;
-  font-family:var(--maibot-font-body);
-  background:var(--maibot-background);
-  color:var(--maibot-foreground);
-  font-synthesis:none;
+<!doctype html>
+<html lang="zh-CN" data-dashboard-style="millennium">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maisya · {{TITLE}}</title>
+<style>
+{{MILLENNIUM_CSS}}
+
+/* ───────────── 管理页专用交互样式 ───────────── */
+.ab-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
 }
-:root.dark{
-  --maibot-background:hsl(24 10% 11%);
-  --maibot-surface:hsl(24 9% 15%);
-  --maibot-foreground:hsl(40 18% 90%);
-  --maibot-muted:hsl(34 8% 62%);
-  --maibot-soft:hsl(24 9% 19%);
-  --maibot-border:hsl(26 9% 25%);
-  --maibot-primary:hsl(12 76% 62%);
-  --maibot-primary-foreground:hsl(24 14% 11%);
-  --maibot-danger:hsl(4 72% 60%);
-  --mil-on:#2fb97c;
-  --mil-on-ink:#072417;
-  --mil-warn:#f59e0b;
-  --mil-screen:#121913;
-  --mil-screen-line:rgba(167,243,190,.07);
-  --mil-screen-ink:#b9f3c7;
-  --mil-bevel:inset 0 1px 0 rgba(255,255,255,.06),0 2px 6px rgba(0,0,0,.35);
-  --mil-inset:inset 0 1px 3px rgba(0,0,0,.38);
-  --mil-engraved:rgba(255,255,255,.06);
-  color-scheme:dark;
+
+.ab-card {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  box-shadow: inset 0 -3px 0 var(--mil-key-side);
 }
-:root[data-dashboard-style="modern"]{
-  --maibot-background:hsl(36 22% 96%);
-  --maibot-surface:hsl(0 0% 100%);
-  --maibot-foreground:hsl(220 18% 16%);
-  --maibot-muted:hsl(220 10% 46%);
-  --maibot-soft:hsl(36 16% 92%);
-  --maibot-border:hsl(30 12% 86%);
-  --maibot-primary:hsl(18 82% 52%);
-  --maibot-primary-foreground:hsl(0 0% 100%);
-  --maibot-danger:hsl(2 70% 52%);
-  --maibot-radius:12px;
-  --mil-on:#10b981;
-  --mil-on-ink:#ffffff;
-  --mil-screen:hsl(220 20% 96%);
-  --mil-screen-line:rgba(15,23,42,.05);
-  --mil-screen-ink:hsl(220 20% 18%);
-  --mil-bevel:0 1px 3px rgba(15,23,42,.05),0 6px 18px rgba(15,23,42,.04);
-  --mil-inset:inset 0 1px 2px rgba(15,23,42,.05);
-  --mil-engraved:transparent;
+.ab-card[aria-current="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side);
 }
-:root.dark[data-dashboard-style="modern"]{
-  --maibot-background:hsl(222 18% 9%);
-  --maibot-surface:hsl(222 16% 13%);
-  --maibot-foreground:hsl(220 20% 94%);
-  --maibot-muted:hsl(220 12% 62%);
-  --maibot-soft:hsl(222 15% 18%);
-  --maibot-border:hsl(222 14% 23%);
-  --maibot-primary:hsl(20 88% 58%);
-  --maibot-primary-foreground:hsl(222 20% 10%);
-  --maibot-danger:hsl(2 74% 62%);
-  --mil-on:#34d399;
-  --mil-on-ink:#062319;
-  --mil-screen:hsl(222 20% 10%);
-  --mil-screen-line:rgba(255,255,255,.04);
-  --mil-screen-ink:hsl(210 25% 88%);
-  --mil-bevel:0 2px 10px rgba(0,0,0,.36);
-  --mil-inset:inset 0 1px 2px rgba(0,0,0,.34);
+
+.set-list {
+  display: flex;
+  flex-direction: column;
 }
-:root[data-dashboard-style="future-retro"]{
-  --maibot-background:hsl(44 33% 93%);
-  --maibot-surface:hsl(45 45% 98%);
-  --maibot-foreground:hsl(215 28% 14%);
-  --maibot-muted:hsl(215 14% 40%);
-  --maibot-soft:hsl(42 26% 87%);
-  --maibot-border:hsl(215 28% 18%);
-  --maibot-primary:hsl(14 82% 53%);
-  --maibot-primary-foreground:hsl(45 50% 98%);
-  --maibot-danger:hsl(0 72% 48%);
-  --maibot-radius:2px;
-  --mil-on:#0f766e;
-  --mil-on-ink:#f0fdfa;
-  --mil-screen:#14231e;
-  --mil-screen-line:rgba(126,245,196,.09);
-  --mil-screen-ink:#a7f3d0;
-  --mil-bevel:2px 2px 0 hsl(215 28% 18%);
-  --mil-inset:inset 0 0 0 1px hsl(215 28% 18% / .16);
-  --mil-engraved:transparent;
+.set-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border-bottom: 2px dashed var(--mil-rule);
+  background: var(--mil-screen);
 }
-:root.dark[data-dashboard-style="future-retro"]{
-  --maibot-background:hsl(172 20% 8%);
-  --maibot-surface:hsl(172 18% 12%);
-  --maibot-foreground:hsl(45 30% 92%);
-  --maibot-muted:hsl(168 12% 62%);
-  --maibot-soft:hsl(172 16% 17%);
-  --maibot-border:hsl(162 24% 38%);
-  --maibot-primary:hsl(16 86% 58%);
-  --maibot-primary-foreground:hsl(172 24% 8%);
-  --mil-on:#2dd4bf;
-  --mil-on-ink:#072320;
-  --mil-screen:#09110f;
-  --mil-screen-line:rgba(45,212,191,.09);
-  --mil-screen-ink:#99f6e4;
-  --mil-bevel:2px 2px 0 rgba(0,0,0,.55);
-  --mil-inset:inset 0 0 0 1px rgba(45,212,191,.18);
+.set-row:first-child {
+  border-top: 2px solid var(--mil-line);
 }
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;min-height:100%;background:var(--maibot-background);color:var(--maibot-foreground);font-family:var(--maibot-font-body)}
-body{overflow-x:hidden}
-button,input,select,textarea{font:inherit}
-[hidden]{display:none!important}
-.page-shell{max-width:1320px;margin:0 auto;padding:12px 16px 28px;display:flex;flex-direction:column;gap:12px}
-.frame-head{
-  display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:14px;
-  padding:12px 16px;
-  background:var(--maibot-surface);
-  border:1px solid var(--maibot-border);
-  border-radius:var(--maibot-radius);
-  box-shadow:var(--mil-bevel);
+.set-row:last-child {
+  border-bottom: 2px solid var(--mil-line);
 }
-.head-left{display:flex;flex-direction:column;gap:3px;min-width:0}
-.head-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.eyebrow{
-  font-family:var(--maibot-font-mono);
-  font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
-  color:var(--maibot-primary);
+.set-row-l {
+  flex: 1 1 240px;
+  min-width: 0;
 }
-.conn-pill{
-  display:inline-flex;align-items:center;gap:6px;
-  padding:3px 9px;
-  border-radius:999px;
-  border:1px solid var(--maibot-border);
-  background:var(--maibot-soft);
-  font-size:11.5px;color:var(--maibot-muted);font-weight:600;
+.set-row-t {
+  font-weight: 700;
+  font-size: 13px;
 }
-[data-status-light]{
-  width:8px;height:8px;border-radius:999px;flex-shrink:0;
-  background:var(--mil-warn);
-  box-shadow:0 0 0 1px rgba(0,0,0,.18),0 0 6px rgba(217,119,6,.35);
-  transition:background-color .16s ease,box-shadow .16s ease;
+.set-row-d {
+  font-size: 12px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
 }
-[data-status-light][data-status="on"]{
-  background:#22c55e;
-  box-shadow:0 0 0 1px rgba(0,0,0,.18),0 0 8px rgba(34,197,94,.48);
+.set-row-r {
+  flex: 0 1 320px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
 }
-[data-status-light][data-status="error"]{
-  background:var(--maibot-danger);
-  box-shadow:0 0 0 1px rgba(0,0,0,.2),0 0 8px rgba(239,68,68,.5);
+
+.exp-card {
+  padding: 6px 8px;
+  border-bottom: 2px dashed var(--mil-rule);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-h1{
-  margin:0;
-  font-family:var(--maibot-font-display);
-  font-size:20px;line-height:1.25;font-weight:700;letter-spacing:-.01em;
-  text-shadow:0 1px 0 var(--mil-engraved);
+.exp-card:last-child {
+  border-bottom: 0;
 }
-h2{
-  margin:0;
-  font-family:var(--maibot-font-display);
-  font-size:14.5px;line-height:1.35;font-weight:700;
-  color:var(--maibot-foreground);
+
+.ws-split {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
 }
-nav.workspace-tabs{
-  display:inline-flex;flex-wrap:wrap;gap:6px;
-  padding:4px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 1px);
-  background:var(--maibot-soft);
-  box-shadow:var(--mil-inset);
+
+@media (max-width: 900px) {
+  .ws-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
-nav.workspace-tabs button{
-  min-height:32px;padding:6px 14px;
-  border:1px solid transparent;
-  border-radius:calc(var(--maibot-radius) - 3px);
-  background:transparent;color:var(--maibot-foreground);
-  font-size:12.5px;font-weight:600;cursor:pointer;
-  transition:background-color .14s ease,border-color .14s ease,color .14s ease;
+
+@media (max-width: 720px) {
+  .set-row-r {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
 }
-nav.workspace-tabs button[aria-current="true"]{
-  background:var(--maibot-primary);
-  border-color:var(--maibot-primary);
-  color:var(--maibot-primary-foreground);
-  box-shadow:var(--mil-bevel);
-}
-main{display:flex;flex-direction:column;gap:12px;min-width:0}
-.columns{
-  display:grid;
-  grid-template-columns:minmax(256px,312px) minmax(0,1fr);
-  gap:14px;
-  align-items:start;
-}
-.columns > div{display:flex;flex-direction:column;gap:12px;min-width:0}
-:where(.card,.maibot-card){
-  background:var(--maibot-surface);
-  border:1px solid var(--maibot-border);
-  border-radius:var(--maibot-radius);
-  box-shadow:var(--mil-bevel);
-  padding:15px 16px;
-  display:flex;flex-direction:column;gap:10px;
-  min-width:0;
-}
-aside.card{gap:10px}
-:where(.maibot-button,button){
-  display:inline-flex;align-items:center;justify-content:center;gap:6px;
-  min-height:34px;padding:6px 13px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-soft);
-  color:var(--maibot-foreground);
-  box-shadow:var(--mil-bevel);
-  font-size:12.5px;font-weight:600;line-height:1.25;
-  cursor:pointer;
-  transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .08s ease;
-}
-.maibot-button-primary,button.primary{
-  background:var(--maibot-primary);
-  border-color:var(--maibot-primary);
-  color:var(--maibot-primary-foreground);
-}
-.maibot-button-danger,button.danger{
-  background:var(--maibot-surface);
-  border-color:var(--maibot-danger);
-  color:var(--maibot-danger);
-}
-button[aria-current="true"]:not(.nav-tab){
-  background:var(--maibot-soft);
-  border-color:var(--maibot-primary);
-  box-shadow:inset 3px 0 0 var(--maibot-primary),var(--mil-bevel);
-  color:var(--maibot-foreground);
-}
-:where(.maibot-button,button):disabled{opacity:.48;cursor:not-allowed}
-:where(.maibot-button,button):active:not(:disabled){transform:translateY(1px)}
-@media (hover:hover) and (pointer:fine){
-  nav.workspace-tabs button:hover:not([aria-current="true"]):not(:disabled){background:var(--maibot-surface)}
-  :where(.maibot-button,button:not(.nav-tab)):hover:not(:disabled){filter:brightness(.97)}
-  .maibot-button-danger:hover:not(:disabled),button.danger:hover:not(:disabled){background:var(--maibot-danger);color:var(--maibot-primary-foreground)}
-}
-.maibot-input,.maibot-select,input:not([type="checkbox"]):not([type="file"]),select,textarea{
-  width:100%;max-width:100%;min-width:0;
-  padding:8px 10px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-background);
-  color:var(--maibot-foreground);
-  box-shadow:var(--mil-inset);
-  font-size:13px;line-height:1.5;
-  transition:border-color .14s ease,box-shadow .14s ease,background-color .14s ease;
-}
-.maibot-select,select{overflow:hidden;text-overflow:ellipsis}
-input[type="file"]{
-  width:100%;min-width:0;padding:6px;
-  border:1px dashed var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-background);
-  font-size:12px;color:var(--maibot-muted);
-}
-:where(input,select,textarea):focus-visible{
-  outline:2px solid var(--maibot-primary);
-  outline-offset:1px;
-}
-textarea{min-height:220px;resize:vertical;font-family:var(--maibot-font-mono);font-size:12.5px;line-height:1.6}
-#package-text,#local-draft,#service-config,#webhook-config{min-height:150px}
-label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--maibot-muted);min-width:0}
-label.check-row{
-  flex-direction:row;align-items:center;justify-content:space-between;gap:12px;
-  padding:9px 11px;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-background);
-  color:var(--maibot-foreground);
-  cursor:pointer;
-}
-label.check-row input[type="checkbox"]{
-  width:17px;height:17px;flex-shrink:0;accent-color:var(--maibot-primary);cursor:pointer;
-}
-label.wide,.wide{grid-column:1 / -1}
-.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.toolbar h2{margin-right:auto}
-.toolbar select{width:auto;max-width:100%;min-width:170px}
-.list{display:flex;flex-direction:column;gap:6px}
-.list button{justify-content:flex-start;text-align:left;width:100%}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:10px;min-width:0}
-.hint{margin:0;font-size:12px;color:var(--maibot-muted);line-height:1.55;overflow-wrap:anywhere}
-.version{
-  font-family:var(--maibot-font-mono);font-size:11.5px;font-weight:600;
-  color:var(--mil-on);
-  padding:2px 8px;border-radius:999px;
-  background:var(--maibot-soft);border:1px solid var(--maibot-border);
-}
-.status{
-  margin:0;padding:8px 12px;min-height:0;
-  border-radius:calc(var(--maibot-radius) - 2px);
-  border:1px solid var(--mil-on);
-  background:var(--maibot-surface);
-  color:var(--mil-on);
-  font-size:12.5px;font-weight:600;
-  overflow-wrap:anywhere;
-}
-.status:empty{display:none}
-.status.error{border-color:var(--maibot-danger);color:var(--maibot-danger)}
-pre{
-  margin:0;padding:10px 12px;max-width:100%;min-width:0;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--mil-screen);
-  background-image:repeating-linear-gradient(0deg,transparent,transparent 23px,var(--mil-screen-line) 24px);
-  color:var(--mil-screen-ink);
-  box-shadow:var(--mil-inset);
-  font-family:var(--maibot-font-mono);
-  font-size:12px;line-height:1.6;
-  white-space:pre-wrap;overflow-wrap:anywhere;
-  overflow-x:auto;
-}
-details{
-  max-width:100%;min-width:0;
-  border:1px solid var(--maibot-border);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-background);
-  padding:10px 12px;
-}
-details > summary{
-  cursor:pointer;font-size:12.5px;font-weight:700;color:var(--maibot-foreground);
-  list-style:none;display:flex;align-items:center;justify-content:space-between;
-}
-details > summary::-webkit-details-marker{display:none}
-details > :not(summary){margin-top:10px}
-.entry{
-  padding:10px 12px;margin-top:8px;
-  border:1px solid var(--maibot-border);
-  border-left:3px solid var(--maibot-primary);
-  border-radius:calc(var(--maibot-radius) - 2px);
-  background:var(--maibot-background);
-  display:flex;flex-direction:column;gap:5px;
-}
-.entry strong{font-family:var(--maibot-font-mono);font-size:12px;color:var(--maibot-foreground);word-break:break-all}
-.entry p{margin:0;font-size:12.5px;line-height:1.55;color:var(--maibot-muted);white-space:pre-wrap;word-break:break-word}
-@media (max-width:860px){
-  .page-shell{padding:10px}
-  .columns,.grid{grid-template-columns:minmax(0,1fr)}
-  .toolbar select{width:100%;min-width:0}
-}
-@media (prefers-reduced-motion:reduce){
-  *{transition:none!important;animation:none!important}
-}
-</style></head>
+</style>
+</head>
 <body data-page="{{PAGE_ID}}">
-<div class="page-shell maibot-page">
-<header class="frame-head">
-  <div class="head-left">
-    <div class="head-meta">
-      <span class="eyebrow">MAISYA WORKSPACE</span>
-      <span class="conn-pill" role="status"><span id="conn-light" data-status-light data-status="warn" aria-hidden="true"></span><span id="connection">正在连接…</span></span>
+<div class="mil-shell">
+
+  <header class="mil-topbar">
+    <div class="mil-brand">
+      <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="mil-nameplate">MAISYA</span>
+      <h1 class="mil-page-title">{{TITLE}}</h1>
+      <nav class="mil-nav" aria-label="Maisya 工作区页面">
+        <button type="button" class="mil-key mil-key--sm" data-nav="now">现场</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="memory">记忆</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
+      </nav>
     </div>
-    <h1>{{TITLE}}</h1>
-  </div>
-  <nav class="workspace-tabs" aria-label="工作区">
-    <button class="nav-tab" type="button" data-nav="now">现场</button>
-    <button class="nav-tab" type="button" data-nav="abilities">能力</button>
-    <button class="nav-tab" type="button" data-nav="memory">记忆</button>
-    <button class="nav-tab" type="button" data-nav="settings">设置</button>
-  </nav>
-</header>
-<main><p id="feedback" class="status" role="status" aria-live="polite"></p>{{BODY}}</main>
+    <div class="mil-top-right">
+      <div class="mil-led-pill">
+        <span class="mil-led" id="mgmt-led"></span>
+        <span>管理台</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="mil-feedback" id="feedback" aria-live="polite"></div>
+
+  {{BODY}}
+
 </div>
+
 <script>
-(()=>{'use strict';
-const $=id=>document.getElementById(id),pageKind=document.body.dataset.page;
-let busy=false,current=null,currentVersion=0,selected='scout',settings=null,settingsVersion='',servicesVersion='';
-let activeOptions=null,webhooksVersion='';const drafts=new Map();
-const text=(id,value)=>{$(id).textContent=String(value??'');};
-const theme=ctx=>{
-  document.documentElement.classList.toggle('dark',ctx?.theme==='dark');
-  document.documentElement.dataset.dashboardStyle=ctx?.dashboardStyle||ctx?.style||'millennium';
-};
-const setConn=(status,label)=>{const l=$('conn-light');if(l)l.dataset.status=status;text('connection',label);};
-window.addEventListener('maibot:context',event=>theme(event.detail));
-function feedback(value,error=false){text('feedback',value);$('feedback').classList.toggle('error',error);}
-async function query(section,options={}){const r=await window.maibot.query('read',{section,payload:JSON.stringify(options)});if(!r.success)throw Error(r.error||'读取失败');return r;}
-async function action(name,options={}){const r=await window.maibot.action('write',{action:name,payload:JSON.stringify(options)});if(!r.success)throw Error(r.error||'保存失败');return r;}
-async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=true);setConn('warn','正在处理…');feedback('');let ok=true;try{await fn();}catch(error){ok=false;setConn('error','操作未完成');feedback(error.message||'操作失败，请重试',true);}finally{busy=false;document.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);if(ok)setConn('on','已连接');}}
-document.querySelectorAll('[data-nav]').forEach(button=>{button.setAttribute('aria-current',String(button.dataset.nav===pageKind));button.onclick=()=>run(()=>window.maibot.navigate(button.dataset.nav));});
-function makeButton(label,handler,attribute,value){const button=document.createElement('button');button.type='button';button.className='maibot-button';button.textContent=label;if(attribute)button.dataset[attribute]=value;button.onclick=()=>run(handler);return button;}
-function remember(){if(current&&$('content').value!==current.content)drafts.set(JSON.stringify(activeOptions),{text:$('content').value,version:currentVersion});}
-function assetOptions(){if(pageKind==='abilities'){const kind=$('document').value;return {kind:kind==='config'||kind==='profile'?'profile':kind,target:kind==='skill'?$('skill-id').value:selected,...(kind==='config'?{document:'profile.toml'}:{})};}return {kind:$('kind').value,...($('kind').value==='memory'?{chat_id:$('chat').value}:{})};}
-async function loadAsset(){const options=assetOptions();if(options.kind==='skill'&&!options.target)return;current=await query('asset',options);activeOptions=options;currentVersion=current.version;const draft=drafts.get(JSON.stringify(options));$('content').value=draft?.text??current.content;if(draft)currentVersion=draft.version;text('version','版本 '+currentVersion+(draft?' · 已恢复草稿':''));$('history').replaceChildren();current.history.forEach(row=>{const option=document.createElement('option');option.value=row.version;option.textContent='版本 '+row.version+' · '+new Date(row.updated*1000).toLocaleString();$('history').append(option);});}
-if($('content')){$('reload').onclick=()=>run(async()=>{const draft=$('content').value;drafts.delete(JSON.stringify(assetOptions()));await loadAsset();$('local-draft').value=draft;$('draft-panel').hidden=false;$('draft-panel').open=true;feedback('已读取最新版本，原草稿保留在下方。');});$('content').oninput=()=>{text('version','版本 '+currentVersion+' · 有未保存的修改');};$('save').onclick=()=>run(async()=>{const options=assetOptions();await action('asset',{...options,content:$('content').value,expected_version:currentVersion});drafts.delete(JSON.stringify(options));await loadAsset();feedback('已保存。');});$('history').onchange=()=>run(async()=>{const result=await query('asset',{...assetOptions(),version:Number($('history').value)});$('content').value=result.content;text('version','正在查看版本 '+result.version+' · 当前版本 '+currentVersion);});$('restore').onclick=()=>run(async()=>{await action('rollback',{...assetOptions(),version:Number($('history').value),expected_version:currentVersion});drafts.delete(JSON.stringify(assetOptions()));await loadAsset();feedback('已回滚，并保留新版本。');});}
-async function catalog(){const data=await query('abilities');$('profiles').replaceChildren();data.profiles.forEach(profile=>{const button=makeButton(profile.title||profile.id,async()=>{remember();selected=profile.id;await loadAsset();document.querySelectorAll('[data-profile]').forEach(el=>el.setAttribute('aria-current',String(el.dataset.profile===selected)));},'profile',profile.id);button.title=profile.id+' · '+(profile.environment||profile.error);button.setAttribute('aria-current',String(selected===profile.id));$('profiles').append(button);});$('skill-list').replaceChildren();data.skills.forEach(id=>{const option=document.createElement('option');option.value=id;$('skill-list').append(option);});}
-async function loadDiscovery(target){try{const d=await query('discovery');if(target){const lines=['可用模型：'+Object.entries(d.models||{}).map(([k,v])=>k+'('+(Array.isArray(v)?v.join(','):String(v))+')').join('；')||'无','已加载插件：'+(d.plugins||[]).map(p=>p.id||p.name||JSON.stringify(p)).join('、')||'无','开放 API：'+(d.apis||[]).map(a=>(a.plugin_id||'')+'.'+(a.name||'')).join('、')||'无','会话数：'+(d.streams||[]).length];text(target,lines.join('\n'));}return d;}catch(error){if(target)text(target,'暂未读取宿主发现信息');return {streams:[],models:{},plugins:[],apis:[]};}}
-async function initializeAbilities(){await catalog();$('document').onchange=()=>run(async()=>{remember();current=null;await loadAsset();});$('skill-id').onchange=()=>run(loadAsset);$('clone').onclick=()=>run(async()=>{const id=$('new-id').value.trim();await action('clone',{target:id,base:selected});selected=id;$('new-id').value='';await catalog();await loadAsset();feedback('新能力已创建。');});$('delete-profile').onclick=()=>run(async()=>{await action('delete_profile',{target:selected});selected='scout';await catalog();await loadAsset();feedback('已删除所选能力档案。');});$('delete-skill').onclick=()=>run(async()=>{const target=$('skill-id').value.trim();await action('delete_skill',{target});$('skill-id').value='';await catalog();if($('document').value==='skill')$('content').value='';feedback('已删除技能 '+target+'。');});$('refresh-discovery').onclick=()=>run(()=>loadDiscovery('discovery-info'));$('export').onclick=()=>run(async()=>{let data=await query('package',{target:selected}),parts=[data.data];while(data.offset<data.total){data=await query('package',{token:data.token,offset:data.offset});parts.push(data.data);}$('package-text').value=JSON.stringify({format:'maisya-profile-1',data:parts.join('')});$('package-panel').open=true;feedback('档案包已导出。复制包文本，可在另一份 Maisya 中粘贴导入。');});$('select-package').onclick=()=>{$('package-text').focus();$('package-text').select();};$('import').onclick=()=>run(async()=>{const source=$('package-text').value.trim();let encoded;try{const bundle=JSON.parse(source);if(bundle.format!=='maisya-profile-1')throw Error();encoded=bundle.data;}catch{throw Error('请粘贴完整的 Maisya 档案包文本，或选择 ZIP 文件。');}await importBytes(Uint8Array.from(atob(encoded),ch=>ch.charCodeAt(0)));});$('package-file').onchange=()=>run(async()=>{const file=$('package-file').files[0];if(!file)return;if(file.size>8388608)throw Error('档案包超过 8 MiB');await importBytes(new Uint8Array(await file.arrayBuffer()));});await loadAsset();await loadDiscovery('discovery-info');}
-async function importBytes(bytes){const target=$('import-id').value.trim();if(!target)throw Error('请填写新能力编号');let token='';for(let offset=0;offset<bytes.length;offset+=24576){const part=bytes.slice(offset,offset+24576);let binary='';part.forEach(value=>binary+=String.fromCharCode(value));const response=await action('import',{target,token,offset,data:btoa(binary),done:offset+part.length===bytes.length});token=response.token||token;}selected=target;await catalog();await loadAsset();feedback('已导入。带服务或凭据的能力需要先完成本机绑定。');}
-function showEntries(id,rows){$(id).replaceChildren();rows.forEach(row=>{const entry=document.createElement('div');entry.className='entry';const title=document.createElement('strong'),body=document.createElement('p');title.textContent=row.thread_id||row.kind||row.name||row.intent_id;body.textContent=row.content||row.result?.text||row.reason||'';entry.append(title,body);if(row.intent_id&&row.status==='pending')entry.append(makeButton('取消',async()=>{await action('cancel_intent',{intent_id:row.intent_id});await loadIntents();feedback('已取消该意图。');}));$(id).append(entry);});if(!rows.length){const empty=document.createElement('p');empty.className='hint';empty.textContent='这里还没有记录。';$(id).append(empty);}}
-async function loadIntents(){const data=await query('intents');showEntries('intent-list',data.intents);text('learning',data.learning.map(row=>row.thread_id+' · '+row.status).join('\n')||'还没有自动笔记记录。');}
-async function memoryOverview(){const data=await query('memory',{chat_id:$('chat').value,query:$('search').value});showEntries('experiences',data.experiences);showEntries('search-results',data.results);$('workspaces').replaceChildren();data.workspaces.forEach(row=>{$('workspaces').append(makeButton(row.name+' · '+row.owner,async()=>{const result=await query('workspace',{workspace_id:row.workspace_id});text('workspace-content',result.files.map(file=>file.path+' · '+file.bytes+' B').join('\n')||'工作区暂无文件');$('workspace-files').replaceChildren();result.files.forEach(file=>$('workspace-files').append(makeButton(file.path,async()=>{const result=await query('workspace',{workspace_id:row.workspace_id,path:file.path});text('workspace-content',result.text);})));}));});}
-async function initializeMemory(){const data=await query('memory');$('chat').replaceChildren();(data.chats.length?data.chats:['']).forEach(id=>{const option=document.createElement('option');option.value=id;option.textContent=id||'暂无会话';$('chat').append(option);});$('kind').onchange=()=>run(async()=>{remember();current=null;await loadAsset();});$('chat').onchange=()=>run(async()=>{remember();current=null;await loadAsset();await memoryOverview();});$('search-button').onclick=()=>run(memoryOverview);await loadAsset();await memoryOverview();await loadIntents();}
-const labels={enabled_chats:'启用会话，以逗号分隔',agent_max_steps:'每轮模型步数',agent_timeout:'每轮最长秒数',agent_max_active:'同时活动线程数',thread_idle_seconds:'闲置检查秒数',thread_context_chars:'上下文字符预算',web_provider:'联网搜索来源',daily_proactive_limit:'每日主动消息上限（0-50，0 为关闭主动）',heartbeat_interval_minutes:'心跳巡检间隔（分钟，5-1440）',heartbeat_profile:'心跳巡检使用能力',sleep_window:'睡眠时段，例如 23-8',proactive_level:'默认主动程度',chat_proactive_levels:'会话独立主动级别（每行 会话=quiet|care|lively）',acquaintance_users:'熟识账号列表（platform:user_id，逗号分隔）',longing_quiet_hours:'想念触发静默小时数（0 为关闭）','plugin.enabled':'启用 Maisya','sandbox.enabled':'启用沙箱','sandbox.image':'固定镜像 digest','sandbox.socket':'本机 Docker socket','sandbox.runtime':'专用运行时','sandbox.subnet':'独立沙箱网段','sandbox.dns':'公网 DNS，以逗号分隔','sandbox.host_addresses':'额外封锁的宿主地址，以逗号分隔','sandbox.memory_mib':'单次执行内存 MiB','sandbox.work_mib':'工作副本 MiB','sandbox.timeout':'单命令最长秒数','sandbox.output_bytes':'命令输出字节上限','sandbox.max_concurrent':'同时运行容器数'};
-const selectOptions={proactive_level:[['quiet','安静'],['care','关心'],['lively','活跃']],web_provider:[['auto','自动（优先宿主预设，未启用时兼容第三方搜索插件）'],['host','仅宿主统一联网（web.search / web.fetch）'],['google_search_plugin','第三方麦麦联网插件（google-search-plugin）'],['mcp','已登记只读 MCP 服务（services.web）'],['plugin_api','已登记跨插件只读 API（services.web）']]};
-function ensureWebOption(val,labelText){const sel=$('web_provider');if(!sel||!val)return;if(![...sel.options].some(o=>o.value===val)){const o=document.createElement('option');o.value=val;o.textContent=labelText||val;sel.append(o);}}
-const getPath=(object,path)=>path.split('.').reduce((value,key)=>value[key],object);
-function setPath(object,path,value){const keys=path.split('.'),last=keys.pop();keys.reduce((item,key)=>item[key],object)[last]=value;}
-function parseField(input){if(input.dataset.type==='boolean')return input.checked;if(input.dataset.type==='number')return Number(input.value);if(input.dataset.type==='array')return input.value.split(/[,\n]/).map(value=>value.trim()).filter(Boolean);if(input.dataset.type==='map'){const out={};input.value.split('\n').map(line=>line.trim()).filter(Boolean).forEach(line=>{const idx=line.indexOf('=');if(idx>0){const k=line.slice(0,idx).trim(),v=line.slice(idx+1).trim();if(k&&v)out[k]=v;}});return out;}return input.value;}
-async function initializeSettings(){const data=await query('settings');settings=data.settings;settingsVersion=data.version;text('admins',data.admins.join('、')||'宿主尚未配置管理员');text('handles',data.handles.join('、')||'还没有凭据');Object.entries(labels).forEach(([key,label])=>{const wrap=document.createElement('label');wrap.append(document.createTextNode(label));const value=getPath(settings,key);let input,kind=Array.isArray(value)?'array':(typeof value==='object'&&value!==null?'map':typeof value);if(selectOptions[key]){input=document.createElement('select');input.className='maibot-select';selectOptions[key].forEach(([val,textLabel])=>{const option=document.createElement('option');option.value=val;option.textContent=textLabel;input.append(option);});if(value&&![...input.options].some(o=>o.value===value)){const custom=document.createElement('option');custom.value=value;custom.textContent='自定义：'+value;input.append(custom);}input.value=value;}else if(kind==='map'){input=document.createElement('textarea');input.className='maibot-input';input.rows=3;input.placeholder='chat_id=lively';input.value=Object.entries(value).map(([k,v])=>k+'='+v).join('\n');wrap.className='wide';}else{input=document.createElement('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':'text';if(input.type==='checkbox'){input.checked=value;wrap.className='check-row';}else{input.className='maibot-input';input.value=Array.isArray(value)?value.join(', '):value;}}input.id=key.replaceAll('.','_');input.dataset.path=key;input.dataset.type=kind;wrap.append(input);if(key==='web_provider'){wrap.className='wide';const customInput=document.createElement('input');customInput.className='maibot-input';customInput.id='web_provider_custom';customInput.placeholder='或直接填入 plugin:ID / web:别名 / mcp:名 / plugin_api:名';customInput.value=selectOptions.web_provider.some(([v])=>v===value)?'':String(value||'');customInput.oninput=()=>{const v=customInput.value.trim();if(v){ensureWebOption(v,'自定义：'+v);input.value=v;}};input.onchange=()=>{if(selectOptions.web_provider.some(([v])=>v===input.value))customInput.value='';else customInput.value=input.value;};wrap.append(customInput);}$(key.startsWith('sandbox.')?'sandbox-fields':'general-fields').append(wrap);});$('save-settings').onclick=()=>run(async()=>{const next=structuredClone(settings);document.querySelectorAll('[data-path]').forEach(input=>setPath(next,input.dataset.path,parseField(input)));const result=await action('settings',{settings:next,expected_version:settingsVersion});settings=result.settings;settingsVersion=result.version;feedback('设置已保存。');await health();});$('save-vault').onclick=()=>run(async()=>{const value=$('vault-value').value;$('vault-value').value='';const data=await action('vault',{handle:$('vault-handle').value.trim(),value});text('handles',data.handles.join('、'));feedback('凭据已保存。');});$('delete-vault').onclick=()=>run(async()=>{const data=await action('vault',{handle:$('vault-handle').value.trim(),delete:true});text('handles',data.handles.join('、')||'还没有凭据');feedback('凭据已删除。');});const services=await query('services');servicesVersion=services.version;$('service-config').value=JSON.stringify(services.configuration,null,2);$('save-services').onclick=()=>run(async()=>{const result=await action('services',{configuration:JSON.parse($('service-config').value),expected_version:servicesVersion});servicesVersion=result.version;feedback('服务登记已保存。');});$('check').onclick=()=>run(health);const webhooks=await query('webhooks');webhooksVersion=webhooks.version;$('webhook-config').value=JSON.stringify(webhooks.configuration,null,2);$('save-webhooks').onclick=()=>run(async()=>{const result=await action('webhooks',{configuration:JSON.parse($('webhook-config').value),expected_version:webhooksVersion});webhooksVersion=result.version;feedback('事件通道已保存。');});if(!$('intent-chat').value&&settings.enabled_chats?.length)$('intent-chat').value=settings.enabled_chats[0];if(settings.heartbeat_profile)$('intent-profile').value=settings.heartbeat_profile;$('schedule-intent').onclick=()=>run(async()=>{const prompt=$('intent-prompt').value.trim();await action('schedule_intent',{chat_id:$('intent-chat').value.trim(),profile:$('intent-profile').value.trim()||'scout',workspace:$('intent-workspace').value.trim(),in_seconds:Number($('intent-in').value||60),every_seconds:Number($('intent-every').value||0),prompt,reason:prompt});$('intent-prompt').value='';await loadIntents();feedback('工作流计划已加入队列。');});await health();await loadIntents();const disc=await loadDiscovery();(disc.plugins||[]).forEach(p=>{if(p.id)ensureWebOption('plugin:'+p.id,'插件：'+p.id);});(disc.apis||[]).forEach(a=>{if(a.name)ensureWebOption('plugin_api:'+a.name,'插件 API：'+a.name);});const chatList=$('intent-chat-list');if(chatList){const allChats=[...new Set([...(settings.enabled_chats||[]),...(disc.streams||[]).map(s=>s.stream_id).filter(Boolean)])];chatList.replaceChildren();allChats.forEach(c=>{const o=document.createElement('option');o.value=c;chatList.append(o);});}}
-async function health(){const data=await query('health');const w=data.web;(w?.custom_providers||[]).forEach(n=>ensureWebOption('web:'+n,'自定义 web：'+n));const webLine=w?'\n联网来源：'+w.provider+(w.third_party_enabled?' · 第三方搜索可用（'+(w.third_party_engines.join('/')||'无可用引擎')+'）':'')+(w.services_bound?.length?' · 已绑定 services.web('+w.services_bound.join(',')+')':'')+(w.custom_providers?.length?' · 自定义 web('+w.custom_providers.join(',')+')':''):'';text('health',(data.ready?'执行器已就绪':data.error||'执行器尚未启用')+'\n'+Math.round(data.bytes/1048576)+' / '+Math.round(data.limit/1048576)+' MiB 持久文件 · '+data.running+' 个容器 · '+data.quarantined+' 个隔离副本'+webLine);}
-(async()=>{if(!window.maibot){setConn('warn','请从 MaiBot 管理台打开');return;}await window.maibot.ready;theme(window.maibot.context);await run(pageKind==='abilities'?initializeAbilities:pageKind==='memory'?initializeMemory:initializeSettings);})();
+(() => {
+  const page = document.body.dataset.page;
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => [...document.querySelectorAll(sel)];
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+
+  // 高亮当前工作区标签并支持跳转
+  $$("[data-nav]").forEach((btn) => {
+    const target = btn.dataset.nav;
+    if (target === page) btn.setAttribute("aria-current", "page");
+    btn.addEventListener("click", () => {
+      if (target !== page && window.maibot?.navigate) window.maibot.navigate(target);
+    });
+  });
+
+  function applyTheme(ctx) {
+    const c = ctx || window.maibot?.context || {};
+    document.documentElement.className = c.theme === "dark" ? "dark" : "";
+    document.documentElement.setAttribute("data-dashboard-style", c.dashboardStyle || "millennium");
+  }
+  applyTheme();
+  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
+
+  // 严格限制最多 2 路并发请求，避免触及宿主 inflight 上限
+  let inflight = 0;
+  const waiters = [];
+  async function acquire() {
+    if (inflight >= 2) await new Promise((res) => waiters.push(res));
+    inflight++;
+  }
+  function release() {
+    inflight--;
+    if (waiters.length) waiters.shift()();
+  }
+  async function rpc(op, key, body) {
+    await acquire();
+    try {
+      const arg = op === "read"
+        ? { section: key, payload: JSON.stringify(body || {}) }
+        : { action: key, payload: JSON.stringify(body || {}) };
+      return op === "read" ? await window.maibot.query("read", arg) : await window.maibot.action("write", arg);
+    } finally {
+      release();
+    }
+  }
+
+  function say(text, isErr = false) {
+    const fb = $("#feedback");
+    if (!fb) return;
+    fb.textContent = text || "";
+    fb.className = `mil-feedback${!text ? "" : isErr ? " mil-feedback--err" : " mil-feedback--ok"}`;
+    const led = $("#mgmt-led");
+    if (led) led.className = `mil-led${isErr ? " mil-led--bad" : ""}`;
+  }
+
+  function versionHistory(history, current) {
+    const sel = $("#history");
+    if (!sel) return;
+    const list = (history || []).slice().reverse();
+    sel.innerHTML = list.map((h) => `<option value="${esc(h.version)}">v${esc(h.version)} · ${esc(h.source || "manual")}</option>`).join("");
+    if (current !== undefined) sel.value = String(current);
+  }
+
+  /* ════════════════════════════════════════════════════════════════
+     1. 能力页 (abilities)
+     ════════════════════════════════════════════════════════════════ */
+  if (page === "abilities") {
+    const ALL_TOOLS = [
+      "web_search", "web_fetch", "chat_read", "message_read", "memory_read", "image_read",
+      "recall_read", "person_read", "workspace_file", "html_render", "result_attach",
+      "mcp_call", "plugin_api", "sandbox_exec", "credential_call",
+    ];
+    let catalog = { profiles: [], skills: [], handles: [] };
+    let selectedProfile = "scout";
+    let expectedVersion = 0;
+    let loadingConfig = false;
+
+    const tomlStr = (v) => JSON.stringify(String(v ?? ""));
+    const tomlArr = (xs) => `[${(xs || []).map((x) => tomlStr(x)).join(", ")}]`;
+
+    function parseSimpleToml(text) {
+      const out = { tools: [], skills: [] };
+      String(text || "").split(/\r?\n/).forEach((line) => {
+        const clean = line.trim();
+        if (!clean || clean.startsWith("#")) return;
+        const eq = clean.indexOf("=");
+        if (eq < 1) return;
+        const k = clean.slice(0, eq).trim();
+        let v = clean.slice(eq + 1).trim();
+        try {
+          if (v.startsWith("[") && v.endsWith("]")) out[k] = JSON.parse(v);
+          else if (v.startsWith("\"") && v.endsWith("\"")) out[k] = JSON.parse(v);
+          else if (v === "true" || v === "false") out[k] = v === "true";
+          else if (!Number.isNaN(Number(v))) out[k] = Number(v);
+          else out[k] = v;
+        } catch {
+          // 复杂多行 TOML 保留在源码框中，不强行覆盖
+        }
+      });
+      return out;
+    }
+
+    function syncVisualFromToml() {
+      loadingConfig = true;
+      const p = parseSimpleToml($("#content").value);
+      $("#cfg-title").value = p.title || "";
+      $("#cfg-env").value = p.environment === "sandbox" ? "sandbox" : "readonly";
+      $("#cfg-access").value = ["everyone", "admins", "listed"].includes(p.access) ? p.access : "everyone";
+      $("#cfg-task").value = ["utils", "planner", "replyer", "fast_model", "vlm"].includes(p.task) ? p.task : "utils";
+      $("#cfg-model-name").value = p.model_name || "";
+      $("#cfg-web").value = p.web_provider || "";
+      $("#cfg-steps").value = p.max_steps ?? "";
+      $("#cfg-temp").value = p.temperature ?? "";
+
+      const pickedTools = new Set(Array.isArray(p.tools) ? p.tools : []);
+      $("#cfg-tools").innerHTML = ALL_TOOLS.map((t) =>
+        `<label class="mil-chk"><input type="checkbox" data-cfg-tool="${esc(t)}" ${pickedTools.has(t) ? "checked" : ""}><span class="mono">${esc(t)}</span></label>`
+      ).join("");
+
+      const pickedSkills = new Set(Array.isArray(p.skills) ? p.skills : []);
+      $("#cfg-skills").innerHTML = (catalog.skills || []).length
+        ? catalog.skills.map((s) =>
+            `<label class="mil-chk"><input type="checkbox" data-cfg-skill="${esc(s)}" ${pickedSkills.has(s) ? "checked" : ""}><span class="mono">${esc(s)}</span></label>`
+          ).join("")
+        : `<span class="mil-hint">暂无自建全局技能</span>`;
+      loadingConfig = false;
+    }
+
+    function writeTomlKey(key, formatted) {
+      if (loadingConfig) return;
+      const lines = $("#content").value.split(/\r?\n/);
+      const re = new RegExp(`^\\s*${key}\\s*=`);
+      const idx = lines.findIndex((l) => re.test(l));
+      if (formatted === null) {
+        if (idx >= 0) lines.splice(idx, 1);
+      } else if (idx >= 0) {
+        lines[idx] = `${key} = ${formatted}`;
+      } else {
+        lines.push(`${key} = ${formatted}`);
+      }
+      $("#content").value = lines.filter((l, i, arr) => i < arr.length - 1 || l !== "").join("\n") + "\n";
+    }
+
+    function targetQuery() {
+      const doc = $("#document").value;
+      if (doc === "skill") return { kind: "skill", target: $("#skill-id").value.trim() };
+      if (doc === "config") return { kind: "profile", target: selectedProfile, document: "profile.toml" };
+      if (doc === "profile") return { kind: "profile", target: selectedProfile, document: "PROFILE.md" };
+      return { kind: doc, target: selectedProfile };
+    }
+
+    function renderDocModeUI() {
+      const doc = $("#document").value;
+      $$("[data-doc-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.docTab === doc)));
+      $("#skill-bar").hidden = doc !== "skill";
+      $("#cfg-visual").hidden = doc !== "config";
+      if (doc === "config") syncVisualFromToml();
+    }
+
+    let assetLoadSeq = 0;
+    async function loadAsset(preserveDraft = false) {
+      const seq = ++assetLoadSeq;
+      const q = targetQuery();
+      renderDocModeUI();
+      if (!q.target) {
+        $("#content").value = "";
+        $("#content").disabled = false;
+        $("#save").disabled = false;
+        $("#version").textContent = "未选择";
+        return;
+      }
+      const prevDraft = $("#content").value;
+      $("#content").disabled = true;
+      $("#save").disabled = true;
+      try {
+        const r = await rpc("read", "asset", q);
+        if (seq !== assetLoadSeq) return;
+        if (!r?.success) return say(r?.error || "读取资产失败", true);
+        if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
+        if (preserveDraft && prevDraft !== (r.content || "")) {
+          $("#local-draft").value = prevDraft;
+          $("#draft-panel").hidden = false;
+        }
+        $("#content").value = r.content || "";
+        expectedVersion = Number(r.version || 0);
+        $("#version").textContent = `v${expectedVersion}`;
+        versionHistory(r.history, expectedVersion);
+        if ($("#document").value === "config") syncVisualFromToml();
+      } finally {
+        if (seq === assetLoadSeq) {
+          $("#content").disabled = false;
+          $("#save").disabled = false;
+        }
+      }
+    }
+
+    function renderCatalog() {
+      $("#profiles").innerHTML = (catalog.profiles || []).map((p) => {
+        const on = p.id === selectedProfile;
+        return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" aria-current="${on}">
+          <div class="mil-row" style="justify-content:space-between;gap:6px">
+            <strong>${esc(p.title || p.id)}</strong>
+            <span class="mil-tag">${esc(p.environment || "readonly")}</span>
+          </div>
+          <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
+            <span class="mono">${esc(p.id)}</span>
+            <span>${esc(p.access || "everyone")} · 技能 ${(p.skills || []).length}</span>
+          </div>
+        </button>`;
+      }).join("") || `<p class="mil-hint">暂无能力档案</p>`;
+
+      $("#skill-list").innerHTML = (catalog.skills || []).map((s) => `<option value="${esc(s)}">`).join("");
+      $("#skill-chips").innerHTML = (catalog.skills || []).map((s) =>
+        `<button type="button" class="mil-key mil-key--sm" data-pick-skill="${esc(s)}">${esc(s)}</button>`
+      ).join("") || `<span class="mil-hint">暂无全局技能，可在下方输入编号新建</span>`;
+    }
+
+    async function refreshDiscovery() {
+      const d = await rpc("read", "discovery", {});
+      if (!d?.success) {
+        $("#discovery-info").textContent = d?.error || "宿主环境探测失败";
+        return;
+      }
+      const modelGroups = Object.entries(d.models || {});
+      const pluginList = d.plugins || [];
+      const apiList = d.apis || [];
+      const streamList = d.streams || [];
+      $("#discovery-cards").innerHTML = `
+        <div class="mil-row" style="margin-bottom:6px">
+          <span class="mil-tag mil-tag--ok">会话流 ${streamList.length}</span>
+          <span class="mil-tag">模型槽位 ${modelGroups.length}</span>
+          <span class="mil-tag">已加载插件 ${pluginList.length}</span>
+          <span class="mil-tag">公开 API ${apiList.length}</span>
+        </div>
+        <div class="mil-hint">可用模型：${esc(modelGroups.map(([k, v]) => `${k}(${Array.isArray(v) ? v.join("/") : JSON.stringify(v)})`).join(" · ") || "无")}</div>
+        <div class="mil-hint">可用插件 API：${esc(apiList.map((a) => `${a.plugin_id}.${a.name}`).join("、") || "暂无")}</div>
+      `;
+      $("#discovery-info").textContent = JSON.stringify({
+        streams: streamList,
+        models: d.models,
+        plugins: pluginList,
+        apis: apiList,
+      }, null, 2);
+    }
+
+    async function loadCatalog() {
+      const r = await rpc("read", "abilities", {});
+      if (!r?.success) return say(r?.error || "读取能力清单失败", true);
+      catalog = r;
+      if (!catalog.profiles.some((p) => p.id === selectedProfile) && catalog.profiles.length) {
+        selectedProfile = catalog.profiles[0].id;
+      }
+      renderCatalog();
+    }
+
+    document.addEventListener("click", async (ev) => {
+      const profBtn = ev.target.closest("[data-profile]");
+      if (profBtn) {
+        selectedProfile = profBtn.dataset.profile;
+        renderCatalog();
+        say("");
+        await loadAsset(false);
+        return;
+      }
+      const docTab = ev.target.closest("[data-doc-tab]");
+      if (docTab) {
+        $("#document").value = docTab.dataset.docTab;
+        if ($("#document").value === "skill" && !$("#skill-id").value && catalog.skills?.length) {
+          $("#skill-id").value = catalog.skills[0];
+        }
+        say("");
+        await loadAsset(false);
+        return;
+      }
+      const skChip = ev.target.closest("[data-pick-skill]");
+      if (skChip) {
+        $("#skill-id").value = skChip.dataset.pickSkill;
+        say("");
+        await loadAsset(false);
+      }
+    });
+
+    $("#document").addEventListener("change", async () => {
+      if ($("#document").value === "skill" && !$("#skill-id").value && catalog.skills?.length) {
+        $("#skill-id").value = catalog.skills[0];
+      }
+      say("");
+      await loadAsset(false);
+    });
+    $("#skill-id").addEventListener("change", () => {
+      say("");
+      loadAsset(false);
+    });
+    $("#content").addEventListener("input", () => {
+      if ($("#document").value === "config") syncVisualFromToml();
+    });
+
+    ["cfg-title", "cfg-env", "cfg-access", "cfg-task", "cfg-model-name", "cfg-web"].forEach((id) => {
+      const key = { "cfg-title": "title", "cfg-env": "environment", "cfg-access": "access", "cfg-task": "task", "cfg-model-name": "model_name", "cfg-web": "web_provider" }[id];
+      $(`#${id}`).addEventListener("input", () => {
+        const val = $(`#${id}`).value.trim();
+        writeTomlKey(key, (val || (key !== "model_name" && key !== "web_provider")) ? tomlStr(val) : null);
+      });
+    });
+    ["cfg-steps", "cfg-temp"].forEach((id) => {
+      const key = id === "cfg-steps" ? "max_steps" : "temperature";
+      $(`#${id}`).addEventListener("input", () => {
+        const val = $(`#${id}`).value.trim();
+        writeTomlKey(key, val === "" ? null : String(Number(val)));
+      });
+    });
+    $("#cfg-visual").addEventListener("change", (ev) => {
+      if (ev.target.matches("[data-cfg-tool]")) {
+        const tools = $$("[data-cfg-tool]:checked").map((x) => x.dataset.cfgTool);
+        writeTomlKey("tools", tomlArr(tools));
+      } else if (ev.target.matches("[data-cfg-skill]")) {
+        const skills = $$("[data-cfg-skill]:checked").map((x) => x.dataset.cfgSkill);
+        writeTomlKey("skills", tomlArr(skills));
+      }
+    });
+
+    $("#save").onclick = async () => {
+      const q = targetQuery();
+      $("#save").disabled = true;
+      say("");
+      try {
+        const r = await rpc("write", "asset", { ...q, content: $("#content").value, expected_version: expectedVersion });
+        if (!r?.success) return say(r?.error || "保存失败", true);
+        expectedVersion = Number(r.version || 0);
+        $("#version").textContent = `v${expectedVersion}`;
+        $("#draft-panel").hidden = true;
+        await loadCatalog();
+        await loadAsset(false);
+        say("已保存");
+      } finally {
+        $("#save").disabled = false;
+      }
+    };
+    $("#reload").onclick = async () => { await loadAsset(true); say("已读取最新版本。"); };
+    $("#restore").onclick = async () => {
+      const q = targetQuery();
+      const ver = Number($("#history").value);
+      say("");
+      const r = await rpc("write", "rollback", { ...q, version: ver, expected_version: expectedVersion });
+      if (!r?.success) return say(r?.error || "回滚失败", true);
+      await loadAsset(false);
+      say(`已回滚至 v${ver}`);
+    };
+    $("#clone").onclick = async () => {
+      const target = $("#new-id").value.trim();
+      const r = await rpc("write", "clone", { base: selectedProfile, target });
+      if (!r?.success) return say(r?.error || "克隆失败", true);
+      selectedProfile = r.id;
+      $("#new-id").value = "";
+      say("新能力已创建");
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#delete-profile").onclick = async () => {
+      const r = await rpc("write", "delete_profile", { target: selectedProfile });
+      if (!r?.success) return say(r?.error || "删除档案失败", true);
+      say("已删除所选能力档案");
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#delete-skill").onclick = async () => {
+      const target = $("#skill-id").value.trim();
+      const r = await rpc("write", "delete_skill", { target });
+      if (!r?.success) return say(r?.error || "删除技能失败", true);
+      $("#skill-id").value = "";
+      say("已删除该全局技能");
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#export").onclick = async () => {
+      let token = "", offset = 0, chunks = [];
+      for (let guard = 0; guard < 100; guard++) {
+        const r = await rpc("read", "package", { target: selectedProfile, token, offset });
+        if (!r?.success) return say(r?.error || "导出失败", true);
+        token = r.token;
+        chunks.push(r.data);
+        offset = r.offset;
+        if (offset >= r.total) break;
+      }
+      $("#package-text").value = chunks.join("");
+      $("#package-panel").open = true;
+      say(`已导出能力档案 ${selectedProfile}`);
+    };
+    $("#select-package").onclick = () => { $("#package-text").select(); };
+    async function uploadB64(b64) {
+      const target = $("#import-id").value.trim();
+      if (!target) return say("请填写导入后的新能力编号", true);
+      let token = "", offset = 0;
+      const step = 16384;
+      for (let i = 0; i < b64.length || i === 0; i += step) {
+        const chunk = b64.slice(i, i + step);
+        const done = i + step >= b64.length;
+        const r = await rpc("write", "import", { target, token, offset, data: chunk, done });
+        if (!r?.success) return say(r?.error || "导入失败", true);
+        token = r.token || token;
+        offset = r.offset || offset;
+      }
+      selectedProfile = target;
+      say("档案包已导入");
+      await loadCatalog();
+      await loadAsset(false);
+    }
+    $("#import").onclick = () => uploadB64($("#package-text").value.trim());
+    $("#package-file").addEventListener("change", () => {
+      const file = $("#package-file").files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const bytes = new Uint8Array(reader.result);
+        let bin = "";
+        bytes.forEach((b) => { bin += String.fromCharCode(b); });
+        uploadB64(btoa(bin));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+    $("#refresh-discovery").onclick = refreshDiscovery;
+
+    Promise.resolve(window.maibot?.ready).then(async () => {
+      applyTheme();
+      await loadCatalog();
+      await loadAsset(false);
+      await refreshDiscovery();
+    });
+  }
+
+  /* ════════════════════════════════════════════════════════════════
+     2. 记忆页 (memory)
+     ════════════════════════════════════════════════════════════════ */
+  if (page === "memory") {
+    let expectedVersion = 0;
+    let memData = { chats: [], workspaces: [] };
+
+    function renderLayerBtns() {
+      const k = $("#kind").value;
+      $$("[data-kind-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kindTab === k)));
+      const cid = $("#chat").value;
+      $$("[data-chat-chip]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.chatChip === cid)));
+    }
+    function updateMeter() {
+      const len = ($("#content").value || "").length;
+      $("#mem-char-count").textContent = `${len} / 16000`;
+      $("#mem-meter-bar").style.width = `${Math.min(100, Math.round((len / 16000) * 100))}%`;
+    }
+    let memLoadSeq = 0;
+    async function loadAsset(preserveDraft = false) {
+      const seq = ++memLoadSeq;
+      const kind = $("#kind").value;
+      const chat_id = $("#chat").value;
+      renderLayerBtns();
+      if (kind === "memory" && !chat_id) {
+        $("#content").value = "";
+        $("#content").disabled = true;
+        $("#save").disabled = false;
+        $("#version").textContent = "请选择会话";
+        updateMeter();
+        return;
+      }
+      const prevDraft = $("#content").value;
+      $("#content").disabled = true;
+      $("#save").disabled = true;
+      try {
+        const r = await rpc("read", "asset", kind === "memory" ? { kind, chat_id } : { kind });
+        if (seq !== memLoadSeq) return;
+        if (!r?.success) return say(r?.error || "读取记忆失败", true);
+        if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
+        if (preserveDraft && prevDraft !== (r.content || "")) {
+          $("#local-draft").value = prevDraft;
+          $("#draft-panel").hidden = false;
+        }
+        $("#content").value = r.content || "";
+        expectedVersion = Number(r.version || 0);
+        $("#version").textContent = `v${expectedVersion}`;
+        versionHistory(r.history, expectedVersion);
+        updateMeter();
+      } finally {
+        if (seq === memLoadSeq) {
+          $("#content").disabled = kind === "memory" && !$("#chat").value;
+          $("#save").disabled = false;
+        }
+      }
+    }
+
+    function renderCards(el, rows, kind) {
+      if (!rows?.length) {
+        el.innerHTML = `<p class="mil-hint">${kind === "search" ? "暂无检索结果" : "暂无自身经历"}</p>`;
+        return;
+      }
+      el.innerHTML = rows.map((x) => {
+        if (typeof x === "string") return `<div class="exp-card"><span>${esc(x)}</span></div>`;
+        return `<div class="exp-card">
+          <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
+            <strong>${esc(x.profile || x.kind || "记录")}</strong>
+            <span class="mono mil-hint">${esc(x.thread_id || x.chat_id || "")}</span>
+          </div>
+          <span style="font-size:12.5px">${esc(x.snippet || x.summary || x.text || x.title || JSON.stringify(x))}</span>
+        </div>`;
+      }).join("");
+    }
+
+    async function loadOverview() {
+      const query = $("#search").value.trim();
+      const chat_id = $("#chat").value;
+      const r = await rpc("read", "memory", { chat_id, query });
+      if (!r?.success) return say(r?.error || "读取记忆概览失败", true);
+      memData = r;
+      const prevChat = $("#chat").value;
+      const chats = r.chats || [];
+      $("#chat").innerHTML = chats.length
+        ? chats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")
+        : `<option value="">暂无会话</option>`;
+      if (prevChat && chats.includes(prevChat)) $("#chat").value = prevChat;
+      $("#chat-chips").innerHTML = chats.map((c) =>
+        `<button type="button" class="mil-key mil-key--sm" data-chat-chip="${esc(c)}" style="justify-content:space-between"><span>${esc(c)}</span></button>`
+      ).join("") || `<span class="mil-hint">暂无已启用会话</span>`;
+      renderLayerBtns();
+      renderCards($("#search-results"), r.results, "search");
+      renderCards($("#experiences"), r.experiences, "exp");
+      $("#workspaces").innerHTML = (r.workspaces || []).map((w) =>
+        `<button type="button" class="mil-key mil-key--sm" data-ws="${esc(w.workspace_id)}">${esc(w.name)} (${esc(w.profile)})</button>`
+      ).join("") || `<span class="mil-hint">暂无持久工作区</span>`;
+    }
+
+    async function loadIntents() {
+      const r = await rpc("read", "intents", {});
+      if (!r?.success) return;
+      $("#intent-list").innerHTML = (r.intents || []).map((i) =>
+        `<div class="exp-card">
+          <div class="mil-row" style="justify-content:space-between">
+            <span><span class="mil-tag">${esc(i.kind)}</span> <strong>${esc(i.reason)}</strong></span>
+            ${i.status === "pending" ? `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>` : `<span class="mil-tag">${esc(i.status)}</span>`}
+          </div>
+          <span class="mil-hint mono">${esc(i.target)} · 来源 ${esc(i.source)}</span>
+        </div>`
+      ).join("") || `<p class="mil-hint">暂无意图记录</p>`;
+      $("#learning").textContent = (r.learning || []).length ? JSON.stringify(r.learning, null, 2) : "暂无自动笔记回执";
+    }
+
+    document.addEventListener("click", async (ev) => {
+      const kindBtn = ev.target.closest("[data-kind-tab]");
+      if (kindBtn) {
+        $("#kind").value = kindBtn.dataset.kindTab;
+        say("");
+        await loadAsset(false);
+        return;
+      }
+      const chatBtn = ev.target.closest("[data-chat-chip]");
+      if (chatBtn) {
+        $("#chat").value = chatBtn.dataset.chatChip;
+        say("");
+        await loadAsset(false);
+        await loadOverview();
+        return;
+      }
+      const wsBtn = ev.target.closest("[data-ws]");
+      if (wsBtn) {
+        const wsid = wsBtn.dataset.ws;
+        const r = await rpc("read", "workspace", { workspace_id: wsid });
+        if (!r?.success) return say(r?.error || "读取工作区失败", true);
+        $("#workspace-files").innerHTML = (r.files || []).map((f) =>
+          `<button type="button" class="mil-key mil-key--sm" data-ws-id="${esc(wsid)}" data-ws-path="${esc(f.path)}" style="justify-content:space-between"><span class="mono">${esc(f.path)}</span><span class="num">${f.bytes}B</span></button>`
+        ).join("") || `<p class="mil-hint">空工作区</p>`;
+        $("#workspace-content").textContent = r.text || "点击左侧文件查看内容";
+        return;
+      }
+      const fileBtn = ev.target.closest("[data-ws-path]");
+      if (fileBtn) {
+        const r = await rpc("read", "workspace", { workspace_id: fileBtn.dataset.wsId, path: fileBtn.dataset.wsPath });
+        if (!r?.success) return say(r?.error || "读取文件失败", true);
+        $("#workspace-content").textContent = r.text || "";
+        return;
+      }
+      const cancelBtn = ev.target.closest("[data-cancel-intent]");
+      if (cancelBtn) {
+        const r = await rpc("write", "cancel_intent", { intent_id: cancelBtn.dataset.cancelIntent });
+        if (!r?.success) return say(r?.error || "取消失败", true);
+        say("意图已取消");
+        await loadIntents();
+      }
+    });
+
+    $("#chat").addEventListener("change", () => { say(""); loadAsset(false); });
+    $("#kind").addEventListener("change", () => { say(""); loadAsset(false); });
+    $("#content").addEventListener("input", updateMeter);
+    $("#save").onclick = async () => {
+      const kind = $("#kind").value;
+      const body = { kind, content: $("#content").value, expected_version: expectedVersion };
+      if (kind === "memory") body.chat_id = $("#chat").value;
+      $("#save").disabled = true;
+      say("");
+      try {
+        const r = await rpc("write", "asset", body);
+        if (!r?.success) return say(r?.error || "保存失败", true);
+        expectedVersion = Number(r.version || 0);
+        $("#version").textContent = `v${expectedVersion}`;
+        $("#draft-panel").hidden = true;
+        await loadAsset(false);
+        say("已保存");
+      } finally {
+        $("#save").disabled = false;
+      }
+    };
+    $("#reload").onclick = async () => { await loadAsset(true); say("已读取最新版本。"); };
+    $("#restore").onclick = async () => {
+      const kind = $("#kind").value;
+      const ver = Number($("#history").value);
+      const body = { kind, version: ver, expected_version: expectedVersion };
+      if (kind === "memory") body.chat_id = $("#chat").value;
+      say("");
+      const r = await rpc("write", "rollback", body);
+      if (!r?.success) return say(r?.error || "回滚失败", true);
+      await loadAsset(false);
+      say(`已回滚至 v${ver}`);
+    };
+    $("#search-button").onclick = loadOverview;
+
+    Promise.resolve(window.maibot?.ready).then(async () => {
+      applyTheme();
+      await loadOverview();
+      await loadAsset(false);
+      await loadIntents();
+    });
+  }
+
+  /* ════════════════════════════════════════════════════════════════
+     3. 设置页 (settings)
+     ════════════════════════════════════════════════════════════════ */
+  if (page === "settings") {
+    let curSettings = null;
+    let curVersion = "";
+    let svcVersion = "";
+    let whVersion = "";
+    const WEB_PRESETS = ["auto", "host", "google_search_plugin", "mcp", "plugin_api"];
+
+    const row = (name, desc, ctl) => `<div class="set-row"><div class="set-row-l"><div class="set-row-t">${name}</div>${desc ? `<div class="set-row-d">${desc}</div>` : ""}</div><div class="set-row-r">${ctl}</div></div>`;
+
+    function renderGeneral() {
+      const s = curSettings || {};
+      const chats = Array.isArray(s.enabled_chats) ? s.enabled_chats : [];
+      const web = s.web_provider || "auto";
+      const isPreset = WEB_PRESETS.includes(web);
+      $("#general-fields").innerHTML = [
+        row("启用 Maisya 插件", "开启后在以下启用会话挂载能力、记忆与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
+        row("启用会话白名单", "填写群号或 chat_id，用逗号分隔；非白名单会话零读取、零打扰。", `<input id="set-chats" class="mil-input mono" value="${esc(chats.join(", "))}" placeholder="群号或 stream_id，逗号分隔">`),
+        row("主动程度", "控制空闲后的事后惦记与冒泡积极性。", `<select id="proactive_level" class="mil-select"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静 (quiet · 仅被动)</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>关怀 (care · 平衡)</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃 (lively · 允许偶遇)</option></select>`),
+        row("全局联网来源", "默认搜索路由；自定义插件/web 别名在右侧输入。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>auto（自动探测）</option><option value="host" ${web === "host" ? "selected" : ""}>host（仅宿主原生）</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>google_search_plugin（第三方联网）</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>mcp（MCP 搜索服务）</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>plugin_api（跨插件 API）</option><option value="custom" ${!isPreset ? "selected" : ""}>自定义标识 / 别名</option></select><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:...">`),
+        row("每日主动搭话上限", "普通闲聊惦记每日最多次数 (0-50)。", `<input id="daily_proactive_limit" class="mil-input mono" style="width:110px" type="number" min="0" max="50" value="${Number(s.daily_proactive_limit ?? 1)}">`),
+        row("心跳间隔与档案", "自身定期探索的间隔分钟与使用能力档案。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:96px" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}"><input id="heartbeat_profile" class="mil-input mono" style="width:130px" value="${esc(s.heartbeat_profile || "scout")}">`),
+        row("睡眠时段与久违提醒", "如 01-08 期间不打扰；熟人会话安静超过小时数再问候。", `<input id="set-sleep" class="mil-input mono" style="width:100px" value="${esc(s.sleep_window || "")}" placeholder="如 01-08"><input id="set-longing" class="mil-input mono" style="width:100px" type="number" min="12" max="720" value="${Number(s.longing_quiet_hours ?? 72)}">`),
+        row("线程步数 / 超时 / 上下文上限", "单次运行安全上限。", `<input id="set-steps" class="mil-input mono" style="width:76px" type="number" min="1" max="64" value="${Number(s.agent_max_steps ?? 16)}"><input id="set-timeout" class="mil-input mono" style="width:84px" type="number" min="10" max="900" value="${Number(s.agent_timeout ?? 180)}"><input id="set-ctx" class="mil-input mono" style="width:96px" type="number" min="24000" max="256000" value="${Number(s.thread_context_chars ?? 48000)}">`),
+      ].join("");
+
+      const sb = s.sandbox || {};
+      $("#sandbox-fields").innerHTML = [
+        row("启用 Docker 沙箱", "仅代码运行需要，纯文字/网页卡片渲染无需开启。", `<label class="mil-switch"><input id="sb-enabled" type="checkbox" ${sb.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${sb.enabled ? "开启" : "关闭"}</span></label>`),
+        row("沙箱镜像与配额", "容器镜像、内存上限(MiB)与单次超时(秒)。", `<input id="sb-image" class="mil-input mono" style="width:150px" value="${esc(sb.image || "")}" placeholder="容器镜像"><input id="sb-mem" class="mil-input mono" style="width:88px" type="number" min="128" max="4096" value="${Number(sb.memory_mib ?? 512)}"><input id="sb-timeout" class="mil-input mono" style="width:78px" type="number" min="1" max="180" value="${Number(sb.timeout ?? 60)}">`),
+      ].join("");
+    }
+
+    function renderHandles(handles) {
+      $("#handles").innerHTML = (handles || []).length
+        ? handles.map((h) => `<button type="button" class="mil-key mil-key--sm mono" data-pick-handle="${esc(h)}">${esc(h)}</button>`).join("")
+        : `<span class="mil-hint">暂无已登记句柄</span>`;
+    }
+
+    async function loadSettings() {
+      const r = await rpc("read", "settings", {});
+      if (!r?.success) return say(r?.error || "读取设置失败", true);
+      curSettings = r.settings;
+      curVersion = r.version;
+      $("#admins").textContent = (r.admins || []).join(", ") || "未配置（继承宿主）";
+      $("#intent-chat-list").innerHTML = ["self", ...(curSettings.enabled_chats || [])].map((c) => `<option value="${esc(c)}">`).join("");
+      renderGeneral();
+      renderHandles(r.handles);
+    }
+
+    async function loadServices() {
+      const r = await rpc("read", "services", {});
+      if (!r?.success) return;
+      svcVersion = r.version;
+      const cfg = r.configuration || {};
+      $("#service-config").value = JSON.stringify(cfg, null, 2);
+      const apis = Object.keys(cfg.apis || {});
+      const webs = Object.keys((cfg.web || {}).providers || {});
+      const mcps = Object.keys(cfg.servers || {});
+      $("#service-cards").innerHTML = `<div class="mil-row">
+        <span class="mil-tag">MCP 服务 ${mcps.length}</span>
+        <span class="mil-tag">跨插件 API ${apis.length}</span>
+        <span class="mil-tag mil-tag--ok">联网别名 ${webs.length}</span>
+      </div>`;
+    }
+
+    async function loadWebhooks() {
+      const r = await rpc("read", "webhooks", {});
+      if (!r?.success) return;
+      whVersion = r.version;
+      const cfg = r.configuration || {};
+      $("#webhook-config").value = JSON.stringify(cfg, null, 2);
+      const keys = Object.keys(cfg);
+      $("#webhook-cards").innerHTML = keys.length
+        ? `<div class="mil-row">${keys.map((k) => `<span class="mil-tag mil-tag--warn">${esc(k)} → ${esc(cfg[k]?.target || "")}</span>`).join("")}</div>`
+        : `<span class="mil-hint">暂无外部事件通道</span>`;
+    }
+
+    async function loadHealth() {
+      const [h, ir] = await Promise.all([rpc("read", "health", {}), rpc("read", "intents", {})]);
+      if (h?.success) {
+        const webLine = `联网来源：${curSettings?.web_provider || "auto"}`;
+        $("#health").textContent = [
+          webLine,
+          `沙箱状态：${h.enabled ? (h.ready ? "已就绪" : `未就绪 (${h.error || "无可用镜像"})`) : "按配置关闭（无容器轻量模式可用）"}`,
+          `活动容器：${h.running || 0} · 隔离目录：${h.quarantined || 0}`,
+          `工作区占用：${((h.bytes || 0) / 1024).toFixed(1)} KB / ${((h.limit || 0) / (1024 * 1024)).toFixed(0)} MB`,
+        ].join("\n");
+      }
+      if (ir?.success) {
+        $("#intent-list").innerHTML = (ir.intents || []).map((i) =>
+          `<div class="exp-card">
+            <div class="mil-row" style="justify-content:space-between">
+              <span><span class="mil-tag">${esc(i.kind)}</span> <strong>${esc(i.reason)}</strong></span>
+              <span class="mil-tag">${esc(i.status)}</span>
+            </div>
+            <span class="mil-hint mono">${esc(i.target)} · 来源 ${esc(i.source)}</span>
+          </div>`
+        ).join("") || `<p class="mil-hint">暂无意图记录</p>`;
+        $("#learning").textContent = (ir.learning || []).length ? JSON.stringify(ir.learning, null, 2) : "暂无自动笔记回执";
+      }
+    }
+
+    document.addEventListener("click", (ev) => {
+      const secBtn = ev.target.closest("[data-sec-filter]");
+      if (secBtn) {
+        const g = secBtn.dataset.secFilter;
+        $$("[data-sec-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === secBtn)));
+        $$("[data-sec-group]").forEach((p) => { p.hidden = g !== "all" && p.dataset.secGroup !== g; });
+        return;
+      }
+      const handleBtn = ev.target.closest("[data-pick-handle]");
+      if (handleBtn) {
+        $("#vault-handle").value = handleBtn.dataset.pickHandle;
+        return;
+      }
+      const preset = ev.target.closest("[data-sched-preset]");
+      if (preset) {
+        const k = preset.dataset.schedPreset;
+        if (k === "once") { $("#intent-in").value = "60"; $("#intent-every").value = "0"; }
+        else if (k === "hourly") { $("#intent-in").value = "120"; $("#intent-every").value = "3600"; }
+        else if (k === "daily") { $("#intent-in").value = "3600"; $("#intent-every").value = "86400"; }
+      }
+    });
+
+    $("#save-settings").onclick = async () => {
+      const selWeb = $("#web_provider").value;
+      const customWeb = $("#web_provider_custom").value.trim();
+      const webProvider = selWeb === "custom" ? (customWeb || "auto") : selWeb;
+      const next = {
+        ...curSettings,
+        plugin: { ...(curSettings?.plugin || {}), enabled: $("#set-enabled").checked },
+        enabled_chats: $("#set-chats").value.split(/[,，\n]+/).map((x) => x.trim()).filter(Boolean),
+        proactive_level: $("#proactive_level").value,
+        web_provider: webProvider,
+        daily_proactive_limit: Number($("#daily_proactive_limit").value),
+        heartbeat_interval_minutes: Number($("#heartbeat_interval_minutes").value),
+        heartbeat_profile: $("#heartbeat_profile").value.trim() || "scout",
+        sleep_window: $("#set-sleep").value.trim(),
+        longing_quiet_hours: Number($("#set-longing").value),
+        agent_max_steps: Number($("#set-steps").value),
+        agent_timeout: Number($("#set-timeout").value),
+        thread_context_chars: Number($("#set-ctx").value),
+        sandbox: {
+          ...(curSettings?.sandbox || {}),
+          enabled: $("#sb-enabled").checked,
+          image: $("#sb-image").value.trim(),
+          memory_mib: Number($("#sb-mem").value || 512),
+          timeout: Number($("#sb-timeout").value || 60),
+        },
+      };
+      const r = await rpc("write", "settings", { settings: next, expected_version: curVersion });
+      if (!r?.success) return say(r?.error || "保存设置失败", true);
+      curSettings = r.settings;
+      curVersion = r.version;
+      say("已保存设置。");
+      await loadHealth();
+    };
+
+    $("#save-vault").onclick = async () => {
+      const handle = $("#vault-handle").value.trim();
+      const value = $("#vault-value").value;
+      const r = await rpc("write", "vault", { handle, value });
+      if (!r?.success) return say(r?.error || "保存凭据失败", true);
+      $("#vault-value").value = "";
+      renderHandles(r.handles);
+      say(`已更新凭据句柄 ${handle}`);
+    };
+    $("#delete-vault").onclick = async () => {
+      const handle = $("#vault-handle").value.trim();
+      const r = await rpc("write", "vault", { handle, delete: true });
+      if (!r?.success) return say(r?.error || "删除句柄失败", true);
+      renderHandles(r.handles);
+      say(`已删除句柄 ${handle}`);
+    };
+    $("#save-services").onclick = async () => {
+      let configuration;
+      try { configuration = JSON.parse($("#service-config").value); } catch { return say("服务登记 JSON 格式无效", true); }
+      const r = await rpc("write", "services", { configuration, expected_version: svcVersion });
+      if (!r?.success) return say(r?.error || "保存服务失败", true);
+      svcVersion = r.version;
+      say("服务登记已保存。");
+      await loadServices();
+    };
+    $("#save-webhooks").onclick = async () => {
+      let configuration;
+      try { configuration = JSON.parse($("#webhook-config").value); } catch { return say("事件通道 JSON 格式无效", true); }
+      const r = await rpc("write", "webhooks", { configuration, expected_version: whVersion });
+      if (!r?.success) return say(r?.error || "保存事件通道失败", true);
+      whVersion = r.version;
+      say("事件通道已保存。");
+      await loadWebhooks();
+    };
+    $("#schedule-intent").onclick = async () => {
+      const r = await rpc("write", "schedule_intent", {
+        chat_id: $("#intent-chat").value.trim(),
+        profile: $("#intent-profile").value.trim(),
+        workspace: $("#intent-workspace").value.trim(),
+        in_seconds: Number($("#intent-in").value || 60),
+        every_seconds: Number($("#intent-every").value || 0),
+        prompt: $("#intent-prompt").value.trim(),
+      });
+      if (!r?.success) return say(r?.error || "加入计划失败", true);
+      say("工作流计划已加入队列。");
+      await loadHealth();
+    };
+    $("#check").onclick = loadHealth;
+
+    Promise.resolve(window.maibot?.ready).then(async () => {
+      applyTheme();
+      await loadSettings();
+      await loadServices();
+      await loadWebhooks();
+      await loadHealth();
+    });
+  }
 })();
-</script></body></html>
+</script>
+</body>
+</html>

@@ -162,6 +162,12 @@ async def test_console_snapshot_includes_system_memory_roles_intents_and_steer(t
         assert roles["system"] > 0
         assert roles["memory"] > 0
         assert snap["selected"]["context"]["chars"] == sum(roles.values())
+        assert snap["selected"]["context"]["items"]
+        assert snap["selected"]["context"]["history_points"]
+        assert snap["stats"]["today_threads"] >= 1
+        assert snap["profile_cards"]
+        assert snap["pulse"]["enabled"] is True
+        assert "hidden-token-value" not in json.dumps(snap, ensure_ascii=False)
         assert len(snap["scheduled_intents"]) == 1
         assert "hidden-token-value" not in snap["scheduled_intents"][0]["reason"]
 

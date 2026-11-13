@@ -1,0 +1,775 @@
+/* Maisya WebUI · MaiBot 千禧机械硬件设计系统 (0px 直角 / 注塑外壳 / 下沉液晶屏 / 3D 机械键帽) */
+:root {
+  --mil-shell: #ddd4bf;
+  --mil-panel: #ebe4d2;
+  --mil-well: #cfc6af;
+  --mil-screen: #fbf9f0;
+  --mil-screen-shade: rgba(112, 104, 90, 0.14);
+  --mil-screen-grid: rgba(130, 124, 112, 0.08);
+  --mil-scope: #403c37;
+  --mil-scope-ink: #e5f3e9;
+  --mil-scope-grid: rgba(255, 255, 255, 0.075);
+  --mil-ink: #322d2a;
+  --mil-muted: #766f66;
+  --mil-print: #5f5849;
+  --mil-line: #5a544a;
+  --mil-rule: #d3cec0;
+  --mil-hi: #f6f1e3;
+  --mil-lo: #bdb39c;
+  --mil-drop: #9c927b;
+  --mil-vent: #afa58d;
+  --mil-key: #f3eee1;
+  --mil-key-hi: #fdfbf5;
+  --mil-key-side: #cbbfa8;
+  --mil-on: #8fd6a0;
+  --mil-on-side: #5fa873;
+  --mil-on-ink: #253323;
+  --mil-hot: #f08a5d;
+  --mil-hot-side: #c2643c;
+  --mil-hot-ink: #3a241a;
+  --mil-danger: #c2452f;
+  --mil-danger-side: #8f3020;
+  --mil-danger-ink: #fff8f5;
+  --mil-warn: #ffd84a;
+  --mil-warn-ink: #3d3210;
+  --mil-led: #8fd6a0;
+  --mil-led-run: #ffd84a;
+  --mil-led-bad: #f08a5d;
+  --mil-meter: #5fa873;
+  --mil-raise: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 5px 0 var(--mil-drop);
+  --mil-sunk: inset 3px 3px 0 var(--mil-screen-shade), -1px -1px 0 1px var(--mil-lo), 1px 1px 0 1px var(--mil-hi);
+  --mil-grain-shell: radial-gradient(rgba(90, 84, 74, 0.1) 1px, transparent 1px);
+  --mil-grain-panel: radial-gradient(rgba(90, 84, 74, 0.065) 1px, transparent 1px);
+  --mil-lcd-grid: linear-gradient(var(--mil-screen-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-screen-grid) 1px, transparent 1px);
+  --mil-radius: 0px;
+  --mil-font-display: var(--maibot-font-display, "Departure Mono", "Ark Pixel 12px SC", ui-monospace, monospace);
+  --mil-font-body: var(--maibot-font-body, "Ark Pixel 12px SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+  --mil-font-mono: var(--maibot-font-mono, "Departure Mono", "JetBrains Mono", ui-monospace, monospace);
+  /* 上下文分布色板 */
+  --ctx-system: #74ba85;
+  --ctx-memory: #6da3d4;
+  --ctx-user: #e7be46;
+  --ctx-assistant: #9e89d4;
+  --ctx-tool: #f08a5d;
+  --ctx-free: #e5decb;
+  color-scheme: light;
+}
+
+:root.dark {
+  --mil-shell: #2f2c28;
+  --mil-panel: #3a3631;
+  --mil-well: #25221f;
+  --mil-screen: #1e221e;
+  --mil-screen-shade: rgba(0, 0, 0, 0.42);
+  --mil-screen-grid: rgba(143, 214, 160, 0.055);
+  --mil-scope: #181c18;
+  --mil-scope-ink: #b9e7c5;
+  --mil-scope-grid: rgba(143, 214, 160, 0.075);
+  --mil-ink: #eee9de;
+  --mil-muted: #a0988a;
+  --mil-print: #b3ab9c;
+  --mil-line: #171513;
+  --mil-rule: #3c423b;
+  --mil-hi: #524d46;
+  --mil-lo: #24211d;
+  --mil-drop: #141210;
+  --mil-vent: #645e55;
+  --mil-key: #4d4841;
+  --mil-key-hi: #605a52;
+  --mil-key-side: #302c27;
+  --mil-on: #8fd6a0;
+  --mil-on-side: #5fa873;
+  --mil-on-ink: #1e2a20;
+  --mil-hot: #f08a5d;
+  --mil-hot-side: #a9522e;
+  --mil-hot-ink: #2c1e16;
+  --mil-danger: #c2452f;
+  --mil-danger-side: #7d2517;
+  --mil-danger-ink: #fff;
+  --mil-warn: #ffd84a;
+  --mil-warn-ink: #29220a;
+  --mil-led: #8fd6a0;
+  --mil-led-run: #ffd84a;
+  --mil-led-bad: #f08a5d;
+  --mil-meter: #8fd6a0;
+  --mil-grain-shell: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  --mil-grain-panel: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  --ctx-system: #5da56f;
+  --ctx-memory: #568ec2;
+  --ctx-user: #cfa334;
+  --ctx-assistant: #836ec0;
+  --ctx-tool: #de784b;
+  --ctx-free: #2a302a;
+  color-scheme: dark;
+}
+
+/* 当宿主切换为 modern 风格时平滑适配其毛玻璃卡片语义 */
+:root[data-dashboard-style="modern"] {
+  --mil-shell: var(--maibot-background, #f6f7fb);
+  --mil-panel: var(--maibot-surface, #ffffff);
+  --mil-well: var(--maibot-muted, #f0f2f7);
+  --mil-screen: var(--maibot-surface, #ffffff);
+  --mil-screen-shade: rgba(15, 23, 42, 0.04);
+  --mil-screen-grid: transparent;
+  --mil-ink: var(--maibot-foreground, #1f2329);
+  --mil-muted: var(--maibot-muted-foreground, #667085);
+  --mil-print: var(--maibot-muted-foreground, #667085);
+  --mil-line: var(--maibot-border, #d8dee8);
+  --mil-rule: var(--maibot-border, #e5e9f0);
+  --mil-hi: transparent;
+  --mil-lo: transparent;
+  --mil-drop: rgba(15, 23, 42, 0.08);
+  --mil-key: var(--maibot-surface, #ffffff);
+  --mil-key-hi: transparent;
+  --mil-key-side: var(--maibot-border, #d8dee8);
+  --mil-raise: 0 2px 10px rgba(15, 23, 42, 0.06);
+  --mil-sunk: inset 0 1px 3px rgba(15, 23, 42, 0.05);
+  --mil-grain-shell: none;
+  --mil-grain-panel: none;
+  --mil-radius: 10px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background-color: var(--mil-shell);
+  background-image: var(--mil-grain-shell);
+  background-size: 5px 5px;
+  color: var(--mil-ink);
+  font-family: var(--mil-font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+h1, h2, h3, h4, p {
+  margin: 0;
+}
+
+pre, code, .mono, .num {
+  font-family: var(--mil-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: var(--mil-well);
+  border-left: 1px solid var(--mil-line);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--mil-lo);
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+}
+
+/* ───────────── 机身外壳容器 ───────────── */
+
+.mil-shell {
+  max-width: 1460px;
+  margin: 0 auto;
+  padding: 12px 14px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 顶部机箱控制条 */
+.mil-topbar {
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--mil-raise);
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mil-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mil-spectrum {
+  display: grid;
+  grid-template-columns: repeat(3, 8px);
+  height: 22px;
+  border: 2px solid var(--mil-line);
+  flex-shrink: 0;
+}
+.mil-spectrum i {
+  display: block;
+}
+.mil-spectrum i:nth-child(1) { background: var(--mil-on); }
+.mil-spectrum i:nth-child(2) { background: var(--mil-warn); }
+.mil-spectrum i:nth-child(3) { background: var(--mil-hot); }
+
+.mil-nameplate {
+  font-family: var(--mil-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  background: var(--mil-line);
+  color: var(--mil-key);
+  font-synthesis: none;
+  flex-shrink: 0;
+}
+
+.mil-page-title {
+  font-family: var(--mil-font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  font-synthesis: none;
+}
+
+.mil-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mil-top-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mil-led-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  font-family: var(--mil-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 方形电源 / 状态 LED（绝对不用圆点） */
+.mil-led {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-led);
+  box-shadow: 0 0 0 1px var(--mil-lo);
+  flex-shrink: 0;
+}
+.mil-led--run {
+  background: var(--mil-led-run);
+  animation: mil-pulse 1.1s steps(2, end) infinite;
+}
+.mil-led--bad {
+  background: var(--mil-led-bad);
+}
+.mil-led--off {
+  background: var(--mil-well);
+}
+
+@keyframes mil-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ───────────── 模块面板 ───────────── */
+
+.mil-panel {
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--mil-raise);
+  padding: 12px 14px 14px;
+  min-width: 0;
+}
+
+.mil-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 2px solid var(--mil-lo);
+  box-shadow: 0 2px 0 var(--mil-hi);
+}
+
+.mil-head-l {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mil-silk {
+  font-family: var(--mil-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mil-print);
+  font-synthesis: none;
+}
+
+.mil-head-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--mil-ink);
+}
+
+.mil-head-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 模压散热百叶窗 */
+.mil-vent {
+  display: inline-block;
+  width: 34px;
+  height: 10px;
+  flex-shrink: 0;
+  background: repeating-linear-gradient(90deg, var(--mil-vent) 0 2px, transparent 2px 6px);
+}
+
+/* ───────────── 内嵌下沉式液晶屏 & 示波器屏 ───────────── */
+
+.mil-screen {
+  background-color: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--mil-sunk);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.mil-scope {
+  background-color: var(--mil-scope);
+  background-image: linear-gradient(var(--mil-scope-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-scope-grid) 1px, transparent 1px);
+  background-size: 12px 12px;
+  color: var(--mil-scope-ink);
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: inset 3px 3px 0 rgba(0, 0, 0, 0.36);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+/* ───────────── 立体机械键帽 ───────────── */
+
+.mil-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 33px;
+  padding: 4px 12px 8px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+  transition: transform 80ms steps(2, end), background-color 120ms ease, box-shadow 80ms steps(2, end);
+}
+
+.mil-key--sm {
+  min-height: 27px;
+  padding: 2px 9px 6px;
+  font-size: 12px;
+}
+
+.mil-key--hot {
+  background: var(--mil-hot);
+  color: var(--mil-hot-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-hot-side), inset 2px 2px 0 rgba(255, 255, 255, 0.3);
+}
+
+.mil-key--danger {
+  background: var(--mil-danger);
+  color: var(--mil-danger-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-danger-side), inset 2px 2px 0 rgba(255, 255, 255, 0.22);
+}
+
+.mil-key--on,
+.mil-key[aria-pressed="true"],
+.mil-key[aria-current="page"],
+.mil-key[aria-selected="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 6px;
+  padding-bottom: 4px;
+  transform: translateY(2px);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.mil-key:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mil-key:not(:disabled):hover {
+    filter: brightness(1.03);
+  }
+}
+
+.mil-key:not(:disabled):active {
+  transform: translateY(3px);
+  padding-top: 6px;
+  padding-bottom: 4px;
+  box-shadow: inset 0 -1px 0 var(--mil-key-side);
+}
+
+.mil-key:focus-visible,
+.mil-input:focus-visible,
+.mil-select:focus-visible,
+.mil-textarea:focus-visible,
+.mil-switch input:focus-visible + span {
+  outline: 2px solid var(--mil-hot);
+  outline-offset: 2px;
+}
+
+/* 分段键帽组（无间隙串联） */
+.mil-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+.mil-seg .mil-key {
+  margin-left: -2px;
+}
+.mil-seg .mil-key:first-child {
+  margin-left: 0;
+}
+
+/* ───────────── 表单控件 ───────────── */
+
+.mil-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mil-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mil-print);
+  letter-spacing: 0.04em;
+}
+
+.mil-input,
+.mil-select,
+.mil-textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 2px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  font-size: 13px;
+}
+
+.mil-textarea {
+  resize: vertical;
+  min-height: 110px;
+  line-height: 1.5;
+}
+
+.mil-textarea--code {
+  font-family: var(--mil-font-mono);
+  font-size: 12.5px;
+}
+
+/* 方形拨动开关 */
+.mil-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.mil-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.mil-switch-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  flex-shrink: 0;
+  transition: background-color 140ms ease;
+}
+.mil-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+  transition: transform 140ms steps(3, end), background-color 140ms ease;
+}
+.mil-switch input:checked + .mil-switch-track {
+  background: var(--mil-on);
+}
+.mil-switch input:checked + .mil-switch-track::after {
+  transform: translateX(20px);
+  background: var(--mil-key-hi);
+}
+.mil-switch-txt {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* 勾选方框芯片 */
+.mil-chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mil-chk input {
+  accent-color: var(--mil-on-side);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+/* ───────────── 分段液晶槽进度条 & 标签徽章 ───────────── */
+
+.mil-meter {
+  height: 14px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  overflow: hidden;
+  padding: 1px;
+}
+.mil-meter > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: repeating-linear-gradient(90deg, var(--mil-meter) 0 8px, transparent 8px 10px);
+  transition: width 240ms ease;
+}
+.mil-meter--warn > i {
+  background: repeating-linear-gradient(90deg, var(--mil-warn) 0 8px, transparent 8px 10px);
+}
+.mil-meter--hot > i {
+  background: repeating-linear-gradient(90deg, var(--mil-hot) 0 8px, transparent 8px 10px);
+}
+
+.mil-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  color: var(--mil-ink);
+  font-family: var(--mil-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.mil-tag--ok { background: var(--mil-on); color: var(--mil-on-ink); }
+.mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
+.mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
+.mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+
+.mil-hint {
+  font-size: 12px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mil-feedback {
+  min-height: 20px;
+  padding: 6px 10px;
+  border: 2px dashed var(--mil-rule);
+  background: var(--mil-screen);
+  font-size: 12.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.mil-feedback:empty {
+  display: none;
+}
+.mil-feedback--err {
+  border-style: solid;
+  border-color: var(--mil-danger);
+  color: var(--mil-danger);
+}
+.mil-feedback--ok {
+  border-style: solid;
+  border-color: var(--mil-on-side);
+  background: rgba(143, 214, 160, 0.16);
+}
+
+.mil-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  font-family: var(--mil-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ───────────── 通用网格、工具条、弹窗抽屉 ───────────── */
+
+.mil-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mil-grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.mil-split {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.mil-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(24, 22, 19, 0.56);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.mil-scrim[hidden] {
+  display: none;
+}
+
+.mil-modal {
+  width: min(760px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 8px 0 var(--mil-drop);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 900px) {
+  .mil-grid-2,
+  .mil-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .mil-shell {
+    padding: 8px 8px 20px;
+    gap: 10px;
+  }
+  .mil-topbar {
+    padding: 8px 10px;
+  }
+  .mil-panel {
+    padding: 10px 10px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mil-led--run {
+    animation: none;
+  }
+  .mil-key,
+  .mil-switch-track,
+  .mil-switch-track::after,
+  .mil-meter > i {
+    transition: none;
+  }
+}

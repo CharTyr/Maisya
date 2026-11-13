@@ -1,1 +1,127 @@
-<section class="card maibot-card"><h2>对话与活动</h2><div id="general-fields" class="grid"></div><details><summary>沙箱执行环境</summary><div id="sandbox-fields" class="grid"></div><p class="hint">启用前准备专用运行时与固定镜像。运行环境变化会先停止正在执行的沙箱活动。</p></details><div class="toolbar"><button class="primary maibot-button maibot-button-primary" id="save-settings" type="button">保存设置</button></div><p class="hint">管理员继承宿主权限设置：<span id="admins"></span></p></section><section class="card maibot-card"><h2>凭据保险箱</h2><p class="hint">已登记：<span id="handles"></span>。保存后只显示句柄。</p><div class="grid"><label>句柄<input id="vault-handle" class="maibot-input" autocomplete="off" placeholder="例如 drawing"></label><label>新凭据<input id="vault-value" class="maibot-input" type="password" autocomplete="new-password" placeholder="输入后保存"></label></div><div class="toolbar"><button id="save-vault" class="maibot-button maibot-button-primary" type="button">保存或替换凭据</button><button class="danger maibot-button maibot-button-danger" id="delete-vault" type="button">删除该句柄</button></div></section><section class="card maibot-card"><h2>能力服务</h2><p class="hint">登记可信 MCP 程序、固定执行模板、只读跨插件 apis 白名单及可选 web 联网绑定；credentials 的值填写保险箱句柄。登记本身不会启动程序。</p><textarea id="service-config" class="maibot-input" aria-label="MCP、模板与接口登记" spellcheck="false"></textarea><div class="toolbar"><button id="save-services" class="maibot-button maibot-button-primary" type="button">保存服务登记</button></div></section><section class="card maibot-card"><div class="toolbar"><h2>执行状态</h2><button id="check" class="maibot-button" type="button">刷新检查</button></div><pre id="health"></pre><details><summary>意图与自动笔记</summary><div id="intent-list"></div><pre id="learning"></pre></details></section><section class="card maibot-card"><h2>定时与周期工作流</h2><p class="hint">由管理员直接将工作流计划挂入指定会话；every_seconds 填 0 为单次执行，大于等于 300 为周期重复。</p><div class="grid"><label>目标会话 chat_id<input id="intent-chat" class="maibot-input" list="intent-chat-list" placeholder="例如 902106123"><datalist id="intent-chat-list"></datalist></label><label>执行能力档案<input id="intent-profile" class="maibot-input" value="scout" placeholder="scout"></label><label>可选工作区<input id="intent-workspace" class="maibot-input" placeholder="例如 digest"></label><label>首次延迟秒数<input id="intent-in" class="maibot-input" type="number" min="1" value="60"></label><label>周期间隔秒数（0 单次 / ≥300 周期）<input id="intent-every" class="maibot-input" type="number" min="0" value="0"></label><label class="wide">任务提示词<textarea id="intent-prompt" class="maibot-input" rows="3" style="min-height:84px" placeholder="定时触发时要执行的任务提示词"></textarea></label></div><div class="toolbar"><button id="schedule-intent" class="maibot-button maibot-button-primary" type="button">加入计划队列</button></div></section><section class="card maibot-card"><h2>外部事件</h2><p class="hint">固定目标、事件类型和签名密钥句柄，也可绑定自主能力 profile 与持久工作区 workspace。接收后按通道配置决定是否先跑线程整理，最终由 Pulse 统一转达；接入走宿主认证 API。</p><textarea id="webhook-config" class="maibot-input" aria-label="外部事件通道" spellcheck="false"></textarea><div class="toolbar"><button id="save-webhooks" class="maibot-button maibot-button-primary" type="button">保存事件通道</button></div><p class="hint">通道示例：{"news":{"target":"chat:会话编号","kind":"proactive","profile":"scout","workspace":"digest","secret_handle":"event_key"}}</p></section>
+<!-- 设置分类快速导航 -->
+<div class="mil-panel" style="padding:8px 12px">
+  <div class="mil-row" style="justify-content:space-between">
+    <div class="mil-seg" role="group" aria-label="设置分类筛选">
+      <button type="button" class="mil-key mil-key--sm" data-sec-filter="all" aria-pressed="true">全部面板</button>
+      <button type="button" class="mil-key mil-key--sm" data-sec-filter="talk" aria-pressed="false">对话与主动</button>
+      <button type="button" class="mil-key mil-key--sm" data-sec-filter="vault" aria-pressed="false">保险箱与服务</button>
+      <button type="button" class="mil-key mil-key--sm" data-sec-filter="schedule" aria-pressed="false">定时与外部事件</button>
+      <button type="button" class="mil-key mil-key--sm" data-sec-filter="health" aria-pressed="false">运行健康</button>
+    </div>
+    <span class="mil-hint">宿主管控管理员：<strong id="admins" class="mono">读取中…</strong></span>
+  </div>
+</div>
+
+<!-- 1. 对话、主动性与联网 -->
+<section class="mil-panel" data-sec-group="talk">
+  <div class="mil-head">
+    <div class="mil-head-l"><span class="mil-silk">TALK & PULSE · 对话、主动性与联网路由</span></div>
+    <div class="mil-head-r"><button class="mil-key mil-key--hot" id="save-settings" type="button">保存设置</button></div>
+  </div>
+  <div id="general-fields" class="set-list" style="margin-bottom:10px"></div>
+  <details class="mil-screen">
+    <summary class="mil-label" style="cursor:pointer">沙箱隔离环境与资源配额（容器模式才需开启）</summary>
+    <div id="sandbox-fields" class="set-list" style="margin-top:8px"></div>
+    <p class="mil-hint" style="margin-top:6px">只读探索与 HTML 渲染出图无需开启 Docker；仅运行代码/二进制脚本工具才启用沙箱。</p>
+  </details>
+</section>
+
+<!-- 2. 凭据保险箱与运行健康 -->
+<div class="mil-grid-2">
+  <section class="mil-panel" data-sec-group="vault">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">VAULT · 凭据保险箱（只进不出）</span></div>
+      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+    </div>
+    <div class="mil-screen" style="margin-bottom:10px">
+      <div class="mil-label" style="margin-bottom:5px">已登记句柄（点击可填入表单）</div>
+      <div id="handles" class="mil-row"></div>
+    </div>
+    <div class="mil-grid-2" style="margin-bottom:10px">
+      <div class="mil-field"><label class="mil-label" for="vault-handle">句柄名</label><input id="vault-handle" class="mil-input mono" autocomplete="off" placeholder="例如 drawing"></div>
+      <div class="mil-field"><label class="mil-label" for="vault-value">新凭据值</label><input id="vault-value" class="mil-input mono" type="password" autocomplete="new-password" placeholder="保存后永不回显"></div>
+    </div>
+    <div class="mil-row">
+      <button id="save-vault" class="mil-key mil-key--hot" type="button">保存或替换凭据</button>
+      <button id="delete-vault" class="mil-key mil-key--danger" type="button">删除该句柄</button>
+    </div>
+  </section>
+
+  <section class="mil-panel" data-sec-group="health">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">HEALTH · 运行状态与工作区用量</span></div>
+      <div class="mil-head-r"><button id="check" class="mil-key mil-key--sm" type="button">刷新检查</button></div>
+    </div>
+    <pre id="health" class="mil-pre" style="margin-bottom:10px">正在检查…</pre>
+    <details>
+      <summary class="mil-label" style="cursor:pointer">待唤醒意图与自动笔记学习</summary>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <div id="intent-list" class="mil-screen"></div>
+        <pre id="learning" class="mil-pre" style="max-height:140px"></pre>
+      </div>
+    </details>
+  </section>
+</div>
+
+<!-- 3. 定时与周期工作流 -->
+<section class="mil-panel" data-sec-group="schedule">
+  <div class="mil-head">
+    <div class="mil-head-l"><span class="mil-silk">SCHEDULER · 定时与周期工作流</span></div>
+    <div class="mil-head-r">
+      <div class="mil-row">
+        <button type="button" class="mil-key mil-key--sm" data-sched-preset="once">单次 60s</button>
+        <button type="button" class="mil-key mil-key--sm" data-sched-preset="hourly">每小时巡检</button>
+        <button type="button" class="mil-key mil-key--sm" data-sched-preset="daily">每日简报</button>
+      </div>
+    </div>
+  </div>
+  <div class="mil-grid-2" style="margin-bottom:10px">
+    <div class="mil-field">
+      <label class="mil-label" for="intent-chat">目标会话 chat_id</label>
+      <input id="intent-chat" class="mil-input mono" list="intent-chat-list" placeholder="例如 902106123 或 self">
+      <datalist id="intent-chat-list"></datalist>
+    </div>
+    <div class="mil-field">
+      <label class="mil-label" for="intent-profile">执行能力档案</label>
+      <input id="intent-profile" class="mil-input mono" value="scout" placeholder="scout">
+    </div>
+    <div class="mil-field">
+      <label class="mil-label" for="intent-workspace">可选工作区</label>
+      <input id="intent-workspace" class="mil-input mono" placeholder="例如 digest">
+    </div>
+    <div class="mil-row" style="align-items:end">
+      <div class="mil-field" style="flex:1 1 120px"><label class="mil-label" for="intent-in">首次延迟(秒)</label><input id="intent-in" class="mil-input mono" type="number" min="1" value="60"></div>
+      <div class="mil-field" style="flex:1 1 120px"><label class="mil-label" for="intent-every">周期间隔(0单次/≥300)</label><input id="intent-every" class="mil-input mono" type="number" min="0" value="0"></div>
+    </div>
+  </div>
+  <div class="mil-field" style="margin-bottom:10px">
+    <label class="mil-label" for="intent-prompt">任务提示词</label>
+    <textarea id="intent-prompt" class="mil-textarea" rows="2" style="min-height:70px" placeholder="定时触发时要执行的任务提示词"></textarea>
+  </div>
+  <div class="mil-row" style="justify-content:flex-end">
+    <button id="schedule-intent" class="mil-key mil-key--hot" type="button">加入计划队列</button>
+  </div>
+</section>
+
+<!-- 4. 能力服务与外部事件通道 -->
+<div class="mil-grid-2">
+  <section class="mil-panel" data-sec-group="vault">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">SERVICES · 能力服务与联网别名</span></div>
+      <div class="mil-head-r"><button id="save-services" class="mil-key mil-key--sm mil-key--hot" type="button">保存服务登记</button></div>
+    </div>
+    <div id="service-cards" class="mil-screen" style="margin-bottom:8px"></div>
+    <textarea id="service-config" class="mil-textarea mil-textarea--code" rows="12" aria-label="MCP、模板与接口登记" spellcheck="false"></textarea>
+    <p class="mil-hint" style="margin-top:6px">登记可信 MCP、固定执行模板、只读跨插件 API 白名单及 web 别名映射，凭据处只填写保险箱句柄。</p>
+  </section>
+
+  <section class="mil-panel" data-sec-group="schedule">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">WEBHOOKS · 外部事件通道</span></div>
+      <div class="mil-head-r"><button id="save-webhooks" class="mil-key mil-key--sm mil-key--hot" type="button">保存事件通道</button></div>
+    </div>
+    <div id="webhook-cards" class="mil-screen" style="margin-bottom:8px"></div>
+    <textarea id="webhook-config" class="mil-textarea mil-textarea--code" rows="12" aria-label="外部事件通道" spellcheck="false"></textarea>
+    <p class="mil-hint" style="margin-top:6px">示例：{"news":{"target":"chat:会话编号","kind":"proactive","profile":"scout","workspace":"digest","secret_handle":"event_key"}}</p>
+  </section>
+</div>

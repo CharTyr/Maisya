@@ -91,6 +91,20 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 )
                 await page.set_content(document)
                 await expect(page.locator("h2")).to_have_text("另一个探索")
+                # 验证 Aisya 上下文方块 / 方格视图与弹窗阅读
+                await expect(page.locator(".cm-tile").first).to_be_visible()
+                await page.locator('[data-ci-idx]').first.click()
+                await expect(page.locator("#ctx-scrim")).to_be_visible()
+                await expect(page.locator("#ctx-modal-body")).not_to_be_empty()
+                await page.locator("#ctx-modal-close").click()
+                await expect(page.locator("#ctx-scrim")).to_be_hidden()
+                await page.locator('[data-ctx-view="grid"]').click()
+                assert await page.locator(".cm-cell").count() == 400
+                await page.locator('[data-ctx-view="map"]').click()
+                # 验证流向图会话筛选与恢复
+                await page.locator('[data-flow-chat="chat"]').click()
+                await expect(page.locator("#flow-filter-hint")).to_contain_text("chat")
+                await page.locator("#flow-all-chats").click()
                 await page.locator(f'[data-thread="{first["thread_id"]}"]').click()
                 await expect(page.locator("h2")).to_contain_text("探索 <img")
                 await page.locator("#message").fill("只属于第一个线程的草稿")

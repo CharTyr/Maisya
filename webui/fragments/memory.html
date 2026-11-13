@@ -1,1 +1,109 @@
-<div class="columns"><aside class="card maibot-card"><h2>记忆层</h2><label for="chat">会话</label><select id="chat" class="maibot-select"></select><label for="kind">正文</label><select id="kind" class="maibot-select"><option value="memory">会话关系记忆</option><option value="journal">MaiBot 近况</option><option value="heartbeat">主动性与节奏</option></select><p class="hint">会话记忆只在原会话使用。近况来自公开的自身活动，保留七天。</p></aside><div><section class="card maibot-card"><div class="toolbar"><h2>正文</h2><span class="version maibot-badge" id="version"></span></div><label for="content">内容</label><textarea id="content" class="maibot-input" maxlength="16000" spellcheck="false"></textarea><div class="toolbar"><button class="primary maibot-button maibot-button-primary" id="save" type="button">保存修改</button><button id="reload" class="maibot-button" type="button">读取最新</button><select id="history" class="maibot-select" aria-label="历史版本"></select><button id="restore" class="maibot-button" type="button">回滚到所选版本</button></div><details id="draft-panel" hidden><summary>读取最新版本前的草稿</summary><textarea id="local-draft" class="maibot-input" readonly aria-label="保留的本地草稿"></textarea></details><p class="hint">保存会保留版本；读取最新时，原草稿保留在下方。</p></section><section class="card maibot-card"><h2>查找经历</h2><div class="toolbar"><input id="search" class="maibot-input" style="flex:1 1 220px" aria-label="检索关键词" placeholder="地点、发现或线程编号"><button id="search-button" class="maibot-button maibot-button-primary" type="button">检索</button></div><div id="search-results"></div><h2>自身经历</h2><div id="experiences"></div></section><section class="card maibot-card"><h2>持续工作区</h2><div id="workspaces" class="toolbar"></div><div id="workspace-files" class="toolbar"></div><pre id="workspace-content"></pre><details><summary>意图与自动笔记</summary><div id="intent-list"></div><pre id="learning"></pre></details></section></div></div>
+<div class="mil-split">
+  <!-- 左栏：记忆层与会话切换 -->
+  <aside class="mil-panel">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">LAYERS · 记忆层级</span></div>
+      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+    </div>
+    <div class="mil-field" style="margin-bottom:10px">
+      <label class="mil-label" for="chat">选择会话</label>
+      <select id="chat" class="mil-select mono"></select>
+    </div>
+    <div id="chat-chips" class="mil-screen" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
+
+    <div class="mil-field" style="margin-bottom:10px">
+      <label class="mil-label" for="kind">记忆文档层</label>
+      <select id="kind" class="mil-select sr-only">
+        <option value="memory">会话关系记忆</option>
+        <option value="journal">MaiBot 近况</option>
+        <option value="heartbeat">主动性与节奏</option>
+      </select>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button type="button" class="mil-key" data-kind-tab="memory" aria-pressed="true" style="justify-content:flex-start">会话关系记忆 (MEMORY.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="journal" aria-pressed="false" style="justify-content:flex-start">MaiBot 近况 (JOURNAL.md)</button>
+        <button type="button" class="mil-key" data-kind-tab="heartbeat" aria-pressed="false" style="justify-content:flex-start">主动性与节奏 (HEARTBEAT.md)</button>
+      </div>
+    </div>
+
+    <div class="mil-screen">
+      <div class="mil-row" style="justify-content:space-between;margin-bottom:5px">
+        <span class="mil-label">当前文档字数</span>
+        <span class="num" style="font-size:12px" id="mem-char-count">0 / 16000</span>
+      </div>
+      <div class="mil-meter"><i id="mem-meter-bar"></i></div>
+      <p class="mil-hint" style="margin-top:6px">会话关系记忆严格按会话隔离；近况保留七天；节奏用于引导周期性探索与日常主动冒泡。</p>
+    </div>
+  </aside>
+
+  <!-- 右栏：正文编辑 + 经历 + 工作区 -->
+  <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">DOCUMENT · 记忆正文</span>
+          <span class="mil-tag" id="version">v0</span>
+        </div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div class="mil-field" style="margin-bottom:10px">
+        <label class="mil-label" for="content">内容</label>
+        <textarea id="content" class="mil-textarea" rows="10" maxlength="16000" spellcheck="false"></textarea>
+      </div>
+      <div class="mil-row" style="justify-content:space-between">
+        <div class="mil-row">
+          <button class="mil-key mil-key--hot" id="save" type="button">保存修改</button>
+          <button class="mil-key" id="reload" type="button">读取最新</button>
+        </div>
+        <div class="mil-row">
+          <select id="history" class="mil-select" style="width:auto;min-width:150px" aria-label="历史版本"></select>
+          <button class="mil-key" id="restore" type="button">回滚到所选版本</button>
+        </div>
+      </div>
+      <details id="draft-panel" style="margin-top:10px" hidden>
+        <summary class="mil-label" style="cursor:pointer">读取最新版本前保留的本地草稿</summary>
+        <textarea id="local-draft" class="mil-textarea" style="margin-top:6px" rows="4" readonly aria-label="保留的本地草稿"></textarea>
+      </details>
+    </section>
+
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">RECALL · 经历检索与自身活动</span></div>
+        <div class="mil-head-r">
+          <div class="mil-row" style="gap:6px">
+            <input id="search" class="mil-input" style="width:200px" aria-label="检索关键词" placeholder="地点、关键词或线程号">
+            <button id="search-button" class="mil-key mil-key--sm mil-key--hot" type="button">检索</button>
+          </div>
+        </div>
+      </div>
+      <div class="mil-grid-2">
+        <div style="min-width:0">
+          <div class="mil-label" style="margin-bottom:5px">检索命中记录</div>
+          <div id="search-results" class="mil-screen" style="min-height:96px;max-height:240px;overflow-y:auto"></div>
+        </div>
+        <div style="min-width:0">
+          <div class="mil-label" style="margin-bottom:5px">自身经历档案</div>
+          <div id="experiences" class="mil-screen" style="min-height:96px;max-height:240px;overflow-y:auto"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">WORKSPACES · 持续工作区与意图队列</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div id="workspaces" class="mil-row" style="margin-bottom:8px"></div>
+      <div class="ws-split">
+        <div id="workspace-files" class="mil-screen" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto"></div>
+        <pre id="workspace-content" class="mil-pre" style="min-height:120px;max-height:260px"></pre>
+      </div>
+      <details style="margin-top:10px" open>
+        <summary class="mil-label" style="cursor:pointer">待唤醒意图与自动笔记回执</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <div id="intent-list" class="mil-screen"></div>
+          <pre id="learning" class="mil-pre" style="max-height:140px"></pre>
+        </div>
+      </details>
+    </section>
+  </div>
+</div>
