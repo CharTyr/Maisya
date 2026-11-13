@@ -146,6 +146,7 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 await page.get_by_role("button", name="停止线程", exact=True).click()
                 await expect(page.locator("#feedback")).to_have_text("线程已停止。")
                 await expect(page.locator("#stop")).to_be_disabled()
+                await page.locator("#open-launch").click()
                 await page.locator("#launch-profile").fill("scout")
                 await page.locator("#launch-chat").fill("chat")
                 await page.locator("#launch-prompt").fill("从现场直接发起的新工作流")

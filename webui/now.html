@@ -1381,7 +1381,7 @@ pre, code, .mono, .num {
         <span class="mil-led" id="top-led"></span>
         <span id="top-state-text">待命</span>
       </div>
-      <button type="button" class="mil-key mil-key--hot" id="open-launch">+ 发起工作流</button>
+      <button type="button" class="mil-key" id="open-launch">唤醒能力</button>
     </div>
   </header>
 
@@ -1412,7 +1412,7 @@ pre, code, .mono, .num {
         <div class="fl-list" id="fl-profiles"></div>
       </div>
       <div class="fl-col">
-        <div class="fl-col-h"><span>04 线程与交付</span><span class="num" id="fl-cnt-th">0</span></div>
+        <div class="fl-col-h"><span>04 活动与产出</span><span class="num" id="fl-cnt-th">0</span></div>
         <div class="fl-list" id="fl-threads"></div>
       </div>
     </div>
@@ -1501,7 +1501,7 @@ pre, code, .mono, .num {
   <section class="mil-split" aria-label="处理记录与线程详情">
     <div class="mil-panel" id="threads-panel">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">THREADS · 处理记录</span></div>
+        <div class="mil-head-l"><span class="mil-silk">ACTIVITY · 近期活动</span></div>
         <div class="mil-head-r">
           <div class="mil-seg" id="th-filters" role="group" aria-label="线程状态筛选">
             <button type="button" class="mil-key mil-key--sm" data-th-filter="all" aria-pressed="true">全部</button>
@@ -1519,7 +1519,7 @@ pre, code, .mono, .num {
     <div class="mil-panel" id="inspector-panel">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk">INSPECTOR · 线程现场</span>
+          <span class="mil-silk">LIVE · 活动现场</span>
           <span class="mil-tag" id="ins-state-tag">—</span>
         </div>
         <div class="mil-head-r" id="ins-meta-tags"></div>
@@ -1540,8 +1540,8 @@ pre, code, .mono, .num {
       </div>
 
       <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
-        <label class="mil-label" for="message">给原线程递纸条 / 补充方向（按线程独立暂存草稿）</label>
-        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="补充约束、指正路线，或让正在工作的线程立即转向（Ctrl/Cmd + Enter 发送）"></textarea>
+        <label class="mil-label" for="message">对当前活动搭句话 / 补充方向（按活动独立暂存草稿）</label>
+        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="顺口补充想法、调整方向，或让正在进行的她立即转向（Ctrl/Cmd + Enter 发送）"></textarea>
         <div class="mil-row" style="justify-content:space-between">
           <label class="mil-switch">
             <input type="checkbox" id="steer">
@@ -1558,44 +1558,44 @@ pre, code, .mono, .num {
     </div>
   </section>
 
-  <!-- 5. 发起新工作流控制台 -->
-  <section class="mil-panel" id="launch-panel" aria-label="发起工作流">
-    <div class="mil-head">
+  <!-- 5. 临时唤醒能力（默认收起，日常由对话与脉搏自主触发） -->
+  <details class="mil-panel" id="launch-panel" aria-label="临时唤醒能力">
+    <summary class="mil-head" style="cursor:pointer;list-style:none;margin-bottom:0;padding-bottom:2px;border-bottom:0;box-shadow:none">
       <div class="mil-head-l">
-        <span class="mil-silk">LAUNCH · 发起工作流</span>
-        <span class="mil-hint">由管理员直接从现场调起任意能力档案或持久工作区</span>
+        <span class="mil-silk">▸ WAKE · 临时唤醒某项能力</span>
+        <span class="mil-hint">可选旁路入口：日常由对话与脉搏自主触发，管理员也可在此直接点名唤醒</span>
       </div>
-      <div class="mil-head-r">
-        <div class="mil-row" id="launch-profile-chips"></div>
-        <span class="mil-vent" aria-hidden="true"></span>
+      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+    </summary>
+    <div style="margin-top:12px;padding-top:12px;border-top:2px solid var(--mil-lo)">
+      <div class="mil-row" id="launch-profile-chips" style="margin-bottom:10px"></div>
+      <div class="launch-grid" style="margin-bottom:10px">
+        <div class="mil-field">
+          <label class="mil-label" for="launch-profile">能力档案</label>
+          <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
+          <datalist id="launch-profile-list"></datalist>
+        </div>
+        <div class="mil-field">
+          <label class="mil-label" for="launch-chat">关联会话（支持 self 自身活动）</label>
+          <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="输入 chat_id 或 self">
+          <datalist id="launch-chat-list"></datalist>
+        </div>
+        <div class="mil-field">
+          <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
+          <input id="launch-workspace" class="mil-input mono" placeholder="例如 digest_daily">
+        </div>
       </div>
+      <div class="mil-field" style="margin-bottom:10px">
+        <label class="mil-label" for="launch-prompt">想让她了解或推进的事</label>
+        <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="写下想让她关注或探索的事情（Ctrl/Cmd + Enter 唤醒）"></textarea>
+      </div>
+      <div class="mil-row" style="justify-content:space-between">
+        <div class="mil-row" id="launch-chat-chips"></div>
+        <button type="button" class="mil-key mil-key--hot" id="launch-run">立即唤醒</button>
+      </div>
+      <div class="mil-feedback" id="launch-feedback" style="margin-top:8px" aria-live="polite"></div>
     </div>
-    <div class="launch-grid" style="margin-bottom:10px">
-      <div class="mil-field">
-        <label class="mil-label" for="launch-profile">能力档案</label>
-        <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
-        <datalist id="launch-profile-list"></datalist>
-      </div>
-      <div class="mil-field">
-        <label class="mil-label" for="launch-chat">目标会话（支持 self 自身活动）</label>
-        <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="输入 chat_id 或 self">
-        <datalist id="launch-chat-list"></datalist>
-      </div>
-      <div class="mil-field">
-        <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
-        <input id="launch-workspace" class="mil-input mono" placeholder="例如 digest_daily">
-      </div>
-    </div>
-    <div class="mil-field" style="margin-bottom:10px">
-      <label class="mil-label" for="launch-prompt">任务提示词</label>
-      <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="交代要查证、创作或持续推进的事情（Ctrl/Cmd + Enter 发起）"></textarea>
-    </div>
-    <div class="mil-row" style="justify-content:space-between">
-      <div class="mil-row" id="launch-chat-chips"></div>
-      <button type="button" class="mil-key mil-key--hot" id="launch-run">直接发起工作流</button>
-    </div>
-    <div class="mil-feedback" id="launch-feedback" style="margin-top:8px" aria-live="polite"></div>
-  </section>
+  </details>
 
 </div>
 
@@ -2517,6 +2517,7 @@ pre, code, .mono, .num {
 
   $("#open-launch").onclick = () => {
     const panel = $("#launch-panel");
+    panel.open = true;
     panel.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "center" });
     $("#launch-prompt").focus();
   };
@@ -2533,7 +2534,7 @@ pre, code, .mono, .num {
   $("#launch-prompt").addEventListener("keydown", (ev) => {
     if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
       ev.preventDefault();
-      $("#launch-btn").click();
+      $("#launch-run").click();
     }
   });
 
