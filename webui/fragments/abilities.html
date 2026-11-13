@@ -1,70 +1,130 @@
 <div class="mil-split">
-  <!-- 左栏：能力档案名册 -->
-  <aside class="mil-panel">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">PROFILES · 能力名册</span></div>
-      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
-    </div>
-    <div id="profiles" class="mil-screen ab-roster" style="margin-bottom:10px"></div>
-    <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
-      <div class="mil-field">
-        <label class="mil-label" for="new-id">新建或克隆档案编号（仅英文/数字/下划线）</label>
-        <input id="new-id" class="mil-input mono" placeholder="例如 painter">
+  <!-- 左栏：技能库（第一公民）+ 角色名册 -->
+  <aside style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">SKILLS · 技能库</span>
+          <span class="mil-tag num" id="skills-count">0 项</span>
+        </div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
       </div>
-      <div class="mil-row">
-        <button id="toggle-profile-enabled" class="mil-key mil-key--sm" type="button">停用所选</button>
-        <button id="clone" class="mil-key mil-key--sm" type="button">从所选能力克隆</button>
-        <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除所选能力</button>
+      <div class="mil-field" style="margin-bottom:8px">
+        <input id="skill-filter" class="mil-input" placeholder="搜索技能名称、编号或用途…" aria-label="筛选技能">
       </div>
-      <p class="mil-hint">能力档案控制某个独立 Agent 的人设说明、模型、工具权限与方法笔记。</p>
-    </div>
+      <div id="skills-roster" class="mil-screen ab-roster" style="max-height:290px;margin-bottom:10px"></div>
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+        <div class="mil-field">
+          <label class="mil-label" for="new-skill-id">新建或复制技能编号（英文/数字/连字符/下划线）</label>
+          <input id="new-skill-id" class="mil-input mono" placeholder="例如 source-audit">
+        </div>
+        <div class="mil-row">
+          <button id="create-skill" class="mil-key mil-key--sm mil-key--hot" type="button">新建技能</button>
+          <button id="clone-skill" class="mil-key mil-key--sm" type="button">复制所选</button>
+          <button id="reset-skill" class="mil-key mil-key--sm" type="button" hidden>重置预设</button>
+          <button id="delete-skill" class="mil-key mil-key--sm mil-key--danger" type="button">删除技能</button>
+        </div>
+        <div class="mil-row" style="justify-content:space-between">
+          <span class="mil-label">导入 SKILL.md</span>
+          <input type="file" id="skill-file" accept=".md,.txt,text/markdown" aria-label="导入 SKILL.md 文件" style="font-size:12px;max-width:100%">
+        </div>
+        <p class="mil-hint">技能（Skill）是可复用的能力单元，可自由编写并一键装配给多个角色。</p>
+      </div>
+    </section>
+
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">ROLES · 角色名册</span>
+          <span class="mil-tag num" id="roles-count">0 个</span>
+        </div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div id="profiles" class="mil-screen ab-roster" style="max-height:250px;margin-bottom:10px"></div>
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+        <div class="mil-field">
+          <label class="mil-label" for="new-id">新建或克隆角色编号（仅英文/数字/下划线）</label>
+          <input id="new-id" class="mil-input mono" placeholder="例如 painter">
+        </div>
+        <div class="mil-row">
+          <button id="toggle-profile-enabled" class="mil-key mil-key--sm" type="button">停用所选</button>
+          <button id="clone" class="mil-key mil-key--sm" type="button">从所选角色克隆</button>
+          <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除所选角色</button>
+        </div>
+        <p class="mil-hint">角色控制某个独立执行器的定位、模型、工具权限与方法笔记。</p>
+      </div>
+    </section>
   </aside>
 
-  <!-- 右栏：档案与技能工作台 -->
+  <!-- 右栏：技能与角色工作台 -->
   <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
     <section class="mil-panel">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk">EDITOR · 档案与技能工作台</span>
+          <span class="mil-silk" id="editor-silk">SKILL · 技能工作台</span>
+          <span class="mil-tag mono" id="active-target-tag">—</span>
           <span class="mil-tag" id="version">v0</span>
           <span class="mil-tag mil-tag--warn" id="dirty-tag" hidden>未保存</span>
         </div>
         <div class="mil-head-r">
           <div class="mil-seg" role="tablist" aria-label="编辑文档类型">
-            <button type="button" class="mil-key mil-key--sm" data-doc-tab="profile" aria-pressed="true">能力说明</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="skill" aria-pressed="true">技能定义</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="profile" aria-pressed="false">角色说明</button>
             <button type="button" class="mil-key mil-key--sm" data-doc-tab="config" aria-pressed="false">模型与权限配置</button>
             <button type="button" class="mil-key mil-key--sm" data-doc-tab="notes" aria-pressed="false">方法笔记</button>
-            <button type="button" class="mil-key mil-key--sm" data-doc-tab="skill" aria-pressed="false">全局技能</button>
           </div>
           <select id="document" class="mil-select sr-only" aria-label="编辑文档类型">
-            <option value="profile">能力说明</option>
+            <option value="skill" selected>技能定义</option>
+            <option value="profile">角色说明</option>
             <option value="config">模型与权限配置</option>
             <option value="notes">方法笔记</option>
-            <option value="skill">全局技能</option>
           </select>
         </div>
       </div>
 
-      <!-- 技能选择器（编辑全局技能时高亮） -->
-      <div id="skill-bar" class="mil-screen" style="margin-bottom:10px" hidden>
-        <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
-          <span class="mil-label">已登记全局技能（点击快速载入，或输入新编号创建）</span>
-          <button id="delete-skill" class="mil-key mil-key--sm mil-key--danger" type="button">删除该技能</button>
+      <input id="skill-id" type="hidden">
+
+      <!-- SKILL.md 可视化元信息与角色装配 -->
+      <div id="skill-visual" class="mil-screen" style="margin-bottom:10px">
+        <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
+          <span class="mil-silk">SKILL META · 技能元信息与角色装配（实时同步下方 SKILL.md）</span>
+          <button type="button" class="mil-key mil-key--sm" id="copy-skill">复制 SKILL.md</button>
         </div>
-        <div class="mil-row" id="skill-chips" style="margin-bottom:6px"></div>
-        <input id="skill-id" class="mil-input mono" list="skill-list" placeholder="输入或选择技能编号，例如 daily-briefing">
-        <datalist id="skill-list"></datalist>
+        <div class="mil-grid-2" style="margin-bottom:8px">
+          <div class="mil-field">
+            <label class="mil-label" for="sk-meta-name">技能名称 (frontmatter name)</label>
+            <input id="sk-meta-name" class="mil-input mono" placeholder="如 news-digest">
+          </div>
+          <div class="mil-field">
+            <label class="mil-label" for="sk-meta-desc">用途简述 (frontmatter description)</label>
+            <input id="sk-meta-desc" class="mil-input" placeholder="一句话说明何时启用与能力边界">
+          </div>
+        </div>
+        <div class="mil-field" style="margin-bottom:8px">
+          <span class="mil-label">装配到角色（勾选即生效）</span>
+          <div class="mil-row" id="sk-role-bindings"></div>
+        </div>
+        <div class="mil-row" style="gap:6px">
+          <span class="mil-label">结构模板片段</span>
+          <button type="button" class="mil-key mil-key--sm" data-sk-snippet="scene">+ 适用场景</button>
+          <button type="button" class="mil-key mil-key--sm" data-sk-snippet="steps">+ 执行步骤</button>
+          <button type="button" class="mil-key mil-key--sm" data-sk-snippet="guard">+ 质量边界</button>
+        </div>
+        <details id="skill-copy-drawer" style="margin-top:8px" hidden>
+          <summary class="mil-label" style="cursor:pointer">手动复制 SKILL.md（沙箱受限时可全选复制）</summary>
+          <textarea id="skill-copy-box" class="mil-textarea mil-textarea--code" style="margin-top:6px" rows="4" readonly aria-label="SKILL.md 复制框"></textarea>
+        </details>
       </div>
 
       <!-- profile.toml 可视化配置器 -->
       <div id="cfg-visual" class="mil-screen" style="margin-bottom:10px" hidden>
         <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
-          <span class="mil-silk">VISUAL CONFIG · 可视化能力配置（实时同步下方 TOML）</span>
+          <span class="mil-silk">VISUAL CONFIG · 可视化角色配置（实时同步下方 TOML）</span>
           <span class="mil-hint">常见字段直接点选；复杂数组仍在下方源码完整保留</span>
         </div>
         <div class="mil-grid-2" style="margin-bottom:8px">
           <div class="mil-field" style="grid-column:1/-1">
-            <label class="mil-chk"><input type="checkbox" id="cfg-enabled"><span>启用此能力档案（关闭后对话、脉搏与外部通道均不触发）</span></label>
+            <label class="mil-chk"><input type="checkbox" id="cfg-enabled"><span>启用此角色（关闭后对话、脉搏与外部通道均不触发）</span></label>
           </div>
           <div class="mil-field"><label class="mil-label" for="cfg-title">显示标题</label><input id="cfg-title" class="mil-input"></div>
           <div class="mil-field"><label class="mil-label" for="cfg-env">运行环境</label><select id="cfg-env" class="mil-select"><option value="readonly">readonly（无容器轻量环境）</option><option value="sandbox">sandbox（Docker 隔离沙箱）</option></select></div>
@@ -80,7 +140,7 @@
           <div class="mil-row" id="cfg-tools"></div>
         </div>
         <div class="mil-field">
-          <span class="mil-label">绑定全局技能 (skills)</span>
+          <span class="mil-label">装配全局技能 (skills)</span>
           <div class="mil-row" id="cfg-skills"></div>
         </div>
       </div>
@@ -112,22 +172,22 @@
     </section>
 
     <div class="mil-grid-2">
-      <!-- 档案包导入导出 -->
+      <!-- 角色包导入导出 -->
       <section class="mil-panel">
         <div class="mil-head">
-          <div class="mil-head-l"><span class="mil-silk">PACKAGE · 档案包导入导出</span></div>
-          <div class="mil-head-r"><button id="export" class="mil-key mil-key--sm" type="button">导出所选能力</button></div>
+          <div class="mil-head-l"><span class="mil-silk">PACKAGE · 角色包导入导出</span></div>
+          <div class="mil-head-r"><button id="export" class="mil-key mil-key--sm" type="button">导出所选角色</button></div>
         </div>
         <details id="package-panel" open>
           <summary class="mil-label" style="cursor:pointer;margin-bottom:8px">包文本与 ZIP 导入（凭据句柄需在本机重新绑定）</summary>
           <div style="display:flex;flex-direction:column;gap:8px">
-            <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="4" aria-label="档案包文本" placeholder="点击「导出所选能力」生成包文本，或粘贴来自其他 Maisya 的包文本"></textarea>
+            <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="4" aria-label="角色包文本" placeholder="点击「导出所选角色」生成包文本，或粘贴来自其他 Maisya 的角色包文本"></textarea>
             <div class="mil-row">
               <button id="select-package" class="mil-key mil-key--sm" type="button">选中包文本</button>
-              <input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 档案包" style="font-size:12px;max-width:100%">
+              <input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 角色包" style="font-size:12px;max-width:100%">
             </div>
             <div class="mil-row">
-              <input id="import-id" class="mil-input mono" style="flex:1 1 140px" placeholder="导入后的新能力编号，例如 imported-artist">
+              <input id="import-id" class="mil-input mono" style="flex:1 1 140px" placeholder="导入后的新角色编号，例如 imported-artist">
               <button id="import" class="mil-key mil-key--sm mil-key--hot" type="button">导入包文本</button>
             </div>
           </div>

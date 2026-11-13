@@ -974,7 +974,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_shape",
-        description="管理员明确指正做法或立规矩时，读取、创建、修改、删除或回滚能力档案、技能与本会话办事备忘（memory）。先 read 获取版本，write/rollback 提供 expected_version；群友日常聊天记忆由宿主自动沉淀，具体会话约定仅写当前会话 memory。",
+        description="管理员明确指正做法或立规矩时，读取、创建、修改、删除或回滚角色、技能与本会话办事备忘（memory）。先 read 获取版本，write/rollback 提供 expected_version；群友日常聊天记忆由宿主自动沉淀，具体会话约定仅写当前会话 memory。",
         parameters={
             "type": "object",
             "properties": {
@@ -1089,7 +1089,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_later",
-        description="为之后安排一次想起、定时任务或定期运行某能力档案工作流。schedule 安排，list 查看，cancel 取消。",
+        description="为之后安排一次想起、定时任务或定期运行某角色工作流。schedule 安排，list 查看，cancel 取消。",
         parameters={
             "type": "object",
             "properties": {
@@ -1186,7 +1186,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     if not await asyncio.to_thread(
                         self.authorize, source_msg_id, chat_id, platform
                     ):
-                        raise PermissionError("定期运行受限能力档案需要真实管理员消息授权")
+                        raise PermissionError("定期运行受限角色需要真实管理员消息授权")
                     scheduled_admin = True
             if thread_id:
                 row = await asyncio.to_thread(
@@ -1896,7 +1896,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 if not self.engine or not self.profiles:
                     raise RuntimeError("Maisya 尚未就绪")
                 if not profile or not chat_id:
-                    raise ValueError("直接发起线程需要选择能力档案与目标会话")
+                    raise ValueError("直接发起线程需要选择角色与目标会话")
                 target_chat = str(chat_id)
                 target_platform = (
                     "self"

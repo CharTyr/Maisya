@@ -50,16 +50,16 @@ class AgentRuntime(Scout):
 
     def available(self, profile):
         if not profile.enabled:
-            raise PermissionError("能力档案已停用")
+            raise PermissionError("角色已停用")
         if (
             self.memory
             and (self.memory.profiles.path / profile.id / "profile.toml").is_file()
         ):
             live = self.memory.profiles.get(profile.id)
             if not live.enabled:
-                raise PermissionError("能力档案已停用")
+                raise PermissionError("角色已停用")
         if not profile.bound:
-            raise PermissionError("能力档案的服务或凭据尚未绑定")
+            raise PermissionError("角色的服务或凭据尚未绑定")
         if profile.environment == "sandbox" and not self.sandbox.ready:
             raise RuntimeError(self.sandbox.error or "沙箱尚未就绪")
         if (
@@ -78,7 +78,7 @@ class AgentRuntime(Scout):
                 or profile.template
                 and profile.template not in configuration.get("templates", {})
             ):
-                raise PermissionError("能力档案引用的服务、模板或只读 API 尚未登记")
+                raise PermissionError("角色引用的服务、模板或只读 API 尚未登记")
 
     async def step(self, profile, history, *, max_steps=None):
         self.available(profile)
@@ -327,7 +327,7 @@ class AgentRuntime(Scout):
             raise PermissionError("本次活动的管理员授权已失效")
         if name in {"workspace_file", "html_render", "result_attach", "digest_feed"}:
             if not profile.uses_workspace:
-                raise PermissionError("当前能力档案未启用工作区工具")
+                raise PermissionError("当前角色未启用工作区工具")
             work = await self._work(context)
             if name == "digest_feed":
                 from .digest import run_digest_tool
@@ -414,7 +414,7 @@ class AgentRuntime(Scout):
             return {"attachments": attachments}
         if name == "sandbox_exec":
             if profile.environment != "sandbox":
-                raise PermissionError("当前能力档案未启用容器沙箱执行")
+                raise PermissionError("当前角色未启用容器沙箱执行")
             if (
                 profile.secrets
                 or profile.network == "restricted"

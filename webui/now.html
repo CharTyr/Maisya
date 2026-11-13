@@ -1412,7 +1412,7 @@ pre, code, .mono, .num {
         <span class="mil-led" id="top-led"></span>
         <span id="top-state-text">待命</span>
       </div>
-      <button type="button" class="mil-key" id="open-launch">唤醒能力</button>
+      <button type="button" class="mil-key" id="open-launch">唤醒角色</button>
     </div>
   </header>
 
@@ -1439,7 +1439,7 @@ pre, code, .mono, .num {
         <div class="fl-list" id="fl-gate"></div>
       </div>
       <div class="fl-col">
-        <div class="fl-col-h"><span>03 能力执行器 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-prof">0</span></div>
+        <div class="fl-col-h"><span>03 角色 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-prof">0</span></div>
         <div class="fl-list" id="fl-profiles"></div>
       </div>
       <div class="fl-col">
@@ -1572,7 +1572,7 @@ pre, code, .mono, .num {
 
       <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
         <label class="mil-label" for="message">对当前活动搭句话 / 补充方向（按活动独立暂存草稿）</label>
-        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="顺口补充想法、调整方向，或让正在进行的她立即转向（Ctrl/Cmd + Enter 发送）"></textarea>
+        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="顺口补充想法、调整方向，或让当前活动立即转向（Ctrl/Cmd + Enter 发送）"></textarea>
         <div class="mil-row" style="justify-content:space-between">
           <label class="mil-switch">
             <input type="checkbox" id="steer">
@@ -1589,11 +1589,11 @@ pre, code, .mono, .num {
     </div>
   </section>
 
-  <!-- 5. 临时唤醒能力（默认收起，日常由对话与脉搏自主触发） -->
-  <details class="mil-panel" id="launch-panel" aria-label="临时唤醒能力">
+  <!-- 5. 临时唤醒角色（默认收起，日常由对话与脉搏自主触发） -->
+  <details class="mil-panel" id="launch-panel" aria-label="临时唤醒角色">
     <summary class="mil-head" style="cursor:pointer;list-style:none;margin-bottom:0;padding-bottom:2px;border-bottom:0;box-shadow:none">
       <div class="mil-head-l">
-        <span class="mil-silk">▸ WAKE · 临时唤醒某项能力</span>
+        <span class="mil-silk">▸ WAKE · 临时唤醒某个角色</span>
         <span class="mil-hint">可选旁路入口：日常由对话与脉搏自主触发，管理员也可在此直接点名唤醒</span>
       </div>
       <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
@@ -1602,7 +1602,7 @@ pre, code, .mono, .num {
       <div class="mil-row" id="launch-profile-chips" style="margin-bottom:10px"></div>
       <div class="launch-grid" style="margin-bottom:10px">
         <div class="mil-field">
-          <label class="mil-label" for="launch-profile">能力档案</label>
+          <label class="mil-label" for="launch-profile">执行角色</label>
           <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
           <datalist id="launch-profile-list"></datalist>
         </div>
@@ -1617,8 +1617,8 @@ pre, code, .mono, .num {
         </div>
       </div>
       <div class="mil-field" style="margin-bottom:10px">
-        <label class="mil-label" for="launch-prompt">想让她了解或推进的事</label>
-        <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="写下想让她关注或探索的事情（Ctrl/Cmd + Enter 唤醒）"></textarea>
+        <label class="mil-label" for="launch-prompt">想推进或了解的事</label>
+        <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="写下想关注或探索的事情（Ctrl/Cmd + Enter 唤醒）"></textarea>
       </div>
       <div class="mil-row" style="justify-content:space-between">
         <div class="mil-row" id="launch-chat-chips"></div>
@@ -1655,7 +1655,7 @@ pre, code, .mono, .num {
   const $ = (sel) => document.querySelector(sel);
 
   const CATS = {
-    system: { name: "能力说明", color: "var(--ctx-system)" },
+    system: { name: "角色与技能", color: "var(--ctx-system)" },
     memory: { name: "手账备忘", color: "var(--ctx-memory)" },
     user: { name: "输入", color: "var(--ctx-user)" },
     assistant: { name: "推理结论", color: "var(--ctx-assistant)" },
@@ -2300,7 +2300,7 @@ pre, code, .mono, .num {
     const rowSummary = (snap.threads || []).find((t) => t.thread_id === sel.thread_id);
     const st = STATE_LABEL[sel.state] || [sel.state || "未知", "", ""];
     $("#title").textContent = rowSummary?.title || sel.thread_id;
-    $("#meta").textContent = `${sel.thread_id} · 会话 ${sel.chat_id} · 能力 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
+    $("#meta").textContent = `${sel.thread_id} · 会话 ${sel.chat_id} · 角色 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
     $("#ins-state-tag").textContent = st[0];
     $("#ins-state-tag").className = `mil-tag ${st[1]}`;
     $("#ins-meta-tags").innerHTML = [

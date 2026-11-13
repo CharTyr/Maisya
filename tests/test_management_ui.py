@@ -102,6 +102,48 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         assert await page.locator("iframe").count() == 0
                     elif name == "abilities":
                         await expect(
+                            page.locator('[data-skill="news-digest"]')
+                        ).to_be_visible()
+                        await expect(
+                            page.locator('[data-skill="news-digest"]')
+                        ).to_contain_text("资讯简报")
+                        await expect(
+                            page.locator('[data-skill="source-checking"]')
+                        ).to_be_visible()
+                        await page.locator("#skill-filter").fill("资讯")
+                        await expect(
+                            page.locator('[data-skill="news-digest"]')
+                        ).to_be_visible()
+                        assert (
+                            await page.locator('[data-skill="source-checking"]').count()
+                            == 0
+                        )
+                        await page.locator("#skill-filter").fill("")
+                        await expect(
+                            page.locator('[data-skill="source-checking"]')
+                        ).to_be_visible()
+                        await page.locator("#new-skill-id").fill("ui-skill")
+                        await page.locator("#create-skill").click()
+                        await expect(
+                            page.locator('[data-skill="ui-skill"]')
+                        ).to_be_visible()
+                        await page.locator("#sk-meta-desc").fill("界面创建的核验技能")
+                        await page.locator("#save").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
+                        await page.locator('[data-bind-role="scout"]').check()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已将技能 ui-skill 装配给角色 scout"
+                        )
+                        assert "ui-skill" in plugin.profiles.get("scout").skills
+                        await page.locator("#delete-skill").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已删除技能 ui-skill"
+                        )
+                        assert "ui-skill" not in plugin.profiles.get("scout").skills
+
+                        await expect(
                             page.locator('[data-profile="digest"]')
                         ).to_contain_text("已停用")
                         await page.locator('[data-profile="digest"]').click()
@@ -174,14 +216,14 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await page.locator("#new-id").fill("ui_temp")
                         await page.locator("#clone").click()
                         await expect(page.locator("#feedback")).to_contain_text(
-                            "新能力已创建"
+                            "新角色已创建"
                         )
                         await expect(
                             page.locator('[data-profile="ui_temp"]')
                         ).to_be_visible()
                         await page.locator("#delete-profile").click()
                         await expect(page.locator("#feedback")).to_contain_text(
-                            "已删除所选能力档案"
+                            "已删除所选角色"
                         )
                         assert await page.locator('[data-profile="ui_temp"]').count() == 0
                     elif name == "memory":

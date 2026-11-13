@@ -58,12 +58,12 @@ class Incoming:
             if has_profile:
                 ability = self.plugin.profiles.get(channel["profile"])
                 if strict_enabled and not ability.enabled:
-                    raise ValueError("事件通道绑定的能力档案已停用")
+                    raise ValueError("事件通道绑定的角色已停用")
                 allowed = (
                     ability.autonomous if strict_enabled else ability.autonomous_config
                 )
                 if not allowed:
-                    raise ValueError("事件通道绑定的能力档案必须允许自主使用")
+                    raise ValueError("事件通道绑定的角色必须允许自主使用")
             elif channel.get("kind") == "silent":
                 chat = channel["target"].split(":", 1)[1]
                 row = self.plugin.threads.get(
@@ -143,7 +143,7 @@ class Incoming:
                 )
                 self.plugin.runtime.available(ability)
                 if not ability.autonomous:
-                    raise PermissionError("事件通道绑定的能力档案不允许自主执行")
+                    raise PermissionError("事件通道绑定的角色不允许自主执行")
                 redacted_event = self.plugin.vault.redact(event)
                 reason_text = (
                     self.plugin.vault.redact(event.get("reason", ""))

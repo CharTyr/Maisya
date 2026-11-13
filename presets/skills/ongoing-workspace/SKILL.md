@@ -1,3 +1,8 @@
+---
+name: ongoing-workspace
+description: 持续工作区协作技能：规范 in/project/out/cache 目录分工、跨轮状态续接与节拍唤醒约定。
+---
+
 ## 持续工作区与多步协作约定
 
 1. **先列目录再动手**：进入或续接命名工作区时，先调用 `workspace_file(action="list")` 查看已有文件，避免覆盖已有进度。

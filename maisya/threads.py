@@ -93,7 +93,7 @@ class ThreadStore:
                 ).fetchone()
                 if binding:
                     if binding["profile"] != profile.id:
-                        raise ValueError("该工作区已绑定另一个能力档案")
+                        raise ValueError("该工作区已绑定另一个角色")
                     previous = db.execute(
                         "SELECT state,profile_snapshot FROM agent_threads WHERE thread_id=?",
                         (binding["thread_id"],),
@@ -950,7 +950,7 @@ class ThreadEngine:
                                     result = {"question": question, "waiting": True}
                                 else:
                                     if name not in profile.tools:
-                                        raise ValueError("当前能力档案未授权此工具")
+                                        raise ValueError("当前角色未授权此工具")
                                     result = await self.runtime.call(
                                         name,
                                         arguments,
@@ -1047,7 +1047,7 @@ class ThreadEngine:
             raise
         except Exception as error:
             safe_errors = {
-                "当前能力档案的模型均未返回可用结果",
+                "当前角色的模型均未返回可用结果",
                 "线程达到本轮探索步数上限",
                 "模型没有给出结果",
             }

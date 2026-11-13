@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
 from .config import Settings
-from .memory import MemoryLayers
+from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
 from .scout import call_capability
 from .share import links_in
 from .services import (
@@ -156,15 +156,102 @@ class Management:
                     profiles.append(
                         {"id": path.name, "title": path.name, "error": str(error)}
                     )
-        skills = plugin.data_root / "abilities/skills"
+        skills_dir = plugin.data_root / "abilities/skills"
+        skill_ids = (
+            [
+                p.name
+                for p in sorted(skills_dir.iterdir())
+                if p.is_dir() and not p.is_symlink()
+            ][:100]
+            if skills_dir.is_dir()
+            else []
+        )
+        preset_set = plugin.memory.preset_skills()
+        with plugin.threads.connect() as db:
+            skill_versions = {
+                row["target"]: (row["version"], row["updated"])
+                for row in db.execute(
+                    "SELECT v.target, v.version, v.updated FROM memory_versions v "
+                    "JOIN (SELECT asset, MAX(version) AS version FROM memory_versions WHERE kind='skill' GROUP BY asset) latest "
+                    "ON v.asset=latest.asset AND v.version=latest.version"
+                )
+            }
+        skill_items = []
+        for skill_id in skill_ids:
+            skill_file = skills_dir / skill_id / "SKILL.md"
+            raw = (
+                MemoryLayers._bytes(skill_file).decode("utf-8", errors="replace")
+                if skill_file.exists() and not skill_file.is_symlink()
+                else ""
+            )
+            meta = parse_skill_meta(skill_id, raw)
+            is_preset = skill_id in preset_set
+            preset_raw = (
+                (PRESETS_DIR / "skills" / skill_id / "SKILL.md").read_text("utf-8")
+                if is_preset
+                else ""
+            )
+            ver, updated = skill_versions.get(skill_id, (0, 0.0))
+            skill_items.append(
+                {
+                    "id": skill_id,
+                    "name": meta["name"],
+                    "title": meta["title"],
+                    "description": meta["description"],
+                    "has_frontmatter": meta["has_frontmatter"],
+                    "is_preset": is_preset,
+                    "is_modified": bool(is_preset and raw.strip() != preset_raw.strip()),
+                    "used_by": [
+                        p["id"] for p in profiles if skill_id in (p.get("skills") or [])
+                    ],
+                    "chars": len(raw),
+                    "version": ver,
+                    "updated": updated,
+                }
+            )
         return {
             "profiles": profiles[:100],
-            "skills": [
-                p.name
-                for p in sorted(skills.iterdir())
-                if p.is_dir() and not p.is_symlink()
-            ][:100],
+            "skills": skill_ids,
+            "skill_items": skill_items,
             "handles": plugin.vault.handles(),
+        }
+
+    def _set_profile_skill_binding(
+        self, profile_id: str, skill_id: str, bound: bool
+    ) -> dict:
+        if bound and skill_id not in self.plugin.memory.skills():
+            raise ValueError("技能不存在")
+        profile = self.plugin.profiles.get(profile_id)
+        current = self.plugin.memory.read(
+            "profile", target=profile_id, document="profile.toml"
+        )
+        existing = list(profile.skills)
+        if bound:
+            next_skills = existing if skill_id in existing else [*existing, skill_id]
+        else:
+            next_skills = [item for item in existing if item != skill_id]
+        formatted = "skills = " + json.dumps(next_skills, ensure_ascii=False)
+        text = current["content"]
+        if re.search(r"(?ms)^skills\s*=\s*\[.*?\]", text):
+            updated = re.sub(
+                r"(?ms)^skills\s*=\s*\[.*?\]", formatted, text, count=1
+            )
+        else:
+            updated = (text.rstrip("\n") + "\n" + formatted + "\n").lstrip("\n")
+        saved = self.plugin.memory.write(
+            "profile",
+            updated,
+            target=profile_id,
+            document="profile.toml",
+            expected_version=current["version"],
+            allow_custom=True,
+        )
+        return {
+            "profile": profile_id,
+            "skill": skill_id,
+            "bound": bound,
+            "skills": next_skills,
+            "version": saved["version"],
         }
 
     def _settings(self):
@@ -826,10 +913,53 @@ class Management:
             target = str(options.get("target") or "").strip()
             await completed_thread(plugin.profiles.delete, target)
             result = {"id": target}
+        elif action == "create_skill":
+            target = str(options.get("target") or "").strip()
+            created = await completed_thread(
+                plugin.memory.create_skill,
+                target,
+                base=str(options.get("base") or "").strip(),
+                title=str(options.get("title") or "").strip(),
+                description=str(options.get("description") or "").strip(),
+                content=str(options.get("content") or ""),
+                allow_custom=True,
+            )
+            result = {"id": created["target"], "version": created["version"]}
+        elif action == "reset_skill":
+            target = str(options.get("target") or "").strip()
+            reset = await completed_thread(plugin.memory.reset_skill, target)
+            result = {"target": target, "version": reset["version"]}
+        elif action == "bind_skill":
+            skill_id = str(options.get("skill") or "").strip()
+            profile_id = str(options.get("profile") or "").strip()
+            bound = options.get("bound")
+            if not skill_id or not profile_id or type(bound) is not bool:
+                raise ValueError("bind_skill 需要提供 skill、profile 与布尔值 bound")
+            result = await completed_thread(
+                self._set_profile_skill_binding, profile_id, skill_id, bound
+            )
         elif action == "delete_skill":
             target = str(options.get("target") or "").strip()
-            await completed_thread(plugin.memory.delete_skill, target)
-            result = {"target": target}
+            if target in plugin.memory.preset_skills():
+                raise ValueError("预设技能不可删除，可点击「重置预设」恢复默认内容")
+
+            def _unbind_and_delete():
+                unbound = []
+                for path in sorted(plugin.profiles.path.iterdir()):
+                    if not path.is_dir() or path.is_symlink():
+                        continue
+                    try:
+                        prof = plugin.profiles.get(path.name)
+                    except (ValueError, OSError):
+                        continue
+                    if target in prof.skills:
+                        self._set_profile_skill_binding(prof.id, target, False)
+                        unbound.append(prof.id)
+                plugin.memory.delete_skill(target)
+                return unbound
+
+            unbound = await completed_thread(_unbind_and_delete)
+            result = {"target": target, "unbound": unbound}
         elif action == "vault":
             if options.get("delete") is True:
                 await completed_thread(plugin.vault.delete, options["handle"])
@@ -887,7 +1017,7 @@ class Management:
             if profile_name:
                 ability = await completed_thread(plugin.profiles.get, profile_name)
                 if not ability.enabled:
-                    raise ValueError("能力档案已停用，请先在「能力」页开启后再加入计划")
+                    raise ValueError("角色已停用，请先在「能力」页开启后再加入计划")
             prompt = str(options.get("prompt") or "").strip()
             reason = str(options.get("reason") or prompt).strip()
             if not reason:

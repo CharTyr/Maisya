@@ -843,6 +843,16 @@ pre, code, .mono, .num {
   color: var(--mil-on-ink);
   box-shadow: inset 0 -1px 0 var(--mil-on-side);
 }
+.ab-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  opacity: 0.88;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 
 .set-list {
   display: flex;
@@ -1072,72 +1082,132 @@ pre, code, .mono, .num {
   <div class="mil-feedback" id="feedback" aria-live="polite"></div>
 
   <div class="mil-split">
-  <!-- 左栏：能力档案名册 -->
-  <aside class="mil-panel">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">PROFILES · 能力名册</span></div>
-      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
-    </div>
-    <div id="profiles" class="mil-screen ab-roster" style="margin-bottom:10px"></div>
-    <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
-      <div class="mil-field">
-        <label class="mil-label" for="new-id">新建或克隆档案编号（仅英文/数字/下划线）</label>
-        <input id="new-id" class="mil-input mono" placeholder="例如 painter">
+  <!-- 左栏：技能库（第一公民）+ 角色名册 -->
+  <aside style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">SKILLS · 技能库</span>
+          <span class="mil-tag num" id="skills-count">0 项</span>
+        </div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
       </div>
-      <div class="mil-row">
-        <button id="toggle-profile-enabled" class="mil-key mil-key--sm" type="button">停用所选</button>
-        <button id="clone" class="mil-key mil-key--sm" type="button">从所选能力克隆</button>
-        <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除所选能力</button>
+      <div class="mil-field" style="margin-bottom:8px">
+        <input id="skill-filter" class="mil-input" placeholder="搜索技能名称、编号或用途…" aria-label="筛选技能">
       </div>
-      <p class="mil-hint">能力档案控制某个独立 Agent 的人设说明、模型、工具权限与方法笔记。</p>
-    </div>
+      <div id="skills-roster" class="mil-screen ab-roster" style="max-height:290px;margin-bottom:10px"></div>
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+        <div class="mil-field">
+          <label class="mil-label" for="new-skill-id">新建或复制技能编号（英文/数字/连字符/下划线）</label>
+          <input id="new-skill-id" class="mil-input mono" placeholder="例如 source-audit">
+        </div>
+        <div class="mil-row">
+          <button id="create-skill" class="mil-key mil-key--sm mil-key--hot" type="button">新建技能</button>
+          <button id="clone-skill" class="mil-key mil-key--sm" type="button">复制所选</button>
+          <button id="reset-skill" class="mil-key mil-key--sm" type="button" hidden>重置预设</button>
+          <button id="delete-skill" class="mil-key mil-key--sm mil-key--danger" type="button">删除技能</button>
+        </div>
+        <div class="mil-row" style="justify-content:space-between">
+          <span class="mil-label">导入 SKILL.md</span>
+          <input type="file" id="skill-file" accept=".md,.txt,text/markdown" aria-label="导入 SKILL.md 文件" style="font-size:12px;max-width:100%">
+        </div>
+        <p class="mil-hint">技能（Skill）是可复用的能力单元，可自由编写并一键装配给多个角色。</p>
+      </div>
+    </section>
+
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">ROLES · 角色名册</span>
+          <span class="mil-tag num" id="roles-count">0 个</span>
+        </div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div id="profiles" class="mil-screen ab-roster" style="max-height:250px;margin-bottom:10px"></div>
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
+        <div class="mil-field">
+          <label class="mil-label" for="new-id">新建或克隆角色编号（仅英文/数字/下划线）</label>
+          <input id="new-id" class="mil-input mono" placeholder="例如 painter">
+        </div>
+        <div class="mil-row">
+          <button id="toggle-profile-enabled" class="mil-key mil-key--sm" type="button">停用所选</button>
+          <button id="clone" class="mil-key mil-key--sm" type="button">从所选角色克隆</button>
+          <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除所选角色</button>
+        </div>
+        <p class="mil-hint">角色控制某个独立执行器的定位、模型、工具权限与方法笔记。</p>
+      </div>
+    </section>
   </aside>
 
-  <!-- 右栏：档案与技能工作台 -->
+  <!-- 右栏：技能与角色工作台 -->
   <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
     <section class="mil-panel">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk">EDITOR · 档案与技能工作台</span>
+          <span class="mil-silk" id="editor-silk">SKILL · 技能工作台</span>
+          <span class="mil-tag mono" id="active-target-tag">—</span>
           <span class="mil-tag" id="version">v0</span>
           <span class="mil-tag mil-tag--warn" id="dirty-tag" hidden>未保存</span>
         </div>
         <div class="mil-head-r">
           <div class="mil-seg" role="tablist" aria-label="编辑文档类型">
-            <button type="button" class="mil-key mil-key--sm" data-doc-tab="profile" aria-pressed="true">能力说明</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="skill" aria-pressed="true">技能定义</button>
+            <button type="button" class="mil-key mil-key--sm" data-doc-tab="profile" aria-pressed="false">角色说明</button>
             <button type="button" class="mil-key mil-key--sm" data-doc-tab="config" aria-pressed="false">模型与权限配置</button>
             <button type="button" class="mil-key mil-key--sm" data-doc-tab="notes" aria-pressed="false">方法笔记</button>
-            <button type="button" class="mil-key mil-key--sm" data-doc-tab="skill" aria-pressed="false">全局技能</button>
           </div>
           <select id="document" class="mil-select sr-only" aria-label="编辑文档类型">
-            <option value="profile">能力说明</option>
+            <option value="skill" selected>技能定义</option>
+            <option value="profile">角色说明</option>
             <option value="config">模型与权限配置</option>
             <option value="notes">方法笔记</option>
-            <option value="skill">全局技能</option>
           </select>
         </div>
       </div>
 
-      <!-- 技能选择器（编辑全局技能时高亮） -->
-      <div id="skill-bar" class="mil-screen" style="margin-bottom:10px" hidden>
-        <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
-          <span class="mil-label">已登记全局技能（点击快速载入，或输入新编号创建）</span>
-          <button id="delete-skill" class="mil-key mil-key--sm mil-key--danger" type="button">删除该技能</button>
+      <input id="skill-id" type="hidden">
+
+      <!-- SKILL.md 可视化元信息与角色装配 -->
+      <div id="skill-visual" class="mil-screen" style="margin-bottom:10px">
+        <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
+          <span class="mil-silk">SKILL META · 技能元信息与角色装配（实时同步下方 SKILL.md）</span>
+          <button type="button" class="mil-key mil-key--sm" id="copy-skill">复制 SKILL.md</button>
         </div>
-        <div class="mil-row" id="skill-chips" style="margin-bottom:6px"></div>
-        <input id="skill-id" class="mil-input mono" list="skill-list" placeholder="输入或选择技能编号，例如 daily-briefing">
-        <datalist id="skill-list"></datalist>
+        <div class="mil-grid-2" style="margin-bottom:8px">
+          <div class="mil-field">
+            <label class="mil-label" for="sk-meta-name">技能名称 (frontmatter name)</label>
+            <input id="sk-meta-name" class="mil-input mono" placeholder="如 news-digest">
+          </div>
+          <div class="mil-field">
+            <label class="mil-label" for="sk-meta-desc">用途简述 (frontmatter description)</label>
+            <input id="sk-meta-desc" class="mil-input" placeholder="一句话说明何时启用与能力边界">
+          </div>
+        </div>
+        <div class="mil-field" style="margin-bottom:8px">
+          <span class="mil-label">装配到角色（勾选即生效）</span>
+          <div class="mil-row" id="sk-role-bindings"></div>
+        </div>
+        <div class="mil-row" style="gap:6px">
+          <span class="mil-label">结构模板片段</span>
+          <button type="button" class="mil-key mil-key--sm" data-sk-snippet="scene">+ 适用场景</button>
+          <button type="button" class="mil-key mil-key--sm" data-sk-snippet="steps">+ 执行步骤</button>
+          <button type="button" class="mil-key mil-key--sm" data-sk-snippet="guard">+ 质量边界</button>
+        </div>
+        <details id="skill-copy-drawer" style="margin-top:8px" hidden>
+          <summary class="mil-label" style="cursor:pointer">手动复制 SKILL.md（沙箱受限时可全选复制）</summary>
+          <textarea id="skill-copy-box" class="mil-textarea mil-textarea--code" style="margin-top:6px" rows="4" readonly aria-label="SKILL.md 复制框"></textarea>
+        </details>
       </div>
 
       <!-- profile.toml 可视化配置器 -->
       <div id="cfg-visual" class="mil-screen" style="margin-bottom:10px" hidden>
         <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
-          <span class="mil-silk">VISUAL CONFIG · 可视化能力配置（实时同步下方 TOML）</span>
+          <span class="mil-silk">VISUAL CONFIG · 可视化角色配置（实时同步下方 TOML）</span>
           <span class="mil-hint">常见字段直接点选；复杂数组仍在下方源码完整保留</span>
         </div>
         <div class="mil-grid-2" style="margin-bottom:8px">
           <div class="mil-field" style="grid-column:1/-1">
-            <label class="mil-chk"><input type="checkbox" id="cfg-enabled"><span>启用此能力档案（关闭后对话、脉搏与外部通道均不触发）</span></label>
+            <label class="mil-chk"><input type="checkbox" id="cfg-enabled"><span>启用此角色（关闭后对话、脉搏与外部通道均不触发）</span></label>
           </div>
           <div class="mil-field"><label class="mil-label" for="cfg-title">显示标题</label><input id="cfg-title" class="mil-input"></div>
           <div class="mil-field"><label class="mil-label" for="cfg-env">运行环境</label><select id="cfg-env" class="mil-select"><option value="readonly">readonly（无容器轻量环境）</option><option value="sandbox">sandbox（Docker 隔离沙箱）</option></select></div>
@@ -1153,7 +1223,7 @@ pre, code, .mono, .num {
           <div class="mil-row" id="cfg-tools"></div>
         </div>
         <div class="mil-field">
-          <span class="mil-label">绑定全局技能 (skills)</span>
+          <span class="mil-label">装配全局技能 (skills)</span>
           <div class="mil-row" id="cfg-skills"></div>
         </div>
       </div>
@@ -1185,22 +1255,22 @@ pre, code, .mono, .num {
     </section>
 
     <div class="mil-grid-2">
-      <!-- 档案包导入导出 -->
+      <!-- 角色包导入导出 -->
       <section class="mil-panel">
         <div class="mil-head">
-          <div class="mil-head-l"><span class="mil-silk">PACKAGE · 档案包导入导出</span></div>
-          <div class="mil-head-r"><button id="export" class="mil-key mil-key--sm" type="button">导出所选能力</button></div>
+          <div class="mil-head-l"><span class="mil-silk">PACKAGE · 角色包导入导出</span></div>
+          <div class="mil-head-r"><button id="export" class="mil-key mil-key--sm" type="button">导出所选角色</button></div>
         </div>
         <details id="package-panel" open>
           <summary class="mil-label" style="cursor:pointer;margin-bottom:8px">包文本与 ZIP 导入（凭据句柄需在本机重新绑定）</summary>
           <div style="display:flex;flex-direction:column;gap:8px">
-            <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="4" aria-label="档案包文本" placeholder="点击「导出所选能力」生成包文本，或粘贴来自其他 Maisya 的包文本"></textarea>
+            <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="4" aria-label="角色包文本" placeholder="点击「导出所选角色」生成包文本，或粘贴来自其他 Maisya 的角色包文本"></textarea>
             <div class="mil-row">
               <button id="select-package" class="mil-key mil-key--sm" type="button">选中包文本</button>
-              <input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 档案包" style="font-size:12px;max-width:100%">
+              <input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 角色包" style="font-size:12px;max-width:100%">
             </div>
             <div class="mil-row">
-              <input id="import-id" class="mil-input mono" style="flex:1 1 140px" placeholder="导入后的新能力编号，例如 imported-artist">
+              <input id="import-id" class="mil-input mono" style="flex:1 1 140px" placeholder="导入后的新角色编号，例如 imported-artist">
               <button id="import" class="mil-key mil-key--sm mil-key--hot" type="button">导入包文本</button>
             </div>
           </div>
@@ -1311,13 +1381,23 @@ pre, code, .mono, .num {
       "recall_read", "person_read", "digest_feed", "workspace_file", "html_render", "result_attach",
       "mcp_call", "plugin_api", "sandbox_exec", "credential_call",
     ];
-    let catalog = { profiles: [], skills: [], handles: [] };
+    let catalog = { profiles: [], skills: [], skill_items: [], handles: [] };
     let selectedProfile = "scout";
+    let selectedSkill = "";
+    let skillFilter = "";
     let expectedVersion = 0;
     let loadingConfig = false;
+    let loadingSkillVisual = false;
 
     const tomlStr = (v) => JSON.stringify(String(v ?? ""));
     const tomlArr = (xs) => `[${(xs || []).map((x) => tomlStr(x)).join(", ")}]`;
+
+    function skillItemsList() {
+      if (Array.isArray(catalog.skill_items) && catalog.skill_items.length) return catalog.skill_items;
+      return (catalog.skills || []).map((id) => ({
+        id, name: id, title: id, description: "", is_preset: false, is_modified: false, used_by: [], chars: 0, version: 0,
+      }));
+    }
 
     function parseSimpleToml(text) {
       const out = { tools: [], skills: [] };
@@ -1360,11 +1440,12 @@ pre, code, .mono, .num {
       ).join("");
 
       const pickedSkills = new Set(Array.isArray(p.skills) ? p.skills : []);
-      $("#cfg-skills").innerHTML = (catalog.skills || []).length
-        ? catalog.skills.map((s) =>
-            `<label class="mil-chk"><input type="checkbox" data-cfg-skill="${esc(s)}" ${pickedSkills.has(s) ? "checked" : ""}><span class="mono">${esc(s)}</span></label>`
+      const items = skillItemsList();
+      $("#cfg-skills").innerHTML = items.length
+        ? items.map((s) =>
+            `<label class="mil-chk" title="${esc(s.description || s.title || s.id)}"><input type="checkbox" data-cfg-skill="${esc(s.id)}" ${pickedSkills.has(s.id) ? "checked" : ""}><span class="mono">${esc(s.id)}</span></label>`
           ).join("")
-        : `<span class="mil-hint">暂无自建全局技能</span>`;
+        : `<span class="mil-hint">暂无可用技能</span>`;
       loadingConfig = false;
     }
 
@@ -1383,9 +1464,83 @@ pre, code, .mono, .num {
       $("#content").value = lines.filter((l, i, arr) => i < arr.length - 1 || l !== "").join("\n") + "\n";
     }
 
+    function unquoteYamlVal(raw) {
+      const v = String(raw || "").trim();
+      if (v.length >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
+        try { return JSON.parse(v); } catch { return v.slice(1, -1); }
+      }
+      if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1);
+      return v;
+    }
+
+    function parseSkillFrontmatter(text) {
+      const m = String(text || "").match(/^\s*---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+      const out = { name: "", description: "" };
+      if (!m) return out;
+      m[1].split(/\r?\n/).forEach((line) => {
+        const pair = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$/);
+        if (pair) {
+          const k = pair[1].toLowerCase();
+          if (k === "name" || k === "description") out[k] = unquoteYamlVal(pair[2]);
+        }
+      });
+      return out;
+    }
+
+    function writeSkillFrontmatter(field, value) {
+      if (loadingSkillVisual) return;
+      const text = $("#content").value || "";
+      const val = String(value ?? "");
+      const formatted = field === "description"
+        ? `description: ${JSON.stringify(val)}`
+        : `name: ${val.trim() || selectedSkill || ""}`;
+      const re = /^(\s*---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/;
+      const m = text.match(re);
+      if (m) {
+        const lines = m[2].split(/\r?\n/);
+        const lineRe = new RegExp(`^\\s*${field}\\s*:`, "i");
+        const idx = lines.findIndex((l) => lineRe.test(l));
+        if (idx >= 0) lines[idx] = formatted;
+        else lines.push(formatted);
+        $("#content").value = m[1] + lines.join("\n") + m[3] + text.slice(m[0].length);
+      } else {
+        const curName = ($("#sk-meta-name").value || selectedSkill || "custom-skill").trim();
+        const curDesc = $("#sk-meta-desc").value || "";
+        const head = `---\nname: ${curName}\ndescription: ${JSON.stringify(curDesc)}\n---\n\n`;
+        $("#content").value = head + text;
+      }
+    }
+
+    function renderSkillRoleBindings() {
+      const host = $("#sk-role-bindings");
+      if (!host) return;
+      const profiles = catalog.profiles || [];
+      if (!selectedSkill || !profiles.length) {
+        host.innerHTML = `<span class="mil-hint">暂无可装配的角色</span>`;
+        return;
+      }
+      host.innerHTML = profiles.map((p) => {
+        const checked = Array.isArray(p.skills) && p.skills.includes(selectedSkill);
+        const label = p.title && p.title !== p.id ? `${p.title} (${p.id})` : p.id;
+        return `<label class="mil-chk" title="${esc(p.enabled === false ? "已停用角色" : "启用角色")}">
+          <input type="checkbox" data-bind-role="${esc(p.id)}" ${checked ? "checked" : ""}>
+          <span>${esc(label)}${p.enabled === false ? " [停用]" : ""}</span>
+        </label>`;
+      }).join("");
+    }
+
+    function syncSkillVisualFromMarkdown() {
+      loadingSkillVisual = true;
+      const parsed = parseSkillFrontmatter($("#content").value);
+      $("#sk-meta-name").value = parsed.name || selectedSkill || "";
+      $("#sk-meta-desc").value = parsed.description || "";
+      renderSkillRoleBindings();
+      loadingSkillVisual = false;
+    }
+
     function targetQuery() {
       const doc = $("#document").value;
-      if (doc === "skill") return { kind: "skill", target: $("#skill-id").value.trim() };
+      if (doc === "skill") return { kind: "skill", target: selectedSkill || $("#skill-id").value.trim() };
       if (doc === "config") return { kind: "profile", target: selectedProfile, document: "profile.toml" };
       if (doc === "profile") return { kind: "profile", target: selectedProfile, document: "PROFILE.md" };
       return { kind: doc, target: selectedProfile };
@@ -1393,10 +1548,16 @@ pre, code, .mono, .num {
 
     function renderDocModeUI() {
       const doc = $("#document").value;
+      const isSkill = doc === "skill";
       $$("[data-doc-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.docTab === doc)));
-      $("#skill-bar").hidden = doc !== "skill";
+      $("#skill-visual").hidden = !isSkill;
       $("#cfg-visual").hidden = doc !== "config";
+      const silk = $("#editor-silk");
+      if (silk) silk.textContent = isSkill ? "SKILL · 技能工作台" : "ROLE · 角色工作台";
+      const tag = $("#active-target-tag");
+      if (tag) tag.textContent = (isSkill ? selectedSkill : selectedProfile) || "—";
       if (doc === "config") syncVisualFromToml();
+      if (isSkill) syncSkillVisualFromMarkdown();
     }
 
     let assetLoadSeq = 0;
@@ -1429,6 +1590,7 @@ pre, code, .mono, .num {
         setDirty(false);
         versionHistory(r.history, expectedVersion);
         if ($("#document").value === "config") syncVisualFromToml();
+        if ($("#document").value === "skill") syncSkillVisualFromMarkdown();
       } finally {
         if (seq === assetLoadSeq) {
           $("#content").disabled = false;
@@ -1438,8 +1600,42 @@ pre, code, .mono, .num {
     }
 
     function renderCatalog() {
+      const isSkillMode = $("#document").value === "skill";
+      const items = skillItemsList();
+      const needle = skillFilter.trim().toLowerCase();
+      const shownSkills = needle
+        ? items.filter((s) => `${s.id} ${s.title || ""} ${s.name || ""} ${s.description || ""}`.toLowerCase().includes(needle))
+        : items;
+
+      $("#skills-count").textContent = `${items.length} 项`;
+      $("#skills-roster").innerHTML = shownSkills.map((s) => {
+        const on = isSkillMode && s.id === selectedSkill;
+        const originTag = s.is_preset
+          ? (s.is_modified ? `<span class="mil-tag mil-tag--warn">预设·已改</span>` : `<span class="mil-tag mil-tag--ok">预设</span>`)
+          : `<span class="mil-tag">自建</span>`;
+        const usedTxt = (s.used_by || []).length ? `已装配: ${s.used_by.join(" · ")}` : "未装配角色";
+        return `<button type="button" class="ab-card" data-skill="${esc(s.id)}" aria-current="${on}">
+          <div class="mil-row" style="justify-content:space-between;gap:6px">
+            <strong>${esc(s.title || s.id)}</strong>
+            <span class="mil-row" style="gap:4px">${originTag}<span class="mil-tag num">v${Number(s.version || 0)}</span></span>
+          </div>
+          ${s.description ? `<div class="ab-desc">${esc(s.description)}</div>` : ""}
+          <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
+            <span class="mono">${esc(s.id)}</span>
+            <span>${esc(usedTxt)}</span>
+          </div>
+        </button>`;
+      }).join("") || `<p class="mil-hint">${needle ? "没有匹配的技能" : "暂无全局技能"}</p>`;
+
+      const activeSkillItem = items.find((s) => s.id === selectedSkill);
+      const resetBtn = $("#reset-skill");
+      const delSkillBtn = $("#delete-skill");
+      if (resetBtn) resetBtn.hidden = !activeSkillItem?.is_preset;
+      if (delSkillBtn) delSkillBtn.disabled = Boolean(!selectedSkill || activeSkillItem?.is_preset);
+
+      $("#roles-count").textContent = `${(catalog.profiles || []).length} 个`;
       $("#profiles").innerHTML = (catalog.profiles || []).map((p) => {
-        const on = p.id === selectedProfile;
+        const on = !isSkillMode && p.id === selectedProfile;
         const isEnabled = p.enabled !== false;
         return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" data-enabled="${isEnabled}" aria-current="${on}">
           <div class="mil-row" style="justify-content:space-between;gap:6px">
@@ -1454,7 +1650,7 @@ pre, code, .mono, .num {
             <span>${esc(p.access || "everyone")} · 技能 ${(p.skills || []).length}</span>
           </div>
         </button>`;
-      }).join("") || `<p class="mil-hint">暂无能力档案</p>`;
+      }).join("") || `<p class="mil-hint">暂无角色</p>`;
 
       const currentProfile = (catalog.profiles || []).find((p) => p.id === selectedProfile);
       const toggleBtn = $("#toggle-profile-enabled");
@@ -1464,10 +1660,7 @@ pre, code, .mono, .num {
         toggleBtn.className = currentlyOn ? "mil-key mil-key--sm" : "mil-key mil-key--sm mil-key--hot";
       }
 
-      $("#skill-list").innerHTML = (catalog.skills || []).map((s) => `<option value="${esc(s)}">`).join("");
-      $("#skill-chips").innerHTML = (catalog.skills || []).map((s) =>
-        `<button type="button" class="mil-key mil-key--sm" data-pick-skill="${esc(s)}">${esc(s)}</button>`
-      ).join("") || `<span class="mil-hint">暂无全局技能，可在下方输入编号新建</span>`;
+      if ($("#document").value === "skill") renderSkillRoleBindings();
     }
 
     async function refreshDiscovery() {
@@ -1505,13 +1698,29 @@ pre, code, .mono, .num {
       if (!catalog.profiles.some((p) => p.id === selectedProfile) && catalog.profiles.length) {
         selectedProfile = catalog.profiles[0].id;
       }
+      const items = skillItemsList();
+      if (!items.some((s) => s.id === selectedSkill) && items.length) {
+        selectedSkill = items[0].id;
+      }
+      $("#skill-id").value = selectedSkill;
       renderCatalog();
     }
 
     document.addEventListener("click", async (ev) => {
+      const skillBtn = ev.target.closest("[data-skill]");
+      if (skillBtn) {
+        selectedSkill = skillBtn.dataset.skill;
+        $("#skill-id").value = selectedSkill;
+        $("#document").value = "skill";
+        renderCatalog();
+        say("");
+        await loadAsset(false);
+        return;
+      }
       const profBtn = ev.target.closest("[data-profile]");
       if (profBtn) {
         selectedProfile = profBtn.dataset.profile;
+        if ($("#document").value === "skill") $("#document").value = "profile";
         renderCatalog();
         say("");
         await loadAsset(false);
@@ -1520,35 +1729,79 @@ pre, code, .mono, .num {
       const docTab = ev.target.closest("[data-doc-tab]");
       if (docTab) {
         $("#document").value = docTab.dataset.docTab;
-        if ($("#document").value === "skill" && !$("#skill-id").value && catalog.skills?.length) {
-          $("#skill-id").value = catalog.skills[0];
+        if ($("#document").value === "skill" && !selectedSkill && catalog.skills?.length) {
+          selectedSkill = catalog.skills[0];
+          $("#skill-id").value = selectedSkill;
         }
+        renderCatalog();
         say("");
         await loadAsset(false);
         return;
       }
-      const skChip = ev.target.closest("[data-pick-skill]");
-      if (skChip) {
-        $("#skill-id").value = skChip.dataset.pickSkill;
-        say("");
-        await loadAsset(false);
+      const snipBtn = ev.target.closest("[data-sk-snippet]");
+      if (snipBtn) {
+        const snippets = {
+          scene: "\n## 适用场景\n- 说明在什么话题、指令或周期节奏下启用本技能。\n",
+          steps: "\n## 执行步骤\n1. 先检索一手来源或工作区记录。\n2. 按规则筛选并结构化输出。\n",
+          guard: "\n## 质量边界\n- 仅引用本轮工具核实过的数据与链接，区分事实与推断。\n",
+        };
+        const chunk = snippets[snipBtn.dataset.skSnippet] || "";
+        if (chunk) {
+          $("#content").value = ($("#content").value || "").replace(/\s+$/, "") + "\n" + chunk;
+          setDirty(true);
+          syncSkillVisualFromMarkdown();
+        }
       }
     });
 
+    $("#skill-filter").addEventListener("input", () => {
+      skillFilter = $("#skill-filter").value;
+      renderCatalog();
+    });
+
     $("#document").addEventListener("change", async () => {
-      if ($("#document").value === "skill" && !$("#skill-id").value && catalog.skills?.length) {
-        $("#skill-id").value = catalog.skills[0];
+      if ($("#document").value === "skill" && !selectedSkill && catalog.skills?.length) {
+        selectedSkill = catalog.skills[0];
+        $("#skill-id").value = selectedSkill;
       }
+      renderCatalog();
       say("");
       await loadAsset(false);
     });
-    $("#skill-id").addEventListener("change", () => {
-      say("");
-      loadAsset(false);
-    });
+
     $("#content").addEventListener("input", () => {
       setDirty(true);
       if ($("#document").value === "config") syncVisualFromToml();
+      if ($("#document").value === "skill") syncSkillVisualFromMarkdown();
+    });
+
+    ["sk-meta-name", "sk-meta-desc"].forEach((id) => {
+      const field = id === "sk-meta-name" ? "name" : "description";
+      $(`#${id}`).addEventListener("input", () => {
+        setDirty(true);
+        writeSkillFrontmatter(field, $(`#${id}`).value);
+      });
+    });
+
+    $("#sk-role-bindings").addEventListener("change", async (ev) => {
+      const cb = ev.target.closest("[data-bind-role]");
+      if (!cb || !selectedSkill) return;
+      const roleId = cb.dataset.bindRole;
+      const nextBound = cb.checked;
+      cb.disabled = true;
+      say("");
+      try {
+        const r = await rpc("write", "bind_skill", { skill: selectedSkill, profile: roleId, bound: nextBound });
+        if (!r?.success) {
+          cb.checked = !nextBound;
+          return say(r?.error || "装配角色失败", true);
+        }
+        await loadCatalog();
+        if ($("#document").value === "config" && selectedProfile === roleId) await loadAsset(false);
+        say(nextBound ? `已将技能 ${selectedSkill} 装配给角色 ${roleId}` : `已从角色 ${roleId} 卸下技能 ${selectedSkill}`);
+      } finally {
+        cb.disabled = false;
+      }
     });
 
     ["cfg-title", "cfg-env", "cfg-access", "cfg-task", "cfg-model-name", "cfg-web"].forEach((id) => {
@@ -1606,16 +1859,125 @@ pre, code, .mono, .num {
       say("");
       const r = await rpc("write", "rollback", { ...q, version: ver, expected_version: expectedVersion });
       if (!r?.success) return say(r?.error || "回滚失败", true);
+      await loadCatalog();
       await loadAsset(false);
       say(`已回滚至 v${ver}`);
     };
+
+    $("#create-skill").onclick = async () => {
+      const target = $("#new-skill-id").value.trim();
+      if (!target) return say("请先填写新技能编号", true);
+      const r = await rpc("write", "create_skill", { target });
+      if (!r?.success) return say(r?.error || "创建技能失败", true);
+      selectedSkill = r.id;
+      $("#skill-id").value = selectedSkill;
+      $("#new-skill-id").value = "";
+      $("#document").value = "skill";
+      say(`已创建技能 ${selectedSkill}`);
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#clone-skill").onclick = async () => {
+      const target = $("#new-skill-id").value.trim();
+      if (!target) return say("请先填写复制后的新技能编号", true);
+      if (!selectedSkill) return say("请先选择要复制的技能", true);
+      const r = await rpc("write", "create_skill", { target, base: selectedSkill });
+      if (!r?.success) return say(r?.error || "复制技能失败", true);
+      selectedSkill = r.id;
+      $("#skill-id").value = selectedSkill;
+      $("#new-skill-id").value = "";
+      $("#document").value = "skill";
+      say(`已复制生成技能 ${selectedSkill}`);
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#reset-skill").onclick = async () => {
+      if (!selectedSkill) return;
+      const r = await rpc("write", "reset_skill", { target: selectedSkill });
+      if (!r?.success) return say(r?.error || "重置预设技能失败", true);
+      $("#document").value = "skill";
+      say(`已重置预设技能 ${selectedSkill}`);
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#delete-skill").onclick = async () => {
+      const target = selectedSkill || $("#skill-id").value.trim();
+      if (!target) return say("请先选择要删除的技能", true);
+      const r = await rpc("write", "delete_skill", { target });
+      if (!r?.success) return say(r?.error || "删除技能失败", true);
+      selectedSkill = "";
+      $("#skill-id").value = "";
+      say(`已删除技能 ${target}`);
+      await loadCatalog();
+      await loadAsset(false);
+    };
+    $("#copy-skill").onclick = async () => {
+      const text = $("#content").value || "";
+      if (!text) return say("当前技能内容为空", true);
+      let copied = false;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        }
+      } catch {}
+      if (copied) {
+        say("已复制 SKILL.md 内容到剪贴板。");
+      } else {
+        $("#skill-copy-box").value = text;
+        $("#skill-copy-drawer").hidden = false;
+        $("#skill-copy-drawer").open = true;
+        $("#skill-copy-box").focus();
+        $("#skill-copy-box").select();
+        say("已展开复制框并全选，请按 Ctrl/Cmd + C 复制。");
+      }
+    };
+    $("#skill-file").addEventListener("change", () => {
+      const file = $("#skill-file").files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const text = String(reader.result || "");
+        const parsed = parseSkillFrontmatter(text);
+        const fileBase = file.name.replace(/\.(md|txt)$/i, "");
+        const candidate = $("#new-skill-id").value.trim()
+          || parsed.name
+          || (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(fileBase) ? fileBase : "");
+        const target = candidate || selectedSkill;
+        if (!target) return say("请先填写或指定技能编号", true);
+        if ((catalog.skills || []).includes(target)) {
+          selectedSkill = target;
+          $("#skill-id").value = target;
+          $("#document").value = "skill";
+          renderCatalog();
+          await loadAsset(false);
+          $("#content").value = text;
+          setDirty(true);
+          syncSkillVisualFromMarkdown();
+          say(`已载入 ${file.name} 到技能 ${target}，确认后点击保存`);
+        } else {
+          const r = await rpc("write", "create_skill", { target, content: text });
+          if (!r?.success) return say(r?.error || "导入技能失败", true);
+          selectedSkill = r.id;
+          $("#skill-id").value = selectedSkill;
+          $("#new-skill-id").value = "";
+          $("#document").value = "skill";
+          say(`已导入并创建技能 ${selectedSkill}`);
+          await loadCatalog();
+          await loadAsset(false);
+        }
+      };
+      reader.readAsText(file, "utf-8");
+    });
+
     $("#clone").onclick = async () => {
       const target = $("#new-id").value.trim();
       const r = await rpc("write", "clone", { base: selectedProfile, target });
       if (!r?.success) return say(r?.error || "克隆失败", true);
       selectedProfile = r.id;
       $("#new-id").value = "";
-      say("新能力已创建");
+      $("#document").value = "profile";
+      say("新角色已创建");
       await loadCatalog();
       await loadAsset(false);
     };
@@ -1624,23 +1986,14 @@ pre, code, .mono, .num {
       const nextEnabled = currentProfile ? currentProfile.enabled === false : true;
       const r = await rpc("write", "toggle_profile", { target: selectedProfile, enabled: nextEnabled });
       if (!r?.success) return say(r?.error || "切换启用状态失败", true);
-      say(nextEnabled ? `已开启能力档案 ${selectedProfile}` : `已停用能力档案 ${selectedProfile}`);
+      say(nextEnabled ? `已开启角色 ${selectedProfile}` : `已停用角色 ${selectedProfile}`);
       await loadCatalog();
       if ($("#document").value === "config") await loadAsset(false);
     };
     $("#delete-profile").onclick = async () => {
       const r = await rpc("write", "delete_profile", { target: selectedProfile });
-      if (!r?.success) return say(r?.error || "删除档案失败", true);
-      say("已删除所选能力档案");
-      await loadCatalog();
-      await loadAsset(false);
-    };
-    $("#delete-skill").onclick = async () => {
-      const target = $("#skill-id").value.trim();
-      const r = await rpc("write", "delete_skill", { target });
-      if (!r?.success) return say(r?.error || "删除技能失败", true);
-      $("#skill-id").value = "";
-      say("已删除该全局技能");
+      if (!r?.success) return say(r?.error || "删除角色失败", true);
+      say("已删除所选角色");
       await loadCatalog();
       await loadAsset(false);
     };
@@ -1656,12 +2009,12 @@ pre, code, .mono, .num {
       }
       $("#package-text").value = chunks.join("");
       $("#package-panel").open = true;
-      say(`已导出能力档案 ${selectedProfile}`);
+      say(`已导出角色 ${selectedProfile}`);
     };
     $("#select-package").onclick = () => { $("#package-text").select(); };
     async function uploadB64(b64) {
       const target = $("#import-id").value.trim();
-      if (!target) return say("请填写导入后的新能力编号", true);
+      if (!target) return say("请填写导入后的新角色编号", true);
       let token = "", offset = 0;
       const step = 16384;
       for (let i = 0; i < b64.length || i === 0; i += step) {
@@ -1673,7 +2026,8 @@ pre, code, .mono, .num {
         offset = r.offset || offset;
       }
       selectedProfile = target;
-      say("档案包已导入");
+      $("#document").value = "profile";
+      say("角色包已导入");
       await loadCatalog();
       await loadAsset(false);
     }
@@ -1900,7 +2254,7 @@ pre, code, .mono, .num {
 
       const metaParts = [
         a.chat_id ? `会话：${chatLabel(a.chat_id)}` : "",
-        a.profile ? `档案：${a.profile}` : "",
+        a.profile ? `角色：${a.profile}` : "",
         a.path ? `路径：${a.path}` : "",
         a.handle ? `句柄：${a.handle}` : "",
         a.thread_id ? `线程：${a.thread_id}` : "",
@@ -2353,12 +2707,12 @@ pre, code, .mono, .num {
       const web = s.web_provider || "auto";
       const isPreset = WEB_PRESETS.includes(web);
       $("#general-fields").innerHTML = [
-        row("启用 Maisya 插件", "开启后在以下启用会话挂载能力、手账备忘与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
+        row("启用 Maisya 插件", "开启后在以下启用会话挂载技能、手账备忘与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
         row("启用会话白名单", "填写群号或 chat_id，用逗号分隔；非白名单会话零读取、零打扰。", `<input id="set-chats" class="mil-input mono" value="${esc(chats.join(", "))}" placeholder="群号或 stream_id，逗号分隔">`),
         row("主动程度", "控制空闲后的事后惦记与冒泡积极性。", `<select id="proactive_level" class="mil-select"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静 (quiet · 仅被动)</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>关怀 (care · 平衡)</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃 (lively · 允许偶遇)</option></select>`),
         row("全局联网来源", "默认搜索路由；自定义插件/web 别名在右侧输入。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>auto（自动探测）</option><option value="host" ${web === "host" ? "selected" : ""}>host（仅宿主原生）</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>google_search_plugin（第三方联网）</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>mcp（MCP 搜索服务）</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>plugin_api（跨插件 API）</option><option value="custom" ${!isPreset ? "selected" : ""}>自定义标识 / 别名</option></select><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:...">`),
         row("每日主动搭话上限", "普通闲聊惦记每日最多次数 (0-50)。", `<input id="daily_proactive_limit" class="mil-input mono" style="width:110px" type="number" min="0" max="50" value="${Number(s.daily_proactive_limit ?? 1)}">`),
-        row("心跳间隔与档案", "自身定期探索的间隔分钟与使用能力档案。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:96px" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}"><input id="heartbeat_profile" class="mil-input mono" style="width:130px" value="${esc(s.heartbeat_profile || "scout")}">`),
+        row("心跳间隔与角色", "自身定期探索的间隔分钟与使用角色。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:96px" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}"><input id="heartbeat_profile" class="mil-input mono" style="width:130px" value="${esc(s.heartbeat_profile || "scout")}">`),
         row("睡眠时段与久违提醒", "如 01-08 期间不打扰；熟人会话安静超过小时数再问候。", `<input id="set-sleep" class="mil-input mono" style="width:100px" value="${esc(s.sleep_window || "")}" placeholder="如 01-08"><input id="set-longing" class="mil-input mono" style="width:100px" type="number" min="12" max="720" value="${Number(s.longing_quiet_hours ?? 72)}">`),
         row("线程步数 / 超时 / 上下文上限", "单次运行安全上限。", `<input id="set-steps" class="mil-input mono" style="width:76px" type="number" min="1" max="64" value="${Number(s.agent_max_steps ?? 16)}"><input id="set-timeout" class="mil-input mono" style="width:84px" type="number" min="10" max="900" value="${Number(s.agent_timeout ?? 180)}"><input id="set-ctx" class="mil-input mono" style="width:96px" type="number" min="24000" max="256000" value="${Number(s.thread_context_chars ?? 48000)}">`),
       ].join("");

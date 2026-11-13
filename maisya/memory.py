@@ -2,6 +2,7 @@
 
 import fcntl
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -14,6 +15,63 @@ from pathlib import Path
 from .vault import atomic_private_write, private_directory
 
 PRESETS_DIR = Path(__file__).resolve().parents[1] / "presets"
+SKILL_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
+
+
+def _unquote_yaml(raw: str) -> str:
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, str):
+                return parsed.strip()
+        except ValueError:
+            return value[1:-1].strip()
+    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        return value[1:-1].strip()
+    return value
+
+
+def parse_skill_meta(skill_id: str, content: str) -> dict:
+    """提取 SKILL.md 的 frontmatter 元信息与摘要。"""
+    text = str(content or "")
+    fm_match = re.match(r"^\s*---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)", text)
+    fields: dict[str, str] = {}
+    if fm_match:
+        for line in fm_match.group(1).splitlines():
+            pair = re.match(r"^\s*([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$", line)
+            if pair:
+                fields[pair.group(1).lower()] = _unquote_yaml(pair.group(2))
+        body = text[fm_match.end() :]
+    else:
+        body = text
+
+    heading_match = re.search(r"^\s*#{1,3}\s+(.+?)\s*$", body, flags=re.MULTILINE)
+    heading = heading_match.group(1).strip() if heading_match else ""
+    name = fields.get("name") or skill_id
+    title = fields.get("title") or heading or name or skill_id
+    description = fields.get("description") or ""
+    if not description:
+        for raw_line in body.splitlines():
+            clean = raw_line.strip()
+            if (
+                not clean
+                or clean.startswith("#")
+                or clean == "---"
+                or clean.startswith("<!--")
+            ):
+                continue
+            clean = re.sub(r"^(?:[-*+]|\d+\.)\s+", "", clean)
+            clean = clean.replace("**", "").strip()
+            if clean:
+                description = clean[:160]
+                break
+    return {
+        "name": name,
+        "title": title,
+        "description": description[:160],
+        "has_frontmatter": bool(fm_match),
+    }
 
 
 class MemoryLayers:
@@ -91,17 +149,15 @@ class MemoryLayers:
 
     def _locate(self, kind, target="", chat_id="", document=""):
         if kind in {"profile", "notes", "skill"}:
-            if not isinstance(target, str) or not re.fullmatch(
-                r"[A-Za-z][A-Za-z0-9_-]{0,63}", target
-            ):
-                raise ValueError("能力或技能编号无效")
+            if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+                raise ValueError("角色或技能编号无效")
             if kind == "profile":
                 document = document or "PROFILE.md"
                 if document not in {"PROFILE.md", "profile.toml"}:
-                    raise ValueError("档案文档无效")
+                    raise ValueError("角色文档无效")
                 directory = self.profiles.path / target
                 if not directory.is_dir():
-                    raise ValueError("能力档案不存在，请先克隆创建")
+                    raise ValueError("角色不存在，请先克隆创建")
             elif kind == "notes":
                 self.profiles.get(target)
                 directory, document = self.profiles.path / target, "NOTES.md"
@@ -273,6 +329,19 @@ class MemoryLayers:
                 current.update(dict(old))
             return current
 
+    def preset_skills(self) -> set[str]:
+        skills_presets = PRESETS_DIR / "skills"
+        if not skills_presets.is_dir():
+            return set()
+        return {
+            p.name
+            for p in skills_presets.iterdir()
+            if p.is_dir()
+            and not p.is_symlink()
+            and (p / "SKILL.md").is_file()
+            and not (p / "SKILL.md").is_symlink()
+        }
+
     def skills(self):
         root = self.root / "abilities/skills"
         if not root.is_dir():
@@ -281,11 +350,90 @@ class MemoryLayers:
             p.name for p in root.iterdir() if p.is_dir() and not p.is_symlink()
         )
 
-    def delete_skill(self, target: str):
-        if not isinstance(target, str) or not re.fullmatch(
-            r"[A-Za-z][A-Za-z0-9_-]{0,63}", target
-        ):
+    def create_skill(
+        self,
+        target: str,
+        *,
+        base: str = "",
+        title: str = "",
+        description: str = "",
+        content: str = "",
+        allow_custom: bool = True,
+    ):
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
+        skill_path = self.root / "abilities/skills" / target / "SKILL.md"
+        if skill_path.is_symlink():
+            raise ValueError("技能路径无效")
+        if skill_path.exists() and self._bytes(skill_path).strip():
+            raise ValueError("同名技能已存在")
+        if content and content.strip():
+            body = content
+        elif base and base.strip():
+            if not isinstance(base, str) or not SKILL_ID_RE.fullmatch(base):
+                raise ValueError("源技能编号无效")
+            src_path = self.root / "abilities/skills" / base / "SKILL.md"
+            if src_path.is_symlink() or not src_path.is_file():
+                raise ValueError("源技能不存在")
+            src = self.read("skill", target=base)["content"]
+            fm_match = re.match(r"^(\s*---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))", src)
+            if fm_match:
+                fm_body = fm_match.group(2)
+                if re.search(r"(?m)^\s*name\s*:", fm_body):
+                    fm_body = re.sub(
+                        r"(?m)^\s*name\s*:.*$", f"name: {target}", fm_body, count=1
+                    )
+                else:
+                    fm_body = f"name: {target}\n{fm_body}"
+                body = fm_match.group(1) + fm_body + fm_match.group(3) + src[fm_match.end() :]
+            else:
+                desc = (description or f"{title or target}（复制自 {base}）").strip()
+                body = (
+                    f"---\nname: {target}\n"
+                    f"description: {json.dumps(desc, ensure_ascii=False)}\n---\n\n{src}"
+                )
+        else:
+            heading = (title or target).strip()
+            desc = (description or f"{heading}：说明本技能处理的场景、步骤与核验边界。").strip()
+            body = (
+                f"---\nname: {target}\n"
+                f"description: {json.dumps(desc, ensure_ascii=False)}\n---\n\n"
+                f"# {heading}\n\n"
+                "## 适用场景\n- 说明在什么需求或信号下启用本技能。\n\n"
+                "## 执行步骤\n1. 先核实输入材料或调用只读检索工具。\n"
+                "2. 按步骤产出结构化结论或工作区文件。\n\n"
+                "## 质量边界\n- 仅引用真实工具返回的数据与链接，不编造结论。\n"
+            )
+        current = self.read("skill", target=target)
+        return self.write(
+            "skill",
+            body,
+            target=target,
+            expected_version=current["version"],
+            allow_custom=allow_custom,
+        )
+
+    def reset_skill(self, target: str):
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        preset_file = PRESETS_DIR / "skills" / target / "SKILL.md"
+        if preset_file.is_symlink() or not preset_file.is_file():
+            raise ValueError("仅内置预设技能支持重置")
+        current = self.read("skill", target=target)
+        return self.write(
+            "skill",
+            preset_file.read_text(encoding="utf-8"),
+            target=target,
+            expected_version=current["version"],
+            author="reset",
+            allow_custom=True,
+        )
+
+    def delete_skill(self, target: str):
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        if target in self.preset_skills():
+            raise ValueError("预设技能不可删除，可点击「重置预设」恢复默认内容")
         directory = self.root / "abilities/skills" / target
         if directory.is_symlink() or not directory.exists():
             raise ValueError("技能不存在")
@@ -293,6 +441,7 @@ class MemoryLayers:
             shutil.rmtree(directory)
             asset = f"skill:{target}:SKILL.md"
             db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
+            db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
         return {"deleted": True, "skill": target}
 
     def write(
@@ -452,7 +601,7 @@ class MemoryLayers:
                 content = self._bytes(path).decode("utf-8")
                 self._guard("skill", content, "", allow_custom=True)
             if not content.strip():
-                raise ValueError("档案引用的技能为空或不存在")
+                raise ValueError("角色引用的技能为空或不存在")
             pieces.append(content)
         return "\n\n".join(pieces)[:16000]
 

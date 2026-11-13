@@ -212,3 +212,141 @@ async def test_scope_configuration_can_be_edited_without_exposing_group_data_as_
         assert plugin.profiles.get("scout").allow_users == ("qq:123456789",)
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_skill_catalog_lifecycle_preset_reset_and_role_binding(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        catalog = await plugin.manage_read("abilities", "{}")
+        assert catalog["success"], catalog
+        assert set(catalog["skills"]) >= {
+            "source-checking",
+            "ongoing-workspace",
+            "news-digest",
+        }
+        items = {item["id"]: item for item in catalog["skill_items"]}
+        assert set(items) >= {"source-checking", "ongoing-workspace", "news-digest"}
+        for sid in ("source-checking", "ongoing-workspace", "news-digest"):
+            assert items[sid]["is_preset"] is True
+            assert items[sid]["is_modified"] is False
+            assert items[sid]["description"]
+            assert items[sid]["title"]
+            assert items[sid]["version"] >= 0
+        assert items["source-checking"]["used_by"] == []
+        assert items["ongoing-workspace"]["used_by"] == []
+        assert "digest" in items["news-digest"]["used_by"]
+
+        # Create a new starter skill
+        created = await plugin.manage_write(
+            "create_skill",
+            json.dumps(
+                {
+                    "target": "rss-audit",
+                    "title": "信源巡检",
+                    "description": "巡检独立作者博客与更新频率",
+                }
+            ),
+        )
+        assert created["success"], created
+        assert "rss-audit" in plugin.memory.skills()
+        after_create = {
+            item["id"]: item
+            for item in (await plugin.manage_read("abilities", "{}"))["skill_items"]
+        }
+        assert after_create["rss-audit"]["is_preset"] is False
+        assert "巡检独立作者博客与更新频率" in after_create["rss-audit"]["description"]
+
+        dup = await plugin.manage_write(
+            "create_skill", json.dumps({"target": "rss-audit"})
+        )
+        assert dup["success"] is False and "已存在" in dup["error"]
+
+        # Clone an existing skill
+        cloned = await plugin.manage_write(
+            "create_skill",
+            json.dumps({"target": "rss-audit-v2", "base": "rss-audit"}),
+        )
+        assert cloned["success"], cloned
+        cloned_doc = plugin.memory.read("skill", target="rss-audit-v2")["content"]
+        assert "name: rss-audit-v2" in cloned_doc
+
+        # One-click role binding and unbinding
+        bound = await plugin.manage_write(
+            "bind_skill",
+            json.dumps({"skill": "rss-audit", "profile": "scout", "bound": True}),
+        )
+        assert bound["success"], bound
+        assert "rss-audit" in plugin.profiles.get("scout").skills
+        after_bind = {
+            item["id"]: item
+            for item in (await plugin.manage_read("abilities", "{}"))["skill_items"]
+        }
+        assert "scout" in after_bind["rss-audit"]["used_by"]
+
+        unbound = await plugin.manage_write(
+            "bind_skill",
+            json.dumps({"skill": "rss-audit", "profile": "scout", "bound": False}),
+        )
+        assert unbound["success"], unbound
+        assert "rss-audit" not in plugin.profiles.get("scout").skills
+
+        # Deleting a bound custom skill auto-unbinds roles and clears stale versions
+        await plugin.manage_write(
+            "bind_skill",
+            json.dumps({"skill": "rss-audit-v2", "profile": "scout", "bound": True}),
+        )
+        assert "rss-audit-v2" in plugin.profiles.get("scout").skills
+        deleted = await plugin.manage_write(
+            "delete_skill", json.dumps({"target": "rss-audit-v2"})
+        )
+        assert deleted["success"], deleted
+        assert "rss-audit-v2" not in plugin.profiles.get("scout").skills
+        assert "rss-audit-v2" not in plugin.memory.skills()
+        assert isinstance(plugin.memory.methods(plugin.profiles.get("scout")), str)
+        recreated = await plugin.manage_write(
+            "create_skill", json.dumps({"target": "rss-audit-v2"})
+        )
+        assert recreated["success"], recreated
+
+        # Preset skill protection & reset (with rollback history preserved)
+        del_preset = await plugin.manage_write(
+            "delete_skill", json.dumps({"target": "news-digest"})
+        )
+        assert del_preset["success"] is False and "预设技能不可删除" in del_preset["error"]
+
+        cur_digest = plugin.memory.read("skill", target="news-digest")
+        edited = await plugin.manage_write(
+            "asset",
+            json.dumps(
+                {
+                    "kind": "skill",
+                    "target": "news-digest",
+                    "content": "---\nname: news-digest\ndescription: 临时改动\n---\n# 临时改动\n",
+                    "expected_version": cur_digest["version"],
+                }
+            ),
+        )
+        assert edited["success"], edited
+        mod_items = {
+            item["id"]: item
+            for item in (await plugin.manage_read("abilities", "{}"))["skill_items"]
+        }
+        assert mod_items["news-digest"]["is_modified"] is True
+
+        reset = await plugin.manage_write(
+            "reset_skill", json.dumps({"target": "news-digest"})
+        )
+        assert reset["success"], reset
+        restored_items = {
+            item["id"]: item
+            for item in (await plugin.manage_read("abilities", "{}"))["skill_items"]
+        }
+        assert restored_items["news-digest"]["is_modified"] is False
+        assert "临时改动" not in plugin.memory.read("skill", target="news-digest")["content"]
+        hist = plugin.memory.history("skill", target="news-digest")
+        assert len(hist) >= 3
+        prev_v = plugin.memory.read("skill", target="news-digest", version=edited["version"])
+        assert "临时改动" in prev_v["content"]
+    finally:
+        await plugin.on_unload()

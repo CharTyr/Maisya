@@ -1,4 +1,4 @@
-"""能力档案的加载与只读能力边界。"""
+"""角色的加载与只读能力边界。"""
 
 import io
 import re
@@ -120,14 +120,14 @@ class Profiles:
 
     def get(self, profile_id: str) -> Profile:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id):
-            raise ValueError("能力档案编号无效")
+            raise ValueError("角色编号无效")
         directory = self.path / profile_id
         if directory.is_symlink():
-            raise ValueError("能力档案不能是符号链接")
+            raise ValueError("角色不能是符号链接")
         for name in ("profile.toml", "PROFILE.md"):
             path = directory / name
             if path.is_symlink() or path.stat().st_size > 65536:
-                raise ValueError("能力档案文件无效或过大")
+                raise ValueError("角色文件无效或过大")
         config = tomllib.loads((directory / "profile.toml").read_text())
         if set(config) - {
             "title",
@@ -154,13 +154,13 @@ class Profiles:
             "allow_users",
             "allow_chats",
         }:
-            raise ValueError("档案包含未声明字段，凭据只能使用句柄绑定")
+            raise ValueError("角色配置包含未声明字段，凭据只能使用句柄绑定")
         task = config.get("task", "utils")
         if not isinstance(task, str) or not TASK_RE.fullmatch(task):
-            raise ValueError("能力档案模型任务槽位无效")
+            raise ValueError("角色模型任务槽位无效")
         environment = config.get("environment", "readonly")
         if environment not in {"readonly", "sandbox"}:
-            raise ValueError("能力档案执行环境无效")
+            raise ValueError("角色执行环境无效")
         tools = config.get("tools", sorted(READONLY_TOOLS))
         fallback = config.get("fallback_models", [])
         if not isinstance(tools, list) or not all(
@@ -168,9 +168,9 @@ class Profiles:
             and name in (SANDBOX_TOOLS if environment == "sandbox" else HOST_TOOLS)
             for name in tools
         ):
-            raise ValueError("能力档案含未注册或越权工具")
+            raise ValueError("角色含未注册或越权工具")
         if config.get("access", "everyone") not in {"everyone", "admins", "listed"}:
-            raise ValueError("能力档案可用范围无效")
+            raise ValueError("角色可用范围无效")
         for field in ("allow_users", "allow_chats"):
             values = config.get(field, [])
             if (
@@ -255,9 +255,9 @@ class Profiles:
         ) and config.get("access") != "admins":
             raise ValueError("私有凭据与限定执行模板必须仅管理员可用")
         if "enabled" in config and type(config["enabled"]) is not bool:
-            raise ValueError("能力档案启用开关必须为布尔值")
+            raise ValueError("角色启用开关必须为布尔值")
         if "bound" in config and type(config["bound"]) is not bool:
-            raise ValueError("能力档案绑定状态必须为布尔值")
+            raise ValueError("角色绑定状态必须为布尔值")
         return Profile(
             id=profile_id,
             title=str(config.get("title", profile_id)),
@@ -290,12 +290,12 @@ class Profiles:
         if not isinstance(profile_id, str) or not re.fullmatch(
             r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id
         ):
-            raise ValueError("能力档案编号无效")
+            raise ValueError("角色编号无效")
         if profile_id in {"scout", "maker", "digest"}:
-            raise ValueError("预设能力档案不可删除")
+            raise ValueError("预设角色不可删除")
         directory = self.path / profile_id
         if directory.is_symlink() or not directory.exists():
-            raise ValueError("能力档案不存在")
+            raise ValueError("角色不存在")
         shutil.rmtree(directory)
         return {"deleted": True, "profile": profile_id}
 
@@ -305,7 +305,7 @@ class Profiles:
             not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", target_id)
             or (self.path / target_id).exists()
         ):
-            raise ValueError("新档案编号无效或已存在")
+            raise ValueError("新角色编号无效或已存在")
         package = self.export(source_id)
         return self.import_package(package, target_id)
 

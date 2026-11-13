@@ -28,7 +28,7 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
     assert digest.autonomous is False
     assert digest.autonomous_config is True
 
-    with pytest.raises(ValueError, match="预设能力档案不可删除"):
+    with pytest.raises(ValueError, match="预设角色不可删除"):
         profiles.delete("digest")
 
     bad_dir = profiles.path / "bad_toggle"

@@ -394,7 +394,7 @@ class Scout:
                 return self.redact(result)
             except (RuntimeError, OSError, TimeoutError):
                 continue
-        raise RuntimeError("当前能力档案的模型均未返回可用结果")
+        raise RuntimeError("当前角色的模型均未返回可用结果")
 
     async def call(self, name, arguments, context):
         validate_arguments(name, arguments)
