@@ -1497,8 +1497,8 @@ pre, code, .mono, .num {
     </div>
   </section>
 
-  <!-- 4. 处理记录 + 线程详情与递纸条 -->
-  <section class="mil-split" aria-label="处理记录与线程详情">
+  <!-- 4. 近期活动 + 活动详情与引导 -->
+  <section class="mil-split" aria-label="近期活动与详情">
     <div class="mil-panel" id="threads-panel">
       <div class="mil-head">
         <div class="mil-head-l"><span class="mil-silk">ACTIVITY · 近期活动</span></div>
@@ -1549,7 +1549,7 @@ pre, code, .mono, .num {
             <span class="mil-switch-txt">立即转向（优先切到新方向）</span>
           </label>
           <div class="mil-row">
-            <button type="button" class="mil-key mil-key--hot" id="send-note">递纸条</button>
+            <button type="button" class="mil-key mil-key--hot" id="send-note">引导</button>
             <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
           </div>
         </div>
@@ -2557,13 +2557,13 @@ pre, code, .mono, .num {
       steer: Boolean($("#steer").checked),
     });
     if (!r?.success) {
-      fb.textContent = r?.error || "递纸条失败";
+      fb.textContent = r?.error || "引导失败";
       fb.className = "mil-feedback mil-feedback--err";
       return;
     }
     localDrafts[state.threadId] = "";
     $("#message").value = "";
-    fb.textContent = "纸条已递入原线程。";
+    fb.textContent = "引导已送达原活动。";
     fb.className = "mil-feedback mil-feedback--ok";
     refresh(false);
   });

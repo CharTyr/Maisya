@@ -131,9 +131,9 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 await large.locator("summary").click()
                 blocking = True
                 await asyncio.wait_for(entered.wait(), 5)
-                await page.get_by_role("button", name="递纸条", exact=True).click()
+                await page.get_by_role("button", name="引导", exact=True).click()
                 await expect(page.locator("#feedback")).to_have_text(
-                    "纸条已递入原线程。"
+                    "引导已送达原活动。"
                 )
                 assert peak == 2 and query_peak == 1
                 blocking = False
