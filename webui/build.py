@@ -4,29 +4,31 @@ import sys
 from pathlib import Path
 
 
-def _render_management(root: Path, css: str, page: str, title: str) -> str:
+def _render_management(root: Path, css: str, fish_js: str, page: str, title: str) -> str:
     template = (root / "management.html.in").read_text(encoding="utf-8")
     body = (root / "fragments" / f"{page}.html").read_text(encoding="utf-8").rstrip("\n")
     return (
         template.replace("{{MILLENNIUM_CSS}}", css)
+        .replace("{{FISH_JS}}", fish_js)
         .replace("{{PAGE_ID}}", page)
         .replace("{{TITLE}}", title)
         .replace("{{BODY}}", body)
     )
 
 
-def _render_now(root: Path, css: str) -> str:
+def _render_now(root: Path, css: str, fish_js: str) -> str:
     template = (root / "now.html.in").read_text(encoding="utf-8")
-    return template.replace("{{MILLENNIUM_CSS}}", css)
+    return template.replace("{{MILLENNIUM_CSS}}", css).replace("{{FISH_JS}}", fish_js)
 
 
 def main():
     root = Path(__file__).resolve().parent
     css = (root / "millennium.css").read_text(encoding="utf-8").rstrip("\n")
+    fish_js = (root / "fish.js").read_text(encoding="utf-8").rstrip("\n")
     targets: list[tuple[Path, str]] = [
-        (root / "now.html", _render_now(root, css)),
+        (root / "now.html", _render_now(root, css, fish_js)),
         *(
-            (root / f"{page}.html", _render_management(root, css, page, title))
+            (root / f"{page}.html", _render_management(root, css, fish_js, page, title))
             for page, title in (
                 ("outputs", "产物"),
                 ("abilities", "能力"),

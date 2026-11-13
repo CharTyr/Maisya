@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证方式与上线前待办；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md) 与 [docs/](docs/01-架构蓝图.md)。
 
-最后更新：2026-11-13。已完成 M0–M6 全量架构落地、工作流自由化、MaiBot 千禧机械风 × Aisya 实时流 **五页玻璃盒管理台**（`现场 | 产物 | 能力 | 手账 | 设置`）、**角色（`profile`）启停开关 + 默认关闭的 `digest` 资讯简报预设工作流**、**围绕 `SKILL.md` 的画廊优先工作台与 `.zip`/`.skill`/`.tar.*` 技能包导入导出**、**`planner` 多 Agent 编排与灵魂缝合（无容器轻量创作降级、`from_threads` 结论+成品全量接力、`Share` `<planner_intent>` 语境传达、闲聊精简注入、`maisya_later` 自然语言周期工作流）**，以及 **`1 + 2` Grok 式能力配方模板分享（本地 `.zip`/`.tar.gz`/包文本 + 后端防 SSRF 公开链接安全拉取预览、草稿隐私体检、本机环境缺件对齐与平滑升级回滚）**；当前累计通过 **224 项**本地与 Playwright Chromium UI 测试、**22 项**真实宿主 SDK 隔离契约（`host_unchanged: true`）、隔离实模 + EXA 第三方联网冒烟与独立 Docker/`runsc` gVisor 运行时验收。
+最后更新：2026-11-13。已完成 M0–M6 全量架构落地、工作流自由化、MaiBot 千禧机械风 × Aisya 实时流 **五页玻璃盒管理台**（`现场 | 产物 | 能力 | 手账 | 设置`）、**角色（`profile`）启停开关 + 角色专属程序化内联 SVG 小鱼头像（12 鱼种 × 18 色 × 11 眼神，支持定制与随机换鱼，`webui/fish.js`）+ 默认关闭的 `digest` 资讯简报预设工作流**、**围绕 `SKILL.md` 的画廊优先工作台与 `.zip`/`.skill`/`.tar.*` 技能包导入导出**、**`planner` 多 Agent 编排与灵魂缝合（无容器轻量创作降级、`from_threads` 结论+成品全量接力、`Share` `<planner_intent>` 语境传达、闲聊精简注入、`maisya_later` 自然语言周期工作流）**，以及 **`1 + 2` Grok 式能力配方模板分享（本地 `.zip`/`.tar.gz`/包文本 + 后端防 SSRF 公开链接安全拉取预览、草稿隐私体检、本机环境缺件对齐与平滑升级回滚）**；当前累计通过 **227 项**本地与 Playwright Chromium UI 测试、**22 项**真实宿主 SDK 隔离契约（`host_unchanged: true`）、隔离实模 + EXA 第三方联网冒烟与独立 Docker/`runsc` gVisor 运行时验收。
 
 ## 1. 一句话定位与核心不变式
 
@@ -27,11 +27,11 @@
 
 | 范围 | 状态 | 依据 |
 |---|---|---|
-| M0 基座 / M1 线程 / M2 回接 | 已实现、加固并验证 | **224 项**本地与 UI 测试 + **22 项**宿主 SDK 隔离契约（含 `web_provider` 多源映射、`send.hybrid` `file` 拆条、`Share` `<planner_intent>` 语境传达、`from_threads` 结论+`out/*`+附件全量接力与闲聊精简 `before_planner`） |
+| M0 基座 / M1 线程 / M2 回接 | 已实现、加固并验证 | **227 项**本地与 UI 测试 + **22 项**宿主 SDK 隔离契约（含 `web_provider` 多源映射、`send.hybrid` `file` 拆条、`Share` `<planner_intent>` 语境传达、`from_threads` 结论+`out/*`+附件全量接力与闲聊精简 `before_planner`） |
 | M3 `maker` + 工作区 + 沙箱 + `@API` | **真实 `runsc` 验收通过；无容器自动降级可用** | `tests_sandbox/run_isolated.py --execute` 全绿（`host_unchanged` / `backup_cleaned`）；`maker` 未开容器时自动以 `light_workspace` 模式保留 `workspace_file`/`html_render`/`result_attach`，开启容器自动恢复 `sandbox_exec`；支持管理员可写 MCP/跨插件 `@API`/自定义模板与 `sandbox_targets` |
 | M4 手账 / Skill 画廊 / 配方分享 / 塑形 | 已实现并验证 | 画廊优先 `能力` 工作台；技能包分块导入导出与伴随文件挂载；`maisya/recipes.py` `1 + 2` 能力配方模板分享（草稿资产勾选与隐私/凭据体检、公开 GitHub/归档链接防 SSRF 拉取预览、对照宿主 `discovery`/保险箱/服务/沙箱缺件对齐、平滑升级保留白名单/启停/工作区并可回滚、推荐例行任务一键挂载）；`Learning._learn` 真实 LLM 冒烟 `applied` |
 | M5 意图 / `Pulse` / 克制主动性 / `digest` 预设 | 已实现并验证 | `maisya_later` 自然语言周期工作流、`Pulse` `<maisya_workflow>` 唤醒与纯链接/正文自动 `bridge.stage` 预装载；`daily_proactive_limit`、`chat_proactive_levels`、`acquaintance_users`、`longing_quiet_hours`、`serendipity`；默认关闭的 `digest` 角色 + `news-digest` 技能 + `digest_feed` |
-| M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | `现场`（跨平台会话头像/名称、FLOW 拓扑、五段上下文、引导 `steer`）、`产物`（交付物/图片预览/持续工作区）、`能力`（Skill 画廊/工作台 + 角色名册与配方分享导入面板）、`手账`（分册指引 + 公开探索示例 + `A_Memorix` 边界清晰）、`设置`（按会话主动度、快捷调度预设） |
+| M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | `现场`（跨平台会话头像/名称、FLOW 拓扑与角色小鱼、五段上下文、引导 `steer`）、`产物`（交付物/图片预览/持续工作区与角色小鱼）、`能力`（Skill 画廊/工作台 + 角色名册/小鱼定制与配方分享导入面板）、`手账`（分册指引 + 公开探索示例 + `A_Memorix` 边界清晰）、`设置`（按会话主动度、快捷调度预设） |
 | 真实模型 + 第三方搜索插件 / EXA 冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开宿主 `web_search`）：`scout` 自动兼容 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | **部署到线上 `plugins/` 与真群联调** | **唯一未执行（红线保护）** | `plugins/`、`src/`、`config/`、`data/` 零改动；需下一会话取得用户当次部署授权并指定测试群 |
 
@@ -41,7 +41,7 @@
 # 1. WebUI 构建一致性检查
 python3 webui/build.py --check
 
-# 2. 全量本地与 Chromium UI 测试（当前 224 passed）
+# 2. 全量本地与 Chromium UI 测试（当前 227 passed）
 PYTHONPATH=.:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider
 
 # 3. 真实宿主 venv 隔离契约（22 tests，自动校验 host_unchanged）

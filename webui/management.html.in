@@ -439,6 +439,8 @@
   const $$ = (sel) => [...document.querySelectorAll(sel)];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
 
+{{FISH_JS}}
+
   // 高亮当前工作区标签并支持跳转
   $$("[data-nav]").forEach((btn) => {
     const target = btn.dataset.nav;
@@ -527,6 +529,122 @@
     let expectedVersion = 0;
     let loadingConfig = false;
     let loadingSkillVisual = false;
+    let fishDrawerOpen = false;
+    let fishDraft = null;
+    let freshFishProfile = "";
+
+    const profileObj = (id) => (catalog.profiles || []).find((p) => p.id === id) || null;
+    const profileFishSeed = (id) => profileObj(id)?.fish_seed || "";
+
+    function fishDraftForProfile(id) {
+      const seed = profileFishSeed(id);
+      const c = parseFishCustom(seed);
+      if (c) return { species: c.species, color: c.color, eyes: c.eyes, base: c.base };
+      const base = FISH_BASE_RE.test(seed) ? seed : newFishSeed();
+      const t = fishTraits(roleFishSeed(id, base));
+      return { species: t.species, color: Math.max(0, FISH_COLORS.indexOf(t.color)), eyes: t.eyes, base };
+    }
+
+    function renderRoleFishPanel() {
+      const bar = $("#role-fish-bar");
+      const summary = $("#role-fish-summary");
+      const drawer = $("#role-fish-drawer");
+      const customBtn = $("#role-fish-custom");
+      const resetBtn = $("#role-fish-reset");
+      if (!bar || !summary || !drawer) return;
+      const p = viewMode === "roles" ? profileObj(selectedProfile) : null;
+      if (!p) {
+        bar.hidden = true;
+        drawer.hidden = true;
+        return;
+      }
+      bar.hidden = false;
+      const curSeed = p.fish_seed || "";
+      const tr = fishTraits(roleFishSeed(p.id, curSeed));
+      const isOff = p.enabled === false;
+      const cls = ["mil-fish--well", isOff ? "mil-fish--off" : "", freshFishProfile === p.id ? "is-new" : ""].filter(Boolean).join(" ");
+      const badge = tr.custom ? "已定制" : curSeed ? "已随机" : "默认头像";
+      summary.innerHTML = `
+        ${roleFishHtml(p.id, curSeed, 48, isOff ? { still: true } : {}, cls)}
+        <div style="min-width:0;display:flex;flex-direction:column;gap:3px">
+          <div class="mil-row" style="gap:6px">
+            <strong>${esc(p.title || p.id)}</strong>
+            <span class="mil-tag">${esc(badge)}</span>
+          </div>
+          <span class="mil-hint">${esc(tr.name)} · ${esc(tr.colorName || "默认色")} · ${esc(tr.eyeName)}</span>
+        </div>
+      `;
+      if (customBtn) customBtn.setAttribute("aria-expanded", String(fishDrawerOpen));
+      if (resetBtn) resetBtn.hidden = !curSeed;
+      if (!fishDrawerOpen) {
+        drawer.hidden = true;
+        drawer.innerHTML = "";
+        return;
+      }
+      drawer.hidden = false;
+      const d = fishDraft || fishDraftForProfile(p.id);
+      fishDraft = d;
+      const previewSeed = customFishSeed(d);
+      const previewTraits = fishTraits(roleFishSeed(p.id, previewSeed));
+      const speciesBtns = Object.entries(FISH_SPECIES).map(([k, name]) =>
+        `<button type="button" class="fish-opt" data-fish-pick="species" data-fish-val="${esc(k)}" aria-pressed="${String(d.species === k)}" title="${esc(name)}">${fishSvg(roleFishSeed(p.id, customFishSeed({ ...d, species: k })), { size: 36, still: true })}<span>${esc(name)}</span></button>`
+      ).join("");
+      const colorSwatches = FISH_COLORS.map((hex, idx) =>
+        `<button type="button" class="fish-swatch" data-fish-pick="color" data-fish-val="${idx}" aria-pressed="${String(d.color === idx)}" aria-label="${esc(FISH_COLOR_NAMES[idx] || String(idx))}" title="${esc(FISH_COLOR_NAMES[idx] || String(idx))}" style="--c:${hex}"></button>`
+      ).join("");
+      const eyesBtns = Object.entries(FISH_EYES).map(([k, name]) =>
+        `<button type="button" class="fish-opt" data-fish-pick="eyes" data-fish-val="${esc(k)}" aria-pressed="${String(d.eyes === k)}" title="${esc(name)}">${fishSvg(roleFishSeed(p.id, customFishSeed({ ...d, eyes: k })), { size: 36, still: true })}<span>${esc(name)}</span></button>`
+      ).join("");
+      drawer.innerHTML = `
+        <div class="fish-preview-box">
+          ${roleFishHtml(p.id, previewSeed, 80, {}, "mil-fish--well")}
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <strong>${esc(previewTraits.name)}</strong>
+            <span class="mil-hint">${esc(FISH_COLOR_NAMES[d.color] || "")} · ${esc(previewTraits.eyeName)}</span>
+            <span class="mil-hint mono" style="font-size:11px">种子：${esc(previewSeed)}</span>
+          </div>
+        </div>
+        <div class="mil-field"><span class="mil-label">鱼种（12 种）</span><div class="fish-opts" role="group" aria-label="选择鱼种">${speciesBtns}</div></div>
+        <div class="mil-field"><span class="mil-label">颜色（18 色）</span><div class="fish-swatches" role="group" aria-label="选择颜色">${colorSwatches}</div></div>
+        <div class="mil-field"><span class="mil-label">眼神（11 种）</span><div class="fish-opts" role="group" aria-label="选择眼神">${eyesBtns}</div></div>
+        <div class="mil-row" style="justify-content:flex-end">
+          <button type="button" class="mil-key mil-key--sm" id="role-fish-shape" title="保持鱼种、颜色和眼神不变，仅更换鳍与姿态细节">更换姿态</button>
+          <button type="button" class="mil-key mil-key--sm" id="role-fish-cancel">收起</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="role-fish-save">保存小鱼</button>
+        </div>
+      `;
+    }
+
+    async function saveProfileFishSeed(nextSeed, feedbackMsg) {
+      if (!selectedProfile) return;
+      const hadDirtyDraft = !$("#dirty-tag")?.hidden;
+      const target = selectedProfile;
+      say("");
+      const r = await rpc("write", "set_profile_fish", { target, fish_seed: nextSeed });
+      if (!r?.success) return say(r?.error || "保存角色小鱼头像失败", true);
+      freshFishProfile = target;
+      setTimeout(() => {
+        if (freshFishProfile === target) {
+          freshFishProfile = "";
+          if ($("#profiles")?.isConnected) {
+            renderCatalog();
+            renderRoleFishPanel();
+          }
+        }
+      }, 700);
+      await loadCatalog();
+      if (viewMode === "roles" && $("#document").value === "config" && target === selectedProfile) {
+        if (!hadDirtyDraft) {
+          await loadAsset(false);
+        } else {
+          expectedVersion = Number(r.version || expectedVersion);
+          $("#version").textContent = `v${expectedVersion}`;
+          writeTomlKey("fish_seed", r.fish_seed ? tomlStr(r.fish_seed) : null);
+        }
+      }
+      renderRoleFishPanel();
+      say(feedbackMsg || "已更新角色小鱼头像");
+    }
 
     const tomlStr = (v) => JSON.stringify(String(v ?? ""));
     const tomlArr = (xs) => `[${(xs || []).map((x) => tomlStr(x)).join(", ")}]`;
@@ -663,6 +781,7 @@
         const label = p.title && p.title !== p.id ? `${p.title} (${p.id})` : p.id;
         return `<label class="mil-chk" title="${esc(p.enabled === false ? "已停用角色" : "启用角色")}">
           <input type="checkbox" data-bind-role="${esc(p.id)}" ${checked ? "checked" : ""}>
+          ${roleFishHtml(p.id, p.fish_seed || "", 18, { still: true }, p.enabled === false ? "mil-fish--off" : "")}
           <span>${esc(label)}${p.enabled === false ? " [停用]" : ""}</span>
         </label>`;
       }).join("");
@@ -747,6 +866,7 @@
       if (delSkillBtn) delSkillBtn.disabled = Boolean(!selectedSkill || activeSkillItem?.is_preset);
       if (inRoles && doc === "config") syncVisualFromToml();
       if (inSkillEditor && isSkill) syncSkillVisualFromMarkdown();
+      renderRoleFishPanel();
     }
 
     let assetLoadSeq = 0;
@@ -795,17 +915,19 @@
       const needle = skillFilter.trim().toLowerCase();
 
       const scopePills = [
-        { key: "all", label: `全部 (${items.length})` },
-        { key: "custom", label: `自建与导入 (${items.filter((s) => !s.is_preset).length})` },
-        { key: "preset", label: `系统预设 (${items.filter((s) => s.is_preset).length})` },
+        { key: "all", label: `全部 (${items.length})`, role: null },
+        { key: "custom", label: `自建与导入 (${items.filter((s) => !s.is_preset).length})`, role: null },
+        { key: "preset", label: `系统预设 (${items.filter((s) => s.is_preset).length})`, role: null },
         ...profiles.map((p) => ({
           key: `role:${p.id}`,
           label: `${p.title || p.id} (${items.filter((s) => (s.used_by || []).includes(p.id)).length})`,
+          role: p,
         })),
       ];
-      $("#skill-scope-bar").innerHTML = scopePills.map((sp) =>
-        `<button type="button" class="mil-key mil-key--sm" data-skill-scope="${esc(sp.key)}" aria-pressed="${skillScope === sp.key}">${esc(sp.label)}</button>`
-      ).join("");
+      $("#skill-scope-bar").innerHTML = scopePills.map((sp) => {
+        const fish = sp.role ? roleFishHtml(sp.role.id, sp.role.fish_seed || "", 16, { still: true }, sp.role.enabled === false ? "mil-fish--off" : "") : "";
+        return `<button type="button" class="mil-key mil-key--sm" data-skill-scope="${esc(sp.key)}" aria-pressed="${skillScope === sp.key}">${fish}<span>${esc(sp.label)}</span></button>`;
+      }).join("");
 
       const scopeFiltered = items.filter((s) => {
         if (skillScope === "custom") return !s.is_preset;
@@ -862,24 +984,32 @@
       if (resetBtn) resetBtn.hidden = !activeSkillItem?.is_preset;
       if (delSkillBtn) delSkillBtn.disabled = Boolean(!selectedSkill || activeSkillItem?.is_preset);
 
+      if (!$("#profiles")) return;
       $("#roles-count").textContent = `${profiles.length} 个`;
       $("#profiles").innerHTML = profiles.map((p) => {
         const on = viewMode === "roles" && p.id === selectedProfile;
         const isEnabled = p.enabled !== false;
+        const fishCls = [!isEnabled ? "mil-fish--off" : "", freshFishProfile === p.id ? "is-new" : ""].filter(Boolean).join(" ");
         return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" data-enabled="${isEnabled}" aria-current="${on}">
-          <div class="mil-row" style="justify-content:space-between;gap:6px">
-            <strong>${esc(p.title || p.id)}</strong>
-            <span class="mil-row" style="gap:4px">
-              <span class="mil-tag ${isEnabled ? "mil-tag--ok" : "mil-tag--off"}">${isEnabled ? "启用" : "已停用"}</span>
-              <span class="mil-tag">${esc(p.environment || "readonly")}</span>
-            </span>
-          </div>
-          <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
-            <span class="mono">${esc(p.id)}</span>
-            <span>${esc(p.access || "everyone")} · 技能 ${(p.skills || []).length}</span>
+          <div class="mil-row" style="gap:9px;align-items:center;flex-wrap:nowrap">
+            ${roleFishHtml(p.id, p.fish_seed || "", 36, on && isEnabled ? {} : { still: true }, fishCls)}
+            <div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:3px">
+              <div class="mil-row" style="justify-content:space-between;gap:6px">
+                <strong>${esc(p.title || p.id)}</strong>
+                <span class="mil-row" style="gap:4px">
+                  <span class="mil-tag ${isEnabled ? "mil-tag--ok" : "mil-tag--off"}">${isEnabled ? "启用" : "已停用"}</span>
+                  <span class="mil-tag">${esc(p.environment || "readonly")}</span>
+                </span>
+              </div>
+              <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
+                <span class="mono">${esc(p.id)}</span>
+                <span>${esc(p.access || "everyone")} · 技能 ${(p.skills || []).length}</span>
+              </div>
+            </div>
           </div>
         </button>`;
       }).join("") || `<p class="mil-hint">暂无角色</p>`;
+      renderRoleFishPanel();
 
       const currentProfile = profiles.find((p) => p.id === selectedProfile);
       const toggleBtn = $("#toggle-profile-enabled");
@@ -991,6 +1121,8 @@
       if (profBtn) {
         selectedProfile = profBtn.dataset.profile;
         viewMode = "roles";
+        fishDrawerOpen = false;
+        fishDraft = null;
         if ($("#document").value === "skill") $("#document").value = "profile";
         revokeRecipeBlob();
         if ($("#rcp-draft-box")) $("#rcp-draft-box").hidden = true;
@@ -1022,6 +1154,18 @@
           setDirty(true);
           syncSkillVisualFromMarkdown();
         }
+        return;
+      }
+      const fishPick = ev.target.closest("[data-fish-pick]");
+      if (fishPick && selectedProfile) {
+        const k = fishPick.dataset.fishPick;
+        const v = fishPick.dataset.fishVal;
+        const d = { ...(fishDraft || fishDraftForProfile(selectedProfile)) };
+        if (k === "color") d[k] = Number(v);
+        else d[k] = v;
+        fishDraft = d;
+        renderRoleFishPanel();
+        $(`.fish-drawer [data-fish-pick="${k}"][data-fish-val="${CSS.escape(v)}"]`)?.focus();
       }
     });
 
@@ -1515,13 +1659,16 @@
         ? `<div class="mil-row" style="margin-top:4px"><span class="mil-tag mil-tag--warn">检测到本地同名角色 ${esc(pv.existing_profile.id)}</span><span class="mil-hint">可选「平滑升级」保留本地白名单(${pv.existing_profile.allow_chats_count || 0} 会话)/启停/工作区并可回滚，或另存为 ${esc(pv.suggested_copy_id)}</span></div>`
         : "";
       $("#rcp-pv-summary").innerHTML = `
-        <div class="mil-row">
-          <strong>${esc(prof.title || prof.id)}</strong>
-          <span class="mil-tag mono">${esc(prof.environment || "readonly")}</span>
-          <span class="mil-tag mono">task:${esc(prof.task || "utils")}</span>
-          <span class="mil-tag">工具 ${(prof.tools || []).length} 项</span>
-          ${prof.has_notes ? `<span class="mil-tag">含 NOTES.md</span>` : ""}
-          ${(prof.preset_files || []).length ? `<span class="mil-tag">预设文件 ${prof.preset_files.length}</span>` : ""}
+        <div class="mil-row" style="gap:10px;align-items:center">
+          ${roleFishHtml(prof.id || pv.source_id, prof.fish_seed || "", 44, {}, "mil-fish--well")}
+          <div class="mil-row" style="gap:6px;flex:1;min-width:0">
+            <strong>${esc(prof.title || prof.id)}</strong>
+            <span class="mil-tag mono">${esc(prof.environment || "readonly")}</span>
+            <span class="mil-tag mono">task:${esc(prof.task || "utils")}</span>
+            <span class="mil-tag">工具 ${(prof.tools || []).length} 项</span>
+            ${prof.has_notes ? `<span class="mil-tag">含 NOTES.md</span>` : ""}
+            ${(prof.preset_files || []).length ? `<span class="mil-tag">预设文件 ${prof.preset_files.length}</span>` : ""}
+          </div>
         </div>
         ${prof.summary ? `<p class="mil-hint" style="margin-top:4px">${esc(prof.summary)}</p>` : ""}
         <div class="mil-row" style="margin-top:4px"><span class="mil-label">技能集：</span>${skillTags}</div>
@@ -1574,6 +1721,43 @@
       }
       syncRecipeImportModeUI();
     }
+
+    $("#role-fish-reroll")?.addEventListener("click", async () => {
+      if (!selectedProfile) return;
+      const next = newFishSeed();
+      fishDraft = null;
+      await saveProfileFishSeed(next, "已随机更换一条新小鱼头像");
+    });
+    $("#role-fish-custom")?.addEventListener("click", () => {
+      if (!selectedProfile) return;
+      fishDrawerOpen = !fishDrawerOpen;
+      if (fishDrawerOpen && !fishDraft) fishDraft = fishDraftForProfile(selectedProfile);
+      renderRoleFishPanel();
+    });
+    $("#role-fish-reset")?.addEventListener("click", async () => {
+      if (!selectedProfile) return;
+      fishDraft = null;
+      fishDrawerOpen = false;
+      await saveProfileFishSeed("", "已恢复该角色的默认小鱼头像");
+    });
+    $("#role-fish-drawer")?.addEventListener("click", async (ev) => {
+      if (!selectedProfile) return;
+      if (ev.target.closest("#role-fish-shape")) {
+        const d = { ...(fishDraft || fishDraftForProfile(selectedProfile)), base: newFishSeed() };
+        fishDraft = d;
+        renderRoleFishPanel();
+        $("#role-fish-shape")?.focus();
+      } else if (ev.target.closest("#role-fish-cancel")) {
+        fishDrawerOpen = false;
+        fishDraft = null;
+        renderRoleFishPanel();
+      } else if (ev.target.closest("#role-fish-save")) {
+        const d = fishDraft || fishDraftForProfile(selectedProfile);
+        const next = customFishSeed(d);
+        fishDrawerOpen = false;
+        await saveProfileFishSeed(next, "已保存自定义小鱼头像");
+      }
+    });
 
     $("#jump-recipe-panel").onclick = async () => {
       viewMode = "roles";
@@ -1969,7 +2153,7 @@
               </div>
               <strong style="font-size:12.5px;overflow-wrap:anywhere">${esc(item.title || item.name)}</strong>
               <div class="mil-row" style="justify-content:space-between;font-size:11px;opacity:.85">
-                <span>${esc(item.profile || "agent")} · ${esc(chatLabel(item.chat_id))}</span>
+                <span class="mil-row" style="gap:5px">${roleFishHtml(item.profile || "agent", (outData.profile_fish || {})[item.profile || ""] || "", 18, { still: true })}<span>${esc(item.profile || "agent")} · ${esc(chatLabel(item.chat_id))}</span></span>
                 ${item.delivered ? `<span>已回接</span>` : ""}
               </div>
             </button>`;
@@ -1978,7 +2162,7 @@
 
       $("#workspaces").innerHTML = (outData.workspaces || []).map((w) =>
         `<button type="button" class="mil-key mil-key--sm" data-ws="${esc(w.workspace_id)}">
-          <span>${esc(w.name)} (${esc(w.profile)})</span>
+          <span class="mil-row" style="gap:6px">${roleFishHtml(w.profile || "agent", (outData.profile_fish || {})[w.profile || ""] || "", 18, { still: true })}<span>${esc(w.name)} (${esc(w.profile)})</span></span>
           <span class="mil-tag num">${w.out_count || 0}/${w.file_count || 0}</span>
         </button>`
       ).join("") || `<span class="mil-hint">暂无持久工作区</span>`;
@@ -1993,14 +2177,21 @@
       $("#out-cur-size").textContent = fmtBytes(a.bytes || a.total || 0);
       $("#out-more-btn").hidden = a.next_offset === null || a.next_offset === undefined;
 
+      const roleId = a.profile || selectedItem?.profile || "";
       const metaParts = [
         a.chat_id ? `会话：${chatLabel(a.chat_id)}` : "",
-        a.profile ? `角色：${a.profile}` : "",
+        roleId ? `角色：${roleId}` : "",
         a.path ? `路径：${a.path}` : "",
         a.handle ? `句柄：${a.handle}` : "",
         a.thread_id ? `线程：${a.thread_id}` : "",
       ].filter(Boolean);
-      $("#out-meta").innerHTML = metaParts.map((m) => `<span class="mil-tag mono">${esc(m)}</span>`).join("") || "无附加元信息";
+      const roleChip = roleId
+        ? `<span class="mil-tag mono mil-row" style="gap:5px">${roleFishHtml(roleId, (outData.profile_fish || {})[roleId] || "", 16, { still: true })}<span>角色：${esc(roleId)}</span></span>`
+        : "";
+      $("#out-meta").innerHTML = [
+        roleChip,
+        ...metaParts.filter((m) => !m.startsWith("角色：")).map((m) => `<span class="mil-tag mono">${esc(m)}</span>`),
+      ].filter(Boolean).join("") || "无附加元信息";
 
       if (a.media_kind === "image" && a._imageUrl) {
         copyBuffer = a._imageUrl;

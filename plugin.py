@@ -1796,6 +1796,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             "access": card.access,
                             "enabled": card.enabled,
                             "autonomous": card.autonomous,
+                            "fish_seed": card.fish_seed,
                         }
                     )
                 except (ValueError, OSError):
@@ -1807,6 +1808,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             "access": "everyone",
                             "enabled": True,
                             "autonomous": True,
+                            "fish_seed": "",
                         }
                     )
 

@@ -156,6 +156,19 @@
         </div>
       </div>
 
+      <!-- 角色小鱼头像栏与定制抽屉（仅角色工作台视图显示） -->
+      <div id="role-fish-bar" class="mil-screen role-fish-bar" hidden>
+        <div class="role-fish-head">
+          <div class="mil-row" id="role-fish-summary" style="gap:10px;min-width:0;flex:1"></div>
+          <div class="mil-row" style="gap:6px">
+            <button type="button" class="mil-key mil-key--sm" id="role-fish-reroll" title="随机更换一条新的小鱼">随机换鱼</button>
+            <button type="button" class="mil-key mil-key--sm" id="role-fish-custom" aria-expanded="false">定制小鱼</button>
+            <button type="button" class="mil-key mil-key--sm" id="role-fish-reset" hidden title="恢复此角色的默认固定小鱼">默认小鱼</button>
+          </div>
+        </div>
+        <div id="role-fish-drawer" class="fish-drawer" hidden></div>
+      </div>
+
       <!-- SKILL.md 可视化元信息、角色装配与附属文件 -->
       <div id="skill-visual" class="mil-screen" style="margin-bottom:10px">
         <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
+from .abilities import FISH_SEED_RE
 from .config import Settings
 from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
 from .recipes import (
@@ -158,6 +159,7 @@ class Management:
                                 "bound",
                                 "enabled",
                                 "skills",
+                                "fish_seed",
                             }
                         }
                     )
@@ -265,6 +267,59 @@ class Management:
             "skills": next_skills,
             "version": saved["version"],
         }
+
+    def _set_profile_fish(self, profile_id: str, fish_seed: str) -> dict:
+        if not isinstance(fish_seed, str) or not FISH_SEED_RE.fullmatch(fish_seed):
+            raise ValueError("角色小鱼头像种子格式无效")
+        self.plugin.profiles.get(profile_id)
+        current = self.plugin.memory.read(
+            "profile", target=profile_id, document="profile.toml", allow_custom=True
+        )
+        text = current["content"]
+        if fish_seed == "":
+            updated = re.sub(r"(?m)^fish_seed\s*=.*\r?\n?", "", text)
+        else:
+            formatted = "fish_seed = " + json.dumps(fish_seed, ensure_ascii=False)
+            if re.search(r"(?m)^fish_seed\s*=.*$", text):
+                updated = re.sub(r"(?m)^fish_seed\s*=.*$", formatted, text, count=1)
+            elif re.search(r"(?m)^title\s*=.*$", text):
+                updated = re.sub(
+                    r"(?m)^title\s*=.*$",
+                    lambda m: m.group(0) + "\n" + formatted,
+                    text,
+                    count=1,
+                )
+            else:
+                updated = (text.rstrip("\n") + "\n" + formatted + "\n").lstrip("\n")
+        if updated and not updated.endswith("\n"):
+            updated += "\n"
+        saved = self.plugin.memory.write(
+            "profile",
+            updated,
+            target=profile_id,
+            document="profile.toml",
+            expected_version=current["version"],
+            allow_custom=True,
+        )
+        return {
+            "target": profile_id,
+            "fish_seed": fish_seed,
+            "version": saved["version"],
+        }
+
+    def _profile_fish_map(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        root = getattr(getattr(self.plugin, "profiles", None), "path", None)
+        if not root or not root.is_dir():
+            return mapping
+        for path in sorted(root.iterdir()):
+            if not path.is_dir() or path.is_symlink():
+                continue
+            try:
+                mapping[path.name] = self.plugin.profiles.get(path.name).fish_seed
+            except (ValueError, OSError):
+                mapping[path.name] = ""
+        return mapping
 
     def _settings(self):
         settings = self.plugin.settings.model_dump()
@@ -845,6 +900,7 @@ class Management:
             "workspaces": chat_workspaces[:60],
             "chats": sorted(c for c in chats if c),
             "stats": stats,
+            "profile_fish": self._profile_fish_map(),
         }
 
     def _read_artifact_stream(
@@ -1197,6 +1253,14 @@ class Management:
                 "enabled": enabled,
                 "version": saved["version"],
             }
+        elif action == "set_profile_fish":
+            target = str(options.get("target") or options.get("profile") or "").strip()
+            raw_seed = options.get("fish_seed", "")
+            if not target or not isinstance(raw_seed, str):
+                raise ValueError("set_profile_fish 需要提供 target 与字符串 fish_seed")
+            result = await completed_thread(
+                self._set_profile_fish, target, raw_seed.strip()
+            )
         elif action == "import_skill":
             result = await completed_thread(self._upload_skill, options)
         elif action == "recipe_preview":

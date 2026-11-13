@@ -15,7 +15,7 @@ Maisya/
 ├── config.example.toml             # 默认关闭的配置示例（含 web_provider / chat_proactive_levels / acquaintance_users / longing_quiet_hours 等）
 ├── maisya/
 │   ├── config.py                   # SDK 配置模型、web_provider/per-chat 主动级别/熟人/久违静默阈值校验与外部数据初始化
-│   ├── abilities.py                # scout/maker/digest 角色（profile，含 enabled 开关）、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全角色包
+│   ├── abilities.py                # scout/maker/digest 角色（profile，含 enabled 开关与可选 fish_seed 头像种子）、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全角色包
 │   ├── digest.py                   # SSRF/XXE 防护 RSS 试订/退订状态机、硬过滤与五维打分精选、离线天光简报卡 HTML 生成与 digest_feed 工具
 │   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、只读技能伴随文件（in/skills/<id>/）、附件、联网路由、MCP/模板/跨插件 API 与 planner 路由
 │   ├── workspaces.py               # 安全文件访问、串行写入、原子检查点、配额与不可变附件
@@ -24,8 +24,8 @@ Maisya/
 │   ├── mcp_worker.py               # MCP 独立子进程的资源限制、cgroup 与降权
 │   ├── memory.py                   # 分层文件、parse_skill_meta()、预设技能与 HEARTBEAT.md 释放（create_skill/reset_skill）、技能压缩包导入导出与伴随文件管理（.zip/.skill/.tar.*）、heartbeat_parts() 解析、版本/回滚与 FTS5
 │   ├── learning.py                 # 同一工具失败后恢复时提炼短方法，状态轨迹输入与有界后台调用
-│   ├── recipes.py                  # Grok 式能力配方模板（草稿与隐私/凭据体检、公开 GitHub/归档链接防 SSRF 拉取、预览缺件对齐、平滑升级与例行任务挂载）
-│   ├── management.py               # 五页管理 API（含产物检视、技能包分块导入导出、能力配方 draft/package/preview/import、服务、健康与事件通道）
+│   ├── recipes.py                  # Grok 式能力配方模板（草稿与隐私/凭据体检、公开 GitHub/归档链接防 SSRF 拉取、预览缺件对齐、平滑升级与例行任务挂载，携带并保护本地 fish_seed）
+│   ├── management.py               # 五页管理 API（含产物检视、profile_fish 映射与 set_profile_fish 头像保存、技能包分块导入导出、能力配方 draft/package/preview/import、服务、健康与事件通道）
 │   ├── incoming.py                 # 宿主认证入口的 HMAC 校验、并发锁去重、可选 profile+workspace 线程启动与 Intent 转换
 │   ├── share.py                    # 原生表达（含非管理员全员艾特过滤）与链接/图片发送、file 附件独立拆条 send.hybrid 交付
 │   ├── scout.py                    # 宿主能力 RPC 包装（显式 timeout_ms 与非标准异常归一化）、WebRouter 委托、plugin_api 与 thread_later 定义
@@ -45,11 +45,12 @@ Maisya/
 │   ├── Dockerfile                  # maisya-sandbox:py313 可复现镜像定义（Python 3.13 + Node 22 + 非 root 用户）
 │   └── build_image.sh              # 默认 dry-run、--execute 构建沙箱镜像脚本
 ├── webui/
-│   ├── now.html                      # 现场：线程、五段上下文条、待唤醒意图、步骤流、勾选立即转向引导与停止
-│   ├── outputs.html                  # 产物：已声明附件与图片预览、工作区成品安全阅读、结论出处与持续工作区目录树
-│   ├── abilities.html                # 能力：画廊优先技能库（双列卡片/筛选/拖拽压缩包导入，点击进入技能工作台编辑与伴随文件预览）、角色名册与角色包
+│   ├── now.html                      # 现场：线程、流向图/线程流/检视器角色小鱼头像、五段上下文条、待唤醒意图、步骤流、勾选立即转向引导与停止
+│   ├── outputs.html                  # 产物：已声明附件与图片预览、工作区成品安全阅读、结论出处与角色小鱼标识、持续工作区目录树
+│   ├── abilities.html                # 能力：画廊优先技能库（双列卡片/筛选/角色小鱼芯片/拖拽压缩包导入，点击进入技能工作台编辑与伴随文件预览）、角色名册/工作台小鱼定制与随机换鱼、能力配方分享
 │   ├── memory.html                   # 手账：会话备忘、近期手账、探索节奏与意图回执
 │   ├── settings.html                 # 设置：会话、按会话主动级别、熟识账号、久违阈值、沙箱、凭据、MCP/API 与事件通道
+│   ├── fish.js                       # 程序化内联 SVG 角色小鱼头像与游动动画（12 鱼种 × 18 配色 × 11 眼神），由 build.py 注入五个页面
 │   ├── management.html.in            # 四个管理页共用的内联脚本（含 data-type="map" 解析）与样式源码
 │   ├── fragments/                    # 四个管理页各自的正文源码
 │   └── build.py                      # 无依赖生成自包含 HTML，--check 检查产物

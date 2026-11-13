@@ -22,7 +22,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from .abilities import ALLOWED_TASKS, HOST_TOOLS, READONLY_TOOLS, SANDBOX_TOOLS
+from .abilities import ALLOWED_TASKS, FISH_SEED_RE, HOST_TOOLS, READONLY_TOOLS, SANDBOX_TOOLS
 from .memory import SKILL_ID_RE, MemoryLayers, _is_archive_junk, _normalize_archive_path, parse_skill_meta
 from .vault import atomic_private_write, private_directory
 
@@ -44,6 +44,7 @@ _SESSION_MARKER_RE = re.compile(r"本群|群名|群号|群友称呼")
 
 _PROFILE_KEY_ORDER = (
     "title",
+    "fish_seed",
     "enabled",
     "bound",
     "environment",
@@ -408,10 +409,14 @@ def serialize_profile_toml(config: dict) -> str:
     for key in _PROFILE_KEY_ORDER:
         if key not in config or config[key] is None:
             continue
+        if key == "fish_seed" and config[key] == "":
+            continue
         seen.add(key)
         lines.append(f"{key} = {_format_toml_value(config[key])}")
     for key in sorted(set(config) - seen):
         if config[key] is None:
+            continue
+        if key == "fish_seed" and config[key] == "":
             continue
         lines.append(f"{key} = {_format_toml_value(config[key])}")
     return "\n".join(lines) + "\n"
@@ -845,6 +850,7 @@ def _assemble_recipe_bundle(plugin, profile_id: str, options: dict | None = None
         "profile": {
             "id": profile.id,
             "title": profile.title,
+            "fish_seed": profile.fish_seed,
             "summary": next(
                 (
                     line.lstrip("#").strip()[:120]
@@ -1147,9 +1153,15 @@ def _parse_and_validate_recipe_files(plugin, files: dict[str, bytes], *, fallbac
         "skills",
         "allow_users",
         "allow_chats",
+        "fish_seed",
     }
     if set(raw_cfg) - allowed_fields:
         raise ValueError("配方 profile.toml 包含未声明字段")
+    fish_seed = raw_cfg.get("fish_seed", "")
+    if fish_seed != "" and (
+        not isinstance(fish_seed, str) or not FISH_SEED_RE.fullmatch(fish_seed)
+    ):
+        raise ValueError("配方小鱼头像种子格式无效")
     environment = raw_cfg.get("environment", "readonly")
     if environment not in {"readonly", "sandbox"}:
         raise ValueError("配方执行环境无效")
@@ -1518,6 +1530,7 @@ def build_recipe_preview(
                 existing_info = {
                     "id": candidate_id,
                     "title": cur_prof.title,
+                    "fish_seed": cur_prof.fish_seed,
                     "is_preset": candidate_id in {"scout", "maker", "digest"},
                     "enabled": cur_prof.enabled,
                     "bound": cur_prof.bound,
@@ -1537,6 +1550,13 @@ def build_recipe_preview(
                 suggested_copy_id = cand
                 break
 
+    raw_preview_fish = str(
+        parsed["config"].get("fish_seed")
+        or ((parsed.get("manifest") or {}).get("profile") or {}).get("fish_seed")
+        or ""
+    ).strip()
+    preview_fish_seed = raw_preview_fish if FISH_SEED_RE.fullmatch(raw_preview_fish) else ""
+
     return clean_zip, {
         "source_id": parsed["source_id"],
         "suggested_target": candidate_id,
@@ -1546,6 +1566,7 @@ def build_recipe_preview(
         "profile": {
             "id": parsed["source_id"],
             "title": str(parsed["config"].get("title") or parsed["source_id"]),
+            "fish_seed": preview_fish_seed,
             "summary": parsed["summary"],
             "enabled": parsed["config"].get("enabled", True) is not False,
             "environment": parsed["config"].get("environment", "readonly"),
@@ -1798,6 +1819,8 @@ def import_recipe_archive(
     # Smooth upgrade (`mode == "update"`): preserve local allowlists, enabled, workspaces, and valid bindings!
     local_profile = plugin.profiles.get(target)
     merged_cfg = dict(incoming_cfg)
+    if not str(merged_cfg.get("fish_seed") or "").strip() and local_profile.fish_seed:
+        merged_cfg["fish_seed"] = local_profile.fish_seed
     merged_cfg["enabled"] = local_profile.enabled
     if local_profile.allow_chats:
         merged_cfg["allow_chats"] = list(local_profile.allow_chats)
@@ -1927,6 +1950,7 @@ def import_recipe_archive(
             "allow_users": list(updated_profile.allow_users),
             "enabled": updated_profile.enabled,
             "bound": updated_profile.bound,
+            "fish_seed": updated_profile.fish_seed,
         },
         "installed_skills": installed_skills,
         "mounted_routines": mounted,

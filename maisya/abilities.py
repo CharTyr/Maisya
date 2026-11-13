@@ -33,6 +33,9 @@ WEB_PROVIDER_RE = re.compile(
     r"^(auto|host|google_search_plugin|mcp(:[A-Za-z][A-Za-z0-9_-]{0,63})?|plugin_api(:[A-Za-z][A-Za-z0-9_-]{0,63})?|plugin:[A-Za-z0-9_.-]{1,128}|web:[A-Za-z][A-Za-z0-9_-]{0,63})$"
 )
 ALLOWED_TASKS = frozenset({"utils", "planner", "replyer", "fast_model", "vlm"})
+FISH_SEED_RE = re.compile(
+    r"^(?:[A-Za-z0-9_]{0,16}|c-[a-z]{1,16}-\d{1,2}-[a-z]{1,16}-[A-Za-z0-9_]{0,10})$"
+)
 DEFAULT_INSTRUCTIONS = (
     "你是 MaiBot 调度的只读探索能力。根据当前要求自主查证，保留出处，区分事实和推断。"
     "普通细节自行决定；只有核心输入缺失才用 ask_user 提问一次。直接给出有用的文字结论。"
@@ -67,6 +70,7 @@ class Profile:
     max_steps: int | None = None
     web_provider: str = ""
     sandbox_targets: tuple[str, ...] = ()
+    fish_seed: str = ""
 
     @property
     def uses_workspace(self):
@@ -167,6 +171,7 @@ class Profiles:
             "skills",
             "allow_users",
             "allow_chats",
+            "fish_seed",
         }:
             raise ValueError("角色配置包含未声明字段，凭据只能使用句柄绑定")
         task = config.get("task", "utils")
@@ -272,6 +277,9 @@ class Profiles:
             raise ValueError("角色启用开关必须为布尔值")
         if "bound" in config and type(config["bound"]) is not bool:
             raise ValueError("角色绑定状态必须为布尔值")
+        fish_seed = config.get("fish_seed", "")
+        if not isinstance(fish_seed, str) or not FISH_SEED_RE.fullmatch(fish_seed):
+            raise ValueError("角色小鱼头像种子格式无效")
         return Profile(
             id=profile_id,
             title=str(config.get("title", profile_id)),
@@ -298,6 +306,7 @@ class Profiles:
             max_steps=max_steps,
             web_provider=web_provider,
             sandbox_targets=tuple(sandbox_targets),
+            fish_seed=fish_seed,
         )
 
     def delete(self, profile_id: str):

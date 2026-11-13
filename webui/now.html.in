@@ -748,8 +748,13 @@
       </div>
 
       <div class="mil-screen" style="margin-bottom:10px">
-        <h2 class="inspector-h2" id="title">等待选择线程</h2>
-        <div class="mil-hint" id="meta" style="margin-top:4px"></div>
+        <div class="mil-row" style="gap:10px;align-items:center;flex-wrap:nowrap">
+          <span class="mil-fish mil-fish--well" id="ins-role-fish" style="width:40px;height:40px" hidden aria-hidden="true"></span>
+          <div style="min-width:0;flex:1">
+            <h2 class="inspector-h2" id="title">等待选择线程</h2>
+            <div class="mil-hint" id="meta" style="margin-top:4px"></div>
+          </div>
+        </div>
         <pre class="mil-pre" id="result-box" style="margin-top:8px;max-height:160px" hidden></pre>
         <div class="mil-row" id="deliveries-row" style="margin-top:8px"></div>
       </div>
@@ -844,6 +849,13 @@
 (() => {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
   const $ = (sel) => document.querySelector(sel);
+  {{FISH_JS}}
+
+  function snapFishSeed(snap, roleId) {
+    const cards = Array.isArray(snap?.profile_cards) ? snap.profile_cards : [];
+    const hit = cards.find((c) => c && c.id === roleId);
+    return String(hit?.fish_seed || "");
+  }
 
   const CATS = {
     system: { name: "角色与技能", color: "var(--ctx-system)" },
@@ -1108,8 +1120,10 @@
       const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
       const selectedMatch = selProf === p.id;
       const isOff = p.enabled === false;
+      const cls = isOff ? "mil-fish--off" : "";
+      const fish = roleFishHtml(p.id, p.fish_seed || "", 26, running ? {} : { still: true }, cls);
       return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" style="${isOff ? "opacity:0.65" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}">
-        <span class="fl-node-top"><span class="fl-node-name">${esc(p.title || p.id)}</span><span class="mil-tag ${isOff ? "mil-tag--off" : ""}">${esc(isOff ? "已停用" : (p.environment === "sandbox" ? "沙箱" : "只读"))}</span></span>
+        <span class="fl-node-top"><span class="mil-row" style="gap:6px;min-width:0;flex:1;flex-wrap:nowrap">${fish}<span class="fl-node-name">${esc(p.title || p.id)}</span></span><span class="mil-tag ${isOff ? "mil-tag--off" : ""}">${esc(isOff ? "已停用" : (p.environment === "sandbox" ? "沙箱" : "只读"))}</span></span>
         <span class="fl-node-sub mono">${esc(p.id)}${isOff ? " · 停用" : p.autonomous ? " · 可自主" : " · 需授权"}</span>
       </button>`;
     }).join("");
@@ -1465,7 +1479,7 @@
         </div>
         ${t.excerpt ? `<div class="thread-excerpt">${esc(t.excerpt)}</div>` : ""}
         <div class="mil-row" style="justify-content:space-between;font-size:11px">
-          <span class="mono">${esc(t.profile)} · ${esc(t.chat_id)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span>
+          <span class="mil-row mono" style="gap:5px">${roleFishHtml(t.profile, snapFishSeed(snap, t.profile), 18, (t.state === "active" || t.state === "waiting") ? {} : { still: true })}<span>${esc(t.profile)} · ${esc(t.chat_id)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span></span>
           <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
         </div>
       </button>`;
@@ -1475,7 +1489,9 @@
   function renderInspector(snap) {
     const sel = snap.selected;
     const stopBtn = $("#stop");
+    const insFish = $("#ins-role-fish");
     if (!sel) {
+      if (insFish) { insFish.hidden = true; insFish.innerHTML = ""; insFish.className = "mil-fish mil-fish--well"; }
       $("#title").textContent = "等待选择线程";
       $("#meta").textContent = "点击上方流向图或左侧处理记录中的任意线程查看详情。";
       $("#ins-state-tag").textContent = "—";
@@ -1490,6 +1506,18 @@
 
     const rowSummary = (snap.threads || []).find((t) => t.thread_id === sel.thread_id);
     const st = STATE_LABEL[sel.state] || [sel.state || "未知", "", ""];
+    if (insFish) {
+      const card = (snap.profile_cards || []).find((c) => c && c.id === sel.profile);
+      const isOff = card?.enabled === false;
+      const swimming = sel.state === "active" || sel.state === "waiting";
+      insFish.hidden = false;
+      insFish.className = `mil-fish mil-fish--well${isOff ? " mil-fish--off" : ""}`;
+      insFish.innerHTML = fishSvg(roleFishSeed(sel.profile, snapFishSeed(snap, sel.profile)), {
+        size: 38,
+        still: !swimming || isOff,
+        label: "",
+      });
+    }
     $("#title").textContent = rowSummary?.title || sel.thread_id;
     $("#meta").textContent = `${sel.thread_id} · 会话 ${sel.chat_id} · 角色 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
     $("#ins-state-tag").textContent = st[0];
@@ -1579,7 +1607,7 @@
     $("#launch-profile-list").innerHTML = profiles.map((p) => `<option value="${esc(p)}">`).join("");
     $("#launch-chat-list").innerHTML = ["self", ...chats].map((c) => `<option value="${esc(c)}">`).join("");
     $("#launch-profile-chips").innerHTML = profiles.slice(0, 6).map((p) =>
-      `<button type="button" class="mil-key mil-key--sm" data-pick-profile="${esc(p)}">${esc(p)}</button>`
+      `<button type="button" class="mil-key mil-key--sm" data-pick-profile="${esc(p)}"><span class="mil-row" style="gap:5px">${roleFishHtml(p, snapFishSeed(snap, p), 18, { still: true })}<span>${esc(p)}</span></span></button>`
     ).join("");
     $("#launch-chat-chips").innerHTML = [...chats.slice(0, 4), "self"].map((c) =>
       `<button type="button" class="mil-key mil-key--sm" data-pick-chat="${esc(c)}">${c === "self" ? "自身活动 self" : esc(c)}</button>`
