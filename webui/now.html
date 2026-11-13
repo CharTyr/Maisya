@@ -787,10 +787,15 @@ pre, code, .mono, .num {
 .flow-box {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-  align-items: start;
-  padding: 6px 2px;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 0.92fr) minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 42px;
+  align-items: stretch;
+  padding: 14px 16px 16px;
+  border: 2px solid var(--mil-line);
+  background-color: var(--mil-screen);
+  background-image: radial-gradient(var(--mil-rule) 1px, transparent 1px);
+  background-size: 12px 12px;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
 }
 
 .fl-svg, .fl-sky {
@@ -800,18 +805,34 @@ pre, code, .mono, .num {
   height: 100%;
   pointer-events: none;
   overflow: visible;
+  z-index: 1;
+}
+.fl-sky {
+  z-index: 3;
 }
 
 .fl-svg path {
   fill: none;
   stroke: var(--mil-lo);
-  stroke-width: 2px;
+  stroke-width: 1.8px;
   stroke-dasharray: 4 3;
+  opacity: 0.72;
 }
 .fl-svg path.on {
   stroke: var(--mil-on-side);
-  stroke-width: 2.5px;
+  stroke-width: 2.8px;
   stroke-dasharray: none;
+  opacity: 1;
+}
+.fl-svg path.live {
+  stroke: var(--mil-hot);
+  stroke-width: 2.8px;
+  stroke-dasharray: 7 5;
+  opacity: 1;
+  animation: fl-dash 0.7s linear infinite;
+}
+@keyframes fl-dash {
+  to { stroke-dashoffset: -24; }
 }
 
 .pkt {
@@ -830,7 +851,16 @@ pre, code, .mono, .num {
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -838,31 +868,60 @@ pre, code, .mono, .num {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   font-family: var(--mil-font-display);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--mil-print);
-  padding: 0 2px 4px;
-  border-bottom: 2px dashed var(--mil-rule);
+  padding: 4px 8px;
+  border: 1.5px solid var(--mil-lo);
+  background: var(--mil-panel);
+}
+.fl-stage-arrow {
+  color: var(--mil-muted);
+  font-family: var(--mil-font-mono);
 }
 
 .fl-node {
+  position: relative;
   width: 100%;
   text-align: left;
-  padding: 7px 9px 9px;
+  padding: 9px 11px;
   border: 2px solid var(--mil-line);
-  background: var(--mil-screen);
-  background-image: var(--mil-lcd-grid);
-  background-size: 3px 3px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  box-shadow: 0 3px 0 var(--mil-lo);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
   transition: transform 80ms steps(2, end), background-color 120ms ease;
+}
+.fl-node[data-port-in="1"]::before,
+.fl-node[data-port-out="1"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border: 1.5px solid var(--mil-line);
+  background: var(--mil-screen);
+  z-index: 4;
+}
+.fl-node[data-port-in="1"]::before { left: -5px; }
+.fl-node[data-port-out="1"]::after { right: -5px; }
+.fl-node.on[data-port-in="1"]::before,
+.fl-node.on[data-port-out="1"]::after {
+  background: var(--mil-on);
+  border-color: var(--mil-on-side);
+}
+.fl-node.run[data-port-in="1"]::before,
+.fl-node.run[data-port-out="1"]::after {
+  background: var(--mil-hot);
+  border-color: var(--mil-hot-side);
 }
 
 .fl-node--static {
@@ -872,12 +931,23 @@ pre, code, .mono, .num {
 .fl-node.on {
   background: var(--mil-on);
   color: var(--mil-on-ink);
-  box-shadow: inset 0 -2px 0 var(--mil-on-side);
+  border-color: var(--mil-on-side);
+  box-shadow: 0 3px 0 var(--mil-on-side);
 }
 
 .fl-node.run {
   border-color: var(--mil-hot-side);
-  box-shadow: inset 3px 0 0 var(--mil-hot);
+  box-shadow: inset 4px 0 0 var(--mil-hot), 0 3px 0 var(--mil-lo);
+}
+
+.fl-node--gate {
+  background: var(--mil-panel);
+  box-shadow: 0 3px 0 var(--mil-lo), inset 4px 0 0 var(--mil-on-side);
+}
+.fl-node--gate[data-port-in="1"]::before,
+.fl-node--gate[data-port-out="1"]::after {
+  background: var(--mil-on);
+  border-color: var(--mil-on-side);
 }
 
 .fl-node-top {
@@ -1270,8 +1340,11 @@ pre, code, .mono, .num {
   .flow-box {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
+    padding: 10px;
   }
-  .fl-svg, .fl-sky {
+  .fl-svg, .fl-sky,
+  .fl-node[data-port-in="1"]::before,
+  .fl-node[data-port-out="1"]::after {
     display: none;
   }
   .strip-grid,
@@ -1322,20 +1395,20 @@ pre, code, .mono, .num {
     <div class="flow-box" id="flow">
       <svg class="fl-svg" aria-hidden="true"></svg>
       <div class="fl-col">
-        <div class="fl-col-h"><span>01 会话来源</span><span class="num" id="fl-cnt-chat">0</span></div>
-        <div id="fl-chats"></div>
+        <div class="fl-col-h"><span>01 会话来源 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-chat">0</span></div>
+        <div class="fl-list" id="fl-chats"></div>
       </div>
       <div class="fl-col">
-        <div class="fl-col-h"><span>02 脉搏闸门</span><span class="num" id="fl-cnt-gate">PULSE</span></div>
-        <div id="fl-gate"></div>
+        <div class="fl-col-h"><span>02 脉搏闸门 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-gate">PULSE</span></div>
+        <div class="fl-list" id="fl-gate"></div>
       </div>
       <div class="fl-col">
-        <div class="fl-col-h"><span>03 能力执行器</span><span class="num" id="fl-cnt-prof">0</span></div>
-        <div id="fl-profiles"></div>
+        <div class="fl-col-h"><span>03 能力执行器 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-prof">0</span></div>
+        <div class="fl-list" id="fl-profiles"></div>
       </div>
       <div class="fl-col">
         <div class="fl-col-h"><span>04 线程与交付</span><span class="num" id="fl-cnt-th">0</span></div>
-        <div id="fl-threads"></div>
+        <div class="fl-list" id="fl-threads"></div>
       </div>
     </div>
   </section>
@@ -1655,13 +1728,14 @@ pre, code, .mono, .num {
     const anchor = (el, side) => {
       const r = el.getBoundingClientRect();
       return {
-        x: (side === "R" ? r.right : r.left) - br.left,
+        x: (side === "R" ? r.right + 4 : r.left - 6) - br.left,
         y: r.top + r.height / 2 - br.top,
       };
     };
-    const curve = (a, b, key, on) => {
-      const dx = Math.max(24, (b.x - a.x) * 0.48);
-      paths.push(`<path data-k="${esc(key)}" class="${on ? "on" : ""}" d="M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}"/>`);
+    const curve = (a, b, key, cls) => {
+      const dx = Math.max(26, (b.x - a.x) * 0.5);
+      const marker = cls.includes("live") ? "url(#fl-arr-run)" : cls.includes("on") ? "url(#fl-arr-on)" : "url(#fl-arr-idle)";
+      paths.push(`<path data-k="${esc(key)}" class="${cls}" marker-end="${marker}" d="M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}"/>`);
     };
     const chats = [...box.querySelectorAll("#fl-chats .fl-node")];
     const gate = box.querySelector("#fl-gate .fl-node");
@@ -1670,17 +1744,31 @@ pre, code, .mono, .num {
     if (gate) {
       const gl = anchor(gate, "L");
       const gr = anchor(gate, "R");
-      chats.forEach((c, i) => curve(anchor(c, "R"), gl, `cg-${i}`, c.classList.contains("on") || c.classList.contains("run")));
-      profs.forEach((p, i) => curve(gr, anchor(p, "L"), `gp-${i}`, p.classList.contains("run") || p.classList.contains("on")));
+      chats.forEach((c, i) => {
+        const cls = [c.classList.contains("on") ? "on" : "", c.classList.contains("run") ? "live" : ""].filter(Boolean).join(" ");
+        curve(anchor(c, "R"), gl, `cg-${i}`, cls);
+      });
+      profs.forEach((p, i) => {
+        const cls = [p.classList.contains("on") ? "on" : "", p.classList.contains("run") ? "live" : ""].filter(Boolean).join(" ");
+        curve(gr, anchor(p, "L"), `gp-${i}`, cls);
+      });
     }
     if (profs.length && ths.length) {
       ths.forEach((t, ti) => {
         const pid = t.dataset.prof;
         const match = profs.find((p) => p.dataset.flowProfile === pid) || profs[0];
-        if (match) curve(anchor(match, "R"), anchor(t, "L"), `pt-${ti}`, t.classList.contains("run") || t.classList.contains("on"));
+        if (match) {
+          const cls = [t.classList.contains("on") ? "on" : "", t.classList.contains("run") ? "live" : ""].filter(Boolean).join(" ");
+          curve(anchor(match, "R"), anchor(t, "L"), `pt-${ti}`, cls);
+        }
       });
     }
-    svg.innerHTML = paths.join("");
+    const defs = `<defs>
+      <marker id="fl-arr-idle" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-lo)" stroke="none"/></marker>
+      <marker id="fl-arr-on" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-on-side)" stroke="none"/></marker>
+      <marker id="fl-arr-run" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-hot)" stroke="none"/></marker>
+    </defs>`;
+    svg.innerHTML = defs + paths.join("");
   }
 
   function emitFlightPackets() {
@@ -1742,32 +1830,36 @@ pre, code, .mono, .num {
       ? `当前按会话筛选：${state.chatFilter}`
       : "点击会话筛选全页 · 点击线程直接检视";
 
+    const selThread = threads.find((t) => t.thread_id === state.threadId) || snap.selected || null;
+    const selChat = state.chatFilter || selThread?.chat_id || "";
+    const selProf = selThread?.profile || "";
+
     $("#fl-chats").innerHTML = chats.length
       ? chats.map((cid) => {
           const activeHere = threads.some((t) => t.chat_id === cid && (t.state === "active" || t.state === "waiting"));
-          const on = state.chatFilter === cid;
+          const on = selChat === cid;
           const label = cid === "self" ? "自身活动 (self)" : cid;
-          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-flow-chat="${esc(cid)}">
+          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-port-out="1" data-flow-chat="${esc(cid)}">
             <span class="fl-node-top"><span class="fl-node-name">${esc(label)}</span><span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span></span>
             <span class="fl-node-sub">${threads.filter((t) => t.chat_id === cid).length} 条记录</span>
           </button>`;
         }).join("")
-      : `<div class="fl-node fl-node--static"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;
+      : `<div class="fl-node fl-node--static" data-port-out="1"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;
 
     const levelMap = { quiet: "安静 (仅被动)", care: "关怀 (平衡)", lively: "活跃 (可冒泡)" };
     const dailyPct = pulse.daily_limit ? Math.min(100, Math.round(((pulse.daily_used || 0) / pulse.daily_limit) * 100)) : 0;
-    $("#fl-gate").innerHTML = `<div class="fl-node fl-node--static${pulse.enabled !== false ? " on" : ""}">
-      <span class="fl-node-top"><span class="fl-node-name">${esc(levelMap[pulse.proactive_level] || "关怀")}</span><span class="mil-led ${pulse.in_sleep ? "mil-led--off" : ""}"></span></span>
+    $("#fl-gate").innerHTML = `<div class="fl-node fl-node--static fl-node--gate" data-port-in="1" data-port-out="1">
+      <span class="fl-node-top"><span class="fl-node-name">${esc(levelMap[pulse.proactive_level] || "关怀")}</span><span class="mil-tag ${pulse.enabled !== false && !pulse.in_sleep ? "mil-tag--ok" : ""}">${pulse.in_sleep ? "休眠" : pulse.enabled !== false ? "在线" : "停用"}</span></span>
       <span class="fl-node-sub">今日主动 ${pulse.daily_used || 0} / ${pulse.daily_limit ?? 1} · 待唤醒 ${snap.stats?.pending_intents ?? (snap.scheduled_intents || []).length}</span>
-      <div class="mil-meter" style="margin-top:4px"><i style="width:${dailyPct}%"></i></div>
+      <div class="mil-meter" style="margin-top:2px"><i style="width:${dailyPct}%"></i></div>
       <span class="fl-node-sub">联网：${esc(pulse.web_provider || "auto")}</span>
     </div>`;
 
     $("#fl-cnt-prof").textContent = String(cards.length);
     $("#fl-profiles").innerHTML = cards.slice(0, 6).map((p) => {
       const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
-      const selectedMatch = snap.selected?.profile === p.id;
-      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" data-flow-profile="${esc(p.id)}">
+      const selectedMatch = selProf === p.id;
+      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}">
         <span class="fl-node-top"><span class="fl-node-name">${esc(p.title || p.id)}</span><span class="mil-tag">${esc(p.environment === "sandbox" ? "沙箱" : "只读")}</span></span>
         <span class="fl-node-sub mono">${esc(p.id)}${p.autonomous ? " · 可自主" : " · 需授权"}</span>
       </button>`;
@@ -1779,12 +1871,12 @@ pre, code, .mono, .num {
       ? shownThreads.map((t) => {
           const st = STATE_LABEL[t.state] || ["未知", "", ""];
           const on = t.thread_id === state.threadId;
-          return `<button type="button" class="fl-node${on ? " on" : ""}${t.state === "active" || t.state === "waiting" ? " run" : ""}" data-flow-thread="${esc(t.thread_id)}" data-prof="${esc(t.profile)}">
+          return `<button type="button" class="fl-node${on ? " on" : ""}${t.state === "active" || t.state === "waiting" ? " run" : ""}" data-port-in="1" data-flow-thread="${esc(t.thread_id)}" data-prof="${esc(t.profile)}">
             <span class="fl-node-top"><span class="fl-node-name">${esc(t.title)}</span><span class="mil-led ${st[2]}"></span></span>
             <span class="fl-node-sub">${esc(t.profile)} · ${t.delivered ? "已交付" : st[0]}</span>
           </button>`;
         }).join("")
-      : `<div class="fl-node fl-node--static"><span class="fl-node-name">暂无线程</span><span class="fl-node-sub">下方可随时发起</span></div>`;
+      : `<div class="fl-node fl-node--static" data-port-in="1"><span class="fl-node-name">暂无线程</span><span class="fl-node-sub">下方可随时发起</span></div>`;
 
     requestAnimationFrame(() => {
       drawFlowLines();
