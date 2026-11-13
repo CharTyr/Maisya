@@ -101,6 +101,14 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         assert await page.locator("img").count() == 0
                         assert await page.locator("iframe").count() == 0
                     elif name == "abilities":
+                        import io
+                        import zipfile
+
+                        # Default view is the spacious Skills Gallery with editor hidden
+                        await expect(
+                            page.locator("#skills-gallery-panel")
+                        ).to_be_visible()
+                        await expect(page.locator("#editor-panel")).to_be_hidden()
                         await expect(
                             page.locator('[data-skill="news-digest"]')
                         ).to_be_visible()
@@ -119,14 +127,32 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                             == 0
                         )
                         await page.locator("#skill-filter").fill("")
+                        await page.locator('[data-skill-scope="preset"]').click()
                         await expect(
                             page.locator('[data-skill="source-checking"]')
                         ).to_be_visible()
+                        await page.locator('[data-skill-scope="all"]').click()
+
+                        # Clicking a skill card opens SKILL workbench; Back button returns to gallery
+                        await page.locator('[data-skill="news-digest"]').click()
+                        await expect(page.locator("#editor-panel")).to_be_visible()
+                        await expect(page.locator("#editor-silk")).to_have_text(
+                            "SKILL · 技能工作台"
+                        )
+                        await expect(page.locator("#skills-gallery-panel")).to_be_hidden()
+                        await page.locator("#back-to-skills").click()
+                        await expect(page.locator("#skills-gallery-panel")).to_be_visible()
+                        await expect(page.locator("#editor-panel")).to_be_hidden()
+
+                        # Create a custom skill, edit frontmatter, bind role, then delete
+                        await page.locator("#open-create-skill").click()
+                        await expect(page.locator("#skill-add-drawer")).to_be_visible()
                         await page.locator("#new-skill-id").fill("ui-skill")
                         await page.locator("#create-skill").click()
-                        await expect(
-                            page.locator('[data-skill="ui-skill"]')
-                        ).to_be_visible()
+                        await expect(page.locator("#editor-panel")).to_be_visible()
+                        await expect(page.locator("#active-target-tag")).to_have_text(
+                            "ui-skill"
+                        )
                         await page.locator("#sk-meta-desc").fill("界面创建的核验技能")
                         await page.locator("#save").click()
                         await expect(page.locator("#feedback")).to_contain_text(
@@ -142,6 +168,39 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                             "已删除技能 ui-skill"
                         )
                         assert "ui-skill" not in plugin.profiles.get("scout").skills
+                        await expect(page.locator("#skills-gallery-panel")).to_be_visible()
+
+                        # Upload a real .zip skill package with companion reference file
+                        await page.locator("#open-import-skill").click()
+                        zbuf = io.BytesIO()
+                        with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+                            zf.writestr("__MACOSX/._SKILL.md", b"appledouble")
+                            zf.writestr(
+                                "ui-pack/SKILL.md",
+                                "---\nname: ui-pack\ndescription: 压缩包导入演示\n---\n# UI Pack\n",
+                            )
+                            zf.writestr(
+                                "ui-pack/references/rules.md",
+                                "# Companion Rules\nCheck reference line.\n",
+                            )
+                        await page.locator("#skill-file").set_input_files(
+                            {
+                                "name": "ui-pack.zip",
+                                "mimeType": "application/zip",
+                                "buffer": zbuf.getvalue(),
+                            }
+                        )
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已导入技能 ui-pack（含 1 个附属文件）"
+                        )
+                        await expect(page.locator("#editor-panel")).to_be_visible()
+                        await expect(page.locator("#sk-companions-box")).to_be_visible()
+                        await page.locator('[data-companion-path="references/rules.md"]').click()
+                        await expect(page.locator("#sk-companion-preview")).to_contain_text(
+                            "Check reference line."
+                        )
+                        await page.locator("#delete-skill").click()
+                        await expect(page.locator("#skills-gallery-panel")).to_be_visible()
 
                         await expect(
                             page.locator('[data-profile="digest"]')
@@ -182,7 +241,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                                 "profile", target="scout", document="profile.toml"
                             )["content"]
                         )
-                        await page.locator("#document").select_option("notes")
+                        await page.locator('[data-doc-tab="notes"]').click()
                         await expect(page.locator("#content")).to_be_enabled()
                         await page.locator("#content").fill("先核对原始来源。")
                         await page.locator("#save").click()
@@ -212,6 +271,8 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(page.locator("#local-draft")).to_have_value(
                             "保留我的草稿。"
                         )
+                        await page.locator("#nav-discovery").click()
+                        await expect(page.locator("#discovery-info")).to_be_visible()
                         await expect(page.locator("#discovery-info")).not_to_be_empty()
                         await page.locator("#new-id").fill("ui_temp")
                         await page.locator("#clone").click()

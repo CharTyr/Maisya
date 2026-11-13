@@ -344,9 +344,10 @@ class Profiles:
             from .memory import MemoryLayers
 
             for skill in profile.skills:
-                source = self.path.parent / "skills" / skill / "SKILL.md"
-                if not source.exists():
-                    source = directory / "preset/skills" / skill / "SKILL.md"
+                skill_dir = self.path.parent / "skills" / skill
+                if not (skill_dir / "SKILL.md").exists():
+                    skill_dir = directory / "preset/skills" / skill
+                source = skill_dir / "SKILL.md"
                 if any(parent.is_symlink() for parent in source.parents):
                     raise ValueError("技能路径不能经过链接")
                 content = MemoryLayers._bytes(source)
@@ -357,6 +358,24 @@ class Profiles:
                 if used > 16 * 1024**2 or count > 256:
                     raise ValueError("档案资产总量超过预算")
                 archive.writestr(f"preset/skills/{skill}/SKILL.md", content)
+                for extra_path in sorted(skill_dir.rglob("*")):
+                    if extra_path == source or extra_path.is_dir():
+                        continue
+                    if extra_path.is_symlink():
+                        raise ValueError("技能路径不能经过链接")
+                    rel_extra = extra_path.relative_to(skill_dir)
+                    if any(part.startswith(".") for part in rel_extra.parts):
+                        continue
+                    extra_bytes = MemoryLayers._bytes(extra_path)
+                    if self.contains_secret(extra_bytes):
+                        raise ValueError("技能附属文件含凭据，不能导出")
+                    used += len(extra_bytes)
+                    count += 1
+                    if used > 16 * 1024**2 or count > 256:
+                        raise ValueError("档案资产总量超过预算")
+                    archive.writestr(
+                        f"preset/skills/{skill}/{rel_extra.as_posix()}", extra_bytes
+                    )
         if buffer.tell() > 8 * 1024**2:
             raise ValueError("档案包过大")
         return buffer.getvalue()

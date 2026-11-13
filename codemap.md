@@ -17,14 +17,14 @@ Maisya/
 │   ├── config.py                   # SDK 配置模型、web_provider/per-chat 主动级别/熟人/久违静默阈值校验与外部数据初始化
 │   ├── abilities.py                # scout/maker/digest 角色（profile，含 enabled 开关）、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全角色包
 │   ├── digest.py                   # SSRF/XXE 防护 RSS 试订/退订状态机、硬过滤与五维打分精选、离线天光简报卡 HTML 生成与 digest_feed 工具
-│   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、附件、联网路由、MCP/模板/跨插件 API 与 planner 路由
+│   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、只读技能伴随文件（in/skills/<id>/）、附件、联网路由、MCP/模板/跨插件 API 与 planner 路由
 │   ├── workspaces.py               # 安全文件访问、串行写入、原子检查点、配额与不可变附件
 │   ├── sandbox.py                  # 专用 Docker/gVisor、max_concurrent 信号量、出站规则、资源参数、取消与清理恢复
 │   ├── services.py                 # 按线程隔离的 stdio MCP 池、私有固定模板、跨插件只读 @API 与 services.json["web"] 只读联网绑定
 │   ├── mcp_worker.py               # MCP 独立子进程的资源限制、cgroup 与降权
-│   ├── memory.py                   # 分层文件、parse_skill_meta()、预设技能与 HEARTBEAT.md 释放（create_skill/reset_skill）、heartbeat_parts() 解析、版本/回滚与 FTS5
+│   ├── memory.py                   # 分层文件、parse_skill_meta()、预设技能与 HEARTBEAT.md 释放（create_skill/reset_skill）、技能压缩包导入导出与伴随文件管理（.zip/.skill/.tar.*）、heartbeat_parts() 解析、版本/回滚与 FTS5
 │   ├── learning.py                 # 同一工具失败后恢复时提炼短方法，状态轨迹输入与有界后台调用
-│   ├── management.py               # 五页管理 API（含产物 outputs / artifact 检视）、持久设置、版本编辑、技能目录与角色装配（skill_items/create_skill/reset_skill/bind_skill）、分块角色包、服务（含 apis/web）、执行健康（含联网状态）与事件通道校验
+│   ├── management.py               # 五页管理 API（含产物 outputs / artifact 检视）、持久设置、版本编辑、技能目录与伴随文件/分块导入导出（skill_items/skill_file/skill_package/import_skill/create_skill/reset_skill/bind_skill）、分块角色包、服务（含 apis/web）、执行健康（含联网状态）与事件通道校验
 │   ├── incoming.py                 # 宿主认证入口的 HMAC 校验、并发锁去重、可选 profile+workspace 线程启动与 Intent 转换
 │   ├── share.py                    # 原生表达（含非管理员全员艾特过滤）与链接/图片发送、file 附件独立拆条 send.hybrid 交付
 │   ├── scout.py                    # 宿主能力 RPC 包装（显式 timeout_ms 与非标准异常归一化）、WebRouter 委托、plugin_api 与 thread_later 定义
@@ -46,7 +46,7 @@ Maisya/
 ├── webui/
 │   ├── now.html                      # 现场：线程、五段上下文条、待唤醒意图、步骤流、勾选立即转向引导与停止
 │   ├── outputs.html                  # 产物：已声明附件与图片预览、工作区成品安全阅读、结论出处与持续工作区目录树
-│   ├── abilities.html                # 能力：技能库（搜索/新建/导入/重置/一键装配角色）、角色名册、方法笔记与角色包
+│   ├── abilities.html                # 能力：画廊优先技能库（双列卡片/筛选/拖拽压缩包导入，点击进入技能工作台编辑与伴随文件预览）、角色名册与角色包
 │   ├── memory.html                   # 手账：会话备忘、近期手账、探索节奏与意图回执
 │   ├── settings.html                 # 设置：会话、按会话主动级别、熟识账号、久违阈值、沙箱、凭据、MCP/API 与事件通道
 │   ├── management.html.in            # 四个管理页共用的内联脚本（含 data-type="map" 解析）与样式源码

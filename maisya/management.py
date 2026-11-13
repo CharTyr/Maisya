@@ -192,6 +192,7 @@ class Management:
                 else ""
             )
             ver, updated = skill_versions.get(skill_id, (0, 0.0))
+            companions = plugin.memory.skill_files(skill_id)
             skill_items.append(
                 {
                     "id": skill_id,
@@ -204,6 +205,8 @@ class Management:
                     "used_by": [
                         p["id"] for p in profiles if skill_id in (p.get("skills") or [])
                     ],
+                    "companion_count": len(companions),
+                    "companion_files": [c["path"] for c in companions[:20]],
                     "chars": len(raw),
                     "version": ver,
                     "updated": updated,
@@ -346,6 +349,39 @@ class Management:
             "total": len(transfer["data"]),
         }
 
+    def _transfer_skill(self, options):
+        self.transfers = {
+            key: value
+            for key, value in self.transfers.items()
+            if value["expires"] > time.time()
+        }
+        token = options.get("token", "")
+        if not token:
+            if len(self.transfers) >= 4:
+                raise ValueError("传输较多，请稍后再试")
+            token = uuid.uuid4().hex
+            data = self.plugin.memory.export_skill_archive(
+                str(options.get("target") or "").strip()
+            )
+            self.transfers[token] = {
+                "data": data,
+                "expires": time.time() + 300,
+                "direction": "download",
+            }
+        transfer = self.transfers.get(token)
+        if not transfer or transfer["direction"] != "download":
+            raise ValueError("导出已过期，请重新导出")
+        offset = options.get("offset", 0)
+        if type(offset) is not int or not 0 <= offset <= len(transfer["data"]):
+            raise ValueError("传输位置无效")
+        data = transfer["data"][offset : offset + 24576]
+        return {
+            "token": token,
+            "data": base64.b64encode(data).decode(),
+            "offset": offset + len(data),
+            "total": len(transfer["data"]),
+        }
+
     async def _discovery(self):
         ctx = getattr(self.plugin, "ctx", None)
 
@@ -447,6 +483,17 @@ class Management:
                 "limit": self.plugin.runtime.files.total_bytes,
                 "web": await self.plugin.runtime.web.status(),
             }
+        elif section == "skill_file":
+            result = await completed_thread(
+                self.plugin.memory.read_skill_file,
+                str(options.get("target") or "").strip(),
+                str(options.get("path") or "").strip(),
+            )
+            if isinstance(result.get("content"), str):
+                result["content"] = self.plugin.vault.redact(result["content"])
+        elif section == "skill_package":
+            async with self.lock:
+                result = await completed_thread(self._transfer_skill, options)
         elif section == "package":
             async with self.lock:
                 result = await completed_thread(self._transfer, options)
@@ -1081,6 +1128,8 @@ class Management:
                 "enabled": enabled,
                 "version": saved["version"],
             }
+        elif action == "import_skill":
+            result = await completed_thread(self._upload_skill, options)
         elif action == "import":
             result = await completed_thread(self._upload, options)
         else:
@@ -1203,4 +1252,46 @@ class Management:
                 bytes(transfer["data"]), transfer["target"]
             )
             return {"id": profile.id, "done": True}
+        return {"token": token, "offset": len(transfer["data"])}
+
+    def _upload_skill(self, options):
+        self.transfers = {
+            key: value
+            for key, value in self.transfers.items()
+            if value["expires"] > time.time()
+        }
+        token = options.get("token", "")
+        if not token:
+            if len(self.transfers) >= 4:
+                raise ValueError("传输较多，请稍后再试")
+            token = uuid.uuid4().hex
+            self.transfers[token] = {
+                "data": bytearray(),
+                "target": str(options.get("target") or "").strip(),
+                "filename": str(options.get("filename") or "").strip(),
+                "overwrite": options.get("overwrite", True) is not False,
+                "expires": time.time() + 300,
+                "direction": "upload_skill",
+            }
+        transfer = self.transfers.get(token)
+        if (
+            not transfer
+            or transfer["direction"] != "upload_skill"
+            or options.get("offset", 0) != len(transfer["data"])
+        ):
+            raise ValueError("导入位置无效或传输过期")
+        data = base64.b64decode(options["data"], validate=True)
+        if len(data) > 24576 or len(transfer["data"]) + len(data) > 8 * 1024**2:
+            self.transfers.pop(token, None)
+            raise ValueError("技能包过大")
+        transfer["data"].extend(data)
+        if options.get("done"):
+            self.transfers.pop(token)
+            imported = self.plugin.memory.import_skill_archive(
+                bytes(transfer["data"]),
+                target=transfer["target"],
+                filename=transfer["filename"],
+                overwrite=transfer["overwrite"],
+            )
+            return {**imported, "done": True}
         return {"token": token, "offset": len(transfer["data"])}

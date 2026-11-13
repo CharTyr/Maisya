@@ -151,6 +151,41 @@ class AgentRuntime(Scout):
             else None
         )
 
+    def _sync_skill_companions(self, row, work):
+        if self.memory is None:
+            return
+        try:
+            live = self.memory.profiles.get(row["profile"])
+            skills = live.skills
+        except (ValueError, OSError):
+            skills = tuple((row.get("profile_snapshot") or {}).get("skills") or ())
+        for skill_id in skills:
+            try:
+                companions = self.memory.read_skill_companions(skill_id)
+            except (ValueError, OSError):
+                continue
+            for rel_sub, raw_data in companions:
+                rel = f"in/skills/{skill_id}/{rel_sub}"
+                with parent_fd(work.path, rel, create=True) as (directory, name):
+                    temp = ".skill-" + os.urandom(6).hex()
+                    fd = os.open(
+                        temp,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=directory,
+                    )
+                    try:
+                        with os.fdopen(fd, "wb") as output:
+                            output.write(raw_data)
+                            output.flush()
+                            os.fsync(output.fileno())
+                        os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
+                    finally:
+                        try:
+                            os.unlink(temp, dir_fd=directory)
+                        except FileNotFoundError:
+                            pass
+
     async def _work(self, row):
         thread_id = row["thread_id"]
         if thread_id not in self.sessions:
@@ -158,6 +193,7 @@ class AgentRuntime(Scout):
             def enter():
                 manager = self.files.activity(row)
                 work = manager.__enter__()
+                self._sync_skill_companions(row, work)
                 self.sessions[thread_id] = manager, work
                 return work
 

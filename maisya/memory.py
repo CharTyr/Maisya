@@ -2,20 +2,211 @@
 
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import stat
+import tarfile
+import tempfile
 import time
+import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .vault import atomic_private_write, private_directory
 
 PRESETS_DIR = Path(__file__).resolve().parents[1] / "presets"
 SKILL_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
+_SKILL_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024
+_SKILL_ARCHIVE_MAX_UNPACKED = 16 * 1024 * 1024
+_SKILL_FILE_MAX_BYTES = 2 * 1024 * 1024
+_SKILL_MAX_ENTRIES = 512
+_SKILL_MAX_FILES = 64
+_SKILL_MAX_BUNDLE = 20
+_SECRET_RE = re.compile(
+    r"-----BEGIN .*PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
+)
+_COMPANION_SEG_RE = re.compile(r"[A-Za-z0-9._\u4e00-\u9fff-]{1,80}")
+_ARCHIVE_JUNK_PARTS = frozenset(
+    {
+        "__MACOSX",
+        ".git",
+        ".svn",
+        ".hg",
+        "__pycache__",
+        "node_modules",
+        ".venv",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
+_ARCHIVE_JUNK_FILES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
+
+
+def _slug_skill_id(raw: str) -> str:
+    text = str(raw or "").strip()
+    for suffix in (
+        ".tar.gz",
+        ".tar.bz2",
+        ".tar.xz",
+        ".tgz",
+        ".zip",
+        ".skill",
+        ".md",
+        ".txt",
+    ):
+        if text.lower().endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    for tail in ("-main", "-master", "-head", "-HEAD"):
+        if len(text) > len(tail) and text.endswith(tail):
+            text = text[: -len(tail)]
+            break
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", text).strip("-_")
+    if not cleaned:
+        return ""
+    if not cleaned[0].isalpha():
+        cleaned = f"skill-{cleaned}"
+    cleaned = cleaned[:64].rstrip("-_")
+    return cleaned if SKILL_ID_RE.fullmatch(cleaned) else ""
+
+
+def _normalize_archive_path(raw_name: str) -> str:
+    if not isinstance(raw_name, str) or "\x00" in raw_name or "\\" in raw_name:
+        raise ValueError("技能压缩包包含非法路径")
+    stripped = raw_name.strip()
+    while stripped.startswith("./"):
+        stripped = stripped[2:]
+    stripped = stripped.rstrip("/")
+    if not stripped or stripped == ".":
+        return ""
+    if stripped.startswith("/"):
+        raise ValueError("技能压缩包不支持绝对路径")
+    parts = stripped.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("技能压缩包包含越界或空路径段")
+    return "/".join(parts)
+
+
+def _is_archive_junk(rel_path: str) -> bool:
+    parts = rel_path.split("/")
+    if any(part in _ARCHIVE_JUNK_PARTS for part in parts):
+        return True
+    base = parts[-1]
+    return base in _ARCHIVE_JUNK_FILES or base.startswith("._")
+
+
+def _extract_skill_archive_entries(
+    raw_bytes: bytes, *, filename: str = ""
+) -> dict[str, bytes]:
+    if not isinstance(raw_bytes, (bytes, bytearray)):
+        raise TypeError("技能包内容必须为字节")
+    raw = bytes(raw_bytes)
+    if not raw or len(raw) > _SKILL_ARCHIVE_MAX_BYTES:
+        raise ValueError("技能包为空或超过 8 MiB 上限")
+
+    lower_name = str(filename or "").strip().lower()
+    is_zip_ext = lower_name.endswith((".zip", ".skill"))
+    is_tar_ext = lower_name.endswith(
+        (".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tar.xz")
+    )
+    is_md_ext = lower_name.endswith((".md", ".txt"))
+
+    mode = ""
+    if is_zip_ext or zipfile.is_zipfile(io.BytesIO(raw)):
+        mode = "zip"
+    elif is_tar_ext:
+        mode = "tar"
+    elif is_md_ext:
+        mode = "md"
+    else:
+        try:
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+                tf.getmembers()
+            mode = "tar"
+        except (tarfile.TarError, EOFError, OSError):
+            if not lower_name:
+                raise ValueError(
+                    "无法识别技能包格式，请上传 .zip、.skill、.tar.gz、.tgz 或 SKILL.md"
+                ) from None
+            raise ValueError(
+                "不支持的技能包格式，请上传 .zip、.skill、.tar.gz、.tgz 或 SKILL.md"
+            ) from None
+
+    if mode == "md":
+        return {"SKILL.md": raw}
+
+    entries: dict[str, bytes] = {}
+    total_unpacked = 0
+
+    if mode == "zip":
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                infos = archive.infolist()
+                if len(infos) > _SKILL_MAX_ENTRIES:
+                    raise ValueError("技能压缩包内条目过多")
+                for info in infos:
+                    if (info.external_attr >> 16) & 0o170000 not in {
+                        0,
+                        0o100000,
+                        0o040000,
+                    }:
+                        raise ValueError("技能压缩包不接受符号链接或特殊文件")
+                    rel = _normalize_archive_path(info.filename)
+                    if not rel or info.is_dir() or _is_archive_junk(rel):
+                        continue
+                    if rel in entries:
+                        raise ValueError(f"技能压缩包存在重复路径: {rel}")
+                    if info.file_size > _SKILL_FILE_MAX_BYTES:
+                        raise ValueError(f"技能文件过大: {rel}")
+                    with archive.open(info, "r") as stream:
+                        data = stream.read(_SKILL_FILE_MAX_BYTES + 1)
+                    if len(data) > _SKILL_FILE_MAX_BYTES:
+                        raise ValueError(f"技能文件过大: {rel}")
+                    total_unpacked += len(data)
+                    if total_unpacked > _SKILL_ARCHIVE_MAX_UNPACKED or len(entries) >= 256:
+                        raise ValueError("技能压缩包解压总量超过预算")
+                    entries[rel] = data
+        except zipfile.BadZipFile:
+            raise ValueError("ZIP 技能压缩包已损坏或格式无效") from None
+        return entries
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as archive:
+            count = 0
+            for member in archive:
+                count += 1
+                if count > _SKILL_MAX_ENTRIES:
+                    raise ValueError("技能压缩包内条目过多")
+                if member.type in (tarfile.XHDTYPE, tarfile.XGLTYPE):
+                    continue
+                if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+                    raise ValueError("技能压缩包不接受符号链接或特殊文件")
+                rel = _normalize_archive_path(member.name)
+                if not rel or member.isdir() or not member.isfile() or _is_archive_junk(rel):
+                    continue
+                if rel in entries:
+                    raise ValueError(f"技能压缩包存在重复路径: {rel}")
+                if member.size > _SKILL_FILE_MAX_BYTES:
+                    raise ValueError(f"技能文件过大: {rel}")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    continue
+                with stream:
+                    data = stream.read(_SKILL_FILE_MAX_BYTES + 1)
+                if len(data) > _SKILL_FILE_MAX_BYTES:
+                    raise ValueError(f"技能文件过大: {rel}")
+                total_unpacked += len(data)
+                if total_unpacked > _SKILL_ARCHIVE_MAX_UNPACKED or len(entries) >= 256:
+                    raise ValueError("技能压缩包解压总量超过预算")
+                entries[rel] = data
+    except (tarfile.TarError, EOFError, OSError):
+        raise ValueError("TAR 技能压缩包已损坏或格式无效") from None
+    return entries
 
 
 def _unquote_yaml(raw: str) -> str:
@@ -404,6 +595,13 @@ class MemoryLayers:
                 "2. 按步骤产出结构化结论或工作区文件。\n\n"
                 "## 质量边界\n- 仅引用真实工具返回的数据与链接，不编造结论。\n"
             )
+        if base and base.strip():
+            companions = self.read_skill_companions(base)
+            dest_root = private_directory(self.root / "abilities/skills" / target)
+            for rel_posix, raw_data in companions:
+                dest_file = dest_root / rel_posix
+                private_directory(dest_file.parent)
+                atomic_private_write(dest_file, raw_data)
         current = self.read("skill", target=target)
         return self.write(
             "skill",
@@ -413,12 +611,338 @@ class MemoryLayers:
             allow_custom=allow_custom,
         )
 
+    @staticmethod
+    def _validate_companion_rel(rel_path: str) -> str:
+        if not isinstance(rel_path, str) or "\\" in rel_path or "\x00" in rel_path:
+            raise ValueError("技能附属文件路径无效")
+        clean = rel_path.strip("/")
+        parts = clean.split("/")
+        if (
+            not clean
+            or len(parts) > 6
+            or clean.upper() == "SKILL.MD"
+            or any(
+                part in {"", ".", ".."}
+                or part.startswith(".")
+                or not _COMPANION_SEG_RE.fullmatch(part)
+                for part in parts
+            )
+        ):
+            raise ValueError(f"技能附属文件路径不合法: {rel_path}")
+        return "/".join(parts)
+
+    def _clear_skill_companions(self, skill_dir: Path):
+        if not skill_dir.is_dir() or skill_dir.is_symlink():
+            return
+        for child in list(skill_dir.iterdir()):
+            if child.name == "SKILL.md":
+                continue
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+
+    def _collect_skill_companions(self, directory: Path) -> list[tuple[str, bytes]]:
+        if not directory.is_dir() or directory.is_symlink():
+            return []
+        collected: list[tuple[str, bytes]] = []
+        total = 0
+        for root_dir, dirs, files in os.walk(directory, followlinks=False):
+            dirs[:] = sorted(
+                d
+                for d in dirs
+                if not d.startswith(".")
+                and d not in _ARCHIVE_JUNK_PARTS
+                and not (Path(root_dir) / d).is_symlink()
+            )
+            for name in sorted(files):
+                if name.startswith(".") or name in _ARCHIVE_JUNK_FILES:
+                    continue
+                full = Path(root_dir) / name
+                rel = full.relative_to(directory).as_posix()
+                if rel == "SKILL.md":
+                    continue
+                if full.is_symlink():
+                    continue
+                try:
+                    rel_clean = self._validate_companion_rel(rel)
+                except ValueError:
+                    continue
+                fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as src:
+                    info = os.fstat(src.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        continue
+                    if info.st_size > _SKILL_FILE_MAX_BYTES:
+                        continue
+                    data = src.read(_SKILL_FILE_MAX_BYTES + 1)
+                if len(data) > _SKILL_FILE_MAX_BYTES:
+                    continue
+                total += len(data)
+                if len(collected) >= _SKILL_MAX_FILES or total > 4 * 1024 * 1024:
+                    break
+                collected.append((rel_clean, data))
+        return collected
+
+    def read_skill_companions(self, target: str) -> list[tuple[str, bytes]]:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        skill_dir = self.root / "abilities/skills" / target
+        return self._collect_skill_companions(skill_dir)
+
+    def skill_files(self, target: str) -> list[dict]:
+        return [
+            {"path": rel, "bytes": len(data)}
+            for rel, data in self.read_skill_companions(target)
+        ]
+
+    def read_skill_file(self, target: str, rel_path: str) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        rel = self._validate_companion_rel(rel_path)
+        skill_dir = self.root / "abilities/skills" / target
+        if skill_dir.is_symlink() or not skill_dir.is_dir():
+            raise ValueError("技能不存在")
+        cur_fd = os.open(skill_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parts = rel.split("/")
+        try:
+            for seg in parts[:-1]:
+                next_fd = os.open(
+                    seg, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur_fd
+                )
+                os.close(cur_fd)
+                cur_fd = next_fd
+            file_fd = os.open(
+                parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=cur_fd
+            )
+        except FileNotFoundError:
+            raise ValueError("技能附属文件不存在") from None
+        except OSError:
+            raise ValueError("无法读取技能附属文件") from None
+        finally:
+            os.close(cur_fd)
+        with os.fdopen(file_fd, "rb") as src:
+            info = os.fstat(src.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError("技能附属文件无效")
+            sample = src.read(32768)
+            size = info.st_size
+        if self.vault.contains_secret(sample) or _SECRET_RE.search(
+            sample.decode("utf-8", errors="ignore")
+        ):
+            raise ValueError("技能附属文件包含凭据，已拒绝读取")
+        is_binary = b"\x00" in sample
+        content = ""
+        if not is_binary:
+            try:
+                content = sample.decode("utf-8")
+            except UnicodeDecodeError:
+                is_binary = True
+        return {
+            "target": target,
+            "path": rel,
+            "bytes": size,
+            "is_binary": is_binary,
+            "content": content,
+            "truncated": size > len(sample),
+        }
+
+    def _guard_companion_bytes(self, rel: str, data: bytes):
+        if len(data) > _SKILL_FILE_MAX_BYTES:
+            raise ValueError(f"技能附属文件过大: {rel}")
+        if self.vault.contains_secret(data):
+            raise ValueError(f"技能附属文件包含已登记凭据，已拒绝导入: {rel}")
+        try:
+            as_text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            as_text = ""
+        if as_text and _SECRET_RE.search(as_text):
+            raise ValueError(f"技能附属文件包含密钥特征，已拒绝导入: {rel}")
+
+    def import_skill_archive(
+        self,
+        raw_bytes: bytes,
+        *,
+        target: str = "",
+        filename: str = "",
+        overwrite: bool = True,
+    ) -> dict:
+        entries = _extract_skill_archive_entries(raw_bytes, filename=filename)
+        skill_md_entries: dict[str, str] = {}
+        for rel in sorted(entries):
+            p = PurePosixPath(rel)
+            if p.name.lower() == "skill.md":
+                parent = "" if len(p.parts) == 1 else p.parent.as_posix()
+                skill_md_entries.setdefault(parent, rel)
+
+        if not skill_md_entries:
+            if len(entries) == 1:
+                only_rel, only_bytes = next(iter(entries.items()))
+                if only_rel.lower().endswith((".md", ".txt")):
+                    entries = {"SKILL.md": only_bytes}
+                    skill_md_entries = {"": "SKILL.md"}
+                else:
+                    raise ValueError("压缩包内未找到 SKILL.md")
+            else:
+                raise ValueError("压缩包内未找到 SKILL.md")
+
+        # Keep only non-nested top skill roots; nested examples/*/SKILL.md remain companions.
+        sorted_roots = sorted(
+            skill_md_entries.keys(),
+            key=lambda r: (0 if not r else len(PurePosixPath(r).parts), r),
+        )
+        top_roots: list[str] = []
+        for root_dir in sorted_roots:
+            if any(
+                anc == "" or root_dir == anc or root_dir.startswith(anc + "/")
+                for anc in top_roots
+            ):
+                continue
+            top_roots.append(root_dir)
+
+        if len(top_roots) > _SKILL_MAX_BUNDLE:
+            raise ValueError(f"单个压缩包最多批量导入 {_SKILL_MAX_BUNDLE} 个技能")
+
+        bundles: list[tuple[str, str, dict[str, bytes]]] = []
+        requested_target = target.strip()
+        if requested_target and not SKILL_ID_RE.fullmatch(requested_target):
+            raise ValueError("技能编号无效")
+
+        for root_dir in top_roots:
+            md_rel = skill_md_entries[root_dir]
+            try:
+                md_text = entries[md_rel].decode("utf-8").lstrip("\ufeff")
+            except UnicodeDecodeError:
+                raise ValueError(f"SKILL.md 必须为 UTF-8 文本: {md_rel}") from None
+            if not md_text.strip():
+                raise ValueError(f"SKILL.md 内容为空: {md_rel}")
+            meta = parse_skill_meta(
+                PurePosixPath(root_dir).name if root_dir else "", md_text
+            )
+            prefix = f"{root_dir}/" if root_dir else ""
+            companions: dict[str, bytes] = {}
+            total_comp = 0
+            for rel, data in entries.items():
+                if rel == md_rel:
+                    continue
+                if prefix and not rel.startswith(prefix):
+                    continue
+                sub_rel = rel[len(prefix) :] if prefix else rel
+                clean_sub = self._validate_companion_rel(sub_rel)
+                self._guard_companion_bytes(clean_sub, data)
+                companions[clean_sub] = data
+                total_comp += len(data)
+                if len(companions) > _SKILL_MAX_FILES or total_comp > 4 * 1024 * 1024:
+                    raise ValueError("单个技能附属文件数量或大小超过预算")
+
+            folder_slug = _slug_skill_id(PurePosixPath(root_dir).name) if root_dir else ""
+            meta_slug = _slug_skill_id(meta.get("name", ""))
+            file_slug = _slug_skill_id(filename)
+            auto_id = folder_slug or meta_slug or file_slug
+
+            if len(top_roots) == 1:
+                skill_id = requested_target or auto_id
+                if not skill_id:
+                    raise ValueError("无法识别技能编号，请先填写「导入技能编号」")
+            else:
+                skill_id = auto_id
+                if not skill_id:
+                    raise ValueError(f"无法为压缩包内目录 {root_dir} 生成有效技能编号")
+                if requested_target and requested_target not in {
+                    skill_id,
+                    PurePosixPath(root_dir).name if root_dir else "",
+                }:
+                    continue
+
+            self._guard("skill", md_text, "", allow_custom=True)
+            bundles.append((skill_id, md_text, companions))
+
+        if requested_target and len(top_roots) > 1 and not bundles:
+            raise ValueError(
+                "压缩包内包含多个技能，请留空技能编号以批量导入，或填写包内对应的技能目录名"
+            )
+
+        seen_ids: set[str] = set()
+        for skill_id, _, _ in bundles:
+            if skill_id in seen_ids:
+                raise ValueError(f"压缩包内存在重复技能编号: {skill_id}")
+            seen_ids.add(skill_id)
+
+        imported: list[dict] = []
+        with self._lock():
+            skills_root = private_directory(self.root / "abilities/skills")
+            for skill_id, md_text, companions in bundles:
+                dest_dir = skills_root / skill_id
+                if dest_dir.is_symlink():
+                    raise ValueError("技能路径无效")
+                if not overwrite and dest_dir.exists() and self._bytes(dest_dir / "SKILL.md"):
+                    raise ValueError(f"同名技能已存在: {skill_id}")
+                stage = Path(tempfile.mkdtemp(prefix="skill-stage-", dir=skills_root))
+                try:
+                    for rel_sub, comp_bytes in companions.items():
+                        target_file = stage / rel_sub
+                        private_directory(target_file.parent)
+                        atomic_private_write(target_file, comp_bytes)
+                    private_directory(dest_dir)
+                    self._clear_skill_companions(dest_dir)
+                    for rel_sub, comp_bytes in companions.items():
+                        target_file = dest_dir / rel_sub
+                        private_directory(target_file.parent)
+                        atomic_private_write(target_file, comp_bytes)
+                finally:
+                    if stage.exists():
+                        shutil.rmtree(stage)
+                saved = self._write(
+                    "skill",
+                    md_text,
+                    target=skill_id,
+                    author="import",
+                    allow_custom=True,
+                )
+                imported.append(
+                    {
+                        "id": skill_id,
+                        "version": saved["version"],
+                        "companions": len(companions),
+                    }
+                )
+        return {
+            "id": imported[0]["id"],
+            "count": len(imported),
+            "imported": imported,
+        }
+
+    def export_skill_archive(self, target: str) -> bytes:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        skill_dir = self.root / "abilities/skills" / target
+        skill_file = skill_dir / "SKILL.md"
+        if skill_dir.is_symlink() or skill_file.is_symlink() or not skill_file.is_file():
+            raise ValueError("技能不存在")
+        main_bytes = self._bytes(skill_file)
+        if self.vault.contains_secret(main_bytes) or _SECRET_RE.search(
+            main_bytes.decode("utf-8", errors="ignore")
+        ):
+            raise ValueError("技能包含凭据，禁止导出")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(f"{target}/SKILL.md", main_bytes)
+            for rel_sub, data in self.read_skill_companions(target):
+                if self.vault.contains_secret(data):
+                    raise ValueError("技能附属文件含凭据，禁止导出")
+                archive.writestr(f"{target}/{rel_sub}", data)
+        if buffer.tell() > _SKILL_ARCHIVE_MAX_BYTES:
+            raise ValueError("技能包超过 8 MiB 导出上限")
+        return buffer.getvalue()
+
     def reset_skill(self, target: str):
         if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
         preset_file = PRESETS_DIR / "skills" / target / "SKILL.md"
         if preset_file.is_symlink() or not preset_file.is_file():
             raise ValueError("仅内置预设技能支持重置")
+        with self._lock():
+            self._clear_skill_companions(self.root / "abilities/skills" / target)
         current = self.read("skill", target=target)
         return self.write(
             "skill",
@@ -602,6 +1126,13 @@ class MemoryLayers:
                 self._guard("skill", content, "", allow_custom=True)
             if not content.strip():
                 raise ValueError("角色引用的技能为空或不存在")
+            companions = self.skill_files(skill)
+            if companions:
+                listed = ", ".join(c["path"] for c in companions[:20])
+                content = (
+                    content.rstrip()
+                    + f"\n\n[技能附属文件（工作区只读路径 in/skills/{skill}/）：{listed}]"
+                )
             pieces.append(content)
         return "\n\n".join(pieces)[:16000]
 

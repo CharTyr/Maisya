@@ -854,6 +854,162 @@ pre, code, .mono, .num {
   overflow-wrap: anywhere;
 }
 
+.ab-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.ab-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.ab-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.ab-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ab-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+}
+.ab-nav-item[aria-current="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side);
+}
+
+.sk-gallery-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 2px dashed var(--mil-rule);
+}
+.sk-gallery-title {
+  font-family: var(--mil-font-display);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.sk-gallery-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sk-add-drawer {
+  margin-bottom: 12px;
+}
+.ab-dropzone {
+  padding: 10px;
+  border: 2px dashed var(--mil-line);
+  background: var(--mil-panel);
+}
+.ab-dropzone[data-drag="true"],
+#skills-gallery-panel[data-drag="true"] {
+  outline: 3px dashed var(--mil-hot);
+  outline-offset: -4px;
+}
+.sk-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-height: 180px;
+}
+.sk-item-card {
+  width: 100%;
+  text-align: left;
+  padding: 11px 12px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  color: var(--mil-ink);
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  box-shadow: inset 0 -3px 0 var(--mil-key-side);
+}
+.sk-item-card:hover {
+  background-color: var(--mil-key-hi);
+}
+.sk-item-card[aria-current="true"] {
+  background-color: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+.sk-item-ico {
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-panel);
+  display: grid;
+  place-items: center;
+  font-family: var(--mil-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo);
+}
+.sk-item-ico--preset {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+.sk-item-ico--custom {
+  background: var(--mil-hot);
+  color: var(--mil-hot-ink);
+}
+.sk-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.sk-item-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mil-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .ab-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .sk-gallery-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .set-list {
   display: flex;
   flex-direction: column;
@@ -1269,9 +1425,11 @@ pre, code, .mono, .num {
       "mcp_call", "plugin_api", "sandbox_exec", "credential_call",
     ];
     let catalog = { profiles: [], skills: [], skill_items: [], handles: [] };
+    let viewMode = "skills-gallery";
     let selectedProfile = "scout";
     let selectedSkill = "";
     let skillFilter = "";
+    let skillScope = "all";
     let expectedVersion = 0;
     let loadingConfig = false;
     let loadingSkillVisual = false;
@@ -1282,7 +1440,7 @@ pre, code, .mono, .num {
     function skillItemsList() {
       if (Array.isArray(catalog.skill_items) && catalog.skill_items.length) return catalog.skill_items;
       return (catalog.skills || []).map((id) => ({
-        id, name: id, title: id, description: "", is_preset: false, is_modified: false, used_by: [], chars: 0, version: 0,
+        id, name: id, title: id, description: "", is_preset: false, is_modified: false, used_by: [], companion_count: 0, companion_files: [], chars: 0, version: 0,
       }));
     }
 
@@ -1416,12 +1574,37 @@ pre, code, .mono, .num {
       }).join("");
     }
 
+    function renderSkillCompanions() {
+      const box = $("#sk-companions-box");
+      const listEl = $("#sk-companions-list");
+      const prevEl = $("#sk-companion-preview");
+      if (!box || !listEl) return;
+      const item = skillItemsList().find((s) => s.id === selectedSkill);
+      const files = item?.companion_files || [];
+      if (!item || !files.length) {
+        box.hidden = true;
+        listEl.innerHTML = "";
+        if (prevEl) {
+          prevEl.hidden = true;
+          prevEl.textContent = "";
+        }
+        return;
+      }
+      box.hidden = false;
+      $("#sk-companion-mount").textContent = `in/skills/${selectedSkill}/`;
+      $("#sk-companion-count").textContent = `${item.companion_count || files.length} 个文件`;
+      listEl.innerHTML = files.map((path) =>
+        `<button type="button" class="mil-key mil-key--sm mono" data-companion-path="${esc(path)}">${esc(path)}</button>`
+      ).join("");
+    }
+
     function syncSkillVisualFromMarkdown() {
       loadingSkillVisual = true;
       const parsed = parseSkillFrontmatter($("#content").value);
       $("#sk-meta-name").value = parsed.name || selectedSkill || "";
       $("#sk-meta-desc").value = parsed.description || "";
       renderSkillRoleBindings();
+      renderSkillCompanions();
       loadingSkillVisual = false;
     }
 
@@ -1434,24 +1617,50 @@ pre, code, .mono, .num {
     }
 
     function renderDocModeUI() {
+      const inGallery = viewMode === "skills-gallery";
+      const inSkillEditor = viewMode === "skill-editor";
+      const inRoles = viewMode === "roles";
+      const inDiscovery = viewMode === "discovery";
+
+      $("#skills-gallery-panel").hidden = !inGallery;
+      $("#editor-panel").hidden = !(inSkillEditor || inRoles);
+      $("#role-package-panel").hidden = !inRoles;
+      $("#discovery-panel").hidden = !inDiscovery;
+
+      $("#nav-skills").setAttribute("aria-current", String(inGallery || inSkillEditor));
+      $("#nav-roles").setAttribute("aria-current", String(inRoles));
+      $("#nav-discovery").setAttribute("aria-current", String(inDiscovery));
+
+      if (inSkillEditor && $("#document").value !== "skill") $("#document").value = "skill";
+      if (inRoles && $("#document").value === "skill") $("#document").value = "profile";
+
       const doc = $("#document").value;
-      const isSkill = doc === "skill";
+      const isSkill = inSkillEditor || doc === "skill";
+      $("#back-to-skills").hidden = !inSkillEditor;
+      $("#skill-head-actions").hidden = !inSkillEditor;
+      $("#role-doc-tabs").hidden = !inRoles;
       $$("[data-doc-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.docTab === doc)));
       $("#skill-visual").hidden = !isSkill;
-      $("#cfg-visual").hidden = doc !== "config";
+      $("#cfg-visual").hidden = !inRoles || doc !== "config";
       const silk = $("#editor-silk");
       if (silk) silk.textContent = isSkill ? "SKILL · 技能工作台" : "ROLE · 角色工作台";
       const tag = $("#active-target-tag");
       if (tag) tag.textContent = (isSkill ? selectedSkill : selectedProfile) || "—";
-      if (doc === "config") syncVisualFromToml();
-      if (isSkill) syncSkillVisualFromMarkdown();
+      const activeSkillItem = skillItemsList().find((s) => s.id === selectedSkill);
+      const resetBtn = $("#reset-skill");
+      const delSkillBtn = $("#delete-skill");
+      if (resetBtn) resetBtn.hidden = !activeSkillItem?.is_preset;
+      if (delSkillBtn) delSkillBtn.disabled = Boolean(!selectedSkill || activeSkillItem?.is_preset);
+      if (inRoles && doc === "config") syncVisualFromToml();
+      if (inSkillEditor && isSkill) syncSkillVisualFromMarkdown();
     }
 
     let assetLoadSeq = 0;
     async function loadAsset(preserveDraft = false) {
       const seq = ++assetLoadSeq;
-      const q = targetQuery();
       renderDocModeUI();
+      if (viewMode === "skills-gallery" || viewMode === "discovery") return;
+      const q = targetQuery();
       if (!q.target) {
         $("#content").value = "";
         $("#content").disabled = false;
@@ -1476,8 +1685,8 @@ pre, code, .mono, .num {
         $("#version").textContent = `v${expectedVersion}`;
         setDirty(false);
         versionHistory(r.history, expectedVersion);
-        if ($("#document").value === "config") syncVisualFromToml();
-        if ($("#document").value === "skill") syncSkillVisualFromMarkdown();
+        if (viewMode === "roles" && $("#document").value === "config") syncVisualFromToml();
+        if (viewMode === "skill-editor" && $("#document").value === "skill") syncSkillVisualFromMarkdown();
       } finally {
         if (seq === assetLoadSeq) {
           $("#content").disabled = false;
@@ -1487,32 +1696,71 @@ pre, code, .mono, .num {
     }
 
     function renderCatalog() {
-      const isSkillMode = $("#document").value === "skill";
       const items = skillItemsList();
+      const profiles = catalog.profiles || [];
       const needle = skillFilter.trim().toLowerCase();
+
+      const scopePills = [
+        { key: "all", label: `全部 (${items.length})` },
+        { key: "custom", label: `自建与导入 (${items.filter((s) => !s.is_preset).length})` },
+        { key: "preset", label: `系统预设 (${items.filter((s) => s.is_preset).length})` },
+        ...profiles.map((p) => ({
+          key: `role:${p.id}`,
+          label: `${p.title || p.id} (${items.filter((s) => (s.used_by || []).includes(p.id)).length})`,
+        })),
+      ];
+      $("#skill-scope-bar").innerHTML = scopePills.map((sp) =>
+        `<button type="button" class="mil-key mil-key--sm" data-skill-scope="${esc(sp.key)}" aria-pressed="${skillScope === sp.key}">${esc(sp.label)}</button>`
+      ).join("");
+
+      const scopeFiltered = items.filter((s) => {
+        if (skillScope === "custom") return !s.is_preset;
+        if (skillScope === "preset") return Boolean(s.is_preset);
+        if (skillScope.startsWith("role:")) {
+          const rid = skillScope.slice(5);
+          return Array.isArray(s.used_by) && s.used_by.includes(rid);
+        }
+        return true;
+      });
       const shownSkills = needle
-        ? items.filter((s) => `${s.id} ${s.title || ""} ${s.name || ""} ${s.description || ""}`.toLowerCase().includes(needle))
-        : items;
+        ? scopeFiltered.filter((s) => `${s.id} ${s.title || ""} ${s.name || ""} ${s.description || ""} ${(s.companion_files || []).join(" ")}`.toLowerCase().includes(needle))
+        : scopeFiltered;
 
       $("#skills-count").textContent = `${items.length} 项`;
       $("#skills-roster").innerHTML = shownSkills.map((s) => {
-        const on = isSkillMode && s.id === selectedSkill;
+        const on = viewMode === "skill-editor" && s.id === selectedSkill;
         const originTag = s.is_preset
           ? (s.is_modified ? `<span class="mil-tag mil-tag--warn">预设·已改</span>` : `<span class="mil-tag mil-tag--ok">预设</span>`)
-          : `<span class="mil-tag">自建</span>`;
+          : `<span class="mil-tag mil-tag--hot">自建</span>`;
+        const compTag = (s.companion_count || 0) > 0
+          ? `<span class="mil-tag">附件 ${s.companion_count}</span>`
+          : "";
         const usedTxt = (s.used_by || []).length ? `已装配: ${s.used_by.join(" · ")}` : "未装配角色";
-        return `<button type="button" class="ab-card" data-skill="${esc(s.id)}" aria-current="${on}">
-          <div class="mil-row" style="justify-content:space-between;gap:6px">
-            <strong>${esc(s.title || s.id)}</strong>
-            <span class="mil-row" style="gap:4px">${originTag}<span class="mil-tag num">v${Number(s.version || 0)}</span></span>
-          </div>
-          ${s.description ? `<div class="ab-desc">${esc(s.description)}</div>` : ""}
-          <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
-            <span class="mono">${esc(s.id)}</span>
-            <span>${esc(usedTxt)}</span>
-          </div>
+        const badgeTxt = (s.id || "SK").slice(0, 2).toUpperCase();
+        return `<button type="button" class="sk-item-card" data-skill="${esc(s.id)}" aria-current="${on}">
+          <span class="sk-item-ico ${s.is_preset ? "sk-item-ico--preset" : "sk-item-ico--custom"}">${esc(badgeTxt)}</span>
+          <span class="sk-item-body">
+            <span class="mil-row" style="justify-content:space-between;gap:6px">
+              <strong>${esc(s.title || s.id)}</strong>
+              <span class="mil-row" style="gap:4px">${originTag}${compTag}<span class="mil-tag num">v${Number(s.version || 0)}</span></span>
+            </span>
+            ${s.description ? `<span class="sk-item-desc">${esc(s.description)}</span>` : ""}
+            <span class="mil-row" style="justify-content:space-between;font-size:11.5px;color:var(--mil-muted)">
+              <span class="mono">${esc(s.id)}</span>
+              <span>${esc(usedTxt)}</span>
+            </span>
+          </span>
         </button>`;
-      }).join("") || `<p class="mil-hint">${needle ? "没有匹配的技能" : "暂无全局技能"}</p>`;
+      }).join("") || `<div class="mil-screen" style="grid-column:1/-1;text-align:center;padding:24px"><p class="mil-hint">${needle || skillScope !== "all" ? "当前筛选条件下没有匹配的技能" : "暂无全局技能，可点击右上角「导入技能包」或「+ 新建技能」添加"}</p></div>`;
+
+      const foot = $("#skills-summary-foot");
+      const clearBtn = $("#clear-skill-filter");
+      if (foot) {
+        foot.textContent = (needle || skillScope !== "all")
+          ? `当前显示 ${shownSkills.length} / ${items.length} 项技能 · 点击卡片进入工作台编辑`
+          : `共 ${items.length} 项技能 · 点击卡片进入工作台；也可直接将 .zip / .skill / .tar.gz 拖拽到此区域导入`;
+      }
+      if (clearBtn) clearBtn.hidden = !(needle || skillScope !== "all");
 
       const activeSkillItem = items.find((s) => s.id === selectedSkill);
       const resetBtn = $("#reset-skill");
@@ -1520,9 +1768,9 @@ pre, code, .mono, .num {
       if (resetBtn) resetBtn.hidden = !activeSkillItem?.is_preset;
       if (delSkillBtn) delSkillBtn.disabled = Boolean(!selectedSkill || activeSkillItem?.is_preset);
 
-      $("#roles-count").textContent = `${(catalog.profiles || []).length} 个`;
-      $("#profiles").innerHTML = (catalog.profiles || []).map((p) => {
-        const on = !isSkillMode && p.id === selectedProfile;
+      $("#roles-count").textContent = `${profiles.length} 个`;
+      $("#profiles").innerHTML = profiles.map((p) => {
+        const on = viewMode === "roles" && p.id === selectedProfile;
         const isEnabled = p.enabled !== false;
         return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" data-enabled="${isEnabled}" aria-current="${on}">
           <div class="mil-row" style="justify-content:space-between;gap:6px">
@@ -1539,7 +1787,7 @@ pre, code, .mono, .num {
         </button>`;
       }).join("") || `<p class="mil-hint">暂无角色</p>`;
 
-      const currentProfile = (catalog.profiles || []).find((p) => p.id === selectedProfile);
+      const currentProfile = profiles.find((p) => p.id === selectedProfile);
       const toggleBtn = $("#toggle-profile-enabled");
       if (toggleBtn && currentProfile) {
         const currentlyOn = currentProfile.enabled !== false;
@@ -1547,7 +1795,10 @@ pre, code, .mono, .num {
         toggleBtn.className = currentlyOn ? "mil-key mil-key--sm" : "mil-key mil-key--sm mil-key--hot";
       }
 
-      if ($("#document").value === "skill") renderSkillRoleBindings();
+      if (viewMode === "skill-editor") {
+        renderSkillRoleBindings();
+        renderSkillCompanions();
+      }
     }
 
     async function refreshDiscovery() {
@@ -1594,11 +1845,49 @@ pre, code, .mono, .num {
     }
 
     document.addEventListener("click", async (ev) => {
+      const navBtn = ev.target.closest("[data-ab-nav]");
+      if (navBtn) {
+        const nextMode = navBtn.dataset.abNav;
+        if (nextMode === "skills") viewMode = "skills-gallery";
+        else if (nextMode === "roles") {
+          viewMode = "roles";
+          if ($("#document").value === "skill") $("#document").value = "profile";
+        } else if (nextMode === "discovery") {
+          viewMode = "discovery";
+        }
+        renderCatalog();
+        await loadAsset(false);
+        return;
+      }
+      const scopeBtn = ev.target.closest("[data-skill-scope]");
+      if (scopeBtn) {
+        skillScope = scopeBtn.dataset.skillScope;
+        renderCatalog();
+        return;
+      }
+      const compBtn = ev.target.closest("[data-companion-path]");
+      if (compBtn && selectedSkill) {
+        const relPath = compBtn.dataset.companionPath;
+        const r = await rpc("read", "skill_file", { target: selectedSkill, path: relPath });
+        const prevEl = $("#sk-companion-preview");
+        if (!r?.success) return say(r?.error || "读取附属文件失败", true);
+        if (prevEl) {
+          prevEl.hidden = false;
+          prevEl.textContent = r.is_binary
+            ? `[二进制文件] ${r.path}（${r.bytes} 字节，工作区只读路径 in/skills/${selectedSkill}/${r.path}）`
+            : `${r.path}（${r.bytes} 字节${r.truncated ? "，已截断前 32KB" : ""}）\n────────────────────────\n${r.content || ""}`;
+        }
+        return;
+      }
       const skillBtn = ev.target.closest("[data-skill]");
       if (skillBtn) {
         selectedSkill = skillBtn.dataset.skill;
         $("#skill-id").value = selectedSkill;
         $("#document").value = "skill";
+        viewMode = "skill-editor";
+        const prevEl = $("#sk-companion-preview");
+        if (prevEl) { prevEl.hidden = true; prevEl.textContent = ""; }
+        $("#skill-copy-drawer").hidden = true;
         renderCatalog();
         say("");
         await loadAsset(false);
@@ -1607,6 +1896,7 @@ pre, code, .mono, .num {
       const profBtn = ev.target.closest("[data-profile]");
       if (profBtn) {
         selectedProfile = profBtn.dataset.profile;
+        viewMode = "roles";
         if ($("#document").value === "skill") $("#document").value = "profile";
         renderCatalog();
         say("");
@@ -1616,10 +1906,7 @@ pre, code, .mono, .num {
       const docTab = ev.target.closest("[data-doc-tab]");
       if (docTab) {
         $("#document").value = docTab.dataset.docTab;
-        if ($("#document").value === "skill" && !selectedSkill && catalog.skills?.length) {
-          selectedSkill = catalog.skills[0];
-          $("#skill-id").value = selectedSkill;
-        }
+        if (docTab.dataset.docTab !== "skill") viewMode = "roles";
         renderCatalog();
         say("");
         await loadAsset(false);
@@ -1640,6 +1927,30 @@ pre, code, .mono, .num {
         }
       }
     });
+
+    $("#back-to-skills").onclick = async () => {
+      viewMode = "skills-gallery";
+      const prevEl = $("#sk-companion-preview");
+      if (prevEl) { prevEl.hidden = true; prevEl.textContent = ""; }
+      renderDocModeUI();
+      await loadCatalog();
+    };
+    $("#refresh-skills").onclick = loadCatalog;
+    $("#open-import-skill").onclick = () => {
+      $("#skill-add-drawer").hidden = false;
+      $("#import-skill-id")?.focus();
+    };
+    $("#open-create-skill").onclick = () => {
+      $("#skill-add-drawer").hidden = false;
+      $("#new-skill-id")?.focus();
+    };
+    $("#close-add-drawer").onclick = () => { $("#skill-add-drawer").hidden = true; };
+    $("#clear-skill-filter").onclick = () => {
+      skillFilter = "";
+      skillScope = "all";
+      $("#skill-filter").value = "";
+      renderCatalog();
+    };
 
     $("#skill-filter").addEventListener("input", () => {
       skillFilter = $("#skill-filter").value;
@@ -1753,27 +2064,32 @@ pre, code, .mono, .num {
 
     $("#create-skill").onclick = async () => {
       const target = $("#new-skill-id").value.trim();
+      const title = $("#new-skill-title")?.value.trim() || "";
       if (!target) return say("请先填写新技能编号", true);
-      const r = await rpc("write", "create_skill", { target });
+      const r = await rpc("write", "create_skill", { target, title });
       if (!r?.success) return say(r?.error || "创建技能失败", true);
       selectedSkill = r.id;
       $("#skill-id").value = selectedSkill;
       $("#new-skill-id").value = "";
+      if ($("#new-skill-title")) $("#new-skill-title").value = "";
+      $("#skill-add-drawer").hidden = true;
       $("#document").value = "skill";
+      viewMode = "skill-editor";
       say(`已创建技能 ${selectedSkill}`);
       await loadCatalog();
       await loadAsset(false);
     };
     $("#clone-skill").onclick = async () => {
-      const target = $("#new-skill-id").value.trim();
+      const target = $("#clone-skill-id").value.trim();
       if (!target) return say("请先填写复制后的新技能编号", true);
       if (!selectedSkill) return say("请先选择要复制的技能", true);
       const r = await rpc("write", "create_skill", { target, base: selectedSkill });
       if (!r?.success) return say(r?.error || "复制技能失败", true);
       selectedSkill = r.id;
       $("#skill-id").value = selectedSkill;
-      $("#new-skill-id").value = "";
+      $("#clone-skill-id").value = "";
       $("#document").value = "skill";
+      viewMode = "skill-editor";
       say(`已复制生成技能 ${selectedSkill}`);
       await loadCatalog();
       await loadAsset(false);
@@ -1783,6 +2099,7 @@ pre, code, .mono, .num {
       const r = await rpc("write", "reset_skill", { target: selectedSkill });
       if (!r?.success) return say(r?.error || "重置预设技能失败", true);
       $("#document").value = "skill";
+      viewMode = "skill-editor";
       say(`已重置预设技能 ${selectedSkill}`);
       await loadCatalog();
       await loadAsset(false);
@@ -1794,9 +2111,29 @@ pre, code, .mono, .num {
       if (!r?.success) return say(r?.error || "删除技能失败", true);
       selectedSkill = "";
       $("#skill-id").value = "";
+      viewMode = "skills-gallery";
       say(`已删除技能 ${target}`);
       await loadCatalog();
-      await loadAsset(false);
+      renderDocModeUI();
+    };
+    $("#export-skill").onclick = async () => {
+      if (!selectedSkill) return;
+      let token = "", offset = 0, chunks = [];
+      for (let guard = 0; guard < 120; guard++) {
+        const r = await rpc("read", "skill_package", { target: selectedSkill, token, offset });
+        if (!r?.success) return say(r?.error || "导出技能包失败", true);
+        token = r.token;
+        chunks.push(r.data);
+        offset = r.offset;
+        if (offset >= r.total) break;
+      }
+      $("#skill-copy-summary").textContent = `技能包 Base64 ZIP（含 SKILL.md 与全部附属文件，可全选复制导入另一份 Maisya）`;
+      $("#skill-copy-box").value = chunks.join("");
+      $("#skill-copy-drawer").hidden = false;
+      $("#skill-copy-drawer").open = true;
+      $("#skill-copy-box").focus();
+      $("#skill-copy-box").select();
+      say(`已打包导出技能 ${selectedSkill}`);
     };
     $("#copy-skill").onclick = async () => {
       const text = $("#content").value || "";
@@ -1811,6 +2148,7 @@ pre, code, .mono, .num {
       if (copied) {
         say("已复制 SKILL.md 内容到剪贴板。");
       } else {
+        $("#skill-copy-summary").textContent = "手动复制 SKILL.md（沙箱受限时可全选复制）";
         $("#skill-copy-box").value = text;
         $("#skill-copy-drawer").hidden = false;
         $("#skill-copy-drawer").open = true;
@@ -1819,42 +2157,99 @@ pre, code, .mono, .num {
         say("已展开复制框并全选，请按 Ctrl/Cmd + C 复制。");
       }
     };
+    function uint8ToB64(bytes) {
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 8192) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      }
+      return btoa(bin);
+    }
+    async function uploadSkillBytes(bytes, filename, targetOverride = "") {
+      const target = (targetOverride || $("#import-skill-id")?.value || "").trim();
+      let token = "", offset = 0, lastResult = null;
+      const chunkBytes = 18432;
+      for (let i = 0; i < bytes.length || i === 0; i += chunkBytes) {
+        const slice = bytes.subarray(i, i + chunkBytes);
+        const done = i + chunkBytes >= bytes.length;
+        const r = await rpc("write", "import_skill", {
+          target,
+          filename: filename || "",
+          token,
+          offset,
+          data: uint8ToB64(slice),
+          done,
+          overwrite: true,
+        });
+        if (!r?.success) return say(r?.error || "导入技能包失败", true);
+        token = r.token || token;
+        offset = r.offset ?? offset;
+        lastResult = r;
+      }
+      if ($("#import-skill-id")) $("#import-skill-id").value = "";
+      $("#skill-add-drawer").hidden = true;
+      await loadCatalog();
+      if ((lastResult?.count || 0) > 1) {
+        const names = (lastResult.imported || []).map((x) => x.id).join("、");
+        viewMode = "skills-gallery";
+        renderCatalog();
+        renderDocModeUI();
+        say(`已从压缩包批量导入 ${lastResult.count} 项技能：${names}`);
+      } else if (lastResult?.id) {
+        selectedSkill = lastResult.id;
+        $("#skill-id").value = selectedSkill;
+        $("#document").value = "skill";
+        viewMode = "skill-editor";
+        renderCatalog();
+        const compCount = lastResult.imported?.[0]?.companions || 0;
+        await loadAsset(false);
+        say(compCount > 0 ? `已导入技能 ${selectedSkill}（含 ${compCount} 个附属文件）` : `已导入技能 ${selectedSkill}`);
+      }
+    }
+    async function uploadSkillB64(b64, filename = "package.zip", targetOverride = "") {
+      const clean = String(b64 || "").replace(/\s+/g, "");
+      if (!clean) return say("请先粘贴技能包 Base64 文本", true);
+      const bin = atob(clean);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await uploadSkillBytes(bytes, filename, targetOverride);
+    }
+    $("#import-skill-b64").onclick = async () => {
+      try {
+        await uploadSkillB64($("#skill-pkg-text").value);
+      } catch (err) {
+        say(err?.message || "技能包文本格式无效", true);
+      }
+    };
     $("#skill-file").addEventListener("change", () => {
       const file = $("#skill-file").files?.[0];
       if (!file) return;
+      const lower = (file.name || "").toLowerCase();
       const reader = new FileReader();
       reader.onload = async () => {
-        const text = String(reader.result || "");
-        const parsed = parseSkillFrontmatter(text);
-        const fileBase = file.name.replace(/\.(md|txt)$/i, "");
-        const candidate = $("#new-skill-id").value.trim()
-          || parsed.name
-          || (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(fileBase) ? fileBase : "");
-        const target = candidate || selectedSkill;
-        if (!target) return say("请先填写或指定技能编号", true);
-        if ((catalog.skills || []).includes(target)) {
-          selectedSkill = target;
-          $("#skill-id").value = target;
-          $("#document").value = "skill";
-          renderCatalog();
-          await loadAsset(false);
-          $("#content").value = text;
-          setDirty(true);
-          syncSkillVisualFromMarkdown();
-          say(`已载入 ${file.name} 到技能 ${target}，确认后点击保存`);
-        } else {
-          const r = await rpc("write", "create_skill", { target, content: text });
-          if (!r?.success) return say(r?.error || "导入技能失败", true);
-          selectedSkill = r.id;
-          $("#skill-id").value = selectedSkill;
-          $("#new-skill-id").value = "";
-          $("#document").value = "skill";
-          say(`已导入并创建技能 ${selectedSkill}`);
-          await loadCatalog();
-          await loadAsset(false);
-        }
+        const bytes = new Uint8Array(reader.result);
+        await uploadSkillBytes(bytes, file.name);
+        $("#skill-file").value = "";
       };
-      reader.readAsText(file, "utf-8");
+      reader.readAsArrayBuffer(file);
+    });
+    ["skills-gallery-panel", "skill-dropzone"].forEach((zoneId) => {
+      const el = $(`#${zoneId}`);
+      if (!el) return;
+      el.addEventListener("dragover", (ev) => {
+        ev.preventDefault();
+        el.setAttribute("data-drag", "true");
+      });
+      el.addEventListener("dragleave", () => {
+        el.removeAttribute("data-drag");
+      });
+      el.addEventListener("drop", async (ev) => {
+        ev.preventDefault();
+        el.removeAttribute("data-drag");
+        const file = ev.dataTransfer?.files?.[0];
+        if (!file) return;
+        const buf = await file.arrayBuffer();
+        await uploadSkillBytes(new Uint8Array(buf), file.name);
+      });
     });
 
     $("#clone").onclick = async () => {
@@ -1864,6 +2259,7 @@ pre, code, .mono, .num {
       selectedProfile = r.id;
       $("#new-id").value = "";
       $("#document").value = "profile";
+      viewMode = "roles";
       say("新角色已创建");
       await loadCatalog();
       await loadAsset(false);
