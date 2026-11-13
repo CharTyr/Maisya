@@ -86,6 +86,25 @@ def _profile_summary(text: str) -> str:
     return ""
 
 
+def _profile_capabilities(profile: Profile, mode: str) -> list[str]:
+    active_tools = set(profile.tools) - (
+        {"sandbox_exec", "credential_call"} if mode == "light_workspace" else set()
+    )
+    caps = []
+    if "web_search" in active_tools or "web_fetch" in active_tools:
+        caps.append("web")
+    if profile.uses_workspace:
+        caps.append("workspace")
+    for key in ("html_render", "sandbox_exec", "result_attach", "digest_feed"):
+        if key in active_tools:
+            caps.append(key)
+    if profile.mcp:
+        caps.append("mcp")
+    if profile.apis:
+        caps.append("plugin_api")
+    return caps
+
+
 def _merge_settings_dict(base: dict, saved: dict, file_cfg: dict) -> dict:
     merged = {}
     for key in set(saved) | set(file_cfg):
@@ -516,7 +535,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_agent",
-        description="按需要调度 Agent 探索、计算、创作与持续活动，也可因 MaiBot 自身好奇主动调用。普通聊天和常识直接 reply。start 开始，send 补充或转向，stop 停止；share 用原生表达交付准确链接、文件或媒体，之后结束本轮。",
+        description="按需要调度 Agent 探索、计算、创作与持续活动，也可因 MaiBot 自身好奇主动调用。普通聊天和常识直接 reply。start 开始（同轮并行开启多线程传 wait_seconds=0，跨角色接力传 from_threads），send 补充或转向，stop 停止；share 用原生表达交付准确链接、文件或媒体，之后结束本轮。",
         parameters={
             "type": "object",
             "properties": {
@@ -541,7 +560,10 @@ class MaisyaPlugin(MaiBotPlugin):
                     "description": "命名工作区；同名活动在原线程继续。",
                 },
                 "thread_id": {"type": "string"},
-                "message": {"type": "string"},
+                "message": {
+                    "type": "string",
+                    "description": "start/send 时的具体要求；share 时填写本轮对话想顺口表达的意图（不写链接或路径）。",
+                },
                 "steer": {
                     "type": "boolean",
                     "default": False,
@@ -552,6 +574,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "minimum": 0,
                     "maximum": 30,
                     "default": 20,
+                    "description": "等待秒数（默认 20）；同轮需并行开启多个线程时传 0 立即后台并行运行，完成后自动回接。",
                 },
                 "ref_msg_ids": {
                     "type": "array",
@@ -562,6 +585,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 5,
+                    "description": "上游线程编号列表（如 scout 查证后交给 maker 创作）：自动把上游文字结论、已声明附件与工作区 out/ 成品导入下游 in/。",
                 },
                 "attachment_handles": {
                     "type": "array",
@@ -681,7 +705,9 @@ class MaisyaPlugin(MaiBotPlugin):
                         message += (
                             "\n<previous_result>"
                             + html.escape(
-                                json.dumps(row["result"], ensure_ascii=False)
+                                json.dumps(
+                                    self.vault.redact(row["result"]), ensure_ascii=False
+                                )
                             )[:5000]
                             + "</previous_result>"
                         )
@@ -765,6 +791,21 @@ class MaisyaPlugin(MaiBotPlugin):
                     result = await self.engine.stop(thread_id, chat_id=target_chat)
                 else:
                     self.runtime.available(self.profiles.get(row["profile"]))
+                    if from_threads:
+                        for previous in from_threads:
+                            prev_row = await asyncio.to_thread(
+                                self.threads.get, previous, chat_id, allow_self=True
+                            )
+                            message += (
+                                "\n<previous_result>"
+                                + html.escape(
+                                    json.dumps(
+                                        self.vault.redact(prev_row["result"]),
+                                        ensure_ascii=False,
+                                    )
+                                )[:5000]
+                                + "</previous_result>"
+                            )
                     route = (
                         await self.bridge.route(
                             chat_id,
@@ -1089,7 +1130,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_later",
-        description="为之后安排一次想起、定时任务或定期运行某角色工作流。schedule 安排，list 查看，cancel 取消。",
+        description="按自然语言为之后安排一次提醒、主动回访或周期运行某角色工作流（如每日汇总、定期巡检出图）。schedule 安排，list 查看，cancel 取消。",
         parameters={
             "type": "object",
             "properties": {
@@ -1101,13 +1142,13 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "string",
                     "enum": ["later", "proactive", "silent"],
                     "default": "later",
-                    "description": "later 到点唤醒并提醒；proactive 为主动冒泡；silent 后台静默运行工作流。",
+                    "description": "later 到点运行/唤醒本会话决定是否交付；proactive 守社交分寸主动冒泡；silent 仅后台静默执行不唤醒会话。",
                 },
                 "source": {
                     "type": "string",
                     "enum": ["later", "afterglow", "serendipity", "longing", "workflow"],
                     "default": "later",
-                    "description": "惦记或工作流来由。",
+                    "description": "惦记或工作流来由（指定 profile 时自动归为 workflow）。",
                 },
                 "source_msg_id": {
                     "type": "string",
@@ -1117,25 +1158,41 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "integer",
                     "minimum": 30,
                     "maximum": 2592000,
-                    "description": "距离现在多少秒后想起。",
+                    "description": "距离现在多少秒后首次触发。",
                 },
                 "every_seconds": {
                     "type": "integer",
                     "minimum": 300,
                     "maximum": 2592000,
-                    "description": "可选循环周期（秒，至少 300 秒）。",
+                    "description": "可选循环周期（秒，至少 300 秒；如每天填 86400）。",
                 },
-                "reason": {"type": "string"},
+                "reason": {
+                    "type": "string",
+                    "description": "提醒事项简述或工作流标题说明。",
+                },
                 "thread_id": {"type": "string"},
                 "intent_id": {"type": "string"},
-                "profile": {"type": "string", "maxLength": 64},
-                "workspace": {"type": "string", "maxLength": 64},
-                "prompt": {"type": "string", "maxLength": 16000},
+                "profile": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "要定时或周期运行的角色编号（如 scout、maker、digest）。",
+                },
+                "workspace": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "工作流绑定的持续工作区名，便于跨轮去重或保留状态。",
+                },
+                "prompt": {
+                    "type": "string",
+                    "maxLength": 16000,
+                    "description": "交给该角色执行的具体任务指令。",
+                },
             },
             "required": ["action"],
             "additionalProperties": False,
         },
         chat_scope="all",
+        visibility="visible",
     )
     async def later_tool(
         self,
@@ -1172,6 +1229,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 return {"success": True, **result}
             if action != "schedule":
                 raise ValueError("未知的意图动作")
+            identity = None
             if source_msg_id:
                 identity = await asyncio.to_thread(
                     self.messages.lookup, source_msg_id, chat_id, platform, max_age=300
@@ -1188,19 +1246,32 @@ class MaisyaPlugin(MaiBotPlugin):
                     ):
                         raise PermissionError("定期运行受限角色需要真实管理员消息授权")
                     scheduled_admin = True
+                if not self._profile_allowed(ability, identity, chat_id, platform):
+                    raise PermissionError("当前真实发言人或会话不在该角色可用范围内")
             if thread_id:
                 row = await asyncio.to_thread(
                     self.threads.get, thread_id, chat_id, allow_self=True
                 )
                 if row["state"] == "closed":
                     raise ValueError("线程已停止，不能安排续接")
-            if every_seconds and (type(every_seconds) is not int or every_seconds < 300):
-                raise ValueError("循环周期 every_seconds 至少为 300 秒")
-            due = self.intents.clock() + in_seconds
+            if every_seconds and (
+                type(every_seconds) is not int or not 300 <= every_seconds <= 2592000
+            ):
+                raise ValueError("循环周期 every_seconds 应在 300 到 2592000 秒之间")
+            effective_in = (
+                (int(every_seconds) if every_seconds else 60)
+                if in_seconds in (0, None, "")
+                else in_seconds
+            )
+            if type(effective_in) is not int or not 30 <= effective_in <= 2592000:
+                raise ValueError("首次触发延迟 in_seconds 应在 30 到 2592000 秒之间")
+            due = self.intents.clock() + effective_in
             intent_kind = kind if kind in {"proactive", "silent"} else "return"
-            if profile or every_seconds or source == "workflow":
+            if profile or source == "workflow":
                 intent_source = (
-                    source if source in {"later", "afterglow", "serendipity", "longing", "workflow"} else "workflow"
+                    source
+                    if source in {"afterglow", "serendipity", "longing", "workflow"}
+                    else "workflow"
                 )
             else:
                 intent_source = (
@@ -1236,7 +1307,14 @@ class MaisyaPlugin(MaiBotPlugin):
                 **result,
                 "content": json.dumps(result, ensure_ascii=False),
             }
-        except (ValueError, PermissionError, TypeError, sqlite3.Error) as error:
+        except (
+            ValueError,
+            PermissionError,
+            TypeError,
+            RuntimeError,
+            OSError,
+            sqlite3.Error,
+        ) as error:
             return {
                 "success": False,
                 "error": self.vault.redact(str(error))
@@ -1305,12 +1383,21 @@ class MaisyaPlugin(MaiBotPlugin):
                     ):
                         continue
                     self.runtime.available(profile)
+                    mode = self.runtime.effective_mode(profile)
+                    skills_info = (
+                        self.memory.skill_briefs(profile.skills, profile_id=profile.id)
+                        if self.memory and profile.skills
+                        else []
+                    )
                     profiles.append(
                         {
                             "id": profile.id,
                             "title": profile.title,
                             "environment": profile.environment,
+                            "mode": mode,
                             "autonomous": profile.autonomous,
+                            "capabilities": _profile_capabilities(profile, mode),
+                            "skills": skills_info,
                             "summary": _profile_summary(profile.instructions),
                         }
                     )
@@ -1339,7 +1426,7 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             if await asyncio.to_thread(self._read_allowed, row, chat_id, platform):
                 visible.append(entry)
-        index = visible
+        index = self.vault.redact(visible) if self.vault else visible
         returned = await self.bridge.offer(chat_id)
         memory = await asyncio.to_thread(self.memory.context, chat_id)
         active_memory = {
@@ -1347,23 +1434,40 @@ class MaisyaPlugin(MaiBotPlugin):
             for key in ("memory", "journal")
             if str(memory.get(key) or "").strip()
         }
-        parts = [
-            "普通闲聊、常识和接梗直接调用 reply；需要独立查证、计算创作或因自身好奇探索时可调用 maisya_agent。",
-            "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
-            "同名 workspace 持续保留文件并按消息顺序推进；start 开启，send 补充或转向，stop 停止，maisya_later 可安排到点提醒或回访。",
-            *(
-                [
-                    "管理员明确指正方法、档案或本会话办事约定时，可用 maisya_shape 读取、修改或回滚（日常聊天事实不必手动写入）。",
-                ]
-                if is_admin
-                else []
-            ),
-            "active 表示后台继续；用户触发线程的后台结果会回接本会话，是否开口由你决定。",
-            "纯文字结论直接 reply，准确链接、文件或媒体调用 share 交付后结束本轮，避免重复表达。",
-            "<maisya_profiles>"
-            + html.escape(json.dumps(profiles, ensure_ascii=False))
-            + "</maisya_profiles>",
-        ]
+        idle_session = not index and not returned and not active_memory
+        if idle_session:
+            parts = [
+                "日常闲聊、接梗与常识直接调用 reply；需查证创作或主动探索调 maisya_agent（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads），安排提醒或周期工作流调 maisya_later。",
+                "查群友印象用宿主长期记忆（如 query_memory），查过往线程与备忘用 maisya_recall；含准确链接或附件的结果用 share 交付后结束本轮。",
+                *(
+                    [
+                        "管理员明确指正方法、角色或本会话约定时可用 maisya_shape。",
+                    ]
+                    if is_admin
+                    else []
+                ),
+                "<maisya_profiles>"
+                + html.escape(json.dumps(profiles, ensure_ascii=False))
+                + "</maisya_profiles>",
+            ]
+        else:
+            parts = [
+                "普通闲聊、常识和接梗直接调用 reply；需要独立查证、计算创作或因自身好奇探索时可调用 maisya_agent（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads）。",
+                "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
+                "同名 workspace 持续保留文件并按消息顺序推进；start 开启，send 补充或转向，stop 停止，maisya_later 可安排到点提醒、回访或周期工作流。",
+                *(
+                    [
+                        "管理员明确指正方法、档案或本会话办事约定时，可用 maisya_shape 读取、修改或回滚（日常聊天事实不必手动写入）。",
+                    ]
+                    if is_admin
+                    else []
+                ),
+                "active 表示后台推进中（见 latest_step）；用户触发线程的后台结果会回接本会话，是否开口由你决定。",
+                "纯文字结论直接 reply，准确链接、文件或媒体调用 share（message 写本轮想说的自然口语意图）交付后结束本轮，避免重复表达。",
+                "<maisya_profiles>"
+                + html.escape(json.dumps(profiles, ensure_ascii=False))
+                + "</maisya_profiles>",
+            ]
         if index:
             parts.append(
                 "<maisya_threads>"

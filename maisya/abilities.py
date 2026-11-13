@@ -75,6 +75,20 @@ class Profile:
         )
 
     @property
+    def requires_container(self):
+        if self.environment != "sandbox":
+            return False
+        if (
+            self.secrets
+            or self.sandbox_targets
+            or self.network == "restricted"
+            or self.template
+            or "credential_call" in self.tools
+        ):
+            return True
+        return not bool(set(self.tools) - {"sandbox_exec", "credential_call"})
+
+    @property
     def autonomous_config(self):
         return (
             self.access == "everyone"
@@ -413,6 +427,11 @@ class Profiles:
                         raise ValueError("档案包含非法路径、重复项或链接")
                     seen.add(item.filename)
                     if item.is_dir():
+                        continue
+                    if relative.as_posix() in {"recipe.json", "RECIPE.md"}:
+                        raw_meta = archive.read(item)
+                        if self.contains_secret(raw_meta):
+                            raise ValueError("档案资产含已知凭据，禁止导入")
                         continue
                     if (
                         relative.as_posix()

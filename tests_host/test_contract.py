@@ -331,11 +331,9 @@ class HostContract(unittest.TestCase):
         self.assertEqual(
             components["maisya_redact"]["metadata"]["error_policy"], "abort"
         )
-        for name in ("maisya_agent", "maisya_recall"):
+        for name in ("maisya_agent", "maisya_recall", "maisya_later"):
             self.assertEqual(components[name]["metadata"]["chat_scope"], "all")
             self.assertEqual(components[name]["metadata"]["visibility"], "visible")
-        self.assertEqual(components["maisya_later"]["metadata"]["chat_scope"], "all")
-        self.assertNotIn("visibility", components["maisya_later"]["metadata"])
         self.assertNotIn("visibility", components["maisya_shape"]["metadata"])
         self.assertEqual(components["maisya_shape"]["metadata"]["chat_scope"], "all")
         for name in (

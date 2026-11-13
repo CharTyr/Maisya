@@ -28,6 +28,49 @@ def public(row):
     }
 
 
+_INPUT_TAG_RE = re.compile(
+    r"\s*<(?:reference_ids|previous_result)>[\s\S]*?</(?:reference_ids|previous_result)>\s*"
+)
+
+
+def _clean_input_title(raw_text: str) -> str:
+    cleaned = _INPUT_TAG_RE.sub(" ", str(raw_text or "")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned[:80]
+
+
+def _summarize_tool_calls(calls: list) -> str:
+    parts = []
+    for call in (calls or [])[:3]:
+        fn = (call.get("function") or {}) if isinstance(call, dict) else {}
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+            if not isinstance(args, dict):
+                args = {}
+        except ValueError:
+            args = {}
+        detail = ""
+        if name == "web_search" and args.get("query"):
+            detail = str(args["query"])[:32]
+        elif name == "web_fetch" and args.get("url"):
+            detail = str(args["url"])[:42]
+        elif name == "workspace_file":
+            act = str(args.get("action") or "")
+            p = str(args.get("path") or "")[:32]
+            detail = f"{act} {p}".strip()
+        elif name == "html_render" and args.get("output_path"):
+            detail = str(args["output_path"])[:32]
+        elif name == "sandbox_exec" and args.get("command"):
+            detail = re.sub(r"\s+", " ", str(args["command"])).strip()[:36]
+        elif name == "digest_feed" and args.get("action"):
+            detail = str(args["action"])[:24]
+        parts.append(f"{name}({detail})" if detail else name)
+    return ", ".join(parts)
+
+
 class ThreadStore:
     def __init__(self, path: Path):
         self.path = path
@@ -530,16 +573,85 @@ class ThreadStore:
                     + " ORDER BY t.updated DESC LIMIT ?",
                     [*parameters, limit],
                 ).fetchall()
-        found = [
-            {
-                "thread_id": row["thread_id"],
-                "profile": row["profile"],
-                "owner": row["owner"],
-                "state": row["state"],
-                "result": json.loads(row["result"]),
-            }
-            for row in rows
-        ]
+            found = []
+            for row in rows:
+                tid = row["thread_id"]
+                ws_row = db.execute(
+                    "SELECT w.name FROM thread_context c JOIN agent_workspaces w "
+                    "ON w.workspace_id=c.workspace_id WHERE c.thread_id=?",
+                    (tid,),
+                ).fetchone()
+                ws_name = str(ws_row["name"]) if ws_row and ws_row["name"] else ""
+                first_in = db.execute(
+                    'SELECT payload FROM thread_events WHERE thread_id=? AND kind="input" '
+                    "ORDER BY seq ASC LIMIT 1",
+                    (tid,),
+                ).fetchone()
+                title = ""
+                if first_in:
+                    try:
+                        title = _clean_input_title(
+                            json.loads(first_in["payload"]).get("text", "")
+                        )
+                    except ValueError:
+                        title = ""
+                if not title:
+                    fts_row = db.execute(
+                        "SELECT text FROM thread_search WHERE thread_id=? LIMIT 1",
+                        (tid,),
+                    ).fetchone()
+                    if fts_row and fts_row["text"]:
+                        title = _clean_input_title(str(fts_row["text"]))
+                item = {
+                    "thread_id": tid,
+                    "profile": row["profile"],
+                    "owner": row["owner"],
+                    "state": row["state"],
+                    "title": title,
+                    "workspace": ws_name,
+                    "result": json.loads(row["result"]),
+                }
+                if row["state"] in {"active", "waiting"}:
+                    latest_ev = db.execute(
+                        "SELECT kind, revision, payload FROM thread_events WHERE thread_id=? "
+                        'AND kind IN ("tools", "question", "redirect", "input") '
+                        "ORDER BY seq DESC LIMIT 1",
+                        (tid,),
+                    ).fetchone()
+                    latest_step = ""
+                    if latest_ev:
+                        ev_kind = latest_ev["kind"]
+                        try:
+                            ev_payload = json.loads(latest_ev["payload"])
+                        except ValueError:
+                            ev_payload = {}
+                        if ev_kind == "tools":
+                            step_count = db.execute(
+                                'SELECT COUNT(*) AS n FROM thread_events WHERE thread_id=? AND revision=? AND kind="tools"',
+                                (tid, latest_ev["revision"]),
+                            ).fetchone()["n"]
+                            summary_calls = _summarize_tool_calls(
+                                ev_payload.get("calls") if isinstance(ev_payload, dict) else []
+                            )
+                            latest_step = (
+                                f"第 {step_count} 步：{summary_calls}"
+                                if summary_calls
+                                else f"第 {step_count} 步执行中"
+                            )
+                        elif ev_kind == "question":
+                            q_text = (
+                                str(ev_payload.get("question") or "")[:60]
+                                if isinstance(ev_payload, dict)
+                                else ""
+                            )
+                            latest_step = f"等待补充：{q_text}" if q_text else "等待补充核心输入"
+                        elif ev_kind == "redirect":
+                            latest_step = "已收到转向补充，正在按新方向推进"
+                        elif ev_kind == "input":
+                            latest_step = "已启动，正在规划第一步"
+                    if latest_step:
+                        item["latest_step"] = latest_step
+                found.append(item)
         if query and not re.fullmatch(r"th_[a-f0-9]{16}", query):
             for item in found:
                 item["matches"] = self.read_history(
@@ -922,7 +1034,7 @@ class ThreadEngine:
                                             if current["owner"] != "self"
                                             else "chat:self"
                                         )
-                                        row = await asyncio.to_thread(
+                                        scheduled_row = await asyncio.to_thread(
                                             self.intents.schedule,
                                             kind="silent",
                                             source="thread",
@@ -937,8 +1049,8 @@ class ThreadEngine:
                                             bypass_limits=True,
                                         )
                                         result = {
-                                            "intent_id": row["intent_id"],
-                                            "due_at": row["due_at"],
+                                            "intent_id": scheduled_row["intent_id"],
+                                            "due_at": scheduled_row["due_at"],
                                         }
                                 elif name == "ask_user":
                                     validate_arguments(name, arguments)

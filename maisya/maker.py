@@ -48,9 +48,17 @@ class AgentRuntime(Scout):
             runtime=self,
         )
 
+    def effective_mode(self, profile):
+        if profile.environment != "sandbox":
+            return "readonly"
+        if self.sandbox.ready:
+            return "sandbox"
+        return "sandbox" if profile.requires_container else "light_workspace"
+
     def available(self, profile):
         if not profile.enabled:
             raise PermissionError("角色已停用")
+        live = None
         if (
             self.memory
             and (self.memory.profiles.path / profile.id / "profile.toml").is_file()
@@ -58,25 +66,40 @@ class AgentRuntime(Scout):
             live = self.memory.profiles.get(profile.id)
             if not live.enabled:
                 raise PermissionError("角色已停用")
-        if not profile.bound:
+        if not profile.bound or (live is not None and not live.bound):
             raise PermissionError("角色的服务或凭据尚未绑定")
-        if profile.environment == "sandbox" and not self.sandbox.ready:
+        needs_container = (
+            profile.environment == "sandbox" and profile.requires_container
+        ) or (
+            live is not None
+            and live.environment == "sandbox"
+            and live.requires_container
+        )
+        if needs_container and not self.sandbox.ready:
             raise RuntimeError(self.sandbox.error or "沙箱尚未就绪")
+        req_secrets = set(profile.secrets) | (set(live.secrets) if live else set())
+        req_mcp = set(profile.mcp) | (set(live.mcp) if live else set())
+        req_apis = set(profile.apis) | (set(live.apis) if live else set())
+        req_templates = {
+            t for t in (profile.template, live.template if live else "") if t
+        }
         if (
-            profile.secrets or profile.template or profile.mcp or profile.apis
+            req_secrets or req_templates or req_mcp or req_apis
         ) and self.services is None:
             raise RuntimeError("能力服务尚未登记")
-        if profile.mcp or profile.template or profile.apis:
+        if req_mcp or req_templates or req_apis:
             configuration = self.services.load()
             if (
                 any(
-                    name not in configuration.get("servers", {}) for name in profile.mcp
+                    name not in configuration.get("servers", {}) for name in req_mcp
                 )
                 or any(
-                    name not in configuration.get("apis", {}) for name in profile.apis
+                    name not in configuration.get("apis", {}) for name in req_apis
                 )
-                or profile.template
-                and profile.template not in configuration.get("templates", {})
+                or any(
+                    tpl not in configuration.get("templates", {})
+                    for tpl in req_templates
+                )
             ):
                 raise PermissionError("角色引用的服务、模板或只读 API 尚未登记")
 
@@ -87,6 +110,7 @@ class AgentRuntime(Scout):
             profile = replace(
                 profile,
                 enabled=live.enabled,
+                bound=live.bound,
                 instructions=live.instructions,
                 model=live.model,
                 model_name=live.model_name,
@@ -110,6 +134,17 @@ class AgentRuntime(Scout):
                 + "\n<methods>"
                 + methods
                 + "</methods>",
+            )
+        if profile.environment == "sandbox" and not self.sandbox.ready:
+            profile = replace(
+                profile,
+                tools=tuple(
+                    name
+                    for name in profile.tools
+                    if name not in {"sandbox_exec", "credential_call"}
+                ),
+                instructions=profile.instructions
+                + "\n<runtime_mode>当前容器沙箱未就绪，自动运行于无容器轻量工作区模式：可使用 workspace_file、html_render、result_attach 及已授权的只读/联网工具完成整理、排版与出图；sandbox_exec 暂不可用（开启容器沙箱后自动恢复）。</runtime_mode>",
             )
         if self.services and profile.mcp:
             descriptions = await completed_thread(self.services.describe, profile)
@@ -161,7 +196,9 @@ class AgentRuntime(Scout):
             skills = tuple((row.get("profile_snapshot") or {}).get("skills") or ())
         for skill_id in skills:
             try:
-                companions = self.memory.read_skill_companions(skill_id)
+                companions = self.memory.read_skill_companions(
+                    skill_id, profile_id=str(row.get("profile") or "")
+                )
             except (ValueError, OSError):
                 continue
             for rel_sub, raw_data in companions:
@@ -302,6 +339,45 @@ class AgentRuntime(Scout):
                 "access"
             ] == "admins" and not await completed_thread(self.authorized, row):
                 raise PermissionError("引用受限线程需要当前管理员授权")
+            prev_res = self.redact(previous.get("result") or {})
+            prev_text = str(prev_res.get("text") or "").strip()
+            prev_links = prev_res.get("links") or []
+            if prev_text or prev_links:
+                lines = [
+                    f"# 上游线程 {previous_id} ({previous.get('profile', '')}) 结论",
+                    "",
+                ]
+                if prev_text:
+                    lines.append(prev_text)
+                if prev_links:
+                    lines.extend(["", "## 参考链接"])
+                    for link_item in prev_links:
+                        url_val = (
+                            link_item.get("url", "")
+                            if isinstance(link_item, dict)
+                            else str(link_item)
+                        )
+                        if url_val:
+                            lines.append(f"- {url_val}")
+                summary_bytes = ("\n".join(lines).strip() + "\n").encode("utf-8")
+                if not self.vault.contains_secret(summary_bytes):
+                    rel_summary = f"in/previous-{previous_id}-result.md"
+                    await completed_thread(
+                        self._import_bytes,
+                        work,
+                        rel_summary,
+                        summary_bytes,
+                        overwrite=True,
+                    )
+                    imported.append(
+                        {
+                            "path": rel_summary,
+                            "thread_id": previous_id,
+                            "kind": "result_text",
+                            "bytes": len(summary_bytes),
+                        }
+                    )
+            attached_signatures = set()
             for index, attachment in enumerate(
                 previous["result"].get("attachments", [])
             ):
@@ -309,34 +385,102 @@ class AgentRuntime(Scout):
                     self.files.resolve, attachment["handle"], previous["chat_id"]
                 )
                 content = await completed_thread(path.read_bytes)
+                attached_signatures.add(
+                    (
+                        str(attachment.get("name") or ""),
+                        hashlib.sha256(content).hexdigest(),
+                    )
+                )
                 relative = (
                     f"in/previous-{previous_id}-{index}-"
                     + re.sub(r"[^\w.-]", "_", attachment["name"])[:80]
                 )
-                await completed_thread(self._import_bytes, work, relative, content)
+                await completed_thread(
+                    self._import_bytes, work, relative, content, overwrite=True
+                )
                 imported.append(
                     {"path": relative, "thread_id": previous_id, "bytes": len(content)}
                 )
+            same_workspace = bool(
+                previous.get("workspace_id")
+                and previous.get("workspace_id") == row.get("workspace_id")
+            )
+            if not same_workspace:
+                out_artifacts = await completed_thread(
+                    self.files.read_checkpoint_outputs, previous
+                )
+                for subpath, out_bytes in out_artifacts:
+                    leaf_name = subpath.rsplit("/", 1)[-1]
+                    if (
+                        leaf_name,
+                        hashlib.sha256(out_bytes).hexdigest(),
+                    ) in attached_signatures:
+                        continue
+                    rel_out = f"in/previous-{previous_id}-out/{subpath}"
+                    try:
+                        await completed_thread(
+                            self._import_bytes,
+                            work,
+                            rel_out,
+                            out_bytes,
+                            overwrite=True,
+                        )
+                    except ValueError:
+                        continue
+                    imported.append(
+                        {
+                            "path": rel_out,
+                            "thread_id": previous_id,
+                            "kind": "workspace_out",
+                            "bytes": len(out_bytes),
+                        }
+                    )
         await completed_thread(work.commit)
         return imported
 
-    def _import_bytes(self, work, relative, content):
+    def _import_bytes(self, work, relative, content, *, overwrite=False):
+        existing_size = 0
+        existed = False
         try:
             with regular_open(work.path, relative) as previous:
-                if previous.read(6 * 1024**2 + 1) == content:
+                existed = True
+                old_bytes = previous.read(6 * 1024**2 + 1)
+                if old_bytes == content:
                     return
-            raise ValueError("引用附件内容已变化，请使用新的消息引用")
+                existing_size = len(old_bytes)
+            if not overwrite:
+                raise ValueError("引用附件内容已变化，请使用新的消息引用")
         except FileNotFoundError:
             pass
         files, used = self.files.inventory(work.path)
         if (
             not content
             or len(content) > 6 * 1024**2
-            or used + len(content) > self.files.max_bytes
-            or len(files) >= self.files.max_files
+            or used - existing_size + len(content) > self.files.max_bytes
+            or (not existed and len(files) >= self.files.max_files)
         ):
             raise ValueError("引用文件为空或超过配额")
         with parent_fd(work.path, relative, create=True) as (directory, name):
+            if overwrite and existed:
+                temp = ".import-" + os.urandom(6).hex()
+                descriptor = os.open(
+                    temp,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=directory,
+                )
+                try:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(content)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
+                finally:
+                    try:
+                        os.unlink(temp, dir_fd=directory)
+                    except FileNotFoundError:
+                        pass
+                return
             descriptor = os.open(
                 name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -451,6 +595,11 @@ class AgentRuntime(Scout):
         if name == "sandbox_exec":
             if profile.environment != "sandbox":
                 raise PermissionError("当前角色未启用容器沙箱执行")
+            if not self.sandbox.ready:
+                raise RuntimeError(
+                    self.sandbox.error
+                    or "当前处于无容器轻量工作区模式，sandbox_exec 暂不可用；请改用 workspace_file、html_render、result_attach，或在设置中启用容器沙箱"
+                )
             if (
                 profile.secrets
                 or profile.network == "restricted"
@@ -504,6 +653,8 @@ class AgentRuntime(Scout):
                 raise RuntimeError("跨插件 API 尚未登记")
             return await self.services.call_api(profile, arguments, context, self)
         if name == "credential_call":
+            if profile.environment == "sandbox" and not self.sandbox.ready:
+                raise RuntimeError(self.sandbox.error or "固定凭据容器执行需要启用容器沙箱")
             if not self.services or not await completed_thread(
                 self.authorized, context
             ):

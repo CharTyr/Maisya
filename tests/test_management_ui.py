@@ -271,6 +271,47 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(page.locator("#local-draft")).to_have_value(
                             "保留我的草稿。"
                         )
+                        # Test Grok-style Recipe Template Share UI (draft checkup -> export -> preview -> SSRF guard -> copy import)
+                        await page.locator("#rcp-draft-btn").click()
+                        await expect(page.locator("#rcp-draft-box")).to_be_visible()
+                        await expect(page.locator("#rcp-draft-box")).to_contain_text(
+                            "隐私体检通过"
+                        )
+                        await expect(page.locator("#rcp-draft-box")).to_contain_text(
+                            "RECIPE.md"
+                        )
+                        await page.locator("#export").click()
+                        await expect(page.locator("#rcp-download-link")).to_be_visible()
+                        await expect(page.locator("#copy-package")).to_be_visible()
+                        await page.locator("#copy-package").click()
+                        assert len(await page.locator("#package-text").input_value()) > 60
+                        await page.locator("#rcp-url").fill("http://127.0.0.1/evil.zip")
+                        await page.locator("#rcp-fetch-btn").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            re.compile("本地|内网|保留|拒绝")
+                        )
+                        await page.locator("#rcp-preview-btn").click()
+                        await expect(page.locator("#rcp-preview-card")).to_be_visible()
+                        await expect(page.locator("#rcp-pv-summary")).to_contain_text(
+                            "检测到本地同名角色 scout"
+                        )
+                        await expect(page.locator("#rcp-pv-alignment")).to_be_visible()
+                        await page.locator("#rcp-mode-copy").check()
+                        await page.locator("#import-id").fill("ui_rcp_copy")
+                        await page.locator("#rcp-confirm-import").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已导入配方副本 ui_rcp_copy"
+                        )
+                        await expect(
+                            page.locator('[data-profile="ui_rcp_copy"]')
+                        ).to_be_visible()
+                        await page.locator("#delete-profile").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已删除所选角色"
+                        )
+                        await expect(
+                            page.locator('[data-profile="ui_rcp_copy"]')
+                        ).to_have_count(0)
                         await page.locator("#nav-discovery").click()
                         await expect(page.locator("#discovery-info")).to_be_visible()
                         await expect(page.locator("#discovery-info")).not_to_be_empty()
@@ -302,6 +343,18 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                             "已保存"
                         )
                         assert plugin.memory.context("other")["memory"] == ""
+                        await page.locator('[data-kind-tab="heartbeat"]').click()
+                        await expect(
+                            page.locator("#insert-heartbeat-example")
+                        ).to_be_visible()
+                        await expect(page.locator("#mem-layer-guide")).to_contain_text(
+                            "自主探索方向"
+                        )
+                        await page.locator("#insert-heartbeat-example").click()
+                        await page.locator("#save").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
                         assert await page.locator("img").count() == 0
                     else:
                         await expect(page.locator("#proactive_level")).to_be_visible()

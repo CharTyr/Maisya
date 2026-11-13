@@ -272,6 +272,47 @@ class Workspaces:
     def inventory(self, path):
         return inventory(path, max_bytes=self.max_bytes, max_files=self.max_files)
 
+    def read_checkpoint_outputs(self, row):
+        workspace_id = (
+            row.get("workspace_id")
+            or "ws_" + hashlib.sha256(row["thread_id"].encode()).hexdigest()[:24]
+        )
+        if not workspace_id.startswith("ws_") or not workspace_id[3:].isalnum():
+            return []
+        durable = self.root / workspace_id
+        pointer = durable / "current.json"
+        if not pointer.is_file() or pointer.is_symlink():
+            return []
+        try:
+            version = json.loads(pointer.read_text()).get("version", "")
+        except (OSError, ValueError):
+            return []
+        if not re.fullmatch(r"v_[a-f0-9]{32}", version):
+            return []
+        source = durable / version
+        if not source.is_dir() or source.is_symlink():
+            return []
+        out_files, _size = inventory(
+            source, roots=("out",), max_bytes=self.max_bytes, max_files=self.max_files
+        )
+        items = []
+        total_out = 0
+        budget = min(self.max_bytes, 24 * 1024**2)
+        for rel, size in sorted(out_files):
+            if len(items) >= 32:
+                break
+            if size <= 0 or size > 6 * 1024**2 or total_out + size > budget:
+                continue
+            with regular_open(source, rel) as handle:
+                data = handle.read(6 * 1024**2 + 1)
+            if len(data) > 6 * 1024**2 or self.contains_secret(data):
+                continue
+            subpath = rel[4:] if rel.startswith("out/") else rel
+            if subpath:
+                items.append((subpath, data))
+                total_out += len(data)
+        return items
+
     def usage(self):
         return sum(
             path.lstat().st_size

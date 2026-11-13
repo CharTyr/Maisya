@@ -14,6 +14,13 @@ from pathlib import Path, PurePosixPath
 
 from .config import Settings
 from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
+from .recipes import (
+    build_recipe_draft,
+    build_recipe_preview,
+    export_recipe_archive,
+    fetch_public_recipe_bytes,
+    import_recipe_archive,
+)
 from .scout import call_capability
 from .share import links_in
 from .services import (
@@ -86,6 +93,7 @@ class Management:
     def __init__(self, plugin):
         self.plugin = plugin
         self.transfers = {}
+        self.recipe_previews = {}
         self.lock = asyncio.Lock()
         self.tasks = set()
         self.closed = False
@@ -108,6 +116,7 @@ class Management:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.transfers.clear()
+        self.recipe_previews.clear()
 
     @staticmethod
     def arguments(payload):
@@ -382,6 +391,46 @@ class Management:
             "total": len(transfer["data"]),
         }
 
+    def _transfer_recipe(self, options):
+        self.transfers = {
+            key: value
+            for key, value in self.transfers.items()
+            if value["expires"] > time.time()
+        }
+        token = options.get("token", "")
+        meta = None
+        if not token:
+            if len(self.transfers) >= 4:
+                raise ValueError("传输较多，请稍后再试")
+            token = uuid.uuid4().hex
+            data, meta = export_recipe_archive(
+                self.plugin,
+                str(options.get("target") or "").strip(),
+                options,
+            )
+            self.transfers[token] = {
+                "data": data,
+                "meta": meta,
+                "expires": time.time() + 300,
+                "direction": "download_recipe",
+            }
+        transfer = self.transfers.get(token)
+        if not transfer or transfer["direction"] != "download_recipe":
+            raise ValueError("导出已过期，请重新导出")
+        offset = options.get("offset", 0)
+        if type(offset) is not int or not 0 <= offset <= len(transfer["data"]):
+            raise ValueError("传输位置无效")
+        data = transfer["data"][offset : offset + 24576]
+        out = {
+            "token": token,
+            "data": base64.b64encode(data).decode(),
+            "offset": offset + len(data),
+            "total": len(transfer["data"]),
+        }
+        if meta is not None:
+            out["meta"] = meta
+        return out
+
     async def _discovery(self):
         ctx = getattr(self.plugin, "ctx", None)
 
@@ -494,6 +543,16 @@ class Management:
         elif section == "skill_package":
             async with self.lock:
                 result = await completed_thread(self._transfer_skill, options)
+        elif section == "recipe_draft":
+            result = await completed_thread(
+                build_recipe_draft,
+                self.plugin,
+                str(options.get("target") or "").strip(),
+                options,
+            )
+        elif section == "recipe_package":
+            async with self.lock:
+                result = await completed_thread(self._transfer_recipe, options)
         elif section == "package":
             async with self.lock:
                 result = await completed_thread(self._transfer, options)
@@ -952,13 +1011,23 @@ class Management:
                 **allowed,
             )
         elif action == "clone":
-            profile = await completed_thread(
-                plugin.profiles.clone, options.get("base", "scout"), options["target"]
-            )
+            def _clone_and_seed():
+                prof = plugin.profiles.clone(
+                    options.get("base", "scout"), options["target"]
+                )
+                plugin.memory.seed_profile(prof.id)
+                return prof
+
+            profile = await completed_thread(_clone_and_seed)
             result = {"id": profile.id}
         elif action == "delete_profile":
             target = str(options.get("target") or "").strip()
-            await completed_thread(plugin.profiles.delete, target)
+
+            def _delete_and_purge():
+                plugin.profiles.delete(target)
+                plugin.memory.purge_profile(target)
+
+            await completed_thread(_delete_and_purge)
             result = {"id": target}
         elif action == "create_skill":
             target = str(options.get("target") or "").strip()
@@ -1130,6 +1199,10 @@ class Management:
             }
         elif action == "import_skill":
             result = await completed_thread(self._upload_skill, options)
+        elif action == "recipe_preview":
+            result = await self._preview_recipe(options)
+        elif action == "recipe_import":
+            result = await completed_thread(self._import_recipe, options)
         elif action == "import":
             result = await completed_thread(self._upload, options)
         else:
@@ -1251,6 +1324,7 @@ class Management:
             profile = self.plugin.profiles.import_package(
                 bytes(transfer["data"]), transfer["target"]
             )
+            self.plugin.memory.seed_profile(profile.id)
             return {"id": profile.id, "done": True}
         return {"token": token, "offset": len(transfer["data"])}
 
@@ -1295,3 +1369,115 @@ class Management:
             )
             return {**imported, "done": True}
         return {"token": token, "offset": len(transfer["data"])}
+
+    def _stage_recipe_preview(self, clean_zip: bytes) -> str:
+        now = time.time()
+        self.recipe_previews = {
+            k: v for k, v in self.recipe_previews.items() if v["expires"] > now
+        }
+        while len(self.recipe_previews) >= 6:
+            oldest = min(self.recipe_previews, key=lambda k: self.recipe_previews[k]["expires"])
+            self.recipe_previews.pop(oldest, None)
+        ptoken = "rpv_" + uuid.uuid4().hex
+        self.recipe_previews[ptoken] = {
+            "data": clean_zip,
+            "expires": now + 600,
+        }
+        return ptoken
+
+    async def _preview_recipe(self, options):
+        target_hint = str(options.get("target") or "").strip()
+        url = str(options.get("url") or "").strip()
+        if url:
+            raw_bytes, fname, sub_hint = await completed_thread(
+                fetch_public_recipe_bytes, url
+            )
+            disc = await self._discovery()
+            clean_zip, preview = await completed_thread(
+                build_recipe_preview,
+                self.plugin,
+                raw_bytes,
+                filename=fname,
+                subpath_hint=sub_hint,
+                target_hint=target_hint,
+                discovery=disc,
+                source_url=url,
+            )
+            ptoken = self._stage_recipe_preview(clean_zip)
+            return {"done": True, "preview_token": ptoken, **preview}
+
+        self.transfers = {
+            key: value
+            for key, value in self.transfers.items()
+            if value["expires"] > time.time()
+        }
+        token = options.get("token", "")
+        if not token:
+            if len(self.transfers) >= 4:
+                raise ValueError("传输较多，请稍后再试")
+            token = uuid.uuid4().hex
+            self.transfers[token] = {
+                "data": bytearray(),
+                "target": target_hint,
+                "filename": str(options.get("filename") or "").strip(),
+                "expires": time.time() + 300,
+                "direction": "upload_recipe",
+            }
+        transfer = self.transfers.get(token)
+        if (
+            not transfer
+            or transfer["direction"] != "upload_recipe"
+            or options.get("offset", 0) != len(transfer["data"])
+        ):
+            raise ValueError("导入位置无效或传输过期")
+        data = base64.b64decode(options["data"], validate=True)
+        if len(data) > 24576 or len(transfer["data"]) + len(data) > 8 * 1024**2:
+            self.transfers.pop(token, None)
+            raise ValueError("配方包过大")
+        transfer["data"].extend(data)
+        if options.get("done"):
+            self.transfers.pop(token, None)
+            disc = await self._discovery()
+            clean_zip, preview = await completed_thread(
+                build_recipe_preview,
+                self.plugin,
+                bytes(transfer["data"]),
+                filename=transfer["filename"],
+                target_hint=transfer["target"],
+                discovery=disc,
+            )
+            ptoken = self._stage_recipe_preview(clean_zip)
+            return {"done": True, "preview_token": ptoken, **preview}
+        return {"token": token, "offset": len(transfer["data"])}
+
+    def _import_recipe(self, options):
+        now = time.time()
+        self.recipe_previews = {
+            k: v for k, v in self.recipe_previews.items() if v["expires"] > now
+        }
+        ptoken = str(options.get("preview_token") or "").strip()
+        if ptoken:
+            staged = self.recipe_previews.get(ptoken)
+            if not staged:
+                raise ValueError("配方预览已过期，请重新点击「预览与对齐检查」")
+            raw_bytes = staged["data"]
+        elif options.get("data"):
+            raw_bytes = base64.b64decode(str(options["data"]), validate=True)
+        else:
+            raise ValueError("请先执行配方预览或提供有效的配方包数据")
+        res = import_recipe_archive(
+            self.plugin,
+            raw_bytes,
+            target=str(options.get("target") or "").strip(),
+            mode=str(options.get("mode") or "copy").strip(),
+            install_skills=options.get("install_skills", True) is not False,
+            overwrite_skills=options.get("overwrite_skills", False) is True,
+            mount_routines=options.get("mount_routines")
+            if isinstance(options.get("mount_routines"), list)
+            else [],
+            routine_chat_id=str(options.get("routine_chat_id") or "").strip(),
+            routine_platform=str(options.get("routine_platform") or "qq").strip() or "qq",
+        )
+        if ptoken:
+            self.recipe_previews.pop(ptoken, None)
+        return {"done": True, **res}

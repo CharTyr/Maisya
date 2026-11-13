@@ -3,4 +3,4 @@ model = ""
 fallback_models = []
 environment = "readonly"
 access = "everyone"
-tools = ["web_search", "web_fetch", "chat_read", "message_read", "memory_read", "image_read"]
+tools = ["web_search", "web_fetch", "chat_read", "message_read", "memory_read", "person_read", "recall_read", "image_read"]

@@ -45,9 +45,28 @@ def test_profile_package_rejects_unknown_secret_fields_and_known_secret_assets(
 async def test_unavailable_maker_refuses_execution_without_affecting_scout(tmp_path):
     plugin = await loaded(tmp_path)
     try:
+        # maker without container degrades to light_workspace mode (disabling sandbox_exec)
+        maker = plugin.profiles.get("maker")
+        assert plugin.runtime.effective_mode(maker) == "light_workspace"
+        row = plugin.threads.create(
+            maker, "轻量工作区测试", chat_id="chat", platform="qq", user_id="Alice"
+        )
+        with pytest.raises(RuntimeError, match="sandbox_exec|沙箱"):
+            await plugin.runtime.call(
+                "sandbox_exec",
+                {"command": "echo hi"},
+                {**row, "_tool_call_id": "exec-no-sandbox"},
+            )
+        # Strict container-only profile still refuses execution when sandbox is unavailable
+        strict_dir = plugin.profiles.path / "strict_shell"
+        strict_dir.mkdir(parents=True)
+        (strict_dir / "PROFILE.md").write_text("仅允许隔离容器命令执行。")
+        (strict_dir / "profile.toml").write_text(
+            'environment = "sandbox"\naccess = "everyone"\ntools = ["sandbox_exec"]\n'
+        )
         rejected = await plugin.agent_tool(
             action="start",
-            profile="maker",
+            profile="strict_shell",
             message="计算 2+2",
             chat_id="chat",
             platform="qq",

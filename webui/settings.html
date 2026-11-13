@@ -1935,6 +1935,9 @@ pre, code, .mono, .num {
         selectedProfile = profBtn.dataset.profile;
         viewMode = "roles";
         if ($("#document").value === "skill") $("#document").value = "profile";
+        revokeRecipeBlob();
+        if ($("#rcp-draft-box")) $("#rcp-draft-box").hidden = true;
+        if ($("#rcp-secret-notes-box")) $("#rcp-secret-notes-box").hidden = true;
         renderCatalog();
         say("");
         await loadAsset(false);
@@ -2313,25 +2316,387 @@ pre, code, .mono, .num {
     $("#delete-profile").onclick = async () => {
       const r = await rpc("write", "delete_profile", { target: selectedProfile });
       if (!r?.success) return say(r?.error || "删除角色失败", true);
-      say("已删除所选角色");
       await loadCatalog();
       await loadAsset(false);
+      say("已删除所选角色");
     };
+
+    let activeRecipePreview = null;
+    let activeRecipeBlobUrl = "";
+
+    function revokeRecipeBlob() {
+      if (activeRecipeBlobUrl) {
+        try { URL.revokeObjectURL(activeRecipeBlobUrl); } catch {}
+        activeRecipeBlobUrl = "";
+      }
+      const dl = $("#rcp-download-link");
+      if (dl) {
+        dl.hidden = true;
+        dl.removeAttribute("href");
+      }
+    }
+
+    function recipeDraftOptions() {
+      const secret_notes = {};
+      $$("[data-secret-note]").forEach((inp) => {
+        const h = inp.dataset.secretNote;
+        const v = inp.value.trim();
+        if (h && v) secret_notes[h] = v;
+      });
+      return {
+        include_skills: $("#rcp-inc-skills")?.checked !== false,
+        include_notes: $("#rcp-inc-notes")?.checked !== false,
+        include_presets: $("#rcp-inc-presets")?.checked !== false,
+        include_routines: $("#rcp-inc-routines")?.checked !== false,
+        secret_notes,
+      };
+    }
+
+    function renderDraftCheckup(d) {
+      const box = $("#rcp-draft-box");
+      const secBox = $("#rcp-secret-notes-box");
+      if (!box) return;
+      box.hidden = false;
+      const st = d.stripped || {};
+      const creds = d.manifest?.dependencies?.credentials || [];
+      if (secBox) {
+        if (creds.length) {
+          const prevVals = {};
+          $$("[data-secret-note]").forEach((el) => { prevVals[el.dataset.secretNote] = el.value; });
+          secBox.hidden = false;
+          secBox.innerHTML = `<span class="mil-label">凭据句柄用途说明（仅导出句柄名与用途提示，绝不导出密钥明文）</span>` + creds.map((c) =>
+            `<div class="mil-row"><span class="mil-tag mono">${esc(c.handle)}</span><input class="mil-input" style="flex:1 1 180px" data-secret-note="${esc(c.handle)}" value="${esc(prevVals[c.handle] ?? c.purpose ?? "")}" placeholder="填写接收方如何获取或配置此凭据"></div>`
+          ).join("");
+        } else {
+          secBox.hidden = true;
+          secBox.innerHTML = "";
+        }
+      }
+      const findings = d.findings || [];
+      const strippedTxt = `已剥离本机会话白名单 ${st.allow_chats || 0} 项 · 用户白名单 ${st.allow_users || 0} 项 · 例行任务会话号 ${st.routine_chat_ids || 0} 项`;
+      const assetSummary = d.file_list
+        ? `拟打包文件 ${d.file_list.length} 个（技能 ${(d.manifest?.skills || []).length} 项 · 例行工作流 ${(d.manifest?.routines || []).length} 项）`
+        : `导出大小 ${d.bytes || 0} B（技能 ${(d.manifest?.skills || []).length} 项 · 例行工作流 ${(d.manifest?.routines || []).length} 项）`;
+      const findingHtml = findings.length
+        ? findings.map((f) => {
+            const cls = f.severity === "blocker" ? "mil-tag--bad" : "mil-tag--warn";
+            const lbl = f.severity === "blocker" ? "阻断" : "提示";
+            return `<div class="mil-row" style="margin-top:4px"><span class="mil-tag ${cls}">${lbl}</span><span class="mono">${esc(f.path)}</span><span>${esc(f.message)}</span></div>`;
+          }).join("")
+        : `<div class="mil-row" style="margin-top:4px"><span class="mil-tag mil-tag--ok">隐私体检通过</span><span>未检出凭据明文、内网地址、群号或本机路径特征</span></div>`;
+      const mdHtml = d.recipe_markdown
+        ? `<details style="margin-top:6px"><summary class="mil-label" style="cursor:pointer">查看人类可读依赖清单 (RECIPE.md)</summary><pre class="mil-pre" style="margin-top:4px;max-height:160px">${esc(d.recipe_markdown)}</pre></details>`
+        : "";
+      box.innerHTML = `<div class="mil-row"><span class="mil-tag">${esc(assetSummary)}</span><span class="mil-tag">${esc(strippedTxt)}</span></div>${findingHtml}${mdHtml}`;
+    }
+
+    async function refreshRecipeDraft() {
+      if (!selectedProfile) return;
+      say("");
+      const r = await rpc("read", "recipe_draft", { target: selectedProfile, ...recipeDraftOptions() });
+      if (!r?.success) return say(r?.error || "生成配方草稿失败", true);
+      renderDraftCheckup(r);
+      say(r.can_export ? `已完成 ${selectedProfile} 配方草稿与隐私体检` : `检测到阻断级敏感内容，请先清理后再导出`, !r.can_export);
+    }
+
+    function syncRecipeRoutineGuard() {
+      if (!activeRecipePreview?.routines?.length) return;
+      const sel = $("#rcp-routine-chat");
+      if (!sel) return;
+      const mode = $("#rcp-mode-update")?.checked && !$("#rcp-mode-update")?.disabled ? "update" : "copy";
+      let readyToMount = false;
+      if (mode === "copy") {
+        readyToMount = (activeRecipePreview.profile?.enabled !== false) && !activeRecipePreview.alignment?.requires_rebind;
+      } else {
+        const typed = $("#import-id")?.value?.trim() || activeRecipePreview.suggested_target;
+        const catalogProf = (catalog.profiles || []).find((p) => p.id === typed);
+        const ex = (activeRecipePreview.existing_profile?.id === typed ? activeRecipePreview.existing_profile : null) || catalogProf;
+        const baseEnabled = ex ? ex.enabled !== false : activeRecipePreview.profile?.enabled !== false;
+        const baseBound = ex ? ex.bound !== false : !activeRecipePreview.alignment?.requires_rebind;
+        readyToMount = baseEnabled && baseBound && !activeRecipePreview.alignment?.missing_binding;
+      }
+      Array.from(sel.options || []).forEach((opt) => {
+        if (opt.value !== "") opt.disabled = !readyToMount;
+      });
+      if (!readyToMount) {
+        sel.value = "";
+        sel.title = "角色导入后处于停用或待绑定凭据状态，请先仅导入角色，完成启用/绑定后再挂载定时工作流";
+      } else {
+        sel.title = "";
+      }
+    }
+
+    function syncRecipeImportModeUI() {
+      if (!activeRecipePreview) return;
+      const pv = activeRecipePreview;
+      const typed = $("#import-id").value.trim();
+      const existsInCatalog = (catalog.profiles || []).some((p) => p.id === (typed || pv.suggested_target));
+      const canUpdate = Boolean(pv.existing_profile || existsInCatalog);
+      const updRadio = $("#rcp-mode-update");
+      const copyRadio = $("#rcp-mode-copy");
+      if (updRadio) updRadio.disabled = !canUpdate;
+      if (!canUpdate && updRadio?.checked && copyRadio) copyRadio.checked = true;
+      syncRecipeRoutineGuard();
+    }
+
+    function renderRecipePreview(pv) {
+      activeRecipePreview = pv;
+      const card = $("#rcp-preview-card");
+      const confirmBtn = $("#rcp-confirm-import");
+      if (!card || !confirmBtn) return;
+      card.hidden = false;
+      confirmBtn.hidden = false;
+      $("#package-panel").open = true;
+
+      $("#rcp-pv-source").textContent = `${pv.source_url ? "公开链接" : "本地包"} · ${pv.source_id}`;
+      const prof = pv.profile || {};
+      const skills = pv.skills || [];
+      const skillTags = skills.length
+        ? skills.map((s) => `<span class="mil-tag ${s.bundled ? "mil-tag--ok" : "mil-tag--warn"}">${esc(s.id)}${s.companions_count ? ` (+${s.companions_count})` : ""}${s.exists_locally ? " · 本地已有" : ""}</span>`).join(" ")
+        : `<span class="mil-hint">无附加技能</span>`;
+      const exBanner = pv.existing_profile
+        ? `<div class="mil-row" style="margin-top:4px"><span class="mil-tag mil-tag--warn">检测到本地同名角色 ${esc(pv.existing_profile.id)}</span><span class="mil-hint">可选「平滑升级」保留本地白名单(${pv.existing_profile.allow_chats_count || 0} 会话)/启停/工作区并可回滚，或另存为 ${esc(pv.suggested_copy_id)}</span></div>`
+        : "";
+      $("#rcp-pv-summary").innerHTML = `
+        <div class="mil-row">
+          <strong>${esc(prof.title || prof.id)}</strong>
+          <span class="mil-tag mono">${esc(prof.environment || "readonly")}</span>
+          <span class="mil-tag mono">task:${esc(prof.task || "utils")}</span>
+          <span class="mil-tag">工具 ${(prof.tools || []).length} 项</span>
+          ${prof.has_notes ? `<span class="mil-tag">含 NOTES.md</span>` : ""}
+          ${(prof.preset_files || []).length ? `<span class="mil-tag">预设文件 ${prof.preset_files.length}</span>` : ""}
+        </div>
+        ${prof.summary ? `<p class="mil-hint" style="margin-top:4px">${esc(prof.summary)}</p>` : ""}
+        <div class="mil-row" style="margin-top:4px"><span class="mil-label">技能集：</span>${skillTags}</div>
+        ${exBanner}
+      `;
+
+      const alignItems = pv.alignment?.items || [];
+      $("#rcp-pv-alignment").innerHTML = `<span class="mil-label">本机环境与依赖对齐检查：</span>` + (
+        alignItems.length
+          ? alignItems.map((it) => {
+              const cls = it.status === "ready" ? "mil-tag--ok" : it.status === "fallback" ? "mil-tag--warn" : "mil-tag--bad";
+              const txt = it.status === "ready" ? "就绪" : it.status === "fallback" ? "轻量降级可用" : "缺件待绑";
+              return `<div class="mil-row"><span class="mil-tag ${cls}">${txt}</span><strong>${esc(it.name)}</strong><span class="mil-hint">${esc(it.detail || "")}</span></div>`;
+            }).join("")
+          : `<div class="mil-row"><span class="mil-tag mil-tag--ok">即装即用</span><span class="mil-hint">纯内置能力配方，本机无需额外凭据或外部服务</span></div>`
+      );
+
+      const warns = pv.privacy_warnings || [];
+      const warnEl = $("#rcp-pv-warnings");
+      if (warnEl) {
+        warnEl.hidden = !warns.length;
+        warnEl.innerHTML = warns.map((w) => `<div class="mil-row"><span class="mil-tag mil-tag--warn">来源提示</span><span class="mono">${esc(w.path)}</span><span class="mil-hint">${esc(w.message)}</span></div>`).join("");
+      }
+
+      const routines = pv.routines || [];
+      const rtWrap = $("#rcp-pv-routines-wrap");
+      if (rtWrap) {
+        rtWrap.hidden = !routines.length;
+        if (routines.length) {
+          const chats = pv.enabled_chats || [];
+          $("#rcp-routine-chat").innerHTML = [
+            `<option value="">暂不挂载（仅导入角色）</option>`,
+            ...chats.map((c) => `<option value="${esc(c)}">挂载至会话 ${esc(c)}</option>`),
+          ].join("");
+          $("#rcp-pv-routines").innerHTML = routines.map((rt) => {
+            const period = rt.every_seconds ? `每 ${rt.every_seconds}s` : "单次";
+            return `<label class="mil-chk" style="justify-content:flex-start"><input type="checkbox" data-rcp-routine="${esc(rt.id)}" checked><span><strong>${esc(rt.title)}</strong> (${esc(period)}${rt.workspace ? ` · ws:${esc(rt.workspace)}` : ""})</span></label>`;
+          }).join("");
+        }
+      }
+
+      if (pv.existing_profile) {
+        $("#rcp-mode-update").disabled = false;
+        $("#rcp-mode-update").checked = true;
+        $("#import-id").value = pv.existing_profile.id;
+      } else {
+        $("#rcp-mode-copy").checked = true;
+        $("#rcp-mode-update").disabled = true;
+        if (!$("#import-id").value.trim()) $("#import-id").value = pv.suggested_target || pv.source_id;
+      }
+      syncRecipeImportModeUI();
+    }
+
+    $("#jump-recipe-panel").onclick = async () => {
+      viewMode = "roles";
+      if ($("#document").value === "skill") $("#document").value = "profile";
+      renderCatalog();
+      await loadAsset(false);
+      await refreshRecipeDraft();
+      $("#role-package-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    $("#rcp-draft-btn").onclick = refreshRecipeDraft;
+    ["rcp-inc-skills", "rcp-inc-notes", "rcp-inc-presets", "rcp-inc-routines"].forEach((cid) => {
+      $(`#${cid}`)?.addEventListener("change", () => {
+        if (!$("#rcp-draft-box")?.hidden) refreshRecipeDraft();
+      });
+    });
+
     $("#export").onclick = async () => {
-      let token = "", offset = 0, chunks = [];
-      for (let guard = 0; guard < 100; guard++) {
-        const r = await rpc("read", "package", { target: selectedProfile, token, offset });
-        if (!r?.success) return say(r?.error || "导出失败", true);
+      revokeRecipeBlob();
+      let token = "", offset = 0, chunks = [], meta = null;
+      const opts = recipeDraftOptions();
+      for (let guard = 0; guard < 200; guard++) {
+        const r = await rpc("read", "recipe_package", { target: selectedProfile, token, offset, ...(token ? {} : opts) });
+        if (!r?.success) return say(r?.error || "导出配方失败", true);
         token = r.token;
+        if (r.meta) meta = r.meta;
         chunks.push(r.data);
         offset = r.offset;
         if (offset >= r.total) break;
       }
-      $("#package-text").value = chunks.join("");
+      const b64 = chunks.join("");
+      $("#package-text").value = b64;
       $("#package-panel").open = true;
-      say(`已导出角色 ${selectedProfile}`);
+      if (meta) renderDraftCheckup(meta);
+      try {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/zip" });
+        activeRecipeBlobUrl = URL.createObjectURL(blob);
+        const dl = $("#rcp-download-link");
+        if (dl) {
+          dl.href = activeRecipeBlobUrl;
+          dl.download = `${selectedProfile}-recipe.zip`;
+          dl.hidden = false;
+        }
+      } catch {}
+      say(`已导出角色 ${selectedProfile} 配方包（已自动剥离白名单与会话号）`);
     };
+    async function copyRecipePackageText(fromSandboxFallback = false) {
+      const text = $("#package-text")?.value?.trim() || "";
+      if (!text) return say("请先点击「导出配方包」生成配方包文本", true);
+      let copied = false;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        }
+      } catch {}
+      $("#package-panel").open = true;
+      $("#package-text").focus();
+      $("#package-text").select();
+      if (fromSandboxFallback) {
+        say(copied
+          ? "当前宿主沙箱限制直接下载文件，已自动复制配方包文本到剪贴板。"
+          : "当前宿主沙箱限制直接下载文件，已全选配方包文本，请按 Ctrl/Cmd + C 复制。");
+      } else {
+        say(copied ? "已复制配方包文本到剪贴板。" : "已全选配方包文本，请按 Ctrl/Cmd + C 复制。");
+      }
+    }
+    $("#copy-package").onclick = () => copyRecipePackageText(false);
     $("#select-package").onclick = () => { $("#package-text").select(); };
+    $("#rcp-download-link").addEventListener("click", async (ev) => {
+      if (window.origin === "null") {
+        ev.preventDefault();
+        await copyRecipePackageText(true);
+      }
+    });
+
+    async function previewRecipeBytes(bytes, filename = "recipe.zip") {
+      if (!bytes?.length) return say("配方包内容为空", true);
+      say("");
+      const target = $("#import-id").value.trim();
+      let token = "", offset = 0, last = null;
+      const stepBytes = 18432;
+      for (let i = 0; i < bytes.length || i === 0; i += stepBytes) {
+        const slice = bytes.subarray(i, i + stepBytes);
+        const done = i + stepBytes >= bytes.length;
+        const r = await rpc("write", "recipe_preview", {
+          target,
+          filename,
+          token,
+          offset,
+          data: uint8ToB64(slice),
+          done,
+        });
+        if (!r?.success) return say(r?.error || "配方预览解析失败", true);
+        token = r.token || token;
+        offset = r.offset ?? offset;
+        last = r;
+      }
+      if (last?.preview_token) {
+        renderRecipePreview(last);
+        say(`已生成配方「${last.profile?.title || last.source_id}」预览，确认对齐状态后点击「确认导入配方」`);
+      }
+    }
+
+    $("#rcp-fetch-btn").onclick = async () => {
+      const url = $("#rcp-url").value.trim();
+      if (!url) return say("请先粘贴公开配方链接", true);
+      say("正在由后端安全拉取并校验配方包…");
+      const r = await rpc("write", "recipe_preview", { url, target: $("#import-id").value.trim() });
+      if (!r?.success) return say(r?.error || "公开链接拉取失败", true);
+      renderRecipePreview(r);
+      say(`已拉取并解析「${r.profile?.title || r.source_id}」，请核对缺件对齐状态后确认导入`);
+    };
+
+    $("#rcp-preview-btn").onclick = async () => {
+      const clean = $("#package-text").value.replace(/\s+/g, "");
+      if (!clean) return say("请先粘贴或导出配方包 Base64 文本", true);
+      try {
+        const bin = atob(clean);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        await previewRecipeBytes(bytes, "recipe-text.zip");
+      } catch {
+        say("配方包 Base64 文本格式无效", true);
+      }
+    };
+
+    $("#rcp-mode-copy").addEventListener("change", () => {
+      if ($("#rcp-mode-copy").checked && activeRecipePreview) {
+        if (activeRecipePreview.existing_profile && $("#import-id").value.trim() === activeRecipePreview.existing_profile.id) {
+          $("#import-id").value = activeRecipePreview.suggested_copy_id || `${activeRecipePreview.source_id}-copy`;
+        }
+      }
+      syncRecipeRoutineGuard();
+    });
+    $("#rcp-mode-update").addEventListener("change", () => {
+      if ($("#rcp-mode-update").checked && activeRecipePreview?.existing_profile) {
+        $("#import-id").value = activeRecipePreview.existing_profile.id;
+      }
+      syncRecipeRoutineGuard();
+    });
+    $("#import-id").addEventListener("input", syncRecipeImportModeUI);
+
+    $("#rcp-confirm-import").onclick = async () => {
+      if (!activeRecipePreview?.preview_token) return say("请先预览配方包", true);
+      const target = $("#import-id").value.trim();
+      if (!target) return say("请填写目标角色编号", true);
+      const mode = $("#rcp-mode-update").checked && !$("#rcp-mode-update").disabled ? "update" : "copy";
+      const routineChat = $("#rcp-routine-chat")?.value || "";
+      const pickedRoutines = routineChat
+        ? $$("[data-rcp-routine]:checked").map((x) => x.dataset.rcpRoutine)
+        : [];
+      say("");
+      const r = await rpc("write", "recipe_import", {
+        preview_token: activeRecipePreview.preview_token,
+        target,
+        mode,
+        install_skills: $("#rcp-install-skills")?.checked !== false,
+        overwrite_skills: mode === "update",
+        mount_routines: pickedRoutines,
+        routine_chat_id: routineChat,
+      });
+      if (!r?.success) return say(r?.error || "配方导入失败", true);
+      activeRecipePreview = null;
+      $("#rcp-preview-card").hidden = true;
+      $("#rcp-confirm-import").hidden = true;
+      selectedProfile = r.id;
+      viewMode = "roles";
+      $("#document").value = "profile";
+      await loadCatalog();
+      await loadAsset(false);
+      const rtHint = (r.mounted_routines || []).length ? `，已挂载 ${r.mounted_routines.length} 项例行任务` : "";
+      const bindHint = r.bound === false ? "（存在待绑定凭据/服务，当前设为待绑定保护态）" : "";
+      say(mode === "update"
+        ? `已平滑升级角色 ${r.id}${rtHint}${bindHint}，原白名单与工作区完整保留且可回滚`
+        : `已导入配方副本 ${r.id}${rtHint}${bindHint}`);
+    };
+
     async function uploadB64(b64) {
       const target = $("#import-id").value.trim();
       if (!target) return say("请填写导入后的新角色编号", true);
@@ -2356,11 +2721,10 @@ pre, code, .mono, .num {
       const file = $("#package-file").files?.[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         const bytes = new Uint8Array(reader.result);
-        let bin = "";
-        bytes.forEach((b) => { bin += String.fromCharCode(b); });
-        uploadB64(btoa(bin));
+        await previewRecipeBytes(bytes, file.name);
+        $("#package-file").value = "";
       };
       reader.readAsArrayBuffer(file);
     });
@@ -2818,11 +3182,21 @@ pre, code, .mono, .num {
     let expectedVersion = 0;
     let memData = { chats: [] };
 
+    const LAYER_GUIDES = {
+      memory: "会话备忘（MEMORY.md）按会话严格隔离，仅记录本会话长期置顶的办事约定；群友印象由宿主 A_Memorix 维护。",
+      journal: "近期手账（JOURNAL.md）由系统在公开探索线程完成后自动沉淀近 7 天经历摘要（新装或尚未触发探索时为空属正常现象）；请勿在此写入单会话私密信息。",
+      heartbeat: "探索节奏（HEARTBEAT.md）配置闲暇分寸与「## 自主探索方向」。预设示例默认处于注释静默态；取消注释或点击右上角「+ 插入公开探索示例」保存后即按心跳间隔巡检公开主题。",
+    };
+
     function renderLayerBtns() {
       const k = $("#kind").value;
       $$("[data-kind-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kindTab === k)));
       const cid = $("#chat").value;
       $$("[data-chat-chip]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.chatChip === cid)));
+      const guide = $("#mem-layer-guide");
+      if (guide) guide.textContent = LAYER_GUIDES[k] || "";
+      const hbBtn = $("#insert-heartbeat-example");
+      if (hbBtn) hbBtn.hidden = k !== "heartbeat";
     }
     function updateMeter() {
       const len = ($("#content").value || "").length;
@@ -2963,6 +3337,19 @@ pre, code, .mono, .num {
     $("#chat").addEventListener("change", () => { say(""); loadAsset(false); });
     $("#kind").addEventListener("change", () => { say(""); loadAsset(false); });
     $("#content").addEventListener("input", () => { setDirty(true); updateMeter(); });
+    $("#insert-heartbeat-example").onclick = () => {
+      const sample = "- 留意开源多模态工具、AI 工程实践与科技新发布的公开一手动态，遇到扎实有趣的进展先记入近期手账。";
+      const cur = $("#content").value || "";
+      if (cur.includes(sample)) return say("当前已包含该公开探索示例。");
+      if (/^##\s*自主探索方向\s*$/m.test(cur)) {
+        $("#content").value = cur.replace(/\s*$/, "\n" + sample + "\n");
+      } else {
+        $("#content").value = cur.replace(/\s*$/, "\n\n## 自主探索方向\n\n" + sample + "\n");
+      }
+      setDirty(true);
+      updateMeter();
+      say("已插入公开探索示例，点击「保存修改」后生效。");
+    };
     $("#save").onclick = async () => {
       const kind = $("#kind").value;
       const body = { kind, content: $("#content").value, expected_version: expectedVersion };

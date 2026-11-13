@@ -506,10 +506,21 @@ class MemoryLayers:
             path,
         )
 
-    def read(self, kind, *, target="", chat_id="", document="", version=None):
+    def read(
+        self,
+        kind,
+        *,
+        target="",
+        chat_id="",
+        document="",
+        version=None,
+        allow_custom=False,
+    ):
         with self._lock(), self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
-            current, asset, _path = self._sync(db, kind, target, chat_id, document)
+            current, asset, _path = self._sync(
+                db, kind, target, chat_id, document, allow_custom=allow_custom
+            )
             if version is not None:
                 old = db.execute(
                     "SELECT content,version FROM memory_versions WHERE asset=? AND version=?",
@@ -540,6 +551,32 @@ class MemoryLayers:
         return sorted(
             p.name for p in root.iterdir() if p.is_dir() and not p.is_symlink()
         )
+
+    def skill_briefs(self, skill_ids, *, profile_id: str = "") -> list[dict]:
+        briefs = []
+        for skill_id in skill_ids or ():
+            if not isinstance(skill_id, str) or not SKILL_ID_RE.fullmatch(skill_id):
+                continue
+            candidates = [self.root / "abilities/skills" / skill_id / "SKILL.md"]
+            if profile_id and SKILL_ID_RE.fullmatch(profile_id):
+                candidates.append(
+                    self.profiles.path / profile_id / "preset/skills" / skill_id / "SKILL.md"
+                )
+            raw_text = ""
+            for cand in candidates:
+                raw = self._bytes(cand)
+                if raw:
+                    raw_text = raw.decode("utf-8", errors="replace")
+                    break
+            meta = parse_skill_meta(skill_id, raw_text) if raw_text else {
+                "title": skill_id,
+                "description": "",
+            }
+            summary = self.vault.redact(
+                (meta.get("description") or meta.get("title") or skill_id)[:72]
+            )
+            briefs.append({"id": skill_id, "summary": summary})
+        return briefs
 
     def create_skill(
         self,
@@ -684,16 +721,28 @@ class MemoryLayers:
                 collected.append((rel_clean, data))
         return collected
 
-    def read_skill_companions(self, target: str) -> list[tuple[str, bytes]]:
+    def read_skill_companions(
+        self, target: str, *, profile_id: str = ""
+    ) -> list[tuple[str, bytes]]:
         if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
         skill_dir = self.root / "abilities/skills" / target
+        if (
+            not (skill_dir / "SKILL.md").is_file()
+            and profile_id
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id)
+        ):
+            preset_dir = self.profiles.path / profile_id / "preset/skills" / target
+            if (preset_dir / "SKILL.md").is_file() and not any(
+                p.is_symlink() for p in preset_dir.parents
+            ):
+                skill_dir = preset_dir
         return self._collect_skill_companions(skill_dir)
 
-    def skill_files(self, target: str) -> list[dict]:
+    def skill_files(self, target: str, *, profile_id: str = "") -> list[dict]:
         return [
             {"path": rel, "bytes": len(data)}
-            for rel, data in self.read_skill_companions(target)
+            for rel, data in self.read_skill_companions(target, profile_id=profile_id)
         ]
 
     def read_skill_file(self, target: str, rel_path: str) -> dict:
@@ -968,6 +1017,40 @@ class MemoryLayers:
             db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
         return {"deleted": True, "skill": target}
 
+    def seed_profile(self, target: str) -> dict[str, int]:
+        versions = {
+            "PROFILE.md": self.read(
+                "profile", target=target, document="PROFILE.md", allow_custom=True
+            )["version"],
+            "profile.toml": self.read(
+                "profile", target=target, document="profile.toml", allow_custom=True
+            )["version"],
+        }
+        notes_path = self.profiles.path / target / "NOTES.md"
+        if notes_path.is_file() and not notes_path.is_symlink():
+            versions["NOTES.md"] = self.read(
+                "notes", target=target, allow_custom=True
+            )["version"]
+        return versions
+
+    def purge_profile(self, target: str) -> None:
+        if not isinstance(target, str) or not target:
+            return
+        with self._lock(), self.store.connect() as db, db:
+            assets = {
+                f"profile:{target}:PROFILE.md",
+                f"profile:{target}:profile.toml",
+                f"notes:{target}:NOTES.md",
+            }
+            rows = db.execute(
+                "SELECT DISTINCT asset FROM memory_versions WHERE kind IN ('profile', 'notes') AND target=?",
+                (target,),
+            ).fetchall()
+            assets.update(row[0] for row in rows)
+            for asset in assets:
+                db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
+                db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
+
     def write(
         self,
         kind,
@@ -1126,7 +1209,7 @@ class MemoryLayers:
                 self._guard("skill", content, "", allow_custom=True)
             if not content.strip():
                 raise ValueError("角色引用的技能为空或不存在")
-            companions = self.skill_files(skill)
+            companions = self.skill_files(skill, profile_id=profile.id)
             if companions:
                 listed = ", ".join(c["path"] for c in companions[:20])
                 content = (

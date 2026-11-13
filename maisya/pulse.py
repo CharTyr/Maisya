@@ -248,8 +248,21 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred", delay=5
                 )
                 return
+        is_workflow = bool(
+            row["source"] == "workflow"
+            or row["payload"].get("profile")
+            or thread is not None
+        )
         text = html.escape(self.redact(row["reason"]))
-        if row["kind"] == "proactive":
+        if is_workflow:
+            intent = (
+                "预设或定时安排的角色工作流已完成本轮运行。结合当前对话与产出内容判断是否交付："
+                "纯文字结论可直接用 reply 自然提起；若含准确链接、图片或文件附件，请调用 maisya_agent(action=\"share\") 交付后结束本轮；若无值得打扰的新内容可静默 stop。"
+                "\n<maisya_workflow>" + text + "</maisya_workflow>"
+            )
+            if row["kind"] == "proactive":
+                intent += await asyncio.to_thread(self._temperament_xml)
+        elif row["kind"] == "proactive":
             intent = (
                 "这是你自己之前想对会话提起的惦记，或计划中的一次自然冒泡。"
                 "结合当前对话判断是否值得开口；可以自然提起，也可以静默 stop。"
@@ -262,19 +275,45 @@ class Pulse:
                 "结合当前对话用一两句自然提起；如果已无意义可静默 stop。"
                 "\n<maisya_reminder>" + text + "</maisya_reminder>"
             )
-        if thread and (thread.get("result") or {}).get("text"):
-            if (thread.get("result") or {}).get("attachments"):
+        if thread and isinstance(thread.get("result"), dict):
+            result_obj = thread["result"]
+            result_text = str(result_obj.get("text") or "")
+            attachments = result_obj.get("attachments") or []
+            from .share import links_in
+
+            try:
+                result_links = links_in(result_obj)
+            except ValueError:
+                result_links = []
+            if result_text or attachments or result_links:
                 await asyncio.to_thread(
                     self.bridge.stage,
                     thread,
                     chat_id,
                     archived=thread.get("owner") == "self",
                 )
-            intent += (
-                "\n<maisya_thread_result>"
-                + html.escape(self.redact(thread["result"]["text"]))
-                + "</maisya_thread_result>"
-            )
+                intent += (
+                    "\n<maisya_thread_result>"
+                    + html.escape(self.redact(result_text))
+                    + "</maisya_thread_result>"
+                )
+                hint_info = {"thread_id": str(thread["thread_id"])}
+                if attachments:
+                    handles = [
+                        str(item.get("handle"))
+                        for item in attachments
+                        if isinstance(item, dict) and item.get("handle")
+                    ]
+                    if handles:
+                        hint_info["attachment_handles"] = handles
+                if result_links:
+                    hint_info["links"] = result_links[:12]
+                if attachments or result_links:
+                    intent += (
+                        "\n<maisya_delivery_hint>"
+                        + html.escape(json.dumps(hint_info, ensure_ascii=False))
+                        + "</maisya_delivery_hint>"
+                    )
         status = await self._wake(
             chat_id,
             intent

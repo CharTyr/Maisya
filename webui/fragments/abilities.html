@@ -40,7 +40,8 @@
           <button id="clone" class="mil-key mil-key--sm" type="button">克隆角色</button>
           <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除角色</button>
         </div>
-        <p class="mil-hint">点击上方任意角色即可进入角色工作台配置模型、权限与方法笔记。</p>
+        <button id="jump-recipe-panel" class="mil-key mil-key--sm" type="button" style="justify-content:center">配方模板分享 / 导入 →</button>
+        <p class="mil-hint">点击上方任意角色即可进入角色工作台配置模型、权限、方法笔记与能力配方模板。</p>
       </div>
     </section>
   </aside>
@@ -253,23 +254,88 @@
       </details>
     </section>
 
-    <!-- 视图 C：角色包导入导出（仅角色工作台视图展开） -->
+    <!-- 视图 C：角色能力配方模板分享与导入（仅角色工作台视图展开） -->
     <section class="mil-panel" id="role-package-panel" hidden>
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">PACKAGE · 角色包导入导出</span></div>
-        <div class="mil-head-r"><button id="export" class="mil-key mil-key--sm" type="button">导出所选角色</button></div>
+        <div class="mil-head-l">
+          <span class="mil-silk">RECIPE · 能力配方分享与导入</span>
+          <span class="mil-tag">配方非完整克隆</span>
+        </div>
+        <div class="mil-head-r">
+          <button id="rcp-draft-btn" class="mil-key mil-key--sm" type="button">草稿与隐私体检</button>
+          <button id="export" class="mil-key mil-key--sm mil-key--hot" type="button">导出配方包</button>
+          <a id="rcp-download-link" class="mil-key mil-key--sm" hidden download>下载 .zip</a>
+        </div>
       </div>
+
+      <!-- 1. 导出前草稿勾选与隐私体检 -->
+      <div class="mil-screen" style="margin-bottom:10px;display:flex;flex-direction:column;gap:8px">
+        <div class="mil-row" style="justify-content:space-between">
+          <span class="mil-label">1. 分享草稿与隐私体检（自动剥离群/用户白名单与会话 ID，绝不打包人设、保险箱密钥明文、手账或工作区）</span>
+        </div>
+        <div class="mil-row">
+          <label class="mil-chk"><input type="checkbox" id="rcp-inc-skills" checked><span>已绑定技能集与附属文件</span></label>
+          <label class="mil-chk"><input type="checkbox" id="rcp-inc-notes" checked><span>通用方法笔记 (NOTES.md)</span></label>
+          <label class="mil-chk"><input type="checkbox" id="rcp-inc-presets" checked><span>初始预设资产 (preset/)</span></label>
+          <label class="mil-chk"><input type="checkbox" id="rcp-inc-routines" checked><span>推荐例行工作流 (Routines)</span></label>
+        </div>
+        <div id="rcp-secret-notes-box" style="display:flex;flex-direction:column;gap:6px" hidden></div>
+        <div id="rcp-draft-box" class="mil-hint" hidden></div>
+      </div>
+
+      <!-- 2. 公开链接拉取 / 本地压缩包 / Base64 预览对齐与平滑升级 -->
       <details id="package-panel" open>
-        <summary class="mil-label" style="cursor:pointer;margin-bottom:8px">包文本与 ZIP 导入（凭据句柄需在本机重新绑定）</summary>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="4" aria-label="角色包文本" placeholder="点击「导出所选角色」生成包文本，或粘贴来自其他 Maisya 的角色包文本"></textarea>
-          <div class="mil-row">
-            <button id="select-package" class="mil-key mil-key--sm" type="button">选中包文本</button>
-            <input type="file" id="package-file" accept=".zip" aria-label="选择 ZIP 角色包" style="font-size:12px;max-width:100%">
+        <summary class="mil-label" style="cursor:pointer;margin-bottom:8px">2. 预览、缺件对齐检查与导入升级（支持公开链接、ZIP/TAR.GZ 文件或包文本）</summary>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="mil-field">
+            <label class="mil-label" for="rcp-url">粘贴公开配方链接（如 GitHub 仓库 / Tree / Release / Raw / Gist，由后端防 SSRF 安全拉取预览）</label>
+            <div class="mil-row">
+              <input id="rcp-url" class="mil-input mono" style="flex:1 1 200px" placeholder="https://github.com/owner/repo 或公开 .zip/.tar.gz 链接">
+              <button id="rcp-fetch-btn" class="mil-key mil-key--sm mil-key--hot" type="button">拉取并预览</button>
+            </div>
           </div>
+
+          <div class="mil-field">
+            <label class="mil-label" for="package-text">本地配方包文件或 Base64 包文本（先预览对齐再落盘；凭据句柄与服务需在本机绑定）</label>
+            <textarea id="package-text" class="mil-textarea mil-textarea--code" rows="3" aria-label="角色包文本" placeholder="点击上方「导出配方包」生成可分享包文本，或粘贴来自其他 Maisya 的配方包文本"></textarea>
+            <div class="mil-row" style="margin-top:4px">
+              <button id="copy-package" class="mil-key mil-key--sm" type="button">复制包文本</button>
+              <button id="select-package" class="mil-key mil-key--sm" type="button">选中包文本</button>
+              <button id="rcp-preview-btn" class="mil-key mil-key--sm" type="button">预览包文本</button>
+              <input type="file" id="package-file" accept=".zip,.tar.gz,.tgz,.tar,application/zip,application/gzip,application/x-tar" aria-label="选择配方压缩包" style="font-size:12px;max-width:100%">
+            </div>
+          </div>
+
+          <!-- 非破坏性预览卡片（先不落盘，对照本机环境展示就绪/缺件与升级模式） -->
+          <div id="rcp-preview-card" class="mil-screen" style="display:flex;flex-direction:column;gap:8px;border-style:solid" hidden>
+            <div class="mil-row" style="justify-content:space-between">
+              <span class="mil-silk">PREVIEW · 配方预览与本机对齐检查（尚未落盘）</span>
+              <span class="mil-tag mono" id="rcp-pv-source">—</span>
+            </div>
+            <div id="rcp-pv-summary"></div>
+            <div id="rcp-pv-alignment" style="display:flex;flex-direction:column;gap:4px"></div>
+            <div id="rcp-pv-warnings" hidden></div>
+            <div id="rcp-pv-routines-wrap" style="border-top:2px dashed var(--mil-rule);padding-top:8px;display:flex;flex-direction:column;gap:6px" hidden>
+              <div class="mil-row" style="justify-content:space-between">
+                <span class="mil-label">随包推荐例行工作流（勾选后可一键挂载到启用会话，也可暂不挂载）</span>
+                <select id="rcp-routine-chat" class="mil-select mono" style="width:auto;min-width:150px" aria-label="挂载例行任务的目标会话"></select>
+              </div>
+              <div id="rcp-pv-routines" style="display:flex;flex-direction:column;gap:4px"></div>
+            </div>
+            <div style="border-top:2px dashed var(--mil-rule);padding-top:8px;display:flex;flex-direction:column;gap:6px">
+              <span class="mil-label">导入策略</span>
+              <div class="mil-row">
+                <label class="mil-chk"><input type="radio" name="rcp-import-mode" id="rcp-mode-copy" value="copy" checked><span>另存为新副本</span></label>
+                <label class="mil-chk"><input type="radio" name="rcp-import-mode" id="rcp-mode-update" value="update"><span>平滑升级同名配方（更新说明/技能并可回滚，保留白名单/启停/凭据与工作区）</span></label>
+                <label class="mil-chk"><input type="checkbox" id="rcp-install-skills" checked><span>同步安装随包技能</span></label>
+              </div>
+            </div>
+          </div>
+
           <div class="mil-row">
-            <input id="import-id" class="mil-input mono" style="flex:1 1 160px" placeholder="导入后的新角色编号，例如 imported-artist">
-            <button id="import" class="mil-key mil-key--sm mil-key--hot" type="button">导入包文本</button>
+            <input id="import-id" class="mil-input mono" style="flex:1 1 160px" placeholder="目标角色编号，例如 imported-artist">
+            <button id="rcp-confirm-import" class="mil-key mil-key--sm mil-key--hot" type="button" hidden>确认导入配方</button>
+            <button id="import" class="mil-key mil-key--sm" type="button">直接导入包文本</button>
           </div>
         </div>
       </details>
