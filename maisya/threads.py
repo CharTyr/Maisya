@@ -131,6 +131,7 @@ class ThreadStore:
                                 "tools",
                                 "network",
                                 "mcp",
+                                "apis",
                                 "secrets",
                                 "template",
                                 "bound",
@@ -564,6 +565,7 @@ class ThreadEngine:
         context_chars=48000,
         redact=lambda value: value,
         intents=None,
+        serendipity=None,
     ):
         self.store = store
         self.runtime = runtime
@@ -574,6 +576,7 @@ class ThreadEngine:
         self.context_chars = context_chars
         self.redact = redact
         self.intents = intents
+        self.serendipity = serendipity
         self.tasks = {}
         self.chats = {}
         self.locks = {}
@@ -894,29 +897,48 @@ class ThreadEngine:
                                     validate_arguments(name, arguments)
                                     if self.intents is None:
                                         raise ValueError("意图存储不可用")
-                                    target = (
-                                        "chat:" + current["chat_id"]
-                                        if current["owner"] != "self"
-                                        else "chat:self"
-                                    )
-                                    row = await asyncio.to_thread(
-                                        self.intents.schedule,
-                                        kind="silent",
-                                        source="thread",
-                                        target=target,
-                                        due_at=time.time() + arguments["in_seconds"],
-                                        reason=arguments["next_step"],
-                                        thread_id=thread_id,
-                                        payload={
-                                            "next_step": arguments["next_step"],
-                                            "platform": current["platform"],
-                                        },
-                                        bypass_limits=True,
-                                    )
-                                    result = {
-                                        "intent_id": row["intent_id"],
-                                        "due_at": row["due_at"],
-                                    }
+                                    due_at = self.intents.clock() + arguments["in_seconds"]
+                                    if arguments.get("kind", "silent") == "serendipity":
+                                        if (
+                                            current["owner"] != "self"
+                                            or not Profile(**current["profile_snapshot"]).autonomous
+                                            or not callable(self.serendipity)
+                                        ):
+                                            raise PermissionError("仅自身公开探索线程可提议偶遇分享")
+                                        share_reason = (
+                                            arguments.get("share_reason")
+                                            or arguments["next_step"]
+                                        ).strip()
+                                        result = await asyncio.to_thread(
+                                            self.serendipity,
+                                            thread_id=thread_id,
+                                            due_at=due_at,
+                                            reason=share_reason,
+                                        )
+                                    else:
+                                        target = (
+                                            "chat:" + current["chat_id"]
+                                            if current["owner"] != "self"
+                                            else "chat:self"
+                                        )
+                                        row = await asyncio.to_thread(
+                                            self.intents.schedule,
+                                            kind="silent",
+                                            source="thread",
+                                            target=target,
+                                            due_at=due_at,
+                                            reason=arguments["next_step"],
+                                            thread_id=thread_id,
+                                            payload={
+                                                "next_step": arguments["next_step"],
+                                                "platform": current["platform"],
+                                            },
+                                            bypass_limits=True,
+                                        )
+                                        result = {
+                                            "intent_id": row["intent_id"],
+                                            "due_at": row["due_at"],
+                                        }
                                 elif name == "ask_user":
                                     validate_arguments(name, arguments)
                                     if current["questions"] or len(calls) != 1:

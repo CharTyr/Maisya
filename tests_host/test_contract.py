@@ -289,6 +289,9 @@ class HostContract(unittest.TestCase):
         page.actions["note"].validate_args(
             {"thread_id": "thread", "message": "补充方向"}
         )
+        page.actions["note"].validate_args(
+            {"thread_id": "thread", "message": "补充方向", "steer": True}
+        )
         with self.assertRaises(ValueError):
             page.actions["stop"].validate_args(
                 {"thread_id": "thread", "unexpected": True}

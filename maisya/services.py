@@ -17,7 +17,63 @@ from pathlib import Path
 from jsonschema import Draft202012Validator, ValidationError
 
 from .sandbox import MINIMAL_ENV
+from .scout import call_capability
 from .workspaces import completed_thread
+
+
+def _unwrap_api_result(raw, key):
+    if isinstance(raw, dict):
+        if raw.get("success") is False:
+            raise RuntimeError(str(raw.get("error") or "跨插件只读 API 调用失败"))
+        if "success" in raw and key in raw:
+            return raw[key]
+    return raw
+
+
+def validate_api_entry(name, spec):
+    if not isinstance(name, str) or not re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_-]{0,63}", name
+    ):
+        raise ValueError("跨插件 API 句柄无效")
+    if not isinstance(spec, dict) or set(spec) - {
+        "api_name",
+        "version",
+        "readonly",
+        "access",
+        "description",
+        "schema",
+    }:
+        raise ValueError("跨插件 API 含未知配置项")
+    api_name = spec.get("api_name", "")
+    if (
+        not isinstance(api_name, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", api_name)
+        or api_name.startswith(("chartyr.maisya.", "maisya_"))
+        or ".maisya_" in api_name
+    ):
+        raise ValueError("跨插件 API 名称无效，且不能登记 Maisya 自身内部接口")
+    if spec.get("readonly") is not True:
+        raise ValueError("跨插件 API 仅允许登记显式声明 readonly=true 的只读接口")
+    if spec.get("access", "everyone") not in {"everyone", "admins"}:
+        raise ValueError("跨插件 API 访问范围无效")
+    version = spec.get("version", "")
+    description = spec.get("description", "")
+    if (
+        not isinstance(version, str)
+        or len(version) > 32
+        or not isinstance(description, str)
+        or len(description) > 500
+    ):
+        raise ValueError("跨插件 API 版本或说明无效")
+    if "schema" in spec:
+        schema = spec["schema"]
+        if (
+            not isinstance(schema, dict)
+            or len(json.dumps(schema)) > 65536
+            or '"$ref"' in json.dumps(schema)
+        ):
+            raise ValueError("跨插件 API 参数 schema 无效或含未绑定引用")
+        Draft202012Validator.check_schema(schema)
 
 
 def validate(schema, arguments):
@@ -132,6 +188,7 @@ class Services:
             "servers",
             "templates",
             "inputs",
+            "apis",
         }:
             raise ValueError("能力服务登记格式无效")
         digest = hashlib.sha256(raw).hexdigest()
@@ -141,6 +198,11 @@ class Services:
             for name in configuration.get(group, {}):
                 if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
                     raise ValueError("能力服务编号无效")
+        apis = configuration.get("apis", {})
+        if not isinstance(apis, dict) or len(apis) > 32:
+            raise ValueError("跨插件 API 登记数量或格式无效")
+        for name, spec in apis.items():
+            validate_api_entry(name, spec)
         self.configuration, self.digest = configuration, digest
         return configuration
 
@@ -152,6 +214,119 @@ class Services:
             }
             for name in profile.mcp
         }
+
+    def describe_apis(self, profile):
+        apis = self.load().get("apis", {})
+        return {
+            name: {
+                "api_name": apis[name]["api_name"],
+                **({"version": apis[name]["version"]} if apis[name].get("version") else {}),
+                **({"description": apis[name]["description"]} if apis[name].get("description") else {}),
+                "access": apis[name].get("access", "everyone"),
+            }
+            for name in profile.apis
+            if name in apis
+        }
+
+    async def call_api(self, profile, arguments, context, runtime):
+        if self.closed:
+            raise RuntimeError("能力服务正在关闭")
+        apis_cfg = self.load().get("apis", {})
+        action = arguments["action"]
+        needs_admin_check = any(
+            apis_cfg.get(name, {}).get("access", "everyone") == "admins"
+            for name in profile.apis
+        )
+        is_admin = (
+            await completed_thread(runtime.authorized, context)
+            if needs_admin_check
+            else False
+        )
+        if action == "list":
+            listed_online = set()
+            try:
+                raw_list = await call_capability(
+                    runtime.host, "api.list", timeout_ms=10000
+                )
+                items = _unwrap_api_result(raw_list, "apis") or []
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        api_n = str(item.get("name") or "")
+                        plugin_id = str(item.get("plugin_id") or "")
+                        if api_n:
+                            listed_online.add(api_n)
+                        if plugin_id and api_n:
+                            listed_online.add(f"{plugin_id}.{api_n}")
+            except (RuntimeError, OSError, ValueError, TypeError):
+                pass
+            visible = []
+            for name in profile.apis:
+                spec = apis_cfg.get(name)
+                if not spec or (spec.get("access", "everyone") == "admins" and not is_admin):
+                    continue
+                visible.append(
+                    {
+                        "id": name,
+                        "api_name": spec["api_name"],
+                        "version": spec.get("version", ""),
+                        "description": spec.get("description", ""),
+                        **({"online": spec["api_name"] in listed_online} if listed_online else {}),
+                    }
+                )
+            return self.vault.redact({"apis": visible})
+
+        api_id = arguments.get("api", "")
+        spec = apis_cfg.get(api_id)
+        if not api_id or api_id not in profile.apis or not isinstance(spec, dict):
+            raise PermissionError("本档案未授权该跨插件只读 API")
+        if spec.get("access", "everyone") == "admins" and not is_admin:
+            raise PermissionError("该跨插件只读 API 需要当前管理员授权")
+
+        if action == "get":
+            raw = await call_capability(
+                runtime.host,
+                "api.get",
+                timeout_ms=10000,
+                api_name=spec["api_name"],
+                version=spec.get("version", ""),
+            )
+            meta = _unwrap_api_result(raw, "api")
+            if meta is None:
+                raise RuntimeError("宿主未找到已登记的跨插件只读 API")
+            payload = {"id": api_id, "api": meta}
+            if "schema" in spec:
+                payload["schema"] = spec["schema"]
+            return self.vault.redact(payload)
+
+        if action == "call":
+            call_args = arguments.get("arguments")
+            if call_args is None:
+                call_args = {}
+            if "schema" in spec:
+                await completed_thread(validate, spec["schema"], call_args)
+            raw = await call_capability(
+                runtime.host,
+                "api.call",
+                timeout_ms=30000,
+                api_name=spec["api_name"],
+                version=spec.get("version", ""),
+                args=call_args,
+            )
+            result = self.vault.redact(_unwrap_api_result(raw, "result"))
+            wrapped = {"api": api_id, "result": result}
+            encoded = json.dumps(wrapped, ensure_ascii=False)
+            if len(encoded) > 20000:
+                return {
+                    "api": api_id,
+                    "text": encoded[:20000],
+                    "truncated": True,
+                    "original_chars": len(encoded),
+                }
+            return wrapped
+
+        raise ValueError("未知跨插件 API 动作")
 
     async def _session(self, service, context, config):
         key = service, self.digest, context["chat_id"], context["thread_id"]

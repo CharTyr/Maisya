@@ -1,6 +1,7 @@
 """管理台只读快照；只读取插件自己的数据。"""
 
 import json
+import sqlite3
 
 
 def snapshot(
@@ -11,6 +12,7 @@ def snapshot(
     cursor=0,
     context_limit=48000,
     redact=lambda value: value,
+    memory=None,
 ):
     if (
         not isinstance(thread_id, str)
@@ -72,13 +74,39 @@ def snapshot(
             selected["result"] = {
                 key: str(redact(value))[:16000] for key, value in row["result"].items()
             }
+            system_chars = len(str(profile.get("instructions", "")))
+            if memory is not None:
+                try:
+                    profile_obj = memory.profiles.get(row["profile"])
+                    system_chars = len(profile_obj.instructions) + len(
+                        memory.methods(profile_obj)
+                    )
+                except (ValueError, OSError, RuntimeError, sqlite3.Error):
+                    pass
+            memory_chars = len(row["summary"])
+            if memory is not None:
+                try:
+                    mem_ctx = memory.context(
+                        "" if row["owner"] == "self" else row["chat_id"]
+                    )
+                    memory_chars += (
+                        len(mem_ctx.get("memory", ""))
+                        + len(mem_ctx.get("journal", ""))
+                        + len(mem_ctx.get("heartbeat", ""))
+                    )
+                except (ValueError, OSError, RuntimeError, sqlite3.Error):
+                    pass
             sizes = {
-                role: sum(
-                    len(json.dumps(item, ensure_ascii=False))
-                    for item in row["history"]
-                    if item.get("role") == role
-                )
-                for role in ("user", "assistant", "tool")
+                "system": system_chars,
+                "memory": memory_chars,
+                **{
+                    role: sum(
+                        len(json.dumps(item, ensure_ascii=False))
+                        for item in row["history"]
+                        if item.get("role") == role
+                    )
+                    for role in ("user", "assistant", "tool")
+                },
             }
             selected["context"] = {
                 "messages": len(row["history"]),
@@ -112,6 +140,37 @@ def snapshot(
                 (thread_id,) if thread_id else (),
             ).fetchall()
         ]
+        try:
+            if thread_id:
+                intent_where = "WHERE thread_id=? OR target=? "
+                intent_params = (thread_id, "chat:" + selected["chat_id"])
+            elif chat_id:
+                intent_where = "WHERE target=? "
+                intent_params = ("chat:" + chat_id,)
+            else:
+                intent_where = ""
+                intent_params = ()
+            scheduled_intents = [
+                {
+                    "intent_id": item["intent_id"],
+                    "kind": item["kind"],
+                    "source": item["source"],
+                    "target": item["target"],
+                    "due_at": item["due_at"],
+                    "status": item["status"],
+                    "reason": str(redact(item["reason"]))[:200],
+                    "thread_id": item["thread_id"],
+                }
+                for item in db.execute(
+                    "SELECT intent_id,kind,source,target,due_at,status,reason,thread_id "
+                    "FROM intents "
+                    + intent_where
+                    + "ORDER BY created DESC LIMIT 12",
+                    intent_params,
+                ).fetchall()
+            ]
+        except sqlite3.OperationalError:
+            scheduled_intents = []
         if thread_id:
             deliveries = [
                 dict(item)
@@ -129,6 +188,7 @@ def snapshot(
         "events": events,
         "cursor": cursor,
         "intents": intents,
+        "scheduled_intents": scheduled_intents,
         "deliveries": deliveries,
     }
 

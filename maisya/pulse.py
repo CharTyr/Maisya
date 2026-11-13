@@ -4,9 +4,20 @@ import asyncio
 import html
 import json
 import logging
+import re
 import sqlite3
 
+from .memory import MemoryLayers
 from .scout import call_capability
+
+
+def _extract_tokens(text):
+    lower = str(text or "").lower()
+    tokens = set(re.findall(r"[a-z0-9_]{2,}", lower))
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", lower):
+        for i in range(len(run) - 1):
+            tokens.add(run[i : i + 2])
+    return tokens
 
 
 class Pulse:
@@ -20,6 +31,13 @@ class Pulse:
         *,
         sleep_window="",
         proactive_level="care",
+        chat_proactive_levels=None,
+        acquaintance_users=None,
+        admins=lambda: set(),
+        enabled_chats=lambda: [],
+        longing_quiet_hours=72,
+        activity=None,
+        platform_for=None,
         redact=lambda v: v,
         routes=None,
         memory=None,
@@ -31,6 +49,13 @@ class Pulse:
         self.intents, self.engine = intents, engine
         self.sleep_window, self.redact = sleep_window, redact
         self.proactive_level = proactive_level
+        self.chat_proactive_levels = dict(chat_proactive_levels or {})
+        self.acquaintance_users = list(acquaintance_users or [])
+        self.admins = admins
+        self.enabled_chats = enabled_chats
+        self.longing_quiet_hours = longing_quiet_hours
+        self.activity = activity
+        self.platform_for = platform_for
         self.routes = routes
         self.memory = memory
         self.profiles = profiles
@@ -39,11 +64,34 @@ class Pulse:
         self.task = None
         self.closing = False
 
+    def level_for(self, chat_id):
+        return self.chat_proactive_levels.get(chat_id, self.proactive_level)
+
+    def _admins(self):
+        return self.admins() if callable(self.admins) else (self.admins or ())
+
+    def _temperament_xml(self):
+        if self.memory is None:
+            return ""
+        try:
+            heartbeat = self.memory.read("heartbeat")
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
+            return ""
+        temperament, _ = MemoryLayers.heartbeat_parts(heartbeat.get("content") or "")
+        if not temperament:
+            return ""
+        return (
+            "\n<maisya_temperament>"
+            + html.escape(self.redact(temperament))
+            + "</maisya_temperament>"
+        )
+
     async def tick(self):
         if self.closing:
             return
         await self._returns()
         if self.intents is not None:
+            await self._longing()
             await self._intents()
         await self._heartbeat()
 
@@ -105,6 +153,22 @@ class Pulse:
         if not self.enabled(chat_id, platform):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
+        thread = None
+        if row.get("thread_id"):
+            try:
+                thread = await asyncio.to_thread(
+                    self.bridge.store.get, row["thread_id"], chat_id, allow_self=True
+                )
+            except (ValueError, PermissionError):
+                thread = None
+            if row["payload"].get("wait_thread") and (
+                (self.engine and self.engine.tasks.get(row["thread_id"]))
+                or (thread and thread["state"] == "active")
+            ):
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "deferred", delay=5
+                )
+                return
         if row["kind"] == "proactive":
             allowed, reason = self._proactive_gate(row)
             if not allowed:
@@ -120,11 +184,18 @@ class Pulse:
                 "结合当前对话判断是否值得开口；可以自然提起，也可以静默 stop。"
                 "\n<maisya_proactive>" + text + "</maisya_proactive>"
             )
+            intent += await asyncio.to_thread(self._temperament_xml)
         else:
             intent = (
                 "这是你之前通过 maisya_later 安排的提醒，现在到期。"
                 "结合当前对话用一两句自然提起；如果已无意义可静默 stop。"
                 "\n<maisya_reminder>" + text + "</maisya_reminder>"
+            )
+        if thread and (thread.get("result") or {}).get("text"):
+            intent += (
+                "\n<maisya_thread_result>"
+                + html.escape(self.redact(thread["result"]["text"]))
+                + "</maisya_thread_result>"
             )
         status = await self._wake(
             chat_id,
@@ -155,6 +226,9 @@ class Pulse:
         await asyncio.to_thread(self.intents.finish, row["intent_id"], done, status)
 
     async def _silent(self, row):
+        if row["payload"].get("already_started"):
+            await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
+            return
         thread_id = row["thread_id"]
         if not thread_id:
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
@@ -225,20 +299,133 @@ class Pulse:
         await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
 
     def _proactive_gate(self, row):
-        if self.proactive_level == "quiet":
+        chat_id = row["target"].split(":", 1)[1]
+        level = self.level_for(chat_id)
+        if level == "quiet":
             return False, "quiet_level"
         source = row["source"]
-        if self.proactive_level == "care" and source == "serendipity":
+        if level == "care" and source == "serendipity":
             return False, "care_blocks_serendipity"
         allowed, reason = self.intents.social_gate(
             row["target"], sleep_window=self.sleep_window
         )
         if not allowed:
             return allowed, reason
-        chat_id = row["target"].split(":", 1)[1]
-        if not self.intents.known_chat(chat_id):
+        if not self.intents.acquaintance_allowed(
+            chat_id,
+            admins=self._admins(),
+            acquaintances=self.acquaintance_users,
+            payload=row.get("payload") or {},
+        ):
             return False, "unfamiliar_chat"
         return True, ""
+
+    def propose_serendipity(self, *, thread_id, due_at, reason):
+        if self.intents is None or self.memory is None:
+            return {"scheduled": False}
+        tokens = _extract_tokens(reason)
+        if not tokens:
+            return {"scheduled": False}
+        admins = self._admins()
+        best = None
+        for chat_id in self.enabled_chats():
+            if self.level_for(chat_id) != "lively":
+                continue
+            platform = self.platform_for(chat_id) if callable(self.platform_for) else ""
+            if not self.enabled(chat_id, platform):
+                continue
+            if not self.intents.acquaintance_allowed(
+                chat_id,
+                admins=admins,
+                acquaintances=self.acquaintance_users,
+                payload={"platform": platform},
+            ):
+                continue
+            if not self.intents.social_gate("chat:" + chat_id, sleep_window="")[0]:
+                continue
+            try:
+                content = (self.memory.read("memory", chat_id=chat_id).get("content") or "").lower()
+            except (ValueError, OSError, RuntimeError, sqlite3.Error):
+                continue
+            score = sum(1 for tok in tokens if tok in content)
+            if score > 0 and (best is None or score > best[0]):
+                best = (score, chat_id, platform)
+        if best is None:
+            return {"scheduled": False}
+        _, best_chat, best_platform = best
+        try:
+            row = self.intents.schedule(
+                kind="proactive",
+                source="serendipity",
+                target="chat:" + best_chat,
+                due_at=due_at,
+                reason=reason,
+                thread_id=thread_id,
+                payload={"platform": best_platform},
+            )
+        except ValueError:
+            return {"scheduled": False}
+        return {"scheduled": True, "intent_id": row["intent_id"], "due_at": row["due_at"]}
+
+    async def _longing(self):
+        if (
+            self.closing
+            or not self.plugin_enabled()
+            or self.intents is None
+            or not callable(self.activity)
+            or self.longing_quiet_hours <= 0
+            or self.intents.in_sleep_window(self.sleep_window)
+            or not await asyncio.to_thread(self.intents.proactive_quota_available)
+        ):
+            return
+        now = self.intents.clock()
+        threshold = self.longing_quiet_hours * 3600
+        admins = self._admins()
+        for chat_id in list(self.enabled_chats()):
+            if self.level_for(chat_id) == "quiet":
+                continue
+            platform = (
+                await asyncio.to_thread(self.platform_for, chat_id)
+                if callable(self.platform_for)
+                else ""
+            )
+            if not self.enabled(chat_id, platform):
+                continue
+            act = await asyncio.to_thread(self.activity, chat_id)
+            if (
+                act["human_count"] < 3
+                or act["last_human_at"] <= 0
+                or now - act["last_human_at"] < threshold
+            ):
+                continue
+            allowed = await asyncio.to_thread(
+                self.intents.acquaintance_allowed,
+                chat_id,
+                admins=admins,
+                acquaintances=self.acquaintance_users,
+                payload={"platform": platform},
+            )
+            if not allowed:
+                continue
+            ready = await asyncio.to_thread(
+                self.intents.longing_ready, chat_id, now=now
+            )
+            if not ready:
+                continue
+            hours = int((now - act["last_human_at"]) // 3600)
+            try:
+                await asyncio.to_thread(
+                    self.intents.schedule,
+                    kind="proactive",
+                    source="longing",
+                    target="chat:" + chat_id,
+                    due_at=now,
+                    reason=f"这个熟识会话已经安静了约 {hours} 小时，看看是否自然问候一句。",
+                    payload={"platform": platform},
+                )
+            except ValueError:
+                pass
+            break
 
     async def _wake(self, chat_id, intent, *, reason, metadata):
         try:
@@ -332,14 +519,21 @@ class Pulse:
             or self.profiles is None
             or self.engine is None
             or self.intents is None
-            or self.proactive_level == "quiet"
+            or (
+                self.proactive_level == "quiet"
+                and not any(
+                    v in {"care", "lively"} for v in self.chat_proactive_levels.values()
+                )
+            )
             or self.intents.in_sleep_window(self.sleep_window)
             or self.engine.tasks
         ):
             return
         try:
             heartbeat = await asyncio.to_thread(self.memory.read, "heartbeat")
-            plan = str(heartbeat.get("content") or "").strip()
+            temperament, plan = MemoryLayers.heartbeat_parts(
+                heartbeat.get("content") or ""
+            )
             if not plan:
                 return
             now = self.intents.clock()
@@ -348,10 +542,15 @@ class Pulse:
             scout = await asyncio.to_thread(self.profiles.get, "scout")
             if not scout.autonomous:
                 return
+            prompt = (
+                "按自身节奏做一次轻量公开探索并记录近况（不涉及任何具体会话私有信息）：\n"
+                + plan
+            )
+            if temperament:
+                prompt += "\n<maisya_temperament>" + html.escape(temperament) + "</maisya_temperament>"
             await self.engine.start(
                 scout,
-                "按自身节奏做一次轻量公开探索并记录近况（不涉及任何具体会话私有信息）：\n"
-                + plan,
+                prompt,
                 chat_id="self",
                 platform="self",
                 user_id="",

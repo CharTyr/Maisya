@@ -53,21 +53,26 @@ async def share(plugin, thread_id, **options):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "text", ["已经核实的纯文字结论", "预览：https://hello.here.now"]
-)
-async def test_plain_text_and_here_now_link_use_only_native_reply(tmp_path, text):
-    plugin, thread_id, calls = await prepared(tmp_path, text)
+async def test_plain_text_uses_only_native_reply_while_here_now_uses_share(tmp_path):
+    plugin, thread_id, calls = await prepared(tmp_path, "已经核实的纯文字结论")
     result = await share(plugin, thread_id)
     assert result["success"] and result["route"] == "reply"
     assert not any(name.startswith("send.") for name, _ in calls)
     native = await plugin.before_replyer(
         session_id="chat", request_type="maisaka.replyer"
     )
-    assert text in __import__("html").unescape(
+    assert "已经核实的纯文字结论" in __import__("html").unescape(
         native["modified_kwargs"]["extra_prompt"]
     )
     await plugin.on_unload()
+
+    plugin2, thread_id2, calls2 = await prepared(
+        tmp_path / "here_now", "预览：https://hello.here.now"
+    )
+    shared = await share(plugin2, thread_id2)
+    assert shared["success"] and shared["route"] == "share" and shared["sent"]
+    assert any(name == "send.hybrid" for name, _ in calls2)
+    await plugin2.on_unload()
 
 
 @pytest.mark.asyncio

@@ -137,11 +137,12 @@ def strip_mention_all(value):
 
 class MessageStore:
     def __init__(
-        self, path: Path, *, max_messages: int = 10000, max_age: float = 86400
+        self, path: Path, *, max_messages: int = 10000, max_age: float = 86400, clock=None
     ):
         self.path = path
         self.max_messages = max_messages
         self.max_age = max_age
+        self.clock = clock
         if path.is_symlink():
             raise ValueError("消息索引不能是符号链接")
         with closing(sqlite3.connect(path)) as db, db:
@@ -159,8 +160,21 @@ class MessageStore:
                 "CREATE TABLE IF NOT EXISTS session_routes ("
                 "session_id TEXT PRIMARY KEY, platform TEXT NOT NULL, "
                 "chat_type TEXT NOT NULL, group_id TEXT NOT NULL, user_id TEXT NOT NULL, "
-                "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL)"
+                "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL, "
+                "human_count INTEGER NOT NULL DEFAULT 0, last_human_at REAL NOT NULL DEFAULT 0)"
             )
+            cols = {
+                row[1]
+                for row in db.execute("PRAGMA table_info(session_routes)").fetchall()
+            }
+            if "human_count" not in cols:
+                db.execute(
+                    "ALTER TABLE session_routes ADD COLUMN human_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_human_at" not in cols:
+                db.execute(
+                    "ALTER TABLE session_routes ADD COLUMN last_human_at REAL NOT NULL DEFAULT 0"
+                )
         path.chmod(0o600)
 
     def record(self, message: Message) -> None:
@@ -168,8 +182,17 @@ class MessageStore:
             (message.message_id, message.session_id, message.platform, message.user_id)
         ):
             raise ValueError("incomplete message identity")
-        now = time.time()
+        now = time.time() if self.clock is None else self.clock()
         with closing(sqlite3.connect(self.path)) as db, db:
+            seen_human = (
+                db.execute(
+                    "SELECT relayed FROM trusted_sources "
+                    "WHERE message_id=? AND session_id=? AND platform=?",
+                    (message.message_id, message.session_id, message.platform),
+                ).fetchone()
+                if not message.is_plugin_relayed
+                else None
+            )
             db.execute(
                 "INSERT INTO trusted_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(message_id, session_id, platform) DO UPDATE SET "
@@ -190,14 +213,17 @@ class MessageStore:
             if not message.is_plugin_relayed:
                 chat_type = "group" if message.group_id else "private"
                 route_user = "" if message.group_id else message.user_id
+                inc = 0 if (seen_human is not None and seen_human[0] == 0) else 1
                 db.execute(
-                    "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(session_id) DO UPDATE SET "
                     "platform=excluded.platform, chat_type=excluded.chat_type, "
                     "group_id=excluded.group_id, user_id=excluded.user_id, "
                     "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
                     "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
-                    "updated=excluded.updated",
+                    "updated=excluded.updated, "
+                    "human_count=session_routes.human_count + excluded.human_count, "
+                    "last_human_at=excluded.last_human_at",
                     (
                         message.session_id,
                         message.platform,
@@ -206,6 +232,8 @@ class MessageStore:
                         route_user,
                         message.account_id,
                         message.scope,
+                        now,
+                        inc,
                         now,
                     ),
                 )
@@ -232,7 +260,7 @@ class MessageStore:
                     platform,
                     message_id,
                     message_id,
-                    time.time()
+                    (time.time() if self.clock is None else self.clock())
                     - (self.max_age if max_age is None else min(max_age, self.max_age)),
                 ),
             ).fetchall()
@@ -271,6 +299,21 @@ class MessageStore:
             "user_id": row[3],
             "account_id": row[4],
             "scope": row[5],
+        }
+
+    def activity_for(self, session_id: str) -> dict:
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute(
+                "SELECT chat_type, human_count, last_human_at "
+                "FROM session_routes WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return {"chat_type": "", "human_count": 0, "last_human_at": 0.0}
+        return {
+            "chat_type": row[0],
+            "human_count": int(row[1]),
+            "last_human_at": float(row[2]),
         }
 
 

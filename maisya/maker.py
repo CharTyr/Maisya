@@ -44,19 +44,22 @@ class AgentRuntime(Scout):
         if profile.environment == "sandbox" and not self.sandbox.ready:
             raise RuntimeError(self.sandbox.error or "沙箱尚未就绪")
         if (
-            profile.secrets or profile.template or profile.mcp
+            profile.secrets or profile.template or profile.mcp or profile.apis
         ) and self.services is None:
             raise RuntimeError("能力服务尚未登记")
-        if profile.mcp or profile.template:
+        if profile.mcp or profile.template or profile.apis:
             configuration = self.services.load()
             if (
                 any(
                     name not in configuration.get("servers", {}) for name in profile.mcp
                 )
+                or any(
+                    name not in configuration.get("apis", {}) for name in profile.apis
+                )
                 or profile.template
                 and profile.template not in configuration.get("templates", {})
             ):
-                raise PermissionError("能力档案引用的服务或模板尚未登记")
+                raise PermissionError("能力档案引用的服务、模板或只读 API 尚未登记")
 
     async def step(self, profile, history):
         self.available(profile)
@@ -85,6 +88,16 @@ class AgentRuntime(Scout):
                 instructions=profile.instructions
                 + "\n已授权的能力服务："
                 + json.dumps(descriptions, ensure_ascii=False),
+            )
+        if self.services and profile.apis:
+            api_descriptions = await completed_thread(
+                self.services.describe_apis, profile
+            )
+            profile = replace(
+                profile,
+                instructions=profile.instructions
+                + "\n已授权的跨插件只读 API："
+                + json.dumps(api_descriptions, ensure_ascii=False),
             )
         return await super().step(profile, history)
 
@@ -328,6 +341,10 @@ class AgentRuntime(Scout):
             if not self.services:
                 raise RuntimeError("MCP 服务尚未登记")
             return await self.services.call(profile, arguments, context, self)
+        if name == "plugin_api":
+            if not self.services:
+                raise RuntimeError("跨插件 API 尚未登记")
+            return await self.services.call_api(profile, arguments, context, self)
         if name == "credential_call":
             if not self.services or not await completed_thread(
                 self.authorized, context

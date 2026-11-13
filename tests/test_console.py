@@ -130,3 +130,56 @@ async def test_console_output_is_bounded_redacted_and_disabled_threads_cannot_re
     for name in ("maisya_now", "maisya_note", "maisya_stop"):
         assert components[name]["metadata"]["public"] is False
     await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_console_snapshot_includes_system_memory_roles_intents_and_steer(tmp_path):
+    import time
+
+    plugin = await loaded(tmp_path)
+    plugin.vault.set("secret", "hidden-token-value")
+    plugin.memory.write("memory", "群主题：复古字体与排版", chat_id="chat")
+    plugin.intents.schedule(
+        kind="proactive",
+        source="later",
+        target="chat:chat",
+        due_at=time.time() + 3600,
+        reason="顺路提醒 hidden-token-value",
+    )
+
+    async def capability(name, **arguments):
+        assert name == "llm.generate_with_tools"
+        return {"success": True, "response": "Done", "tool_calls": []}
+
+    plugin.ctx.call_capability = capability
+    try:
+        started = await plugin.agent_tool(
+            action="start", message="Inspect fonts", chat_id="chat", platform="qq"
+        )
+        snap = await plugin.console_query(thread_id=started["thread_id"])
+        assert snap["success"]
+        roles = snap["selected"]["context"]["roles"]
+        assert roles["system"] > 0
+        assert roles["memory"] > 0
+        assert snap["selected"]["context"]["chars"] == sum(roles.values())
+        assert len(snap["scheduled_intents"]) == 1
+        assert "hidden-token-value" not in snap["scheduled_intents"][0]["reason"]
+
+        bad_steer = await plugin.console_send(
+            thread_id=started["thread_id"], message="turn", steer="yes"
+        )
+        assert not bad_steer["success"]
+
+        steered = await plugin.console_send(
+            thread_id=started["thread_id"], message="Steer toward monospace", steer=True
+        )
+        assert steered["success"]
+        await plugin.engine.drain()
+        after = await plugin.console_query(thread_id=started["thread_id"])
+        assert any(
+            event["kind"] == "redirect"
+            or "Steer toward monospace" in event["text"]
+            for event in after["events"]
+        )
+    finally:
+        await plugin.on_unload()

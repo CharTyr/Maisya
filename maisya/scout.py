@@ -80,10 +80,12 @@ TOOL_DEFINITIONS = {
     ),
     "thread_later": definition(
         "thread_later",
-        "为本线程安排下一次唤醒；用于多站行程、定期检查等持续活动。",
+        "为本线程安排下一次唤醒；用于多站行程、定期检查等持续活动。自身公开探索线程还可用 kind='serendipity' 提议向活跃且投缘的会话分享偶遇发现。",
         {
             "in_seconds": {"type": "integer", "minimum": 60, "maximum": 604800},
             "next_step": STRING,
+            "kind": {"type": "string", "enum": ["silent", "serendipity"]},
+            "share_reason": {"type": "string", "minLength": 0, "maxLength": 500},
         },
         ["in_seconds", "next_step"],
     ),
@@ -125,6 +127,16 @@ TOOL_DEFINITIONS = {
         "调用本档案已绑定的 MCP 服务与工具。",
         {"service": STRING, "tool": STRING, "arguments": {"type": "object"}},
         ["service", "tool", "arguments"],
+    ),
+    "plugin_api": definition(
+        "plugin_api",
+        "查询或调用本档案已允许的宿主其他插件只读 @API。",
+        {
+            "action": {"type": "string", "enum": ["list", "get", "call"]},
+            "api": {"type": "string", "minLength": 0, "maxLength": 64},
+            "arguments": {"type": "object"},
+        },
+        ["action"],
     ),
     "credential_call": definition(
         "credential_call",

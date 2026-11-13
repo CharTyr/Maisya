@@ -26,6 +26,7 @@ SANDBOX_TOOLS = READONLY_TOOLS | {
     "sandbox_exec",
     "result_attach",
     "mcp_call",
+    "plugin_api",
     "credential_call",
 }
 ALLOWED_TASKS = frozenset({"utils", "planner", "replyer", "fast_model", "vlm"})
@@ -49,6 +50,7 @@ class Profile:
     instructions: str = DEFAULT_INSTRUCTIONS
     network: str = "none"
     mcp: tuple[str, ...] = ()
+    apis: tuple[str, ...] = ()
     secrets: tuple[str, ...] = ()
     template: str = ""
     bound: bool = True
@@ -116,6 +118,7 @@ class Profiles:
             "access",
             "network",
             "mcp",
+            "apis",
             "secrets",
             "template",
             "bound",
@@ -138,7 +141,7 @@ class Profiles:
             in (
                 SANDBOX_TOOLS
                 if environment == "sandbox"
-                else READONLY_TOOLS | {"mcp_call"}
+                else READONLY_TOOLS | {"mcp_call", "plugin_api"}
             )
             for name in tools
         ):
@@ -178,7 +181,7 @@ class Profiles:
         )
         if network not in {"public", "none", "restricted"}:
             raise ValueError("档案网络策略无效")
-        for field in ("mcp", "secrets", "skills"):
+        for field in ("mcp", "apis", "secrets", "skills"):
             if not isinstance(config.get(field, []), list) or any(
                 not isinstance(value, str)
                 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", value)
@@ -204,6 +207,7 @@ class Profiles:
             environment=environment,
             network=network,
             mcp=tuple(config.get("mcp", [])),
+            apis=tuple(config.get("apis", [])),
             secrets=tuple(config.get("secrets", [])),
             template=str(config.get("template", "")),
             bound=config.get("bound", True) is True,
@@ -324,6 +328,7 @@ class Profiles:
             config = tomllib.loads((stage / "profile.toml").read_text())
             if (
                 config.get("mcp")
+                or config.get("apis")
                 or config.get("secrets")
                 or config.get("template")
                 or config.get("access") == "listed"

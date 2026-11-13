@@ -8,8 +8,11 @@ import stat
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 from .vault import atomic_private_write, private_directory
+
+PRESETS_DIR = Path(__file__).resolve().parents[1] / "presets"
 
 
 class MemoryLayers:
@@ -35,10 +38,43 @@ class MemoryLayers:
                 "CREATE TABLE IF NOT EXISTS experience_receipts (thread_id TEXT,revision INTEGER,PRIMARY KEY(thread_id,revision))"
             )
         private_directory(root / "memory/self")
+        heartbeat_preset = PRESETS_DIR / "memory/HEARTBEAT.md"
         for kind in ("journal", "heartbeat"):
             path = self._locate(kind)[1]
-            if not path.exists():
-                atomic_private_write(path, b"")
+            if not path.exists() and not path.is_symlink():
+                initial = (
+                    heartbeat_preset.read_bytes()
+                    if kind == "heartbeat" and heartbeat_preset.is_file()
+                    else b""
+                )
+                atomic_private_write(path, initial)
+        skills_presets = PRESETS_DIR / "skills"
+        if skills_presets.is_dir():
+            for source_dir in sorted(skills_presets.iterdir()):
+                if not source_dir.is_dir() or source_dir.is_symlink():
+                    continue
+                skill_file = source_dir / "SKILL.md"
+                if not skill_file.is_file() or skill_file.is_symlink():
+                    continue
+                destination_dir = private_directory(root / "abilities/skills" / source_dir.name)
+                destination = destination_dir / "SKILL.md"
+                if not destination.exists() and not destination.is_symlink():
+                    atomic_private_write(destination, skill_file.read_bytes())
+
+    @staticmethod
+    def heartbeat_parts(content: str) -> tuple[str, str]:
+        cleaned = re.sub(r"<!--[\s\S]*?-->", "", str(content or ""))
+        match = re.search(r"^##\s*自主探索方向\s*$", cleaned, flags=re.MULTILINE)
+        if match is None:
+            return "", cleaned.strip()
+        before = re.sub(
+            r"^##\s*气质与分寸\s*$", "", cleaned[: match.start()], flags=re.MULTILINE
+        ).strip()
+        after = cleaned[match.end() :]
+        next_heading = re.search(r"^##\s+", after, flags=re.MULTILINE)
+        if next_heading is not None:
+            after = after[: next_heading.start()]
+        return before, after.strip()
 
     @contextmanager
     def _lock(self):

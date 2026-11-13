@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、坑和上线前核查；设计与规则的权威来源是根目录 `AGENTS.md`、`codemap.md` 和 `docs/` 文档。
 
-最后更新：2026-11-13（M0–M6 加固、真实宿主契约、隔离实模 EXA 联网冒烟与 gVisor/Docker 运行时验收全通）。
+最后更新：2026-11-13（完成全量设计期望对齐、188 项本地单测/UI 测试、20 项真实宿主 SDK 契约与隔离实模 EXA 联网冒烟）。
 
 ## 这是什么
 
@@ -14,11 +14,11 @@ MaiBot 插件 `chartyr.maisya`。不改 MaiBot 宿主源码，给 MaiBot 提供�
 
 | 范围 | 状态 | 依据 |
 |---|---|---|
-| M0 基座 / M1 线程 / M2 回接 | 已实现、加固并验证 | 180 项本地单测/UI 测试 + 20 项宿主 SDK 契约 |
-| M3 maker + 工作区 + 沙箱 + 凭据 | **真实 runsc 验收通过** | `tests_sandbox/run_isolated.py --execute` 全绿，`host_unchanged` / `backup_cleaned` 复核通过，新增 `sandbox/Dockerfile` 与 `sandbox/build_image.sh` |
-| M4 记忆与塑形 | 已实现并验证 | 本地单测 + `Learning._learn` 真实 LLM 冒烟 (`applied`) |
-| M5 意图 / Pulse / 心跳 | 已实现并加固 | `session_routes` 持久化路由 + `chat.open_session` 冷会话重开 + `later(kind="proactive")` 额度约束 + 睡眠时段 + `HEARTBEAT.md` 自身定期探索 |
-| M6 四页管理台与三路配置合并 | 已实现并验证 | `webui/build.py --check` + 2 项 Chromium UI 测试 + `settings.base.json` 三路合并 |
+| M0 基座 / M1 线程 / M2 回接 | 已实现、加固、对齐并验证 | 188 项本地单测/UI 测试 + 20 项宿主 SDK 契约（含 `send.hybrid` `file` 拆条与 `before_planner` 精简） |
+| M3 maker + 工作区 + 沙箱 + 凭据 + 只读 `@API` | **真实 runsc 验收通过** | `tests_sandbox/run_isolated.py --execute` 全绿，`host_unchanged` / `backup_cleaned` 复核通过，新增 `source-checking` / `ongoing-workspace` 开箱技能与 `plugin_api` 只读跨插件接口 |
+| M4 记忆与塑形 | 已实现并验证 | 本地单测 + `Learning._learn` 真实 LLM 冒烟 (`applied`)；含 `HEARTBEAT.md` 脾性/方向拆分 |
+| M5 意图 / Pulse / 克制主动性 | 已实现并对齐 | `session_routes` 活跃统计 + `chat_proactive_levels` + `acquaintance_users` + `longing_quiet_hours` + `serendipity` 偶遇路由 + `profile+workspace` 事件先跑线程 |
+| M6 四页管理台与三路配置合并 | 已实现并验证 | `webui/build.py --check` + 2 项 Chromium UI 测试（含五段上下文、`steer` 勾选、`data-type="map"` 设置与移动视口检查）+ `settings.base.json` 原子/三路合并 |
 | 真实模型 + EXA 联网冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`）：`scout` 调 EXA `web.search` 返回真实来源链接、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | 部署到线上 `plugins/` | **未部署（红线未放行）** | `plugins/`、`src/`、`config/`、`data/` 零改动；上线部署需用户当次授权与先备份 |
 
@@ -58,6 +58,12 @@ python3 tests_sandbox/run_isolated.py --execute
 3. **能力档案 `task` 槽位与 `maker` 路由对齐**：`Profile.task` 限定 `utils | planner | replyer | fast_model | vlm`；`presets/profiles/maker/profile.toml` 设 `task = "planner"`；`scout`、`maker` 与 `console` 均透传 `profile.task`。
 4. **冷会话唤醒、主动额度与 `HEARTBEAT.md`**：`_manifest.json` 声明 `chat.open_session`；`trust.py` 持久化 `session_routes` 并支持 `strip_mention_all`（非管理员输出剥离 `@全体成员`/`@所有人`/`[CQ:at,qq=all]`）；`pulse._wake` 遇聊天流未建立先尝试 `chat.open_session` 一次，仍失败则 `deferred`；`later_tool(kind="proactive")` 受 `1 次/日` 主动额度和 `sleep_window` 约束；`pulse._heartbeat()` 按 `HEARTBEAT.md` 周期启动自身 `scout`（受 `proactive_level != "quiet"`、`sleep_window` 与冷却控制）。
 5. **三路配置合并与沙箱并发上限**：`plugin.py` 维护 `data/maisya/settings.base.json`，在 `on_load` 与版本化 `on_config_update` 时对 `config.toml`、`settings.base.json`、`settings.json` 做三路合并；`SandboxSettings` 新增 `max_concurrent`（默认 `2`，范围 `1..8`）并同步 WebUI。
+6. **回归设计期望对齐（2026-11-13）**：
+   - 开箱即用预设：`presets/skills/source-checking/SKILL.md`、`presets/skills/ongoing-workspace/SKILL.md` 与 `presets/memory/HEARTBEAT.md`（区分脾性基线与空白自主方向）；优化 `scout`/`maker` 档案说明。
+   - 跨插件只读 `@API`：`_manifest.json` 新增 `api.list` / `api.get` / `api.call`，`services.json["apis"]` 与 `plugin_api` 工具允许按白名单只读调用其他插件接口（适配 `api.call` 对 `result` 的 SDK 自动解包）。
+   - 无缝对接 `planner` 与清晰投递：`before_planner` 输出 `summary`/`autonomous`、省略空上下文段、条件提示 `maisya_shape`（仅管理员轮）；`Share` 将 `file` 附件拆出于图文主表达之后单独 `send.hybrid` 跟发。
+   - 克制主动性与事件先跑线程：新增 `chat_proactive_levels`（映射原子替换）、`acquaintance_users`、`longing_quiet_hours`、规则化 `_longing`、`self` 线程 `thread_later(kind="serendipity")` 偶遇路由、`<maisya_temperament>` / `<maisya_thread_result>` 注入与 `webhooks.json` 自主 `profile+workspace` 先跑线程再通知。
+   - 玻璃盒管理台扩展：`console.py` 补全 `system`/`memory` 角色占比与 `scheduled_intents`；`now.html` 支持五段上下文柱状图与勾选 `steer` 立即转向递纸条；`settings.html` 暴露独立会话级别、熟人列表与静默小时阈值。
 
 ## 上线前人工核查清单（部署到线上前必看）
 

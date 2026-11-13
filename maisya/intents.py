@@ -38,8 +38,21 @@ class Intents:
                 "CREATE TABLE IF NOT EXISTS session_routes ("
                 "session_id TEXT PRIMARY KEY, platform TEXT NOT NULL, "
                 "chat_type TEXT NOT NULL, group_id TEXT NOT NULL, user_id TEXT NOT NULL, "
-                "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL)"
+                "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL, "
+                "human_count INTEGER NOT NULL DEFAULT 0, last_human_at REAL NOT NULL DEFAULT 0)"
             )
+            cols = {
+                row[1]
+                for row in db.execute("PRAGMA table_info(session_routes)").fetchall()
+            }
+            if "human_count" not in cols:
+                db.execute(
+                    "ALTER TABLE session_routes ADD COLUMN human_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_human_at" not in cols:
+                db.execute(
+                    "ALTER TABLE session_routes ADD COLUMN last_human_at REAL NOT NULL DEFAULT 0"
+                )
 
     def _intent(self, row):
         result = dict(row)
@@ -172,7 +185,7 @@ class Intents:
                 )
             return [self._intent(row) for row in rows if row["intent_id"] in claimed]
 
-    def finish(self, intent_id, status, wake_status=""):
+    def finish(self, intent_id, status, wake_status="", *, delay=900):
         if status not in {"done", "deferred", "failed"}:
             raise ValueError("意图处理结果无效")
         with self.store.connect() as db, db:
@@ -180,7 +193,7 @@ class Intents:
                 db.execute(
                     "UPDATE intents SET status='pending', due_at=? "
                     "WHERE intent_id=? AND status='claimed'",
-                    (self.clock() + 900, intent_id),
+                    (self.clock() + delay, intent_id),
                 )
             else:
                 db.execute(
@@ -244,6 +257,91 @@ class Intents:
                 (chat_id,),
             ).fetchone()
         return route is not None
+
+    def event_exists(self, event_key, event_digest):
+        with self.store.connect() as db:
+            old = db.execute(
+                "SELECT digest, intent_id FROM incoming_events WHERE event_key=?",
+                (event_key,),
+            ).fetchone()
+        if not old:
+            return None
+        if old["digest"] != event_digest:
+            raise ValueError("同一事件编号已绑定另一份内容")
+        return self.get(old["intent_id"])
+
+    def proactive_quota_available(self, *, now=None) -> bool:
+        now = self.clock() if now is None else now
+        start, end = self._day_bounds(now)
+        with self.store.connect() as db:
+            used = db.execute(
+                "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
+                "AND source IN ('afterglow','serendipity','longing','later') "
+                "AND created>=? AND created<? AND status!='cancelled'",
+                (start, end),
+            ).fetchone()["count"]
+        return used < 1
+
+    def longing_ready(self, chat_id, *, now=None, cooldown=7 * 86400) -> bool:
+        now = self.clock() if now is None else now
+        with self.store.connect() as db:
+            state = db.execute(
+                "SELECT locked, last_proactive FROM social_state WHERE chat_id=?",
+                (chat_id,),
+            ).fetchone()
+            if state and (
+                state["locked"]
+                or (state["last_proactive"] and now - state["last_proactive"] < cooldown)
+            ):
+                return False
+            active_proactive = db.execute(
+                "SELECT 1 FROM intents WHERE target=? AND kind='proactive' "
+                "AND status IN ('pending','claimed') LIMIT 1",
+                ("chat:" + chat_id,),
+            ).fetchone()
+            if active_proactive is not None:
+                return False
+            recent_longing = db.execute(
+                "SELECT 1 FROM intents WHERE target=? AND source='longing' "
+                "AND status!='cancelled' "
+                "AND ((handled IS NOT NULL AND ? - handled < ?) OR ? - created < ?) "
+                "LIMIT 1",
+                ("chat:" + chat_id, now, cooldown, now, cooldown),
+            ).fetchone()
+        return recent_longing is None
+
+    def acquaintance_allowed(
+        self, chat_id, *, admins=(), acquaintances=(), payload=None
+    ) -> bool:
+        trusted = {
+            str(x).strip().lower() for x in (*admins, *acquaintances) if str(x).strip()
+        }
+        with self.store.connect() as db:
+            route = db.execute(
+                "SELECT platform, chat_type, user_id, human_count "
+                "FROM session_routes WHERE session_id=?",
+                (chat_id,),
+            ).fetchone()
+            non_relayed = db.execute(
+                "SELECT platform, user_id FROM trusted_sources "
+                "WHERE session_id=? AND relayed=0 LIMIT 1",
+                (chat_id,),
+            ).fetchone()
+        if route and route["chat_type"] == "group":
+            return bool(route["human_count"] > 0 or non_relayed is not None)
+        if (
+            route
+            and route["chat_type"] == "private"
+            and (route["human_count"] > 0 or non_relayed is not None)
+        ) or (route is None and non_relayed is not None):
+            return True
+        plat = str(
+            (payload or {}).get("platform") or (route["platform"] if route else "")
+        ).strip().lower()
+        uid = str(
+            (payload or {}).get("user_id") or (route["user_id"] if route else "")
+        ).strip().lower()
+        return bool(plat and uid and f"{plat}:{uid}" in trusted)
 
     def mark_proactive(self, target):
         chat_id = target.split(":", 1)[1]

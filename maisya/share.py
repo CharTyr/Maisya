@@ -5,7 +5,6 @@ import base64
 import html
 import json
 import re
-from urllib.parse import urlsplit
 
 from .scout import call_capability, checked, safe_url
 from .trust import strip_mention_all
@@ -143,18 +142,7 @@ class Share:
         if not isinstance(message, str) or len(message) > 4000:
             raise ValueError("分享表达须为 4000 字符以内的文字")
         links = links_in(row["result"])
-        if (
-            not handles
-            and not refs
-            and (
-                not links
-                or all(
-                    (urlsplit(link).hostname or "").endswith(".here.now")
-                    or urlsplit(link).hostname == "here.now"
-                    for link in links
-                )
-            )
-        ):
+        if not handles and not refs and not links:
             self.bridge.stage(row, chat_id, archived=row["owner"] == "self")
             return {"route": "reply", "thread_id": thread_id, "result": row["result"]}
         declared = {
@@ -224,7 +212,9 @@ class Share:
             )
             return {"route": "share", "status": "cancelled", "sent": False}
         text = expression + ("\n" + "\n".join(links) if links else "")
-        segments = references + [{"type": "text", "data": text}] + media
+        inline_media = [item for item in media if item.get("type") != "file"]
+        file_media = [item for item in media if item.get("type") == "file"]
+        segments = references + [{"type": "text", "data": text}] + inline_media
         if not is_admin:
             text = strip_mention_all(text)
             segments = strip_mention_all(segments)
@@ -257,8 +247,37 @@ class Share:
             message_id = (
                 str(sent.get("message_id") or "") if isinstance(sent, dict) else ""
             )
+            if success and file_media:
+                for file_seg in file_media:
+                    clean_seg = (
+                        strip_mention_all(file_seg) if not is_admin else file_seg
+                    )
+                    file_name = str(
+                        (clean_seg.get("data") or {}).get("name") or "附件"
+                    )
+                    label = f"[文件：{file_name}]"
+                    if not is_admin:
+                        label = strip_mention_all(label) or "[文件：附件]"
+                    file_sent = await call_capability(
+                        self.host,
+                        "send.hybrid",
+                        timeout_ms=60000,
+                        stream_id=chat_id,
+                        segments=[clean_seg],
+                        processed_plain_text=label,
+                        sync_to_maisaka_history=True,
+                        maisaka_source_kind="guided_reply",
+                        return_details=True,
+                    )
+                    file_ok = bool(file_sent) and (
+                        not isinstance(file_sent, dict)
+                        or file_sent.get("sent", file_sent.get("success", False))
+                    )
+                    if not file_ok:
+                        status = "failed"
+                        break
         except (RuntimeError, OSError, ValueError, TypeError):
-            pass
+            status = "uncertain"
         await asyncio.to_thread(
             self.bridge.finish_delivery,
             thread_id,

@@ -11,6 +11,7 @@ from dataclasses import asdict
 
 from .config import Settings
 from .memory import MemoryLayers
+from .services import validate_api_entry
 from .vault import atomic_private_write
 from .workspaces import completed_thread, regular_open
 
@@ -360,13 +361,18 @@ class Management:
             self.plugin.vault.contains_secret(raw)
             or len(raw) > 48000
             or not isinstance(config, dict)
-            or set(config) - {"servers", "templates", "inputs"}
+            or set(config) - {"servers", "templates", "inputs", "apis"}
         ):
             raise ValueError("服务登记只接受结构化配置和凭据句柄")
         if not isinstance(config.get("servers", {}), dict) or not isinstance(
             config.get("templates", {}), dict
         ):
             raise TypeError("服务登记需要 servers 和 templates 对象")
+        apis = config.get("apis", {})
+        if not isinstance(apis, dict) or len(apis) > 32:
+            raise ValueError("跨插件 API 登记数量或格式无效")
+        for name, spec in apis.items():
+            validate_api_entry(name, spec)
         inputs = config.get("inputs", {})
         if not isinstance(inputs, dict) or len(inputs) > 16:
             raise ValueError("平台文件读取器登记无效")

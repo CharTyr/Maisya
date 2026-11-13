@@ -6,6 +6,10 @@ thread_idle_seconds = 900
 thread_context_chars = 48000
 sleep_window = ""
 proactive_level = "care"
+longing_quiet_hours = 72
+acquaintance_users = []
+
+[chat_proactive_levels]
 
 [plugin]
 enabled = false

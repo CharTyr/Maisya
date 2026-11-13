@@ -1,5 +1,6 @@
 """宿主认证 API 接收签名事件，转换为原有 Intent。"""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -15,6 +16,7 @@ class Incoming:
     def __init__(self, plugin):
         self.plugin = plugin
         self.path = plugin.data_root / "webhooks.json"
+        self._lock = asyncio.Lock()
 
     def load(self):
         raw = MemoryLayers._bytes(self.path)
@@ -32,6 +34,8 @@ class Incoming:
                 "kind",
                 "secret_handle",
                 "thread_id",
+                "profile",
+                "workspace",
                 "enabled",
             }:
                 raise ValueError("事件通道含未知字段")
@@ -40,7 +44,22 @@ class Incoming:
             ) not in {"proactive", "silent"}:
                 raise ValueError("事件通道需要固定目标与 proactive/silent 类型")
             self.plugin.vault._validate_handle(channel.get("secret_handle", ""))
-            if channel.get("kind") == "silent":
+            has_profile = bool(channel.get("profile"))
+            has_thread = bool(channel.get("thread_id"))
+            if has_profile and has_thread:
+                raise ValueError("事件通道不能同时指定 profile 和 thread_id")
+            if channel.get("workspace"):
+                if not has_profile:
+                    raise ValueError("事件通道指定 workspace 时必须同时指定 profile")
+                if not isinstance(channel["workspace"], str) or not re.fullmatch(
+                    r"[a-z0-9][a-z0-9_-]{0,47}", channel["workspace"]
+                ):
+                    raise ValueError("事件通道工作区编号格式无效")
+            if has_profile:
+                ability = self.plugin.profiles.get(channel["profile"])
+                if not ability.autonomous:
+                    raise ValueError("事件通道绑定的能力档案必须允许自主使用")
+            elif channel.get("kind") == "silent":
                 chat = channel["target"].split(":", 1)[1]
                 row = self.plugin.threads.get(
                     channel.get("thread_id", ""), chat, allow_self=chat == "self"
@@ -98,20 +117,90 @@ class Incoming:
         platform = await completed_thread(
             self.plugin.messages.platform_for, target_chat
         )
-        intent = await completed_thread(
-            self.plugin.intents.schedule,
-            kind=binding["kind"],
-            source="webhook",
-            target=binding["target"],
-            due_at=self.plugin.intents.clock(),
-            reason=self.plugin.vault.redact(event.get("reason", "")),
-            thread_id=binding.get("thread_id", ""),
-            payload={"event": self.plugin.vault.redact(event), "platform": platform},
-            event_key=key,
-            event_digest=digest,
-        )
-        return {
-            "success": True,
-            "intent_id": intent["intent_id"],
-            "status": intent["status"],
-        }
+        async with self._lock:
+            existing = await completed_thread(
+                self.plugin.intents.event_exists, key, digest
+            )
+            if existing is not None:
+                return {
+                    "success": True,
+                    "intent_id": existing["intent_id"],
+                    "status": existing["status"],
+                    **(
+                        {"thread_id": existing["thread_id"]}
+                        if existing.get("thread_id")
+                        else {}
+                    ),
+                }
+            if binding.get("profile"):
+                ability = await completed_thread(
+                    self.plugin.profiles.get, binding["profile"]
+                )
+                self.plugin.runtime.available(ability)
+                if not ability.autonomous:
+                    raise PermissionError("事件通道绑定的能力档案不允许自主执行")
+                redacted_event = self.plugin.vault.redact(event)
+                reason_text = (
+                    self.plugin.vault.redact(event.get("reason", ""))
+                    or f"处理外部事件 {channel}"
+                )
+                prompt = (
+                    reason_text
+                    + "\n<external_event>"
+                    + json.dumps(redacted_event, ensure_ascii=False)
+                    + "</external_event>"
+                )
+                started = await self.plugin.engine.start(
+                    ability,
+                    prompt,
+                    chat_id="self" if target_chat == "self" else target_chat,
+                    platform="self" if target_chat == "self" else (platform or "webhook"),
+                    user_id="",
+                    owner="self" if target_chat == "self" else "chat",
+                    wait_seconds=0,
+                    workspace=binding.get("workspace", ""),
+                )
+                payload_data = {
+                    "event": redacted_event,
+                    "platform": platform,
+                    **(
+                        {"wait_thread": True}
+                        if binding["kind"] == "proactive"
+                        else {"already_started": True}
+                    ),
+                }
+                intent = await completed_thread(
+                    self.plugin.intents.schedule,
+                    kind=binding["kind"],
+                    source="webhook",
+                    target=binding["target"],
+                    due_at=self.plugin.intents.clock(),
+                    reason=reason_text,
+                    thread_id=started["thread_id"],
+                    payload=payload_data,
+                    event_key=key,
+                    event_digest=digest,
+                )
+                return {
+                    "success": True,
+                    "intent_id": intent["intent_id"],
+                    "status": intent["status"],
+                    "thread_id": started["thread_id"],
+                }
+            intent = await completed_thread(
+                self.plugin.intents.schedule,
+                kind=binding["kind"],
+                source="webhook",
+                target=binding["target"],
+                due_at=self.plugin.intents.clock(),
+                reason=self.plugin.vault.redact(event.get("reason", "")),
+                thread_id=binding.get("thread_id", ""),
+                payload={"event": self.plugin.vault.redact(event), "platform": platform},
+                event_key=key,
+                event_digest=digest,
+            )
+            return {
+                "success": True,
+                "intent_id": intent["intent_id"],
+                "status": intent["status"],
+            }
