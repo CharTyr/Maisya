@@ -1757,7 +1757,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @API(
         "maisya_manage_read",
-        description="管理页读取档案、手账、设置与执行状态",
+        description="管理页读取产物、档案、手账、设置与执行状态",
         version="1",
         public=False,
     )

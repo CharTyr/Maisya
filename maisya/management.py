@@ -4,14 +4,18 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from pathlib import Path, PurePosixPath
 
 from .config import Settings
 from .memory import MemoryLayers
 from .scout import call_capability
+from .share import links_in
 from .services import (
     validate_api_entry,
     validate_endpoint_targets,
@@ -19,6 +23,63 @@ from .services import (
 )
 from .vault import atomic_private_write
 from .workspaces import completed_thread, regular_open
+
+
+_TEXT_EXTS = {
+    ".txt",
+    ".py",
+    ".js",
+    ".ts",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".tsv",
+    ".sh",
+    ".sql",
+    ".css",
+    ".xml",
+    ".log",
+    ".ini",
+    ".cfg",
+}
+
+_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _media_kind(name: str) -> tuple[str, str]:
+    suffix = Path(name).suffix.lower()
+    if suffix in _IMAGE_MIME:
+        return ("image", _IMAGE_MIME[suffix])
+    if suffix in {".html", ".htm"}:
+        return ("html", "text/html")
+    if suffix in {".md", ".markdown"}:
+        return ("markdown", "text/markdown")
+    if suffix in _TEXT_EXTS:
+        return ("text", "text/plain")
+    return ("binary", "application/octet-stream")
+
+
+def _safe_links(result: dict) -> list[str]:
+    try:
+        return links_in(result)
+    except ValueError:
+        out = []
+        raw_text = str(result.get("text", ""))
+        for candidate in re.findall(r"https?://[^\s<>\"'`]+", raw_text):
+            cleaned = candidate.rstrip("。，、；！!.,;")
+            if cleaned not in out:
+                out.append(cleaned)
+            if len(out) >= 40:
+                break
+        return out
 
 
 class Management:
@@ -273,6 +334,13 @@ class Management:
             result["chat_sources"] = await self.plugin._resolve_chat_sources(
                 result.get("chats", [])
             )
+        elif section == "outputs":
+            result = await completed_thread(self._outputs, options)
+            result["chat_sources"] = await self.plugin._resolve_chat_sources(
+                result.get("chats", [])
+            )
+        elif section == "artifact":
+            result = await completed_thread(self._artifact, options)
         elif section == "workspace":
             result = await completed_thread(self._workspace, options)
         elif section == "intents":
@@ -298,27 +366,58 @@ class Management:
             raise ValueError("未知管理查询")
         return {"success": True, **self.plugin.vault.redact(result)}
 
-    def _workspace(self, options):
-        import re
-
-        workspace_id = options["workspace_id"]
+    def _resolve_workspace_dir(self, workspace_id: str) -> tuple[Path | None, dict]:
         if not isinstance(workspace_id, str) or not re.fullmatch(
             r"ws_[a-f0-9]{24}", workspace_id
         ):
             raise ValueError("工作区编号无效")
+        meta = {}
         with self.plugin.threads.connect() as db:
-            if not db.execute(
-                "SELECT 1 FROM agent_workspaces WHERE workspace_id=?", (workspace_id,)
-            ).fetchone():
-                raise ValueError("工作区不存在")
+            ws_row = db.execute(
+                "SELECT workspace_id,owner,chat_id,name,profile,thread_id "
+                "FROM agent_workspaces WHERE workspace_id=?",
+                (workspace_id,),
+            ).fetchone()
+            if ws_row:
+                meta = dict(ws_row)
+            else:
+                matched = None
+                for t_row in db.execute(
+                    "SELECT thread_id,owner,chat_id,profile,updated FROM agent_threads"
+                ):
+                    implicit = (
+                        "ws_"
+                        + hashlib.sha256(t_row["thread_id"].encode()).hexdigest()[:24]
+                    )
+                    if implicit == workspace_id:
+                        matched = dict(t_row)
+                        break
+                if not matched:
+                    raise ValueError("工作区不存在")
+                meta = {
+                    "workspace_id": workspace_id,
+                    "owner": matched["owner"],
+                    "chat_id": matched["chat_id"],
+                    "name": f"临时 · {matched['thread_id'][:10]}",
+                    "profile": matched["profile"],
+                    "thread_id": matched["thread_id"],
+                }
         root = self.plugin.runtime.files.root / workspace_id
         pointer = MemoryLayers._bytes(root / "current.json")
         if not pointer:
-            return {"files": [], "text": ""}
+            return None, meta
         version = json.loads(pointer)["version"]
         if not re.fullmatch(r"v_[a-f0-9]{32}", version):
             raise ValueError("工作区版本无效")
-        path = root / version
+        vdir = root / version
+        if vdir.is_symlink() or not vdir.is_dir():
+            raise ValueError("工作区目录无效")
+        return vdir, meta
+
+    def _workspace(self, options):
+        path, _meta = self._resolve_workspace_dir(options["workspace_id"])
+        if path is None:
+            return {"files": [], "text": ""}
         files, _size = self.plugin.runtime.files.inventory(path)
         text = ""
         if options.get("path"):
@@ -328,6 +427,368 @@ class Management:
             "files": [{"path": name, "bytes": size} for name, size in files[:200]],
             "text": text,
         }
+
+    def _outputs(self, options):
+        chat_id = options.get("chat_id", "")
+        kind_filter = options.get("kind", "all")
+        query = options.get("query", "")
+        if not isinstance(chat_id, str) or len(chat_id) > 256:
+            raise ValueError("会话筛选无效")
+        if kind_filter not in {"all", "attachment", "workspace_out", "conclusion"}:
+            raise ValueError("产物类型筛选无效")
+        if not isinstance(query, str) or len(query) > 200:
+            raise ValueError("检索关键词无效")
+
+        files_api = self.plugin.runtime.files
+        items = []
+        chats = set(self.plugin.settings.enabled_chats)
+        attached_keys = set()
+        ws_entries = {}
+        workspaces = []
+
+        with self.plugin.threads.connect() as db:
+            thread_rows = {
+                r["thread_id"]: dict(r)
+                for r in db.execute(
+                    "SELECT thread_id,profile,chat_id,owner,state,result,updated "
+                    "FROM agent_threads ORDER BY updated DESC LIMIT 200"
+                )
+            }
+            delivered = {
+                r["thread_id"]
+                for r in db.execute("SELECT DISTINCT thread_id FROM result_deliveries")
+            }
+            att_rows = [
+                dict(r)
+                for r in db.execute(
+                    "SELECT handle,chat_id,thread_id,revision,name,kind,size,digest,created "
+                    "FROM attachments ORDER BY created DESC LIMIT 160"
+                )
+            ]
+            named_ws = [
+                dict(r)
+                for r in db.execute(
+                    "SELECT workspace_id,owner,chat_id,name,profile,thread_id "
+                    "FROM agent_workspaces ORDER BY rowid DESC LIMIT 80"
+                )
+            ]
+
+        for row in thread_rows.values():
+            chats.add(row["chat_id"])
+
+        for row in att_rows:
+            fpath = files_api.artifacts / row["handle"]
+            if fpath.is_symlink() or not fpath.is_file():
+                continue
+            chats.add(row["chat_id"])
+            attached_keys.add((row["thread_id"], row["name"], row["size"]))
+            t_info = thread_rows.get(row["thread_id"], {})
+            media_kind, mime = _media_kind(row["name"])
+            items.append(
+                {
+                    "id": f"att:{row['handle']}",
+                    "kind": "attachment",
+                    "media_kind": media_kind,
+                    "mime": mime,
+                    "handle": row["handle"],
+                    "name": row["name"],
+                    "title": row["name"],
+                    "chat_id": row["chat_id"],
+                    "thread_id": row["thread_id"],
+                    "profile": t_info.get("profile", ""),
+                    "bytes": row["size"],
+                    "at": float(row["created"] or 0.0),
+                    "delivered": row["thread_id"] in delivered,
+                    "excerpt": f"已声明附件 · {row['size']} 字节",
+                }
+            )
+
+        for row in named_ws:
+            ws_entries[row["workspace_id"]] = dict(row)
+            chats.add(row["chat_id"])
+
+        for tid, t_info in thread_rows.items():
+            implicit = "ws_" + hashlib.sha256(tid.encode()).hexdigest()[:24]
+            if implicit not in ws_entries and (files_api.root / implicit / "current.json").exists():
+                ws_entries[implicit] = {
+                    "workspace_id": implicit,
+                    "owner": t_info["owner"],
+                    "chat_id": t_info["chat_id"],
+                    "name": f"临时 · {tid[:10]}",
+                    "profile": t_info["profile"],
+                    "thread_id": tid,
+                }
+
+        for ws_id, meta in ws_entries.items():
+            root = files_api.root / ws_id
+            pointer = MemoryLayers._bytes(root / "current.json")
+            file_count = 0
+            out_count = 0
+            total_bytes = 0
+            if pointer:
+                try:
+                    version = json.loads(pointer)["version"]
+                except (ValueError, KeyError, TypeError):
+                    version = ""
+                if re.fullmatch(r"v_[a-f0-9]{32}", str(version)):
+                    vdir = root / version
+                    if not vdir.is_symlink() and vdir.is_dir():
+                        inv, total_bytes = files_api.inventory(vdir)
+                        file_count = len(inv)
+                        t_info = thread_rows.get(meta["thread_id"], {})
+                        for rel, size in inv:
+                            if not rel.startswith("out/"):
+                                continue
+                            out_count += 1
+                            base_name = PurePosixPath(rel).name
+                            if (meta["thread_id"], base_name, size) in attached_keys:
+                                continue
+                            media_kind, mime = _media_kind(base_name)
+                            mtime = 0.0
+                            try:
+                                mtime = (vdir / rel).lstat().st_mtime
+                            except OSError:
+                                pass
+                            items.append(
+                                {
+                                    "id": f"ws:{ws_id}:{rel}",
+                                    "kind": "workspace_out",
+                                    "media_kind": media_kind,
+                                    "mime": mime,
+                                    "workspace_id": ws_id,
+                                    "workspace_name": meta["name"],
+                                    "path": rel,
+                                    "name": base_name,
+                                    "title": base_name,
+                                    "chat_id": meta["chat_id"],
+                                    "thread_id": meta["thread_id"],
+                                    "profile": meta["profile"],
+                                    "bytes": size,
+                                    "at": float(t_info.get("updated") or mtime),
+                                    "delivered": meta["thread_id"] in delivered,
+                                    "excerpt": f"工作区 {meta['name']} / {rel}",
+                                }
+                            )
+            workspaces.append(
+                {
+                    **meta,
+                    "file_count": file_count,
+                    "out_count": out_count,
+                    "total_bytes": total_bytes,
+                }
+            )
+
+        for tid, row in thread_rows.items():
+            try:
+                parsed = json.loads(row["result"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(parsed, dict) or "error" in parsed:
+                continue
+            text = str(parsed.get("text") or "").strip()
+            links = _safe_links(parsed)
+            atts = [a for a in (parsed.get("attachments") or []) if isinstance(a, dict)]
+            if not text and not links:
+                continue
+            excerpt = text.splitlines()[0][:140] if text else (links[0] if links else "")
+            items.append(
+                {
+                    "id": f"con:{tid}",
+                    "kind": "conclusion",
+                    "media_kind": "conclusion",
+                    "mime": "text/plain",
+                    "name": excerpt[:48] or tid,
+                    "title": excerpt[:64] or tid,
+                    "chat_id": row["chat_id"],
+                    "thread_id": tid,
+                    "profile": row["profile"],
+                    "bytes": len(text.encode("utf-8")),
+                    "at": float(row["updated"] or 0.0),
+                    "delivered": tid in delivered,
+                    "links_count": len(links),
+                    "attachments_count": len(atts),
+                    "excerpt": excerpt,
+                }
+            )
+
+        chat_items = [i for i in items if not chat_id or i["chat_id"] == chat_id]
+        chat_workspaces = [w for w in workspaces if not chat_id or w["chat_id"] == chat_id]
+        stats = {
+            "total": len(chat_items),
+            "attachments": sum(1 for i in chat_items if i["kind"] == "attachment"),
+            "workspace_out": sum(1 for i in chat_items if i["kind"] == "workspace_out"),
+            "conclusions": sum(1 for i in chat_items if i["kind"] == "conclusion"),
+            "workspaces": len(chat_workspaces),
+        }
+
+        filtered = chat_items
+        if kind_filter != "all":
+            filtered = [i for i in filtered if i["kind"] == kind_filter]
+        needle = query.strip().lower()
+        if needle:
+            filtered = [
+                i
+                for i in filtered
+                if needle
+                in " ".join(
+                    str(
+                        i.get(k) or ""
+                    )
+                    for k in (
+                        "name",
+                        "title",
+                        "path",
+                        "excerpt",
+                        "profile",
+                        "workspace_name",
+                        "thread_id",
+                    )
+                ).lower()
+            ]
+        filtered.sort(key=lambda item: item.get("at", 0.0), reverse=True)
+        return {
+            "items": filtered[:80],
+            "workspaces": chat_workspaces[:60],
+            "chats": sorted(c for c in chats if c),
+            "stats": stats,
+        }
+
+    def _read_artifact_stream(
+        self, stream, name: str, offset: int, *, total_hint: int | None = None, extra: dict | None = None
+    ) -> dict:
+        media_kind, mime = _media_kind(name)
+        meta = dict(extra or {})
+        if media_kind in {"image", "binary"}:
+            max_preview = 8 * 1024 * 1024
+            raw = stream.read(max_preview + 1)
+            if len(raw) > max_preview:
+                raise ValueError("二进制产物超过 8 MiB 在线预览上限")
+            if self.plugin.vault.contains_secret(raw):
+                raise PermissionError("产物包含已登记凭据，已拒绝预览")
+            total = total_hint if total_hint is not None else len(raw)
+            chunk = raw[offset : offset + 196608]
+            next_off = offset + len(chunk) if offset + len(chunk) < len(raw) else None
+            return {
+                **meta,
+                "name": name,
+                "media_kind": media_kind,
+                "mime": mime,
+                "bytes": len(raw),
+                "total": total,
+                "base64": base64.b64encode(chunk).decode("ascii"),
+                "next_offset": next_off,
+            }
+        raw = stream.read(2 * 1024 * 1024)
+        decoded = self.plugin.vault.redact(raw.decode("utf-8", errors="replace"))
+        end = min(len(decoded), offset + 16000)
+        return {
+            **meta,
+            "name": name,
+            "media_kind": media_kind,
+            "mime": mime,
+            "bytes": total_hint if total_hint is not None else len(raw),
+            "total": len(decoded),
+            "text": decoded[offset:end],
+            "next_offset": end if end < len(decoded) else None,
+        }
+
+    def _artifact(self, options):
+        kind = options.get("kind", "")
+        offset = options.get("offset", 0)
+        if type(offset) is not int or not 0 <= offset <= 128 * 1024**2:
+            raise ValueError("预览偏移量无效")
+
+        if kind == "attachment":
+            handle = options.get("handle", "")
+            if (
+                not isinstance(handle, str)
+                or not handle.startswith("att_")
+                or not handle[4:].isalnum()
+            ):
+                raise ValueError("附件句柄无效")
+            with self.plugin.threads.connect() as db:
+                row = db.execute(
+                    "SELECT * FROM attachments WHERE handle=?", (handle,)
+                ).fetchone()
+            if not row:
+                raise ValueError("附件不存在")
+            fpath = self.plugin.runtime.files.artifacts / handle
+            if (
+                fpath.is_symlink()
+                or not fpath.is_file()
+                or fpath.stat().st_size != row["size"]
+                or hashlib.sha256(fpath.read_bytes()).hexdigest() != row["digest"]
+            ):
+                raise ValueError("附件已损坏")
+            with open(fpath, "rb") as source:
+                return self._read_artifact_stream(
+                    source,
+                    row["name"],
+                    offset,
+                    total_hint=row["size"],
+                    extra={
+                        "kind": "attachment",
+                        "handle": handle,
+                        "chat_id": row["chat_id"],
+                        "thread_id": row["thread_id"],
+                    },
+                )
+
+        if kind == "workspace_file":
+            vdir, ws_meta = self._resolve_workspace_dir(options.get("workspace_id", ""))
+            if vdir is None:
+                raise ValueError("工作区尚无已提交文件")
+            rel_path = options.get("path", "")
+            if not isinstance(rel_path, str) or not rel_path:
+                raise ValueError("文件路径无效")
+            with regular_open(vdir, rel_path) as source:
+                size = os.fstat(source.fileno()).st_size
+                return self._read_artifact_stream(
+                    source,
+                    PurePosixPath(rel_path).name,
+                    offset,
+                    total_hint=size,
+                    extra={
+                        "kind": "workspace_file",
+                        "workspace_id": ws_meta["workspace_id"],
+                        "path": rel_path,
+                        "chat_id": ws_meta["chat_id"],
+                        "thread_id": ws_meta["thread_id"],
+                    },
+                )
+
+        if kind == "conclusion":
+            thread_id = options.get("thread_id", "")
+            if not isinstance(thread_id, str) or len(thread_id) > 64:
+                raise ValueError("线程编号无效")
+            with self.plugin.threads.connect() as db:
+                row = db.execute(
+                    "SELECT thread_id,chat_id,profile,state,result,updated "
+                    "FROM agent_threads WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()
+            if not row:
+                raise ValueError("线程不存在")
+            parsed = json.loads(row["result"] or "{}")
+            text = self.plugin.vault.redact(str(parsed.get("text") or ""))
+            links = _safe_links(parsed)[:40]
+            atts = [a for a in (parsed.get("attachments") or []) if isinstance(a, dict)][:8]
+            end = min(len(text), offset + 16000)
+            return {
+                "kind": "conclusion",
+                "media_kind": "conclusion",
+                "thread_id": row["thread_id"],
+                "chat_id": row["chat_id"],
+                "profile": row["profile"],
+                "state": row["state"],
+                "text": text[offset:end],
+                "next_offset": end if end < len(text) else None,
+                "total": len(text),
+                "links": links,
+                "attachments": atts,
+            }
+
+        raise ValueError("未知产物类型")
 
     async def write(self, action, payload):
         async with self.request(), self.lock:

@@ -1,3 +1,5 @@
+import base64
+import json
 from pathlib import Path
 import re
 
@@ -6,9 +8,45 @@ from playwright.async_api import async_playwright, expect
 from test_foundation import loaded
 
 
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+
+
 @pytest.mark.asyncio
 async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tmp_path):
     plugin = await loaded(tmp_path)
+    profile = plugin.profiles.get("scout")
+    row = plugin.threads.create(
+        profile,
+        "输出周报摘要与海报",
+        chat_id="chat",
+        platform="qq",
+        user_id="qq:Alice",
+        workspace="ws_ui",
+    )
+    with plugin.runtime.files.activity(row) as work:
+        work.write(
+            "out/summary.html",
+            "<h2>周报摘要</h2><p>本周进展顺利。</p><script>window.pwned=true</script>",
+        )
+        (work.path / "out/poster.png").write_bytes(PNG_1X1)
+        work.commit()
+        attached = plugin.runtime.files.attach(row, work, ["out/poster.png"])
+    with plugin.threads.connect() as db, db:
+        db.execute(
+            "UPDATE agent_threads SET state='waiting', result=?, completed_revision=1 WHERE thread_id=?",
+            (
+                json.dumps(
+                    {
+                        "text": "周报摘要已整理，参考 https://example.org/weekly",
+                        "attachments": attached,
+                    },
+                    ensure_ascii=False,
+                ),
+                row["thread_id"],
+            ),
+        )
     active, peak = 0, 0
 
     async def request(mode, arguments):
@@ -33,6 +71,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 await page.expose_function("backend", request)
                 for name, title in [
+                    ("outputs", "产物"),
                     ("abilities", "能力"),
                     ("memory", "手账"),
                     ("settings", "设置"),
@@ -47,7 +86,21 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     )
                     await page.set_content(document)
                     await expect(page.locator("h1")).to_have_text(title)
-                    if name == "abilities":
+                    if name == "outputs":
+                        await expect(page.locator("#out-st-total")).not_to_have_text("0")
+                        await page.locator('[data-out-idx="0"]').click()
+                        await expect(page.locator("#out-stage")).to_be_visible()
+                        await expect(page.locator("#out-cur-badge")).not_to_be_empty()
+                        await page.locator('[data-out-kind="workspace_out"]').click()
+                        await page.locator('[data-out-idx="0"]').click()
+                        await expect(page.locator("#out-stage")).to_contain_text("周报摘要")
+                        assert await page.evaluate("Boolean(window.pwned)") is False
+                        await page.locator("#workspaces button").first.click()
+                        await page.locator("#workspace-files button").first.click()
+                        await expect(page.locator("#workspace-content")).not_to_be_empty()
+                        assert await page.locator("img").count() == 0
+                        assert await page.locator("iframe").count() == 0
+                    elif name == "abilities":
                         await page.locator('[data-profile="scout"]').click()
                         await page.locator('[data-doc-tab="config"]').click()
                         await expect(page.locator("#content")).to_be_enabled()

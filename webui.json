@@ -101,6 +101,48 @@
       }
     },
     {
+      "id": "outputs",
+      "title": "产物",
+      "mode": "custom",
+      "placement": "workspace",
+      "entry": "webui/outputs.html",
+      "layout": "viewport",
+      "queries": {
+        "read": {
+          "api": "maisya_manage_read",
+          "version": "1",
+          "parameters": {
+            "section": {
+              "type": "string",
+              "required": true,
+              "max_length": 64
+            },
+            "payload": {
+              "type": "string",
+              "max_length": 60000
+            }
+          }
+        }
+      },
+      "actions": {
+        "write": {
+          "api": "maisya_manage_write",
+          "version": "1",
+          "parameters": {
+            "action": {
+              "type": "string",
+              "required": true,
+              "max_length": 64
+            },
+            "payload": {
+              "type": "string",
+              "max_length": 60000
+            }
+          }
+        }
+      }
+    },
+    {
       "id": "abilities",
       "title": "能力",
       "mode": "custom",

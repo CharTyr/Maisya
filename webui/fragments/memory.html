@@ -90,21 +90,16 @@
 
     <section class="mil-panel">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">WORKSPACES · 持续工作区与意图队列</span></div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
-      </div>
-      <div id="workspaces" class="mil-row" style="margin-bottom:8px"></div>
-      <div class="ws-split">
-        <div id="workspace-files" class="mil-screen" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto"></div>
-        <pre id="workspace-content" class="mil-pre" style="min-height:120px;max-height:260px"></pre>
-      </div>
-      <details style="margin-top:10px" open>
-        <summary class="mil-label" style="cursor:pointer">待唤醒意图与自动笔记回执</summary>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-          <div id="intent-list" class="mil-screen"></div>
-          <pre id="learning" class="mil-pre" style="max-height:140px"></pre>
+        <div class="mil-head-l"><span class="mil-silk">INTENTS · 待唤醒意图与自动笔记回执</span></div>
+        <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm" data-nav="outputs">查看持续工作区 →</button>
+          <span class="mil-vent" aria-hidden="true"></span>
         </div>
-      </details>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div id="intent-list" class="mil-screen" style="max-height:220px;overflow-y:auto"></div>
+        <pre id="learning" class="mil-pre" style="max-height:160px"></pre>
+      </div>
     </section>
   </div>
 </div>

@@ -909,6 +909,132 @@ pre, code, .mono, .num {
   }
 }
 
+/* ───────────── 产物页专用样式 ───────────── */
+.out-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.out-stat {
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  padding: 8px 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.out-stat-lbl {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--mil-print);
+}
+
+.out-stat-val {
+  font-family: var(--mil-font-display);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.out-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.out-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.out-stage {
+  min-height: 220px;
+  max-height: 540px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.out-img-stage {
+  width: 100%;
+  min-height: 300px;
+  height: 380px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  border: 2px dashed var(--mil-rule);
+  background-color: var(--mil-well);
+}
+
+.out-doc {
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.out-doc h1, .out-doc h2, .out-doc h3, .out-doc h4 {
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 2px dashed var(--mil-rule);
+  font-family: var(--mil-font-display);
+}
+.out-doc p, .out-doc ul, .out-doc ol, .out-doc blockquote, .out-doc pre {
+  margin: 0 0 10px;
+}
+.out-doc ul, .out-doc ol {
+  padding-left: 20px;
+}
+.out-doc blockquote {
+  padding: 6px 10px;
+  border-left: 3px solid var(--mil-hot);
+  background: var(--mil-well);
+}
+.out-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.out-doc th, .out-doc td {
+  border: 1.5px solid var(--mil-line);
+  padding: 4px 7px;
+  text-align: left;
+}
+.out-doc th {
+  background: var(--mil-panel);
+}
+
+.out-link-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1.5px dashed var(--mil-rule);
+  font-size: 12px;
+}
+.out-link-item:last-child {
+  border-bottom: 0;
+}
+
+@media (max-width: 900px) {
+  .out-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 720px) {
   .set-row-r {
     flex: 1 1 100%;
@@ -927,6 +1053,7 @@ pre, code, .mono, .num {
       <h1 class="mil-page-title">设置</h1>
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm" data-nav="now">现场</button>
+        <button type="button" class="mil-key mil-key--sm" data-nav="outputs">产物</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="memory">手账</button>
         <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
@@ -1143,7 +1270,7 @@ pre, code, .mono, .num {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
       ev.preventDefault();
       if (page === "settings") $("#save-settings")?.click();
-      else $("#save")?.click();
+      else if (page === "abilities" || page === "memory") $("#save")?.click();
     }
   });
 
@@ -1529,11 +1656,448 @@ pre, code, .mono, .num {
   }
 
   /* ════════════════════════════════════════════════════════════════
+     1.5. 产物页 (outputs)
+     ════════════════════════════════════════════════════════════════ */
+  if (page === "outputs") {
+    let outData = { items: [], workspaces: [], chats: [], chat_sources: {}, stats: {} };
+    let filterChat = "";
+    let filterKind = "all";
+    let selectedItem = null;
+    let curView = "preview";
+    let curArtifact = null;
+    let textAccumulator = "";
+    let copyBuffer = "";
+    let activeBlobUrl = "";
+    let openSeq = 0;
+
+    const KIND_LABELS = {
+      attachment: "附件/图片",
+      workspace_out: "工作区成品",
+      workspace_file: "工作区文件",
+      conclusion: "结论与出处",
+    };
+
+    const MEDIA_LABELS = {
+      image: "图片",
+      html: "HTML",
+      markdown: "Markdown",
+      text: "文本",
+      binary: "二进制",
+      conclusion: "结论",
+    };
+
+    const fmtBytes = (n) => {
+      const v = Number(n || 0);
+      if (v >= 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(2)} MB`;
+      if (v >= 1024) return `${(v / 1024).toFixed(1)} KB`;
+      return `${v} B`;
+    };
+
+    const revokeBlob = () => {
+      if (activeBlobUrl) {
+        try { URL.revokeObjectURL(activeBlobUrl); } catch {}
+        activeBlobUrl = "";
+      }
+    };
+
+    const SAFE_HTML_TAGS = new Set([
+      "H1", "H2", "H3", "H4", "P", "UL", "OL", "LI", "PRE", "CODE", "BLOCKQUOTE",
+      "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "STRONG", "B", "EM", "I",
+      "HR", "BR", "ARTICLE", "SECTION", "HEADER", "DIV", "SPAN", "A",
+    ]);
+    const SKIP_HTML_TAGS = new Set([
+      "SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "SVG", "IMG",
+      "NOSCRIPT", "TEMPLATE", "LINK", "META", "BASE",
+    ]);
+
+    function safeHtmlNode(node) {
+      if (node.nodeType === 3) return esc(node.nodeValue || "");
+      if (node.nodeType !== 1) return "";
+      const tag = node.tagName.toUpperCase();
+      if (SKIP_HTML_TAGS.has(tag)) return "";
+      const inner = [...node.childNodes].map(safeHtmlNode).join("");
+      if (!SAFE_HTML_TAGS.has(tag)) return inner;
+      if (tag === "BR" || tag === "HR") return `<${tag.toLowerCase()}>`;
+      if (tag === "A") {
+        const href = String(node.getAttribute("href") || "").trim();
+        if (/^https?:\/\//i.test(href)) {
+          return `<span>${inner || esc(href)}</span> <span class="mil-tag mono">${esc(href)}</span>`;
+        }
+        return `<span>${inner}</span>`;
+      }
+      const lower = tag.toLowerCase();
+      return `<${lower}>${inner}</${lower}>`;
+    }
+
+    function renderSafeHtml(src) {
+      try {
+        const doc = new DOMParser().parseFromString(String(src || ""), "text/html");
+        return `<div class="out-doc">${safeHtmlNode(doc.body) || `<p class="mil-hint">空白文档</p>`}</div>`;
+      } catch {
+        return `<pre class="mil-pre">${esc(src || "")}</pre>`;
+      }
+    }
+
+    function renderMarkdown(src) {
+      const lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
+      const out = [];
+      let inCode = false;
+      let codeBuf = [];
+      let listOpen = false;
+      const closeList = () => { if (listOpen) { out.push("</ul>"); listOpen = false; } };
+      const inlineMd = (s) => esc(s)
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<span>$1</span> <span class="mil-tag mono">$2</span>');
+      for (const line of lines) {
+        if (line.trim().startsWith("```")) {
+          closeList();
+          if (inCode) {
+            out.push(`<pre class="mil-pre">${esc(codeBuf.join("\n"))}</pre>`);
+            codeBuf = [];
+            inCode = false;
+          } else {
+            inCode = true;
+          }
+          continue;
+        }
+        if (inCode) { codeBuf.push(line); continue; }
+        const h = line.match(/^(#{1,4})\s+(.+)$/);
+        if (h) { closeList(); out.push(`<h${h[1].length}>${inlineMd(h[2])}</h${h[1].length}>`); continue; }
+        const li = line.match(/^\s*[-*+]\s+(.+)$/);
+        if (li) { if (!listOpen) { out.push("<ul>"); listOpen = true; } out.push(`<li>${inlineMd(li[1])}</li>`); continue; }
+        closeList();
+        if (line.startsWith(">")) { out.push(`<blockquote>${inlineMd(line.replace(/^>\s?/, ""))}</blockquote>`); continue; }
+        if (!line.trim()) continue;
+        out.push(`<p>${inlineMd(line)}</p>`);
+      }
+      closeList();
+      if (inCode && codeBuf.length) out.push(`<pre class="mil-pre">${esc(codeBuf.join("\n"))}</pre>`);
+      return `<div class="out-doc">${out.join("") || `<p class="mil-hint">空白文档</p>`}</div>`;
+    }
+
+    function renderFilterButtons() {
+      $$("[data-out-kind]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.outKind === filterKind)));
+      $$("[data-out-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.outView === curView)));
+      $$("[data-out-chat]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.outChat === filterChat)));
+    }
+
+    function chatLabel(cid) {
+      if (!cid) return "全部会话";
+      const s = (outData.chat_sources || {})[cid];
+      return s?.name && s.name !== cid ? `${s.name} (${cid})` : cid;
+    }
+
+    function renderChatFilter() {
+      const chats = outData.chats || [];
+      const srcs = outData.chat_sources || {};
+      $("#out-chat").innerHTML = [`<option value="">全部会话</option>`, ...chats.map((c) => `<option value="${esc(c)}">${esc(chatLabel(c))}</option>`)].join("");
+      $("#out-chat").value = filterChat;
+      const chipHtml = [
+        `<button type="button" class="mil-key mil-key--sm" data-out-chat="" style="justify-content:flex-start">全部会话 (${outData.stats?.total || 0})</button>`,
+        ...chats.map((c) => {
+          const s = srcs[c] || {};
+          const name = s.name || c;
+          const rawAv = String(s.avatar || "");
+          const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
+          const mono = (name || c || "?").trim().slice(0, 1).toUpperCase();
+          return `<button type="button" class="mil-key mil-key--sm" data-out-chat="${esc(c)}" style="justify-content:flex-start;gap:7px" title="${esc(c)}">
+            <span class="mil-avatar mil-avatar--sm" aria-hidden="true">${esc(mono)}${safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(safeAv)}')"></span>` : ""}</span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span>
+            ${s.platform ? `<span class="mil-tag">${esc(s.platform)}</span>` : ""}
+          </button>`;
+        }),
+      ].join("");
+      $("#out-chat-chips").innerHTML = chipHtml;
+    }
+
+    function renderCatalog() {
+      const st = outData.stats || {};
+      $("#out-st-total").textContent = String(st.total || 0);
+      $("#out-st-att").textContent = String(st.attachments || 0);
+      $("#out-st-wsout").textContent = String(st.workspace_out || 0);
+      $("#out-st-ws").textContent = String(st.workspaces || 0);
+
+      const items = outData.items || [];
+      $("#out-list").innerHTML = items.length
+        ? items.map((item, idx) => {
+            const active = selectedItem && selectedItem.id === item.id;
+            const kindTxt = KIND_LABELS[item.kind] || item.kind;
+            return `<button type="button" class="ab-card" data-out-idx="${idx}" aria-current="${active ? "true" : "false"}">
+              <div class="mil-row" style="justify-content:space-between;font-size:11px">
+                <span class="mil-tag">${esc(kindTxt)}</span>
+                <span class="num">${esc(fmtBytes(item.bytes))}</span>
+              </div>
+              <strong style="font-size:12.5px;overflow-wrap:anywhere">${esc(item.title || item.name)}</strong>
+              <div class="mil-row" style="justify-content:space-between;font-size:11px;opacity:.85">
+                <span>${esc(item.profile || "agent")} · ${esc(chatLabel(item.chat_id))}</span>
+                ${item.delivered ? `<span>已回接</span>` : ""}
+              </div>
+            </button>`;
+          }).join("")
+        : `<p class="mil-hint" style="padding:8px">当前筛选条件下暂无产物条目。</p>`;
+
+      $("#workspaces").innerHTML = (outData.workspaces || []).map((w) =>
+        `<button type="button" class="mil-key mil-key--sm" data-ws="${esc(w.workspace_id)}">
+          <span>${esc(w.name)} (${esc(w.profile)})</span>
+          <span class="mil-tag num">${w.out_count || 0}/${w.file_count || 0}</span>
+        </button>`
+      ).join("") || `<span class="mil-hint">暂无持久工作区</span>`;
+      renderFilterButtons();
+    }
+
+    function renderArtifactStage() {
+      if (!curArtifact) return;
+      const a = curArtifact;
+      const stage = $("#out-stage");
+      $("#out-cur-badge").textContent = `${KIND_LABELS[a.kind] || a.kind || "文件"} · ${MEDIA_LABELS[a.media_kind] || a.media_kind || "文本"}`;
+      $("#out-cur-size").textContent = fmtBytes(a.bytes || a.total || 0);
+      $("#out-more-btn").hidden = a.next_offset === null || a.next_offset === undefined;
+
+      const metaParts = [
+        a.chat_id ? `会话：${chatLabel(a.chat_id)}` : "",
+        a.profile ? `档案：${a.profile}` : "",
+        a.path ? `路径：${a.path}` : "",
+        a.handle ? `句柄：${a.handle}` : "",
+        a.thread_id ? `线程：${a.thread_id}` : "",
+      ].filter(Boolean);
+      $("#out-meta").innerHTML = metaParts.map((m) => `<span class="mil-tag mono">${esc(m)}</span>`).join("") || "无附加元信息";
+
+      if (a.media_kind === "image" && a._imageUrl) {
+        copyBuffer = a._imageUrl;
+        if (curView === "raw") {
+          stage.innerHTML = `<pre class="mil-pre mono">图片 MIME：${esc(a.mime)} · 体积：${a.bytes} B\n${esc((a._base64Head || "").slice(0, 2000))}</pre>`;
+        } else {
+          stage.innerHTML = `<div class="out-img-stage" role="img" aria-label="${esc(a.name || "产物图片")}" style="background-image:url('${esc(a._imageUrl)}')"></div>`;
+        }
+        return;
+      }
+
+      if (a.media_kind === "binary") {
+        copyBuffer = a._base64Head || "";
+        stage.innerHTML = `<pre class="mil-pre">二进制文件：${esc(a.name)} (${a.bytes} B)\nMIME：${esc(a.mime)}\nBase64 片段：\n${esc((a._base64Head || "").slice(0, 1200))}</pre>`;
+        return;
+      }
+
+      if (a.media_kind === "conclusion") {
+        copyBuffer = textAccumulator + ((a.links || []).length ? "\n\n出处链接：\n" + a.links.join("\n") : "");
+        if (curView === "raw") {
+          stage.innerHTML = `<pre class="mil-pre">${esc(copyBuffer)}</pre>`;
+        } else {
+          const linksHtml = (a.links || []).length
+            ? `<div style="margin-top:10px;border-top:2px dashed var(--mil-rule);padding-top:8px"><div class="mil-label" style="margin-bottom:4px">提取的出处链接 (${a.links.length})</div>${a.links.map((u) => `<div class="out-link-item"><span class="mono" style="overflow-wrap:anywhere">${esc(u)}</span></div>`).join("")}</div>`
+            : "";
+          const attsHtml = (a.attachments || []).length
+            ? `<div style="margin-top:10px;border-top:2px dashed var(--mil-rule);padding-top:8px"><div class="mil-label" style="margin-bottom:6px">关联附件 (${a.attachments.length})</div><div class="mil-row">${a.attachments.map((att) => `<button type="button" class="mil-key mil-key--sm" data-open-att="${esc(att.handle)}">${esc(att.name)} (${fmtBytes(att.bytes || 0)})</button>`).join("")}</div></div>`
+            : "";
+          stage.innerHTML = `${renderMarkdown(textAccumulator)}${linksHtml}${attsHtml}`;
+        }
+        return;
+      }
+
+      copyBuffer = textAccumulator;
+      if (curView === "preview" && a.media_kind === "html") {
+        stage.innerHTML = renderSafeHtml(textAccumulator);
+      } else if (curView === "preview" && a.media_kind === "markdown") {
+        stage.innerHTML = renderMarkdown(textAccumulator);
+      } else {
+        stage.innerHTML = `<pre class="mil-pre">${esc(textAccumulator)}</pre>`;
+      }
+    }
+
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    async function loadArtifact(req, append = false) {
+      const seq = ++openSeq;
+      if (!append) {
+        revokeBlob();
+        textAccumulator = "";
+        $("#out-copy-drawer").hidden = true;
+      }
+      const r = await rpc("read", "artifact", req);
+      if (seq !== openSeq) return;
+      if (!r?.success) return say(r?.error || "读取产物内容失败", true);
+      say("");
+
+      if (r.media_kind === "image") {
+        const chunks = [r.base64 || ""];
+        let nextOff = r.next_offset;
+        while (nextOff !== null && nextOff !== undefined && chunks.length < 48) {
+          const nxt = await rpc("read", "artifact", { ...req, offset: nextOff });
+          if (seq !== openSeq) return;
+          if (!nxt?.success) return say(nxt?.error || "图片分块读取失败", true);
+          chunks.push(nxt.base64 || "");
+          nextOff = nxt.next_offset;
+        }
+        if (chunks.length === 1) {
+          r._imageUrl = `data:${r.mime || "image/png"};base64,${chunks[0]}`;
+        } else {
+          const arrays = chunks.map(b64ToBytes);
+          const blob = new Blob(arrays, { type: r.mime || "image/png" });
+          activeBlobUrl = URL.createObjectURL(blob);
+          r._imageUrl = activeBlobUrl;
+        }
+        r._base64Head = chunks[0];
+        r.next_offset = null;
+        r._req = req;
+        curArtifact = r;
+        renderArtifactStage();
+        return;
+      }
+
+      if (r.media_kind === "binary") {
+        r._base64Head = r.base64 || "";
+        r._req = req;
+        curArtifact = r;
+        renderArtifactStage();
+        return;
+      }
+
+      textAccumulator = append ? textAccumulator + (r.text || "") : (r.text || "");
+      r._req = req;
+      curArtifact = r;
+      renderArtifactStage();
+    }
+
+    function openItem(item) {
+      if (!item) return;
+      selectedItem = item;
+      renderCatalog();
+      if (item.kind === "attachment") {
+        return loadArtifact({ kind: "attachment", handle: item.handle, offset: 0 });
+      }
+      if (item.kind === "workspace_out") {
+        return loadArtifact({ kind: "workspace_file", workspace_id: item.workspace_id, path: item.path, offset: 0 });
+      }
+      if (item.kind === "conclusion") {
+        return loadArtifact({ kind: "conclusion", thread_id: item.thread_id, offset: 0 });
+      }
+    }
+
+    async function loadOutputs(autoOpen = true) {
+      const query = $("#out-search").value.trim();
+      const r = await rpc("read", "outputs", { chat_id: filterChat, kind: filterKind, query });
+      if (!r?.success) return say(r?.error || "读取产物目录失败", true);
+      outData = r;
+      renderChatFilter();
+      renderCatalog();
+      if (autoOpen && r.items?.length && !selectedItem) {
+        await openItem(r.items[0]);
+      }
+    }
+
+    document.addEventListener("click", async (ev) => {
+      const chatBtn = ev.target.closest("[data-out-chat]");
+      if (chatBtn) {
+        filterChat = chatBtn.dataset.outChat;
+        selectedItem = null;
+        await loadOutputs(true);
+        return;
+      }
+      const kindBtn = ev.target.closest("[data-out-kind]");
+      if (kindBtn) {
+        filterKind = kindBtn.dataset.outKind;
+        selectedItem = null;
+        await loadOutputs(true);
+        return;
+      }
+      const viewBtn = ev.target.closest("[data-out-view]");
+      if (viewBtn) {
+        curView = viewBtn.dataset.outView;
+        renderFilterButtons();
+        renderArtifactStage();
+        return;
+      }
+      const cardBtn = ev.target.closest("[data-out-idx]");
+      if (cardBtn) {
+        const idx = Number(cardBtn.dataset.outIdx);
+        await openItem((outData.items || [])[idx]);
+        return;
+      }
+      const attBtn = ev.target.closest("[data-open-att]");
+      if (attBtn) {
+        await loadArtifact({ kind: "attachment", handle: attBtn.dataset.openAtt, offset: 0 });
+        return;
+      }
+      const wsBtn = ev.target.closest("[data-ws]");
+      if (wsBtn) {
+        const wsid = wsBtn.dataset.ws;
+        $$("[data-ws]").forEach((b) => b.setAttribute("aria-current", String(b === wsBtn)));
+        const r = await rpc("read", "workspace", { workspace_id: wsid });
+        if (!r?.success) return say(r?.error || "读取工作区失败", true);
+        $("#workspace-files").innerHTML = (r.files || []).map((f) => {
+          const area = String(f.path || "").split("/")[0] || "file";
+          return `<button type="button" class="mil-key mil-key--sm" data-ws-id="${esc(wsid)}" data-ws-path="${esc(f.path)}" style="justify-content:space-between;gap:6px"><span class="mil-tag">${esc(area)}</span><span class="mono" style="flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis">${esc(f.path)}</span><span class="num">${f.bytes}B</span></button>`;
+        }).join("") || `<p class="mil-hint">空工作区</p>`;
+        $("#workspace-content").textContent = r.text || "点击左侧文件查看内容并同步到上方检视器";
+        return;
+      }
+      const fileBtn = ev.target.closest("[data-ws-path]");
+      if (fileBtn) {
+        $$("[data-ws-path]").forEach((b) => b.setAttribute("aria-current", String(b === fileBtn)));
+        const wsid = fileBtn.dataset.wsId;
+        const fpath = fileBtn.dataset.wsPath;
+        await loadArtifact({ kind: "workspace_file", workspace_id: wsid, path: fpath, offset: 0 });
+        if (curArtifact && curArtifact.workspace_id === wsid && curArtifact.path === fpath) {
+          $("#workspace-content").textContent = curArtifact.text || `[${curArtifact.media_kind}] ${curArtifact.name} (${curArtifact.bytes} B · 已在上方检视器打开)`;
+        }
+      }
+    });
+
+    $("#out-chat").addEventListener("change", async () => {
+      filterChat = $("#out-chat").value;
+      selectedItem = null;
+      await loadOutputs(true);
+    });
+    $("#out-search-btn").onclick = () => { selectedItem = null; loadOutputs(true); };
+    $("#out-search").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); selectedItem = null; loadOutputs(true); }
+    });
+    $("#out-more-btn").onclick = () => {
+      if (curArtifact?._req && curArtifact.next_offset != null) {
+        loadArtifact({ ...curArtifact._req, offset: curArtifact.next_offset }, true);
+      }
+    };
+    $("#out-goto-now").onclick = () => {
+      if (window.maibot?.navigate) window.maibot.navigate("now");
+    };
+    $("#out-copy-btn").onclick = async () => {
+      if (!copyBuffer) return say("当前无可复制的文本内容。", true);
+      let copied = false;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(copyBuffer);
+          copied = true;
+        }
+      } catch {}
+      if (copied) {
+        say("已复制产物内容到剪贴板。");
+      } else {
+        $("#out-copy-box").value = copyBuffer;
+        $("#out-copy-drawer").hidden = false;
+        $("#out-copy-drawer").open = true;
+        $("#out-copy-box").focus();
+        $("#out-copy-box").select();
+        say("已展开手动复制框并全选，请按 Ctrl/Cmd + C 复制。");
+      }
+    };
+
+    Promise.resolve(window.maibot?.ready).then(async () => {
+      applyTheme();
+      await loadOutputs(true);
+    });
+  }
+
+  /* ════════════════════════════════════════════════════════════════
      2. 手账页 (memory)
      ════════════════════════════════════════════════════════════════ */
   if (page === "memory") {
     let expectedVersion = 0;
-    let memData = { chats: [], workspaces: [] };
+    let memData = { chats: [] };
 
     function renderLayerBtns() {
       const k = $("#kind").value;
@@ -1635,9 +2199,6 @@ pre, code, .mono, .num {
       renderLayerBtns();
       renderCards($("#search-results"), r.results, "search");
       renderCards($("#experiences"), r.experiences, "exp");
-      $("#workspaces").innerHTML = (r.workspaces || []).map((w) =>
-        `<button type="button" class="mil-key mil-key--sm" data-ws="${esc(w.workspace_id)}">${esc(w.name)} (${esc(w.profile)})</button>`
-      ).join("") || `<span class="mil-hint">暂无持久工作区</span>`;
     }
 
     async function loadIntents() {
@@ -1669,26 +2230,6 @@ pre, code, .mono, .num {
         say("");
         await loadAsset(false);
         await loadOverview();
-        return;
-      }
-      const wsBtn = ev.target.closest("[data-ws]");
-      if (wsBtn) {
-        const wsid = wsBtn.dataset.ws;
-        $$("[data-ws]").forEach((b) => b.setAttribute("aria-current", String(b === wsBtn)));
-        const r = await rpc("read", "workspace", { workspace_id: wsid });
-        if (!r?.success) return say(r?.error || "读取工作区失败", true);
-        $("#workspace-files").innerHTML = (r.files || []).map((f) =>
-          `<button type="button" class="mil-key mil-key--sm" data-ws-id="${esc(wsid)}" data-ws-path="${esc(f.path)}" style="justify-content:space-between"><span class="mono">${esc(f.path)}</span><span class="num">${f.bytes}B</span></button>`
-        ).join("") || `<p class="mil-hint">空工作区</p>`;
-        $("#workspace-content").textContent = r.text || "点击左侧文件查看内容";
-        return;
-      }
-      const fileBtn = ev.target.closest("[data-ws-path]");
-      if (fileBtn) {
-        $$("[data-ws-path]").forEach((b) => b.setAttribute("aria-current", String(b === fileBtn)));
-        const r = await rpc("read", "workspace", { workspace_id: fileBtn.dataset.wsId, path: fileBtn.dataset.wsPath });
-        if (!r?.success) return say(r?.error || "读取文件失败", true);
-        $("#workspace-content").textContent = r.text || "";
         return;
       }
       const cancelBtn = ev.target.closest("[data-cancel-intent]");

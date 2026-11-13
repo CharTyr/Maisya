@@ -1,0 +1,98 @@
+<!-- 顶部遥测概览条 -->
+<section class="out-stats" aria-label="产物统计概览">
+  <div class="out-stat">
+    <span class="out-stat-lbl">全部产物</span>
+    <span class="out-stat-val num" id="out-st-total">0</span>
+  </div>
+  <div class="out-stat">
+    <span class="out-stat-lbl">附件与图片</span>
+    <span class="out-stat-val num" id="out-st-att">0</span>
+  </div>
+  <div class="out-stat">
+    <span class="out-stat-lbl">工作区成品</span>
+    <span class="out-stat-val num" id="out-st-wsout">0</span>
+  </div>
+  <div class="out-stat">
+    <span class="out-stat-lbl">持续工作区</span>
+    <span class="out-stat-val num" id="out-st-ws">0</span>
+  </div>
+</section>
+
+<div class="mil-split">
+  <!-- 左栏：产物筛选与目录 -->
+  <aside class="mil-panel">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk">CATALOG · 产物目录与筛选</span></div>
+      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+    </div>
+
+    <div class="mil-field" style="margin-bottom:10px">
+      <label class="mil-label" for="out-chat">来源会话</label>
+      <select id="out-chat" class="mil-select mono"></select>
+    </div>
+    <div id="out-chat-chips" class="mil-screen" style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px"></div>
+
+    <div class="mil-field" style="margin-bottom:10px">
+      <span class="mil-label">产物分类</span>
+      <div class="mil-row" style="gap:6px">
+        <button type="button" class="mil-key mil-key--sm" data-out-kind="all" aria-pressed="true">全部</button>
+        <button type="button" class="mil-key mil-key--sm" data-out-kind="attachment" aria-pressed="false">附件与图片</button>
+        <button type="button" class="mil-key mil-key--sm" data-out-kind="workspace_out" aria-pressed="false">工作区成品</button>
+        <button type="button" class="mil-key mil-key--sm" data-out-kind="conclusion" aria-pressed="false">结论与出处</button>
+      </div>
+    </div>
+
+    <div class="mil-row" style="gap:6px;margin-bottom:10px">
+      <input id="out-search" class="mil-input" style="flex:1;min-width:0" aria-label="检索产物" placeholder="文件名、简报标题或线程号">
+      <button id="out-search-btn" class="mil-key mil-key--sm mil-key--hot" type="button">筛选</button>
+    </div>
+
+    <div id="out-list" class="out-roster"></div>
+  </aside>
+
+  <!-- 右栏：产物检视器 + 持续工作区 -->
+  <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk">PREVIEW · 产物检视器</span>
+          <span class="mil-tag" id="out-cur-badge">未选择</span>
+          <span class="mil-tag" id="out-cur-size">--</span>
+        </div>
+        <div class="mil-head-r">
+          <div class="mil-row" style="gap:6px">
+            <button type="button" class="mil-key mil-key--sm" data-out-view="preview" aria-pressed="true">阅读预览</button>
+            <button type="button" class="mil-key mil-key--sm" data-out-view="raw" aria-pressed="false">源码原文</button>
+            <button type="button" class="mil-key mil-key--sm" id="out-copy-btn">复制内容</button>
+            <button type="button" class="mil-key mil-key--sm" id="out-goto-now">前往现场</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="out-meta" class="mil-screen out-meta">请选择左侧产物条目，或点击下方持续工作区文件进行检视。</div>
+      <div id="out-stage" class="mil-screen out-stage">
+        <p class="mil-hint">暂无选中产物。</p>
+      </div>
+      <div class="mil-row" style="justify-content:space-between;margin-top:8px">
+        <span class="mil-hint" id="out-chunk-hint">支持图片、HTML/Markdown 排版安全阅读与长文本分页加载</span>
+        <button type="button" class="mil-key mil-key--sm" id="out-more-btn" hidden>加载后续内容</button>
+      </div>
+      <details id="out-copy-drawer" style="margin-top:8px" hidden>
+        <summary class="mil-label" style="cursor:pointer">手动复制区（沙箱受限时可全选复制）</summary>
+        <textarea id="out-copy-box" class="mil-textarea mono" style="margin-top:6px" rows="4" readonly aria-label="产物复制框"></textarea>
+      </details>
+    </section>
+
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk">WORKSPACES · 持续工作区浏览</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      </div>
+      <div id="workspaces" class="mil-row" style="margin-bottom:8px"></div>
+      <div class="ws-split">
+        <div id="workspace-files" class="mil-screen" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto"></div>
+        <pre id="workspace-content" class="mil-pre" style="min-height:120px;max-height:260px"></pre>
+      </div>
+    </section>
+  </div>
+</div>

@@ -269,10 +269,10 @@ class HostContract(unittest.TestCase):
     def test_webui(self):
         extension = load_webui_extension(str(PLUGIN_DIR))
         self.assertEqual(extension.schema_version, 2)
-        self.assertEqual(len(extension.pages), 4)
+        self.assertEqual(len(extension.pages), 5)
         self.assertEqual(
             {page.id for page in extension.pages},
-            {"now", "abilities", "memory", "settings"},
+            {"now", "outputs", "abilities", "memory", "settings"},
         )
         for workspace in extension.pages[1:]:
             self.assertEqual(workspace.queries["read"].api, "maisya_manage_read")

@@ -4,7 +4,7 @@
 
 仓库根目录就是插件根目录，可直接支持 MaiBot 官方后台填写仓库地址安装和点按钮更新。运行期用户资产全部存放在插件目录外的 `<宿主根>/data/maisya/`。
 
-当前架构与实现已对齐产品设计期望：插件生命周期、外部数据目录与 `settings.base.json` 三路配置合并（`chat_proactive_levels` 等用户键映射整份原子替换）、可信消息与 `session_routes`（含 `human_count` / `last_human_at` 活跃统计）、管理员验身与 `@全体成员` 过滤、保险箱与输入/出站脱敏；`scout`/`maker` 档案（开箱内置 `source-checking` / `ongoing-workspace` 技能与 `HEARTBEAT.md` 脾性）、按档案覆盖 `model_name` / `max_tokens` / `temperature` / `max_steps` / `web_provider` / `sandbox_targets`、开放无容器工作区与宿主 `render.html2png` 渲染出图、`person_read` / `recall_read`、管理员可写 MCP / 跨插件 `@API` / 自定义模板与删除能力档案/技能、`web_provider` 多源自由映射（含 `plugin:<id>` / `web:<name>` / `mcp:<name>` / `plugin_api:<name>` 与 `arg_map` / `defaults`）、`call_capability` 显式超时与 `RPCError` 归一化；持久工作区、gVisor/Docker 沙箱与并发控制（`max_concurrent`）；分层记忆、版本回滚、可配置 `heartbeat_interval_minutes` / `heartbeat_profile` 定期探索与恢复后短方法学习；`bridge.py` / `share.py` 原生回接（`file` 附件独立拆条 `send.hybrid` 跟发）；`intents.py` / `pulse.py`（`daily_proactive_limit`、每会话独立主动级别 `chat_proactive_levels`、冷私聊 `acquaintance_users` 边界、`self` 线程 `thread_later(kind="serendipity")` 偶遇路由、规则化 `_longing`、`<maisya_temperament>` 与 `<maisya_thread_result>` 注入、`wait_thread` 5s 顺延、管理员定时/周期工作流 `every_seconds >= 300`）；`incoming.py`（支持 `profile` + 可选 `workspace` 先跑自主线程后通知）；以及四页玻璃盒管理台（现场直接发起工作流、五段构成、`scheduled_intents`、`steer` 转向、宿主发现只读参考与工作流计划调度）。
+当前架构与实现已对齐产品设计期望：插件生命周期、外部数据目录与 `settings.base.json` 三路配置合并（`chat_proactive_levels` 等用户键映射整份原子替换）、可信消息与 `session_routes`（含 `human_count` / `last_human_at` 活跃统计）、管理员验身与 `@全体成员` 过滤、保险箱与输入/出站脱敏；`scout`/`maker` 档案（开箱内置 `source-checking` / `ongoing-workspace` 技能与 `HEARTBEAT.md` 脾性）、按档案覆盖 `model_name` / `max_tokens` / `temperature` / `max_steps` / `web_provider` / `sandbox_targets`、开放无容器工作区与宿主 `render.html2png` 渲染出图、`person_read` / `recall_read`、管理员可写 MCP / 跨插件 `@API` / 自定义模板与删除能力档案/技能、`web_provider` 多源自由映射（含 `plugin:<id>` / `web:<name>` / `mcp:<name>` / `plugin_api:<name>` 与 `arg_map` / `defaults`）、`call_capability` 显式超时与 `RPCError` 归一化；持久工作区、gVisor/Docker 沙箱与并发控制（`max_concurrent`）；分层记忆、版本回滚、可配置 `heartbeat_interval_minutes` / `heartbeat_profile` 定期探索与恢复后短方法学习；`bridge.py` / `share.py` 原生回接（`file` 附件独立拆条 `send.hybrid` 跟发）；`intents.py` / `pulse.py`（`daily_proactive_limit`、每会话独立主动级别 `chat_proactive_levels`、冷私聊 `acquaintance_users` 边界、`self` 线程 `thread_later(kind="serendipity")` 偶遇路由、规则化 `_longing`、`<maisya_temperament>` 与 `<maisya_thread_result>` 注入、`wait_thread` 5s 顺延、管理员定时/周期工作流 `every_seconds >= 300`）；`incoming.py`（支持 `profile` + 可选 `workspace` 先跑自主线程后通知）；以及五页玻璃盒管理台（现场直接唤醒与引导、产物集中检视与持续工作区浏览、能力与宿主发现只读参考、手账与探索节奏、设置与定时调度）。
 
 ```text
 Maisya/
@@ -23,7 +23,7 @@ Maisya/
 │   ├── mcp_worker.py               # MCP 独立子进程的资源限制、cgroup 与降权
 │   ├── memory.py                   # 分层文件、预设技能与 HEARTBEAT.md 释放、heartbeat_parts() 解析、版本/回滚与 FTS5
 │   ├── learning.py                 # 同一工具失败后恢复时提炼短方法，状态轨迹输入与有界后台调用
-│   ├── management.py               # 四页管理 API、持久设置、版本编辑、分块档案包、服务（含 apis/web）、执行健康（含联网状态）与事件通道校验
+│   ├── management.py               # 五页管理 API（含产物 outputs / artifact 检视）、持久设置、版本编辑、分块档案包、服务（含 apis/web）、执行健康（含联网状态）与事件通道校验
 │   ├── incoming.py                 # 宿主认证入口的 HMAC 校验、并发锁去重、可选 profile+workspace 线程启动与 Intent 转换
 │   ├── share.py                    # 原生表达（含非管理员全员艾特过滤）与链接/图片发送、file 附件独立拆条 send.hybrid 交付
 │   ├── scout.py                    # 宿主能力 RPC 包装（显式 timeout_ms 与非标准异常归一化）、WebRouter 委托、plugin_api 与 thread_later 定义
@@ -43,13 +43,14 @@ Maisya/
 │   ├── Dockerfile                  # maisya-sandbox:py313 可复现镜像定义（Python 3.13 + Node 22 + 非 root 用户）
 │   └── build_image.sh              # 默认 dry-run、--execute 构建沙箱镜像脚本
 ├── webui/
-│   ├── now.html                    # 现场：线程、五段上下文条、待唤醒意图、步骤流、勾选立即转向递纸条与停止
-│   ├── abilities.html              # 能力：档案、技能、笔记、MCP/API、执行环境与档案包
-│   ├── memory.html                 # 手账：近期手账、自身经历、会话备忘、工作区与检索
-│   ├── settings.html               # 设置：会话、按会话主动级别、熟识账号、久违阈值、沙箱、凭据、MCP/API 与事件通道
-│   ├── management.html.in          # 三个管理页共用的内联脚本（含 data-type="map" 解析）与样式源码
-│   ├── fragments/                  # 三页各自的正文源码
-│   └── build.py                    # 无依赖生成自包含 HTML，--check 检查产物
+│   ├── now.html                      # 现场：线程、五段上下文条、待唤醒意图、步骤流、勾选立即转向引导与停止
+│   ├── outputs.html                  # 产物：已声明附件与图片预览、工作区成品安全阅读、结论出处与持续工作区目录树
+│   ├── abilities.html                # 能力：档案、技能、笔记、MCP/API、执行环境与档案包
+│   ├── memory.html                   # 手账：会话备忘、近期手账、探索节奏与意图回执
+│   ├── settings.html                 # 设置：会话、按会话主动级别、熟识账号、久违阈值、沙箱、凭据、MCP/API 与事件通道
+│   ├── management.html.in            # 四个管理页共用的内联脚本（含 data-type="map" 解析）与样式源码
+│   ├── fragments/                    # 四个管理页各自的正文源码
+│   └── build.py                      # 无依赖生成自包含 HTML，--check 检查产物
 ├── docs/
 │   ├── 00-开发入门.md
 │   ├── 01-架构蓝图.md
