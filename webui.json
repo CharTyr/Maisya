@@ -62,7 +62,7 @@
           "parameters": {
             "thread_id": {
               "type": "string",
-              "required": true,
+              "required": false,
               "max_length": 64
             },
             "message": {
@@ -72,6 +72,18 @@
             },
             "steer": {
               "type": "boolean"
+            },
+            "profile": {
+              "type": "string",
+              "max_length": 64
+            },
+            "chat_id": {
+              "type": "string",
+              "max_length": 128
+            },
+            "workspace": {
+              "type": "string",
+              "max_length": 64
             }
           }
         },

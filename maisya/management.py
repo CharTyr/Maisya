@@ -11,7 +11,12 @@ from dataclasses import asdict
 
 from .config import Settings
 from .memory import MemoryLayers
-from .services import validate_api_entry, validate_web_bindings
+from .scout import call_capability
+from .services import (
+    validate_api_entry,
+    validate_endpoint_targets,
+    validate_web_bindings,
+)
 from .vault import atomic_private_write
 from .workspaces import completed_thread, regular_open
 
@@ -75,6 +80,11 @@ class Management:
                                 "environment",
                                 "access",
                                 "model",
+                                "task",
+                                "model_name",
+                                "tools",
+                                "web_provider",
+                                "max_steps",
                                 "bound",
                                 "skills",
                             }
@@ -187,6 +197,47 @@ class Management:
             "total": len(transfer["data"]),
         }
 
+    async def _discovery(self):
+        ctx = getattr(self.plugin, "ctx", None)
+
+        async def probe(capability, default):
+            if ctx is None:
+                return default
+            try:
+                return await call_capability(ctx, capability)
+            except Exception:
+                return default
+
+        raw_streams = await probe("chat.get_all_streams", [])
+        streams = (
+            raw_streams.get("streams") or raw_streams.get("data") or []
+            if isinstance(raw_streams, dict)
+            else raw_streams
+        )
+        raw_models = await probe("llm.get_available_models", {})
+        if isinstance(raw_models, dict):
+            models = (
+                raw_models["models"]
+                if isinstance(raw_models.get("models"), dict)
+                else {k: v for k, v in raw_models.items() if k != "success"}
+            )
+        else:
+            models = {}
+        raw_plugins = await probe("component.list_loaded_plugins", [])
+        plugins = (
+            raw_plugins.get("plugins") or []
+            if isinstance(raw_plugins, dict)
+            else raw_plugins
+        )
+        raw_apis = await probe("api.list", [])
+        apis = raw_apis.get("apis") or [] if isinstance(raw_apis, dict) else raw_apis
+        return {
+            "streams": streams if isinstance(streams, list) else [],
+            "models": models if isinstance(models, dict) else {},
+            "plugins": plugins if isinstance(plugins, list) else [],
+            "apis": apis if isinstance(apis, list) else [],
+        }
+
     async def read(self, section, payload):
         async with self.request():
             return await self._read(section, payload)
@@ -223,6 +274,8 @@ class Management:
             result = await completed_thread(self._workspace, options)
         elif section == "intents":
             result = await completed_thread(self._intents)
+        elif section == "discovery":
+            result = await self._discovery()
         elif section == "health":
             sandbox = self.plugin.runtime.sandbox
             result = {
@@ -296,6 +349,7 @@ class Management:
                 function,
                 kind,
                 options["content"] if action == "asset" else options["version"],
+                allow_custom=True,
                 **allowed,
             )
         elif action == "clone":
@@ -303,6 +357,14 @@ class Management:
                 plugin.profiles.clone, options.get("base", "scout"), options["target"]
             )
             result = {"id": profile.id}
+        elif action == "delete_profile":
+            target = str(options.get("target") or "").strip()
+            await completed_thread(plugin.profiles.delete, target)
+            result = {"id": target}
+        elif action == "delete_skill":
+            target = str(options.get("target") or "").strip()
+            await completed_thread(plugin.memory.delete_skill, target)
+            result = {"target": target}
         elif action == "vault":
             if options.get("delete") is True:
                 await completed_thread(plugin.vault.delete, options["handle"])
@@ -350,6 +412,44 @@ class Management:
                 plugin.intents.cancel, row["intent_id"], row["target"]
             )
             result = {"intent_id": row["intent_id"]}
+        elif action == "schedule_intent":
+            chat_id = str(options.get("chat_id") or "").strip()
+            if not chat_id:
+                raise ValueError("请填写目标会话 chat_id")
+            profile_name = str(options.get("profile") or "").strip()
+            if profile_name:
+                await completed_thread(plugin.profiles.get, profile_name)
+            prompt = str(options.get("prompt") or "").strip()
+            reason = str(options.get("reason") or prompt).strip()
+            if not reason:
+                raise ValueError("请填写计划原因或任务提示词")
+            in_seconds = int(options.get("in_seconds", 60))
+            if in_seconds < 1:
+                raise ValueError("延迟秒数必须大于 0")
+            every_seconds = int(options.get("every_seconds", 0) or 0)
+            if every_seconds and every_seconds < 300:
+                raise ValueError("周期执行间隔至少 300 秒")
+            kind = str(options.get("kind") or "return").strip() or "return"
+            payload = {
+                "platform": str(options.get("platform") or "qq").strip() or "qq",
+                "profile": profile_name or str(plugin.settings.heartbeat_profile or "scout"),
+                "workspace": str(options.get("workspace") or "").strip(),
+                "prompt": prompt or reason,
+                "every_seconds": every_seconds,
+                "scheduled_admin": True,
+            }
+            due_at = plugin.intents.clock() + in_seconds
+            row = await completed_thread(
+                plugin.intents.schedule,
+                kind=kind,
+                source="workflow",
+                target=f"chat:{chat_id}",
+                due_at=due_at,
+                reason=reason,
+                payload=payload,
+                bypass_limits=True,
+            )
+            result = {"intent": row}
         elif action == "import":
             result = await completed_thread(self._upload, options)
         else:
@@ -395,6 +495,7 @@ class Management:
                 "readonly",
                 "access",
                 "memory_mib",
+                "description",
             }:
                 raise ValueError("MCP 服务含未知配置项")
             command = server.get("command", [])
@@ -415,8 +516,23 @@ class Management:
                 "schema",
                 "secrets",
                 "targets",
+                "description",
+                "access",
             }:
                 raise ValueError("固定模板含未知配置项")
+            raw_targets = template.get("targets", [])
+            if not isinstance(raw_targets, list):
+                raise ValueError("固定模板 targets 必须为列表")
+            normalized_targets = []
+            for entry in raw_targets:
+                if isinstance(entry, str):
+                    normalized_targets.append(entry)
+                elif isinstance(entry, dict) and "address" in entry and "port" in entry:
+                    normalized_targets.append(f"{entry['address']}:{entry['port']}")
+                else:
+                    raise ValueError("固定模板 targets 仅支持 host:port 字符串或 {address, port}")
+            if normalized_targets:
+                validate_endpoint_targets(normalized_targets)
             for handle in template.get("secrets", []):
                 self.plugin.vault._validate_handle(handle)
         validate_web_bindings(config)

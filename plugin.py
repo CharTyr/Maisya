@@ -181,7 +181,11 @@ class MaisyaPlugin(MaiBotPlugin):
         self.bridge = await asyncio.to_thread(
             Bridge, self.threads, redact=self.vault.redact
         )
-        self.intents = await asyncio.to_thread(Intents, self.threads)
+        self.intents = await asyncio.to_thread(
+            Intents,
+            self.threads,
+            daily_proactive_limit=getattr(self.settings, "daily_proactive_limit", 1),
+        )
         self.runtime = AgentRuntime(
             self.ctx,
             self.data_root,
@@ -193,6 +197,7 @@ class MaisyaPlugin(MaiBotPlugin):
         )
         self.runtime.memory = self.memory
         self.runtime.permitted = self._activity_permitted
+        self.runtime.recall = self._agent_recall
         await self.runtime.sandbox.probe()
         self.engine = ThreadEngine(
             self.threads,
@@ -230,6 +235,11 @@ class MaisyaPlugin(MaiBotPlugin):
             memory=self.memory,
             profiles=self.profiles,
             plugin_enabled=lambda: self.settings.plugin.enabled,
+            heartbeat_interval=getattr(
+                self.settings, "heartbeat_interval_minutes", 60
+            )
+            * 60,
+            heartbeat_profile=getattr(self.settings, "heartbeat_profile", "scout"),
         )
         self.engine.serendipity = self.pulse.propose_serendipity
         self.pulse.start()
@@ -280,6 +290,8 @@ class MaisyaPlugin(MaiBotPlugin):
 
     def _activity_authorized(self, row):
         grant = row.get("grant") or {}
+        if grant.get("console_admin") is True or grant.get("scheduled_admin") is True:
+            return True
         return bool(
             grant.get("source_msg_id")
             and self.authorize(grant["source_msg_id"], row["chat_id"], row["platform"])
@@ -305,11 +317,14 @@ class MaisyaPlugin(MaiBotPlugin):
         )
 
     def _activity_permitted(self, row):
+        grant = row.get("grant") or {}
+        if grant.get("console_admin") is True or grant.get("scheduled_admin") is True:
+            return True
         original = Profile(**row["profile_snapshot"])
         live = self.profiles.get(row["profile"])
         if row["owner"] == "self":
             return original.autonomous and live.autonomous
-        source = (row.get("grant") or {}).get("source_msg_id", "")
+        source = grant.get("source_msg_id", "")
         identity = (
             self.messages.lookup(source, row["chat_id"], row["platform"], max_age=300)
             if source
@@ -367,6 +382,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 self.engine.timeout = settings.agent_timeout
                 self.engine.max_active = settings.agent_max_active
                 self.engine.context_chars = settings.thread_context_chars
+                if self.intents:
+                    self.intents.daily_proactive_limit = settings.daily_proactive_limit
                 if self.pulse:
                     self.pulse.sleep_window = settings.sleep_window
                     self.pulse.proactive_level = settings.proactive_level
@@ -375,6 +392,10 @@ class MaisyaPlugin(MaiBotPlugin):
                     )
                     self.pulse.acquaintance_users = list(settings.acquaintance_users)
                     self.pulse.longing_quiet_hours = settings.longing_quiet_hours
+                    self.pulse.heartbeat_interval = (
+                        settings.heartbeat_interval_minutes * 60
+                    )
+                    self.pulse.heartbeat_profile = settings.heartbeat_profile
                 for thread_id in list(self.engine.tasks):
                     row = await asyncio.to_thread(
                         self.threads.get, thread_id, self.engine.chats[thread_id]
@@ -894,15 +915,64 @@ class MaisyaPlugin(MaiBotPlugin):
         except (ValueError, PermissionError, TypeError, sqlite3.Error) as error:
             return {"success": False, "error": str(error)}
 
+    async def _agent_recall(self, arguments, context):
+        chat_id = context["chat_id"]
+        platform = str(context.get("platform") or "").lower()
+        kind = arguments.get("kind", "all")
+        scope = "self" if context.get("owner") == "self" else arguments.get("scope", "available")
+        query = str(arguments.get("query", ""))
+        limit = int(arguments.get("limit", 5))
+        rows = []
+        if kind in {"threads", "experiences", "all"} and not (
+            kind == "experiences" and scope == "chat"
+        ):
+            rows = await asyncio.to_thread(
+                self.threads.search,
+                query,
+                chat_id,
+                scope="self" if kind == "experiences" else scope,
+                limit=limit,
+            )
+        readable = []
+        source_msg = (context.get("grant") or {}).get("source_msg_id", "")
+        identity = (
+            await asyncio.to_thread(
+                self.messages.lookup, source_msg, chat_id, platform, max_age=300
+            )
+            if source_msg
+            else None
+        )
+        for item in rows:
+            row = await asyncio.to_thread(
+                self.threads.get, item["thread_id"], chat_id, allow_self=True
+            )
+            if await asyncio.to_thread(
+                self._read_allowed, row, chat_id, platform, identity, False
+            ):
+                readable.append(item)
+        memories = (
+            await asyncio.to_thread(
+                self.memory.search,
+                query,
+                chat_id,
+                kind=kind if kind in {"memory", "journal"} else "all",
+                scope="self" if context.get("owner") == "self" else scope,
+                limit=limit,
+            )
+            if kind in {"memory", "journal", "all"}
+            else []
+        )
+        return self.vault.redact({"threads": readable, "memories": memories})
+
     @Tool(
         "maisya_shape",
-        description="管理员明确指正时，读取、创建、修改或回滚能力档案、技能与会话记忆。先 read 获取版本，write/rollback 提供 expected_version；具体群信息仅写当前会话 memory。",
+        description="管理员明确指正时，读取、创建、修改、删除或回滚能力档案、技能与会话记忆。先 read 获取版本，write/rollback 提供 expected_version；具体群信息仅写当前会话 memory。",
         parameters={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "history", "rollback", "create"],
+                    "enum": ["read", "write", "history", "rollback", "create", "delete"],
                 },
                 "kind": {
                     "type": "string",
@@ -917,7 +987,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 },
                 "target": {"type": "string", "maxLength": 64},
                 "document": {"type": "string", "enum": ["PROFILE.md", "profile.toml"]},
-                "content": {"type": "string", "maxLength": 16000},
+                "content": {"type": "string", "maxLength": 65536},
                 "source_msg_id": {"type": "string"},
                 "expected_version": {"type": "integer", "minimum": 0},
                 "version": {"type": "integer", "minimum": 0},
@@ -962,6 +1032,13 @@ class MaisyaPlugin(MaiBotPlugin):
             elif action == "create" and kind == "profile":
                 await asyncio.to_thread(self.profiles.clone, base, target)
                 result = await asyncio.to_thread(self.memory.read, kind, **options)
+            elif action == "delete":
+                if kind == "profile":
+                    result = await asyncio.to_thread(self.profiles.delete, target)
+                elif kind == "skill":
+                    result = await asyncio.to_thread(self.memory.delete_skill, target)
+                else:
+                    raise ValueError("仅支持删除自定义 profile 或 skill")
             elif action in {"write", "rollback"}:
                 if type(expected_version) is not int or expected_version < 0:
                     raise ValueError("修改前请读取并提供 expected_version")
@@ -972,6 +1049,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         content,
                         expected_version=expected_version,
                         author="admin:" + source_msg_id,
+                        allow_custom=True,
                         **options,
                     )
                 else:
@@ -980,6 +1058,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         kind,
                         version,
                         expected_version=expected_version,
+                        allow_custom=True,
                         **options,
                     )
             else:
@@ -1002,7 +1081,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_later",
-        description="为之后安排一次想起：到时 MaiBot 会重新考虑是否开口。schedule 安排，list 查看，cancel 取消。",
+        description="为之后安排一次想起、定时任务或定期运行某能力档案工作流。schedule 安排，list 查看，cancel 取消。",
         parameters={
             "type": "object",
             "properties": {
@@ -1012,19 +1091,19 @@ class MaisyaPlugin(MaiBotPlugin):
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["later", "proactive"],
+                    "enum": ["later", "proactive", "silent"],
                     "default": "later",
-                    "description": "later 是到点提一句的提醒；proactive 是 MaiBot 自己的惦记，受每日额度与社交分寸约束。",
+                    "description": "later 到点唤醒并提醒；proactive 为主动冒泡；silent 后台静默运行工作流。",
                 },
                 "source": {
                     "type": "string",
-                    "enum": ["later", "afterglow", "serendipity", "longing"],
+                    "enum": ["later", "afterglow", "serendipity", "longing", "workflow"],
                     "default": "later",
-                    "description": "惦记的来由：余韵、偶遇、想念或定时。",
+                    "description": "惦记或工作流来由。",
                 },
                 "source_msg_id": {
                     "type": "string",
-                    "description": "用户要求提醒时填写真实消息编号；MaiBot 自主回访可留空。",
+                    "description": "用户要求提醒或安排受限工作流时填写真实消息编号；MaiBot 自主回访可留空。",
                 },
                 "in_seconds": {
                     "type": "integer",
@@ -1032,9 +1111,18 @@ class MaisyaPlugin(MaiBotPlugin):
                     "maximum": 2592000,
                     "description": "距离现在多少秒后想起。",
                 },
+                "every_seconds": {
+                    "type": "integer",
+                    "minimum": 300,
+                    "maximum": 2592000,
+                    "description": "可选循环周期（秒，至少 300 秒）。",
+                },
                 "reason": {"type": "string"},
                 "thread_id": {"type": "string"},
                 "intent_id": {"type": "string"},
+                "profile": {"type": "string", "maxLength": 64},
+                "workspace": {"type": "string", "maxLength": 64},
+                "prompt": {"type": "string", "maxLength": 16000},
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -1046,11 +1134,15 @@ class MaisyaPlugin(MaiBotPlugin):
         action="",
         source_msg_id="",
         in_seconds=0,
+        every_seconds=0,
         kind="later",
         source="later",
         reason="",
         thread_id="",
         intent_id="",
+        profile="",
+        workspace="",
+        prompt="",
         **kwargs,
     ):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
@@ -1078,19 +1170,47 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
                 if identity is None or identity.is_plugin_relayed:
                     raise PermissionError("本次调用的来源消息无法核验")
+            scheduled_admin = False
+            if profile:
+                ability = await asyncio.to_thread(self.profiles.get, profile)
+                self.runtime.available(ability)
+                if not ability.autonomous:
+                    if not await asyncio.to_thread(
+                        self.authorize, source_msg_id, chat_id, platform
+                    ):
+                        raise PermissionError("定期运行受限能力档案需要真实管理员消息授权")
+                    scheduled_admin = True
             if thread_id:
                 row = await asyncio.to_thread(
                     self.threads.get, thread_id, chat_id, allow_self=True
                 )
                 if row["state"] == "closed":
                     raise ValueError("线程已停止，不能安排续接")
+            if every_seconds and (type(every_seconds) is not int or every_seconds < 300):
+                raise ValueError("循环周期 every_seconds 至少为 300 秒")
             due = self.intents.clock() + in_seconds
-            intent_kind = "proactive" if kind == "proactive" else "return"
-            intent_source = (
-                ("afterglow" if source == "later" else source)
-                if kind == "proactive"
-                else "later"
-            )
+            intent_kind = kind if kind in {"proactive", "silent"} else "return"
+            if profile or every_seconds or source == "workflow":
+                intent_source = (
+                    source if source in {"later", "afterglow", "serendipity", "longing", "workflow"} else "workflow"
+                )
+            else:
+                intent_source = (
+                    ("afterglow" if source == "later" else source)
+                    if intent_kind == "proactive"
+                    else "later"
+                )
+            payload = {"platform": platform}
+            if profile:
+                payload["profile"] = profile
+            if workspace:
+                payload["workspace"] = workspace
+            if prompt:
+                payload["prompt"] = prompt
+            if every_seconds:
+                payload["every_seconds"] = every_seconds
+            if scheduled_admin:
+                payload["scheduled_admin"] = True
             row = await asyncio.to_thread(
                 self.intents.schedule,
                 kind=intent_kind,
@@ -1099,8 +1219,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 due_at=due,
                 reason=reason,
                 thread_id=thread_id,
-                payload={"platform": platform},
-                bypass_limits=intent_kind != "proactive",
+                payload=payload,
+                bypass_limits=intent_kind != "proactive" or bool(profile or every_seconds),
             )
             result = self.vault.redact(row)
             return {
@@ -1385,6 +1505,16 @@ class MaisyaPlugin(MaiBotPlugin):
                 redact=self.vault.redact,
                 memory=self.memory,
             )
+            result["profiles"] = (
+                sorted(
+                    item.name
+                    for item in self.profiles.path.iterdir()
+                    if item.is_dir() and not item.name.startswith(".")
+                )
+                if self.profiles and self.profiles.path.exists()
+                else []
+            )
+            result["enabled_chats"] = list(self.settings.enabled_chats)
             return self.vault.redact(result)
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as error:
             return {
@@ -1511,11 +1641,49 @@ class MaisyaPlugin(MaiBotPlugin):
             raise ValueError("线程不存在")
         return await asyncio.to_thread(self.threads.get, thread_id, target["chat_id"])
 
-    @API("maisya_note", description="给原线程补充方向", version="1", public=False)
-    async def console_send(self, thread_id, message, steer=False):
+    @API("maisya_note", description="给原线程补充方向或从控制台直接发起工作流", version="1", public=False)
+    async def console_send(
+        self,
+        thread_id="",
+        message="",
+        steer=False,
+        profile="",
+        chat_id="",
+        workspace="",
+    ):
         try:
             if type(steer) is not bool:
                 raise ValueError("转向标志必须为布尔值")
+            if not thread_id:
+                if not self.engine or not self.profiles:
+                    raise RuntimeError("Maisya 尚未就绪")
+                if not profile or not chat_id:
+                    raise ValueError("直接发起线程需要选择能力档案与目标会话")
+                target_chat = str(chat_id)
+                target_platform = (
+                    "self"
+                    if target_chat == "self"
+                    else (await asyncio.to_thread(self.messages.platform_for, target_chat) or "bot_console")
+                )
+                if not (
+                    self.settings.plugin.enabled
+                    if target_chat == "self"
+                    else self.enabled_for(target_chat, target_platform)
+                ):
+                    raise PermissionError("目标会话尚未启用 Maisya")
+                ability = await asyncio.to_thread(self.profiles.get, str(profile))
+                started = await self.engine.start(
+                    ability,
+                    message,
+                    chat_id=target_chat,
+                    platform=target_platform,
+                    user_id="",
+                    owner="self" if target_chat == "self" else "chat",
+                    wait_seconds=0,
+                    workspace=str(workspace or ""),
+                    grant={"console_admin": True},
+                )
+                return {"success": True, **self.vault.redact(started)}
             row = await self._console_target(thread_id)
             if not (
                 self.settings.plugin.enabled
@@ -1523,15 +1691,13 @@ class MaisyaPlugin(MaiBotPlugin):
                 else self.enabled_for(row["chat_id"], row["platform"])
             ):
                 raise PermissionError("原会话尚未启用 Maisya")
-            if await asyncio.to_thread(self._restricted_thread, row):
-                raise PermissionError("受限线程请在原会话提供本次真实管理员授权")
             result = await self.engine.send(
                 thread_id,
                 message,
                 chat_id=row["chat_id"],
                 wait_seconds=0,
                 steer=steer,
-                input_context={"grant": {}},
+                input_context={"grant": {"console_admin": True}},
             )
             return {"success": True, **self.vault.redact(result)}
         except (

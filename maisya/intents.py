@@ -6,7 +6,15 @@ import time
 import uuid
 
 KINDS = {"return", "proactive", "silent"}
-SOURCES = {"thread", "afterglow", "serendipity", "longing", "later", "webhook"}
+SOURCES = {
+    "thread",
+    "afterglow",
+    "serendipity",
+    "longing",
+    "later",
+    "webhook",
+    "workflow",
+}
 CHAT_TARGET = re.compile(r"^chat:[^\s:]{1,256}$")
 
 
@@ -15,8 +23,9 @@ def encode(value):
 
 
 class Intents:
-    def __init__(self, store, *, clock=time.time):
+    def __init__(self, store, *, clock=time.time, daily_proactive_limit=1):
         self.store, self.clock = store, clock
+        self.daily_proactive_limit = int(daily_proactive_limit)
         with store.connect() as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS intents ("
@@ -115,6 +124,7 @@ class Intents:
                         raise ValueError("同一事件编号已绑定另一份内容")
                     return self.get(old["intent_id"])
             if kind == "proactive" and not bypass_limits:
+                limit = int(self.daily_proactive_limit)
                 start, end = self._day_bounds(now)
                 used = db.execute(
                     "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
@@ -122,8 +132,8 @@ class Intents:
                     "AND created>=? AND created<? AND status!='cancelled'",
                     (start, end),
                 ).fetchone()["count"]
-                if used >= 1:
-                    raise ValueError("普通惦记每天最多一条，今天已用完")
+                if limit <= 0 or used >= limit:
+                    raise ValueError("普通惦记已达到每日上限")
             db.execute(
                 "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL)",
                 (
@@ -184,6 +194,19 @@ class Intents:
                     claimed,
                 )
             return [self._intent(row) for row in rows if row["intent_id"] in claimed]
+
+    def update_thread(self, intent_id, thread_id, payload=None):
+        with self.store.connect() as db, db:
+            if payload is None:
+                db.execute(
+                    "UPDATE intents SET thread_id=? WHERE intent_id=?",
+                    (thread_id, intent_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE intents SET thread_id=?, payload=? WHERE intent_id=?",
+                    (thread_id, encode(payload), intent_id),
+                )
 
     def finish(self, intent_id, status, wake_status="", *, delay=900):
         if status not in {"done", "deferred", "failed"}:
@@ -271,6 +294,9 @@ class Intents:
         return self.get(old["intent_id"])
 
     def proactive_quota_available(self, *, now=None) -> bool:
+        limit = int(self.daily_proactive_limit)
+        if limit <= 0:
+            return False
         now = self.clock() if now is None else now
         start, end = self._day_bounds(now)
         with self.store.connect() as db:
@@ -280,7 +306,7 @@ class Intents:
                 "AND created>=? AND created<? AND status!='cancelled'",
                 (start, end),
             ).fetchone()["count"]
-        return used < 1
+        return used < limit
 
     def longing_ready(self, chat_id, *, now=None, cooldown=7 * 86400) -> bool:
         now = self.clock() if now is None else now

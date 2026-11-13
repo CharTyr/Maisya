@@ -71,7 +71,7 @@ class AgentRuntime(Scout):
             ):
                 raise PermissionError("能力档案引用的服务、模板或只读 API 尚未登记")
 
-    async def step(self, profile, history):
+    async def step(self, profile, history, *, max_steps=None):
         self.available(profile)
         if self.memory:
             live = await completed_thread(self.memory.profiles.get, profile.id)
@@ -79,9 +79,19 @@ class AgentRuntime(Scout):
                 profile,
                 instructions=live.instructions,
                 model=live.model,
+                model_name=live.model_name,
                 fallback_models=live.fallback_models,
                 task=live.task,
+                max_tokens=live.max_tokens,
+                temperature=live.temperature,
+                max_steps=live.max_steps,
+                web_provider=live.web_provider,
+                sandbox_targets=live.sandbox_targets,
                 skills=live.skills,
+                mcp=live.mcp,
+                apis=live.apis,
+                secrets=live.secrets,
+                template=live.template,
             )
             methods = await completed_thread(self.memory.methods, profile)
             profile = replace(
@@ -106,7 +116,7 @@ class AgentRuntime(Scout):
             profile = replace(
                 profile,
                 instructions=profile.instructions
-                + "\n已授权的跨插件只读 API："
+                + "\n已授权的跨插件 API："
                 + json.dumps(api_descriptions, ensure_ascii=False),
             )
         return await super().step(profile, history)
@@ -159,7 +169,7 @@ class AgentRuntime(Scout):
             raise ValueError("引用输入无效")
         if not isinstance(previous_threads, list) or len(previous_threads) > 5:
             raise ValueError("引用线程无效")
-        if row["profile_snapshot"]["environment"] != "sandbox":
+        if not Profile(**row["profile_snapshot"]).uses_workspace:
             return []
         if row["owner"] == "self":
             raise PermissionError("自身活动不自动导入会话引用输入")
@@ -195,6 +205,8 @@ class AgentRuntime(Scout):
                         raise ValueError("引用附件过大")
                     content = base64.b64decode(binary, validate=True)
                 elif data.get("url"):
+                    if not self.sandbox.ready:
+                        raise RuntimeError("下载外部链接引用文件需要启用沙箱")
                     url = safe_url(data["url"])
                     cache_name = (
                         "reference-"
@@ -303,11 +315,9 @@ class AgentRuntime(Scout):
             profile.access == "admins" or live_restricted
         ) and not await completed_thread(self.authorized, context):
             raise PermissionError("本次活动的管理员授权已失效")
-        if name in {"workspace_file", "sandbox_exec", "result_attach"}:
-            if profile.environment != "sandbox":
-                raise PermissionError("只读档案不能写工作区或执行脚本")
-            if profile.secrets or profile.template:
-                raise PermissionError("私有凭据档案只接受固定执行模板")
+        if name in {"workspace_file", "html_render", "result_attach"}:
+            if not profile.uses_workspace:
+                raise PermissionError("当前能力档案未启用工作区工具")
             work = await self._work(context)
             if name == "workspace_file":
                 action = arguments["action"]
@@ -322,17 +332,58 @@ class AgentRuntime(Scout):
                 )
                 await completed_thread(work.commit)
                 return result
-            if name == "sandbox_exec":
-                return self.redact(
-                    await self.sandbox.execute(
-                        context,
-                        work,
-                        arguments["command"],
-                        call_id=context["_tool_call_id"],
-                        timeout=arguments.get("timeout"),
-                        mode=profile.network,
-                    )
+            if name == "html_render":
+                html_text = arguments.get("html") or ""
+                if not html_text and arguments.get("html_path"):
+                    def _read_html():
+                        with regular_open(work.path, arguments["html_path"]) as src:
+                            raw = src.read(524289)
+                        if len(raw) > 524288:
+                            raise ValueError("HTML 源文件超过 512KB 上限")
+                        return raw.decode("utf-8", errors="replace")
+
+                    html_text = await completed_thread(_read_html)
+                if not isinstance(html_text, str) or not html_text.strip():
+                    raise ValueError("html_render 需要提供非空 html 或 html_path")
+                output_path = str(
+                    arguments.get("output_path") or f"out/render-{os.urandom(6).hex()}.png"
                 )
+                if not output_path.startswith("out/"):
+                    raise ValueError("渲染图片输出路径必须位于 out/ 目录下")
+                viewport = {
+                    "width": int(arguments.get("width", 960)),
+                    "height": int(arguments.get("height", 640)),
+                }
+                rendered = checked(
+                    await call_capability(
+                        self.host,
+                        "render.html2png",
+                        timeout_ms=30000,
+                        html=html_text,
+                        selector=str(arguments.get("selector", "body")),
+                        viewport=viewport,
+                        device_scale_factor=float(
+                            arguments.get("device_scale_factor", 2.0)
+                        ),
+                        full_page=bool(arguments.get("full_page", True)),
+                        allow_network=False,
+                    ),
+                    "result",
+                )
+                image_b64 = rendered.get("image_base64")
+                if not isinstance(image_b64, str) or len(image_b64) > 12 * 1024**2:
+                    raise RuntimeError("宿主渲染未返回有效图片数据")
+                png_bytes = base64.b64decode(image_b64, validate=True)
+                write_res = await completed_thread(
+                    work.write_bytes, output_path, png_bytes
+                )
+                await completed_thread(work.commit)
+                return {
+                    **write_res,
+                    "mime_type": rendered.get("mime_type", "image/png"),
+                    "width": rendered.get("width"),
+                    "height": rendered.get("height"),
+                }
             attempts = self.attachment_attempts.get(context["thread_id"], 0)
             if attempts >= 2:
                 return {
@@ -347,6 +398,53 @@ class AgentRuntime(Scout):
                 raise
             self.attachments[context["thread_id"]] = attachments
             return {"attachments": attachments}
+        if name == "sandbox_exec":
+            if profile.environment != "sandbox":
+                raise PermissionError("当前能力档案未启用容器沙箱执行")
+            if (
+                profile.secrets
+                or profile.network == "restricted"
+                or profile.sandbox_targets
+            ) and (
+                profile.access != "admins"
+                or not await completed_thread(self.authorized, context)
+            ):
+                raise PermissionError("带私有凭据或受限网络的沙箱执行仅限当前管理员授权")
+            work = await self._work(context)
+            endpoints = ()
+            if profile.network == "restricted" and profile.sandbox_targets:
+                from .services import validate_endpoint_targets
+
+                endpoints = await completed_thread(
+                    validate_endpoint_targets, profile.sandbox_targets
+                )
+            if profile.secrets:
+                async with self.services.mount_secrets(
+                    self, profile.secrets, work=work
+                ) as secrets:
+                    return self.redact(
+                        await self.sandbox.execute(
+                            context,
+                            work,
+                            arguments["command"],
+                            call_id=context["_tool_call_id"],
+                            timeout=arguments.get("timeout"),
+                            mode=profile.network,
+                            **({"targets": endpoints} if endpoints else {}),
+                            secrets=secrets,
+                        )
+                    )
+            return self.redact(
+                await self.sandbox.execute(
+                    context,
+                    work,
+                    arguments["command"],
+                    call_id=context["_tool_call_id"],
+                    timeout=arguments.get("timeout"),
+                    mode=profile.network,
+                    **({"targets": endpoints} if endpoints else {}),
+                )
+            )
         if name == "mcp_call":
             if not self.services:
                 raise RuntimeError("MCP 服务尚未登记")

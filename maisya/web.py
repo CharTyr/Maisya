@@ -1056,59 +1056,231 @@ class WebRouter:
             kind, arguments, context, self.runtime, mode=mode
         )
 
-    async def search(
-        self, query: str, max_results: int = 5, context: dict[str, Any] | None = None
+    async def _call_plugin_api_name(
+        self,
+        api_name: str,
+        kind: str,
+        arguments: dict[str, Any],
+        context: dict[str, Any],
+        *,
+        version: str = "",
+        binding: dict[str, Any] | None = None,
     ):
-        ctx = context or {}
-        mode = self.current_provider()
+        if self.host is None or not hasattr(self.host, "call_capability"):
+            raise RuntimeError("跨插件联网调用缺少宿主上下文")
+        if self.services is not None:
+            apis_cfg = self.services.load().get("apis", {})
+            for spec in apis_cfg.values():
+                if spec.get("api_name") == api_name and spec.get("access") == "admins":
+                    if (
+                        context.get("owner") == "self"
+                        or self.runtime is None
+                        or not await completed_thread(self.runtime.authorized, context)
+                    ):
+                        raise PermissionError("该联网插件接口需要当前管理员授权")
+            call_args = self.services.apply_web_mapping(arguments, binding)
+        else:
+            call_args = dict(arguments)
+        raw = await call_capability(
+            self.host,
+            "api.call",
+            timeout_ms=30000,
+            api_name=api_name,
+            version=version,
+            args=call_args,
+        )
+        if isinstance(raw, dict):
+            if raw.get("success") is False:
+                raise RuntimeError(str(raw.get("error") or f"跨插件接口 {api_name} 调用失败"))
+            value = raw["result"] if ("success" in raw and "result" in raw) else raw
+        else:
+            value = raw
+        value = self.redact(value)
+        if isinstance(value, dict):
+            items = value.get("items") if isinstance(value.get("items"), list) else value.get("results")
+            return {
+                "provider": api_name,
+                **value,
+                **({"items": items, "results": items} if isinstance(items, list) else {}),
+            }
+        if kind == "fetch":
+            return {
+                "provider": api_name,
+                "url": arguments["url"],
+                "title": arguments["url"],
+                "content": str(value)[:16000],
+                "content_kind": "page_text",
+                "service": f"plugin:{api_name}",
+            }
+        return {
+            "provider": api_name,
+            "query": arguments["query"],
+            "items": [],
+            "results": [],
+            "summary": str(value)[:16000],
+            "content_kind": "search_results",
+            "service": f"plugin:{api_name}",
+        }
+
+    async def _resolve_plugin_target(self, target: str, kind: str) -> tuple[str, str]:
+        if self.host is not None and hasattr(self.host, "call_capability"):
+            try:
+                raw = await call_capability(self.host, "api.list", timeout_ms=10000)
+                items = (
+                    raw.get("apis", [])
+                    if isinstance(raw, dict) and "success" in raw
+                    else (raw if isinstance(raw, list) else [])
+                )
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    plugin_id = str(item.get("plugin_id") or "")
+                    name = str(item.get("name") or "")
+                    full = f"{plugin_id}.{name}" if plugin_id and name else name
+                    if full == target or name == target:
+                        return full, str(item.get("version") or "")
+                matches = [
+                    item
+                    for item in items
+                    if isinstance(item, dict) and item.get("plugin_id") == target and item.get("name")
+                ]
+                if matches:
+                    chosen = next(
+                        (m for m in matches if kind in str(m.get("name", "")).lower()),
+                        matches[0],
+                    )
+                    return f"{chosen['plugin_id']}.{chosen['name']}", str(chosen.get("version") or "")
+            except (RuntimeError, OSError, ValueError, TypeError):
+                pass
+        return target, ""
+
+    async def _call_named_provider(
+        self, name: str, kind: str, arguments: dict[str, Any], context: dict[str, Any]
+    ):
+        if self.services is None:
+            raise RuntimeError("能力服务尚未登记")
+        cfg = await completed_thread(self.services.load)
+        providers = (cfg.get("web") or {}).get("providers") or {}
+        spec = providers.get(name)
+        if not isinstance(spec, dict):
+            raise RuntimeError(f"未在 services.web.providers 中找到 {name}")
+        pkind = spec.get("kind", "")
+        if pkind == "host":
+            cap = "web.search" if kind == "search" else "web.fetch"
+            mapped = self.services.apply_web_mapping(arguments, spec)
+            return await self._call_host_web(cap, **mapped)
+        if pkind == "google_search_plugin":
+            return await self._call_third_party(kind, arguments)
+        if pkind == "mcp":
+            service = spec.get("service") or spec.get("target", "")
+            srv_cfg = (cfg.get("servers") or {}).get(service)
+            if not isinstance(srv_cfg, dict) or not srv_cfg.get("tools"):
+                raise RuntimeError(f"提供方 {name} 关联的 MCP 服务 {service} 未登记")
+            tool = spec.get("tool") or next(
+                (t for t in srv_cfg["tools"] if kind in t.lower()),
+                srv_cfg["tools"][0],
+            )
+            return await self.services._call_web_mcp(
+                service, tool, kind, arguments, context, self.runtime, srv_cfg, binding=spec
+            )
+        if pkind in {"plugin_api", "plugin"}:
+            api_id = spec.get("api")
+            api_spec = (cfg.get("apis") or {}).get(api_id) if api_id else None
+            api_name = (
+                (api_spec or {}).get("api_name")
+                or spec.get("api_name")
+                or spec.get("target")
+                or ""
+            )
+            version = str(spec.get("version") or (api_spec or {}).get("version") or "")
+            if not api_name:
+                raise RuntimeError(f"提供方 {name} 缺少目标插件 API 名称")
+            return await self._call_plugin_api_name(
+                api_name, kind, arguments, context, version=version, binding=spec
+            )
+        raise RuntimeError(f"未知的自定义联网提供方类型 {pkind}")
+
+    async def _dispatch(
+        self,
+        mode: str,
+        kind: str,
+        arguments: dict[str, Any],
+        context: dict[str, Any],
+    ):
         if mode == "host":
             try:
-                return await self._call_host_web(
-                    "web.search", query=query, max_results=max_results
-                )
+                cap = "web.search" if kind == "search" else "web.fetch"
+                return await self._call_host_web(cap, **arguments)
             except _HostWebDisabledError as exc:
                 raise RuntimeError(str(exc)) from None
         if mode == "google_search_plugin":
-            return await self._call_third_party(
-                "search", {"query": query, "max_results": max_results}
+            return await self._call_third_party(kind, arguments)
+        if mode in {"mcp", "plugin_api"} or mode.startswith(("mcp:", "plugin_api:")):
+            return await self._call_service_web(kind, arguments, context, mode)
+        if mode.startswith("plugin:"):
+            target = mode.split(":", 1)[1]
+            api_name, version = await self._resolve_plugin_target(target, kind)
+            return await self._call_plugin_api_name(
+                api_name, kind, arguments, context, version=version
             )
-        if mode in {"mcp", "plugin_api"}:
-            return await self._call_service_web(
-                "search", {"query": query, "max_results": max_results}, ctx, mode
+        if mode.startswith("web:"):
+            return await self._call_named_provider(
+                mode.split(":", 1)[1], kind, arguments, context
             )
+        return None
+
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        context: dict[str, Any] | None = None,
+        *,
+        provider: str = "",
+        limit: int | None = None,
+    ):
+        ctx = context or {}
+        count = max_results if limit is None else int(limit)
+        mode = str(provider or ctx.get("web_provider") or self.current_provider() or "auto")
+        if mode != "auto":
+            out = await self._dispatch(
+                mode, "search", {"query": query, "max_results": count}, ctx
+            )
+            if out is not None:
+                return out
         # mode == "auto": 宿主预设优先，仅在宿主明确未启用/未分配时自动兼容外部绑定或第三方插件
         try:
             return await self._call_host_web(
-                "web.search", query=query, max_results=max_results
+                "web.search", query=query, max_results=count
             )
         except _HostWebDisabledError:
             via_service = await self._call_service_web(
-                "search", {"query": query, "max_results": max_results}, ctx, "any"
+                "search", {"query": query, "max_results": count}, ctx, "any"
             )
             if via_service is not None:
                 return via_service
             cfg = await self.load_third_party_config()
             if cfg is not None:
                 return await self._call_third_party(
-                    "search", {"query": query, "max_results": max_results}, cfg=cfg
+                    "search", {"query": query, "max_results": count}, cfg=cfg
                 )
             raise RuntimeError(
                 "宿主统一联网未启用，且未检测到可用的第三方联网插件或服务登记"
             ) from None
 
-    async def fetch(self, url: str, context: dict[str, Any] | None = None):
+    async def fetch(
+        self,
+        url: str,
+        context: dict[str, Any] | None = None,
+        *,
+        provider: str = "",
+    ):
         url = safe_url(url)
         ctx = context or {}
-        mode = self.current_provider()
-        if mode == "host":
-            try:
-                return await self._call_host_web("web.fetch", url=url)
-            except _HostWebDisabledError as exc:
-                raise RuntimeError(str(exc)) from None
-        if mode == "google_search_plugin":
-            return await self._call_third_party("fetch", {"url": url})
-        if mode in {"mcp", "plugin_api"}:
-            return await self._call_service_web("fetch", {"url": url}, ctx, mode)
+        mode = str(provider or ctx.get("web_provider") or self.current_provider() or "auto")
+        if mode != "auto":
+            out = await self._dispatch(mode, "fetch", {"url": url}, ctx)
+            if out is not None:
+                return out
         try:
             return await self._call_host_web("web.fetch", url=url)
         except _HostWebDisabledError:
@@ -1126,11 +1298,13 @@ class WebRouter:
 
     async def status(self) -> dict[str, Any]:
         services_bound: list[str] = []
+        custom_providers: list[str] = []
         if self.services is not None:
             try:
                 cfg = await completed_thread(self.services.load)
                 web_cfg = cfg.get("web") if isinstance(cfg.get("web"), dict) else {}
                 services_bound = [k for k in ("search", "fetch") if k in web_cfg]
+                custom_providers = sorted((web_cfg.get("providers") or {}).keys())
             except (OSError, ValueError, TypeError):
                 services_bound = []
         third_party = await self.load_third_party_config()
@@ -1144,6 +1318,7 @@ class WebRouter:
         return {
             "provider": self.current_provider(),
             "services_bound": services_bound,
+            "custom_providers": custom_providers,
             "third_party_enabled": third_party is not None,
             "third_party_default": str(backend.get("default_engine") or ""),
             "third_party_engines": engines,

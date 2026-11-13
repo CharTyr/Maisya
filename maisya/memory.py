@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import os
 import re
+import shutil
 import stat
 import time
 from contextlib import contextmanager
@@ -136,20 +137,22 @@ class MemoryLayers:
             if (
                 not stat.S_ISREG(info.st_mode)
                 or info.st_nlink != 1
-                or info.st_size > 65536
+                or info.st_size > 131072
             ):
                 raise ValueError("记忆文件无效或过大")
-            return source.read(65537)
+            return source.read(131073)
 
-    def _guard(self, kind, content, chat_id, document=""):
+    LIMITS = {
+        "memory": 16000,
+        "journal": 8000,
+        "notes": 16000,
+        "heartbeat": 16000,
+    }
+
+    def _guard(self, kind, content, chat_id, document="", *, allow_custom=False):
         if not isinstance(content, str):
             raise TypeError("记忆内容必须为文本")
-        maximum = {
-            "memory": 2200,
-            "journal": 1500,
-            "notes": 2200,
-            "heartbeat": 2200,
-        }.get(kind, 16000)
+        maximum = self.LIMITS.get(kind, 65536)
         if len(content) > maximum or "\x00" in content:
             raise ValueError("记忆内容超过长度限制")
         if self.vault.contains_secret(content.encode()) or re.search(
@@ -157,7 +160,7 @@ class MemoryLayers:
             content,
         ):
             raise ValueError("内容包含凭据，已拒绝保存")
-        if kind == "memory" or kind == "profile" and document == "profile.toml":
+        if allow_custom or kind == "memory" or kind == "profile" and document == "profile.toml":
             return
         if re.search(
             r"本群|群名|群号|群友称呼|业务抬头|资产代号|工作区代号|服务器地址|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d{8,}\b|\b(?:\d{1,3}\.){3}\d{1,3}\b|/(?:root|Users|home)/",
@@ -215,14 +218,20 @@ class MemoryLayers:
         db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
         db.execute("INSERT INTO memory_search VALUES (?,?)", (asset, content))
 
-    def _sync(self, db, kind, target, chat_id, document):
+    def _sync(self, db, kind, target, chat_id, document, *, allow_custom=False):
         asset, path, document, target = self._locate(kind, target, chat_id, document)
         content = self._bytes(path).decode("utf-8")
-        self._guard(kind, content, chat_id, document)
         old = db.execute(
             "SELECT * FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
             (asset,),
         ).fetchone()
+        self._guard(
+            kind,
+            content,
+            chat_id,
+            document,
+            allow_custom=allow_custom or (old is not None and old["content"] == content),
+        )
         if old is None or old["content"] != content:
             version = old["version"] + 1 if old else 0
             self._record(
@@ -264,6 +273,28 @@ class MemoryLayers:
                 current.update(dict(old))
             return current
 
+    def skills(self):
+        root = self.root / "abilities/skills"
+        if not root.is_dir():
+            return []
+        return sorted(
+            p.name for p in root.iterdir() if p.is_dir() and not p.is_symlink()
+        )
+
+    def delete_skill(self, target: str):
+        if not isinstance(target, str) or not re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_-]{0,63}", target
+        ):
+            raise ValueError("技能编号无效")
+        directory = self.root / "abilities/skills" / target
+        if directory.is_symlink() or not directory.exists():
+            raise ValueError("技能不存在")
+        with self._lock(), self.store.connect() as db, db:
+            shutil.rmtree(directory)
+            asset = f"skill:{target}:SKILL.md"
+            db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
+        return {"deleted": True, "skill": target}
+
     def write(
         self,
         kind,
@@ -274,6 +305,7 @@ class MemoryLayers:
         document="",
         expected_version=None,
         author="admin",
+        allow_custom=False,
     ):
         with self._lock():
             return self._write(
@@ -284,6 +316,7 @@ class MemoryLayers:
                 document=document,
                 expected_version=expected_version,
                 author=author,
+                allow_custom=allow_custom,
             )
 
     def _write(
@@ -296,6 +329,7 @@ class MemoryLayers:
         document="",
         expected_version=None,
         author="admin",
+        allow_custom=False,
     ):
         if kind == "journal" and content and not content.startswith("## "):
             content = (
@@ -304,13 +338,15 @@ class MemoryLayers:
                 + "\n"
                 + content
             )
-        self._guard(kind, content, chat_id, document)
+        self._guard(kind, content, chat_id, document, allow_custom=allow_custom)
         previous = None
         path = None
         try:
             with self.store.connect() as db, db:
                 db.execute("BEGIN IMMEDIATE")
-                current, asset, path = self._sync(db, kind, target, chat_id, document)
+                current, asset, path = self._sync(
+                    db, kind, target, chat_id, document, allow_custom=allow_custom
+                )
                 if expected_version is not None and (
                     type(expected_version) is not int
                     or expected_version != current["version"]
@@ -359,7 +395,7 @@ class MemoryLayers:
             **{
                 key: value
                 for key, value in options.items()
-                if key != "expected_version"
+                if key not in {"expected_version", "allow_custom"}
             },
         )
         return self.write(kind, old["content"], **options, author="rollback")
@@ -375,9 +411,9 @@ class MemoryLayers:
             when = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
             if self.clock() - 7 * 86400 < when <= self.clock():
                 kept.append("## " + day + "\n" + text.strip())
-        while len("\n\n".join(kept)) > 1500 and len(kept) > 1:
+        while len("\n\n".join(kept)) > self.LIMITS["journal"] and len(kept) > 1:
             kept.pop(0)
-        return "\n\n".join(kept)[:1500]
+        return "\n\n".join(kept)[: self.LIMITS["journal"]]
 
     def context(self, chat_id):
         memory = self.read("memory", chat_id=chat_id)["content"] if chat_id else ""
@@ -414,7 +450,7 @@ class MemoryLayers:
                 if any(parent.is_symlink() for parent in path.parents):
                     raise ValueError("技能路径不能经过链接")
                 content = self._bytes(path).decode("utf-8")
-                self._guard("skill", content, "")
+                self._guard("skill", content, "", allow_custom=True)
             if not content.strip():
                 raise ValueError("档案引用的技能为空或不存在")
             pieces.append(content)

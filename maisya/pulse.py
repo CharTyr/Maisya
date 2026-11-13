@@ -44,6 +44,7 @@ class Pulse:
         profiles=None,
         plugin_enabled=lambda: True,
         heartbeat_interval=3600,
+        heartbeat_profile="scout",
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
@@ -61,6 +62,7 @@ class Pulse:
         self.profiles = profiles
         self.plugin_enabled = plugin_enabled
         self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_profile = heartbeat_profile
         self.task = None
         self.closing = False
 
@@ -143,6 +145,25 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred"
                 )
 
+    async def _reschedule_recurring(self, row):
+        every = int((row.get("payload") or {}).get("every_seconds") or 0)
+        if every < 300 or self.intents is None:
+            return
+        next_payload = dict(row["payload"])
+        next_payload.pop("wait_thread", None)
+        next_payload.pop("already_started", None)
+        await asyncio.to_thread(
+            self.intents.schedule,
+            kind=row["kind"],
+            source=row["source"],
+            target=row["target"],
+            due_at=self.intents.clock() + every,
+            reason=row["reason"],
+            thread_id="",
+            payload=next_payload,
+            bypass_limits=True,
+        )
+
     async def _dispatch(self, row):
         target = row["target"]
         chat_id = target.split(":", 1)[1]
@@ -153,6 +174,56 @@ class Pulse:
         if not self.enabled(chat_id, platform):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
+        if row["kind"] == "proactive":
+            allowed, reason = self._proactive_gate(row)
+            if not allowed:
+                status = "deferred" if reason == "sleep_window" else "failed"
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], status, reason
+                )
+                return
+        elif row["payload"].get("profile") and self.intents.in_sleep_window(self.sleep_window):
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "deferred", "sleep_window"
+            )
+            return
+        if (
+            row["payload"].get("profile")
+            and not row.get("thread_id")
+            and self.engine is not None
+            and self.profiles is not None
+        ):
+            ability = await asyncio.to_thread(self.profiles.get, row["payload"]["profile"])
+            if not ability.autonomous and not row["payload"].get("scheduled_admin"):
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "fresh_authorization_required",
+                )
+                return
+            prompt = row["payload"].get("prompt") or row["reason"]
+            started = await self.engine.start(
+                ability,
+                prompt,
+                chat_id="self" if chat_id == "self" else chat_id,
+                platform="self" if chat_id == "self" else (platform or "qq"),
+                user_id="",
+                owner="self" if chat_id == "self" else "chat",
+                wait_seconds=5,
+                workspace=row["payload"].get("workspace", ""),
+                grant={"scheduled_admin": True}
+                if row["payload"].get("scheduled_admin")
+                else {},
+            )
+            updated_payload = {**row["payload"], "wait_thread": True}
+            row = {**row, "thread_id": started["thread_id"], "payload": updated_payload}
+            await asyncio.to_thread(
+                self.intents.update_thread,
+                row["intent_id"],
+                started["thread_id"],
+                updated_payload,
+            )
         thread = None
         if row.get("thread_id"):
             try:
@@ -167,14 +238,6 @@ class Pulse:
             ):
                 await asyncio.to_thread(
                     self.intents.finish, row["intent_id"], "deferred", delay=5
-                )
-                return
-        if row["kind"] == "proactive":
-            allowed, reason = self._proactive_gate(row)
-            if not allowed:
-                status = "deferred" if reason == "sleep_window" else "failed"
-                await asyncio.to_thread(
-                    self.intents.finish, row["intent_id"], status, reason
                 )
                 return
         text = html.escape(self.redact(row["reason"]))
@@ -192,6 +255,13 @@ class Pulse:
                 "\n<maisya_reminder>" + text + "</maisya_reminder>"
             )
         if thread and (thread.get("result") or {}).get("text"):
+            if (thread.get("result") or {}).get("attachments"):
+                await asyncio.to_thread(
+                    self.bridge.stage,
+                    thread,
+                    chat_id,
+                    archived=thread.get("owner") == "self",
+                )
             intent += (
                 "\n<maisya_thread_result>"
                 + html.escape(self.redact(thread["result"]["text"]))
@@ -224,17 +294,58 @@ class Pulse:
             else ("deferred" if status in {"session_missing", "uncertain"} else "failed")
         )
         await asyncio.to_thread(self.intents.finish, row["intent_id"], done, status)
+        if done == "done":
+            await self._reschedule_recurring(row)
 
     async def _silent(self, row):
         if row["payload"].get("already_started"):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
+            return
+        target_chat = row["target"].split(":", 1)[1]
+        if (
+            row["payload"].get("profile")
+            and not row.get("thread_id")
+            and self.engine is not None
+            and self.profiles is not None
+        ):
+            platform = row["payload"].get("platform", "")
+            if target_chat != "self" and not self.enabled(target_chat, platform):
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "deferred"
+                )
+                return
+            ability = await asyncio.to_thread(
+                self.profiles.get, row["payload"]["profile"]
+            )
+            if not ability.autonomous and not row["payload"].get("scheduled_admin"):
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "fresh_authorization_required",
+                )
+                return
+            await self.engine.start(
+                ability,
+                row["payload"].get("prompt") or row["reason"],
+                chat_id="self" if target_chat == "self" else target_chat,
+                platform="self" if target_chat == "self" else (platform or "qq"),
+                user_id="",
+                owner="self" if target_chat == "self" else "chat",
+                wait_seconds=0,
+                workspace=row["payload"].get("workspace", ""),
+                grant={"scheduled_admin": True}
+                if row["payload"].get("scheduled_admin")
+                else {},
+            )
+            await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
+            await self._reschedule_recurring(row)
             return
         thread_id = row["thread_id"]
         if not thread_id:
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
             return
         try:
-            target_chat = row["target"].split(":", 1)[1]
             thread = await asyncio.to_thread(
                 self.bridge.store.get,
                 thread_id,
@@ -254,7 +365,7 @@ class Pulse:
             or profile.get("allow_users")
             or profile.get("secrets")
             or profile.get("template")
-        ):
+        ) and not row["payload"].get("scheduled_admin"):
             await asyncio.to_thread(
                 self.intents.finish,
                 row["intent_id"],
@@ -291,12 +402,17 @@ class Pulse:
                 prompt,
                 chat_id=chat_id,
                 wait_seconds=0,
-                input_context={"grant": {}},
+                input_context={
+                    "grant": {"scheduled_admin": True}
+                    if row["payload"].get("scheduled_admin")
+                    else {}
+                },
             )
         except (ValueError, PermissionError, RuntimeError, sqlite3.Error):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
         await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
+        await self._reschedule_recurring(row)
 
     def _proactive_gate(self, row):
         chat_id = row["target"].split(":", 1)[1]
@@ -526,7 +642,9 @@ class Pulse:
                 )
             )
             or self.intents.in_sleep_window(self.sleep_window)
-            or self.engine.tasks
+            or any(
+                self.engine.chats.get(tid) == "self" for tid in self.engine.tasks
+            )
         ):
             return
         try:
@@ -539,8 +657,10 @@ class Pulse:
             now = self.intents.clock()
             if not await asyncio.to_thread(self._claim_heartbeat, now):
                 return
-            scout = await asyncio.to_thread(self.profiles.get, "scout")
-            if not scout.autonomous:
+            ability = await asyncio.to_thread(
+                self.profiles.get, self.heartbeat_profile
+            )
+            if not ability.autonomous:
                 return
             prompt = (
                 "按自身节奏做一次轻量公开探索并记录近况（不涉及任何具体会话私有信息）：\n"
@@ -549,7 +669,7 @@ class Pulse:
             if temperament:
                 prompt += "\n<maisya_temperament>" + html.escape(temperament) + "</maisya_temperament>"
             await self.engine.start(
-                scout,
+                ability,
                 prompt,
                 chat_id="self",
                 platform="self",

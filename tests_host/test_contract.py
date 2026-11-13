@@ -1353,6 +1353,145 @@ class HostContract(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_workflow_freedom_host_capabilities_and_direct_console_launch(self):
+        async def run():
+            import base64
+
+            manifest = json.loads((PLUGIN_DIR / "_manifest.json").read_text())
+            for cap in (
+                "chat.get_all_streams",
+                "llm.get_available_models",
+                "component.list_loaded_plugins",
+                "person.get_id",
+                "person.get_id_by_name",
+                "person.get_value",
+                "render.html2png",
+            ):
+                self.assertIn(cap, manifest["capabilities"])
+
+            with tempfile.TemporaryDirectory() as directory:
+                step = 0
+                render_calls = []
+
+                async def rpc(method, plugin_id, payload, **kwargs):
+                    nonlocal step
+                    name, args = payload["capability"], payload["args"]
+                    if name == "config.get":
+                        return {"success": True, "value": ["qq:Alice"]}
+                    if name == "chat.get_all_streams":
+                        return {
+                            "success": True,
+                            "streams": [{"stream_id": "contract-chat", "platform": "qq"}],
+                        }
+                    if name == "llm.get_available_models":
+                        return {"success": True, "models": {"planner": ["step-5-preview"]}}
+                    if name == "component.list_loaded_plugins":
+                        return {
+                            "success": True,
+                            "plugins": [{"id": "third.search", "enabled": True}],
+                        }
+                    if name == "api.list":
+                        return {
+                            "success": True,
+                            "apis": [{"plugin_id": "third.search", "name": "run", "version": "1"}],
+                        }
+                    if name == "render.html2png":
+                        render_calls.append(args)
+                        return {
+                            "success": True,
+                            "image_base64": base64.b64encode(b"\x89PNG\r\n\x1a\nhost-ok").decode(),
+                            "mime_type": "image/png",
+                            "width": 960,
+                            "height": 640,
+                        }
+                    if name == "llm.generate_with_tools":
+                        step += 1
+                        if step == 1:
+                            return {
+                                "success": True,
+                                "response": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call_render",
+                                        "function": {
+                                            "name": "html_render",
+                                            "arguments": {
+                                                "html": "<h1>Contract Card</h1>",
+                                                "output_path": "out/card.png",
+                                            },
+                                        },
+                                    }
+                                ],
+                            }
+                        if step == 2:
+                            return {
+                                "success": True,
+                                "response": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call_attach",
+                                        "function": {
+                                            "name": "result_attach",
+                                            "arguments": {"paths": ["out/card.png"]},
+                                        },
+                                    }
+                                ],
+                            }
+                        return {
+                            "success": True,
+                            "response": "渲染完成，卡片已附带。",
+                            "tool_calls": [],
+                        }
+                    raise AssertionError(name)
+
+                plugin = create_plugin()
+                plugin._set_context(
+                    PluginContext(
+                        PLUGIN_ID,
+                        rpc_call=rpc,
+                        paths=build_plugin_paths(PLUGIN_ID, Path(directory)),
+                    )
+                )
+                plugin.set_plugin_config(
+                    {
+                        "plugin": {"enabled": True, "config_version": "0.1.0"},
+                        "enabled_chats": ["contract-chat"],
+                    }
+                )
+                await plugin.on_load()
+                try:
+                    disc = await plugin.manage_read("discovery", "{}")
+                    self.assertTrue(disc["success"], disc)
+                    self.assertEqual(disc["streams"][0]["stream_id"], "contract-chat")
+                    self.assertIn("planner", disc["models"])
+                    self.assertEqual(disc["plugins"][0]["id"], "third.search")
+
+                    pdir = plugin.profiles.path / "painter"
+                    pdir.mkdir(parents=True)
+                    (pdir / "PROFILE.md").write_text("无容器渲染卡片并附上。")
+                    (pdir / "profile.toml").write_text(
+                        'environment = "readonly"\n'
+                        'tools = ["workspace_file", "html_render", "result_attach"]\n'
+                    )
+
+                    launched = await plugin.console_send(
+                        "",
+                        "画一张简报卡",
+                        profile="painter",
+                        chat_id="contract-chat",
+                    )
+                    self.assertTrue(launched["success"], launched)
+                    await plugin.engine.drain()
+                    row = plugin.threads.get(launched["thread_id"], "contract-chat")
+                    self.assertEqual(row["state"], "idle")
+                    self.assertEqual(len(render_calls), 1)
+                    self.assertIs(render_calls[0]["allow_network"], False)
+                    self.assertEqual(row["result"]["attachments"][0]["name"], "card.png")
+                finally:
+                    await plugin.on_unload()
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     print("SDK:", importlib.metadata.version("maibot-plugin-sdk"))

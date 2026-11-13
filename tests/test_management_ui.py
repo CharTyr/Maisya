@@ -78,6 +78,20 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(page.locator("#local-draft")).to_have_value(
                             "保留我的草稿。"
                         )
+                        await expect(page.locator("#discovery-info")).not_to_be_empty()
+                        await page.locator("#new-id").fill("ui_temp")
+                        await page.locator("#clone").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "新能力已创建"
+                        )
+                        await expect(
+                            page.locator('[data-profile="ui_temp"]')
+                        ).to_be_visible()
+                        await page.locator("#delete-profile").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已删除所选能力档案"
+                        )
+                        assert await page.locator('[data-profile="ui_temp"]').count() == 0
                     elif name == "memory":
                         await page.locator("#chat").select_option("chat")
                         await expect(page.locator("#content")).to_be_enabled()
@@ -93,6 +107,16 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     else:
                         await expect(page.locator("#proactive_level")).to_be_visible()
                         await expect(page.locator("#web_provider")).to_be_visible()
+                        await expect(
+                            page.locator("#web_provider_custom")
+                        ).to_be_visible()
+                        await expect(
+                            page.locator("#daily_proactive_limit")
+                        ).to_be_visible()
+                        await expect(
+                            page.locator("#heartbeat_interval_minutes")
+                        ).to_be_visible()
+                        await expect(page.locator("#heartbeat_profile")).to_be_visible()
                         await page.locator("#proactive_level").select_option("quiet")
                         await page.locator("#web_provider").select_option(
                             "google_search_plugin"
@@ -114,6 +138,17 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(page.locator("#vault-value")).to_have_value("")
                         assert "drawing" in plugin.vault.handles()
                         assert "ui-private-secret-value" not in await page.content()
+                        await page.locator("#intent-chat").fill("chat")
+                        await page.locator("#intent-prompt").fill("每天巡检一次热点")
+                        await page.locator("#schedule-intent").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "工作流计划已加入队列"
+                        )
+                        assert any(
+                            row["source"] == "workflow"
+                            and row["reason"] == "每天巡检一次热点"
+                            for row in plugin.intents.list("chat:chat")
+                        )
                     await page.set_viewport_size({"width": 390, "height": 844})
                     await page.evaluate(
                         "window.dispatchEvent(new CustomEvent('maibot:context',{detail:{theme:'dark'}}))"

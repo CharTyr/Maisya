@@ -16,6 +16,15 @@ class PluginSettings(PluginConfigBase):
     config_version: str = "0.1.0"
 
 
+WEB_PROVIDER_PATTERN = (
+    r"^(auto|host|google_search_plugin"
+    r"|mcp(:[A-Za-z][A-Za-z0-9_-]{0,63})?"
+    r"|plugin_api(:[A-Za-z][A-Za-z0-9_-]{0,63})?"
+    r"|plugin:[A-Za-z0-9_.-]{1,128}"
+    r"|web:[A-Za-z][A-Za-z0-9_-]{0,63})$"
+)
+
+
 class Settings(PluginConfigBase):
     plugin: PluginSettings = Field(default_factory=PluginSettings)
     enabled_chats: list[str] = Field(default_factory=list)
@@ -26,10 +35,16 @@ class Settings(PluginConfigBase):
     thread_context_chars: int = Field(default=48000, ge=24000, le=256000)
     web_provider: str = Field(
         default="auto",
-        pattern=r"^(auto|host|google_search_plugin|mcp|plugin_api)$",
+        pattern=WEB_PROVIDER_PATTERN,
     )
     sleep_window: str = Field(default="", pattern=r"^$|^\d{1,2}-\d{1,2}$")
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
+    daily_proactive_limit: int = Field(default=1, ge=0, le=50)
+    heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
+    heartbeat_profile: str = Field(
+        default="scout",
+        pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+    )
     chat_proactive_levels: dict[str, str] = Field(default_factory=dict)
     acquaintance_users: list[str] = Field(default_factory=list)
     longing_quiet_hours: int = Field(default=72, ge=12, le=720)

@@ -82,11 +82,11 @@ async def test_cross_plugin_readonly_api_validation_binding_and_execution(tmp_pa
     plugin = await loaded(tmp_path, ["qq:Alice"])
     try:
         plugin.vault.set("secret_key", "super-secret-api-token")
-        # Reject missing/false readonly and self APIs
+        # Reject invalid readonly type, invalid access, and self APIs
         current = await plugin.manage_read("services", "{}")
         bad_configs = [
-            {"apis": {"w": {"api_name": "other.plugin.weather", "readonly": False}}},
-            {"apis": {"w": {"api_name": "other.plugin.weather"}}},
+            {"apis": {"w": {"api_name": "other.plugin.weather", "readonly": "yes"}}},
+            {"apis": {"w": {"api_name": "other.plugin.weather", "access": "root"}}},
             {"apis": {"self": {"api_name": "chartyr.maisya.maisya_now", "readonly": True}}},
             {"apis": {"self2": {"api_name": "maisya_now", "readonly": True}}},
         ]

@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from contextlib import asynccontextmanager
 import hashlib
 import ipaddress
 import json
@@ -9,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import sys
 import tempfile
 import uuid
@@ -52,8 +54,8 @@ def validate_api_entry(name, spec):
         or ".maisya_" in api_name
     ):
         raise ValueError("跨插件 API 名称无效，且不能登记 Maisya 自身内部接口")
-    if spec.get("readonly") is not True:
-        raise ValueError("跨插件 API 仅允许登记显式声明 readonly=true 的只读接口")
+    if "readonly" in spec and type(spec["readonly"]) is not bool:
+        raise ValueError("跨插件 API readonly 必须是布尔值")
     if spec.get("access", "everyone") not in {"everyone", "admins"}:
         raise ValueError("跨插件 API 访问范围无效")
     version = spec.get("version", "")
@@ -76,16 +78,60 @@ def validate_api_entry(name, spec):
         Draft202012Validator.check_schema(schema)
 
 
+def _validate_web_provider_entry(name, spec):
+    if not isinstance(name, str) or not re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_-]{0,63}", name
+    ):
+        raise ValueError("联网搜索提供方句柄无效")
+    if not isinstance(spec, dict) or set(spec) - {
+        "kind",
+        "target",
+        "service",
+        "tool",
+        "api",
+        "api_name",
+        "version",
+        "arg_map",
+        "defaults",
+    }:
+        raise ValueError("联网搜索提供方配置含未知字段")
+    kind = spec.get("kind", "")
+    if kind not in {"host", "google_search_plugin", "mcp", "plugin_api", "plugin"}:
+        raise ValueError("联网搜索提供方类型无效")
+    if "arg_map" in spec:
+        arg_map = spec["arg_map"]
+        if not isinstance(arg_map, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) and v for k, v in arg_map.items()
+        ):
+            raise ValueError("联网搜索 arg_map 必须是字符串映射")
+    if "defaults" in spec and not isinstance(spec["defaults"], dict):
+        raise ValueError("联网搜索 defaults 必须是对象")
+
+
 def validate_web_bindings(configuration):
     web = configuration.get("web", {})
-    if not isinstance(web, dict) or set(web) - {"search", "fetch"}:
-        raise ValueError("联网服务绑定仅支持 search 与 fetch")
+    if not isinstance(web, dict) or set(web) - {"search", "fetch", "providers"}:
+        raise ValueError("联网服务绑定仅支持 search、fetch 与 providers")
     servers = configuration.get("servers", {})
     apis = configuration.get("apis", {})
-    for kind, binding in web.items():
+    for kind in ("search", "fetch"):
+        if kind not in web:
+            continue
+        binding = web[kind]
         if not isinstance(binding, dict):
             raise ValueError(f"联网服务 {kind} 绑定格式无效")
-        if set(binding) == {"service", "tool"}:
+        base_keys = set(binding) - {"arg_map", "defaults"}
+        if "arg_map" in binding and (
+            not isinstance(binding["arg_map"], dict)
+            or not all(
+                isinstance(k, str) and isinstance(v, str) and v
+                for k, v in binding["arg_map"].items()
+            )
+        ):
+            raise ValueError("联网服务 arg_map 必须是字符串映射")
+        if "defaults" in binding and not isinstance(binding["defaults"], dict):
+            raise ValueError("联网服务 defaults 必须是对象")
+        if base_keys == {"service", "tool"}:
             service, tool = binding["service"], binding["tool"]
             server = servers.get(service)
             if (
@@ -94,13 +140,69 @@ def validate_web_bindings(configuration):
                 or server.get("readonly") is not True
             ):
                 raise ValueError("联网服务绑定仅允许 readonly=true 的只读 MCP 服务与已登记工具")
-        elif set(binding) == {"api"}:
+        elif base_keys == {"api"}:
             api_id = binding["api"]
             spec = apis.get(api_id)
             if not isinstance(spec, dict) or spec.get("readonly") is not True:
                 raise ValueError("联网服务绑定仅允许 readonly=true 的已登记跨插件只读 API")
         else:
             raise ValueError("联网服务绑定须指定 {service, tool} 或 {api}")
+    if "providers" in web:
+        providers = web["providers"]
+        if not isinstance(providers, dict) or len(providers) > 32:
+            raise ValueError("联网搜索提供方列表格式或数量无效")
+        for name, spec in providers.items():
+            _validate_web_provider_entry(name, spec)
+
+
+def validate_endpoint_targets(targets):
+    if not isinstance(targets, (list, tuple)) or not targets or len(targets) > 64:
+        raise ValueError("受限网络需要 1 到 64 个明确目标")
+    endpoints = []
+    seen = set()
+    for item in targets:
+        if isinstance(item, dict):
+            host = str(item.get("address", "")).strip()
+            port = item.get("port")
+        elif isinstance(item, str) and ":" in item:
+            host, raw_port = item.rsplit(":", 1)
+            host = host.strip()
+            if not raw_port.isdigit():
+                raise ValueError("受限网络目标端口无效")
+            port = int(raw_port)
+        else:
+            raise ValueError("受限网络目标格式应为 host:port 或 {address, port}")
+        if not host or type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError("受限网络目标主机或端口无效")
+        try:
+            ip_obj = ipaddress.IPv4Address(host)
+            candidates = [str(ip_obj)] if ip_obj.is_global else []
+            if not candidates:
+                raise ValueError("受限网络目标禁止内网或保留地址")
+        except ipaddress.AddressValueError:
+            if len(host) > 253 or any(ch.isspace() for ch in host):
+                raise ValueError("受限网络目标域名无效")
+            try:
+                resolved = socket.getaddrinfo(
+                    host, port, socket.AF_INET, socket.SOCK_STREAM
+                )
+            except OSError as error:
+                raise ValueError(f"无法解析目标主机 {host}") from error
+            candidates = []
+            for entry in resolved:
+                ip_text = entry[4][0]
+                if not ipaddress.IPv4Address(ip_text).is_global:
+                    raise ValueError("目标域名解析包含非公网地址，已拒绝")
+                if ip_text not in candidates:
+                    candidates.append(ip_text)
+            if not candidates:
+                raise ValueError(f"目标主机 {host} 未返回可用 IPv4 地址")
+        for ip_text in candidates:
+            pair = (ip_text, port)
+            if pair not in seen:
+                seen.add(pair)
+                endpoints.append(pair)
+    return endpoints
 
 
 def validate(schema, arguments):
@@ -309,9 +411,18 @@ class Services:
         api_id = arguments.get("api", "")
         spec = apis_cfg.get(api_id)
         if not api_id or api_id not in profile.apis or not isinstance(spec, dict):
-            raise PermissionError("本档案未授权该跨插件只读 API")
+            raise PermissionError("本档案未授权该跨插件 API")
         if spec.get("access", "everyone") == "admins" and not is_admin:
-            raise PermissionError("该跨插件只读 API 需要当前管理员授权")
+            raise PermissionError("该跨插件 API 需要当前管理员授权")
+        if (
+            profile.environment == "readonly"
+            and spec.get("readonly") is not True
+            and not (
+                profile.access == "admins"
+                and await completed_thread(runtime.authorized, context)
+            )
+        ):
+            raise PermissionError("只读普通档案不能调用非只读跨插件 API")
 
         if action == "get":
             raw = await call_capability(
@@ -485,8 +596,15 @@ class Services:
             runtime.authorized, context
         ):
             raise PermissionError("MCP 服务需要当前管理员授权")
-        if profile.environment == "readonly" and not config.get("readonly", False):
-            raise PermissionError("只读档案不能调用可写 MCP 服务")
+        if (
+            profile.environment == "readonly"
+            and not config.get("readonly", False)
+            and not (
+                profile.access == "admins"
+                and await completed_thread(runtime.authorized, context)
+            )
+        ):
+            raise PermissionError("只读普通档案不能调用可写 MCP 服务")
         lock = self.locks.setdefault((service, context["thread_id"]), asyncio.Lock())
         async with lock:
             session = await self._session(service, context, config)
@@ -625,6 +743,35 @@ class Services:
             else:
                 runtime.attachments[context["thread_id"]] = old
 
+    @asynccontextmanager
+    async def mount_secrets(self, runtime, handles, *, work=None):
+        secret_directory = Path(
+            tempfile.mkdtemp(prefix="secrets-", dir=runtime.files.runtime)
+        )
+        secret_volume = runtime.sandbox.volume(secret_directory)
+        mounted = False
+        try:
+            await completed_thread(secret_volume.__enter__)
+            mounted = True
+            secrets = {}
+            for handle in handles:
+                value = await completed_thread(self.vault.for_execution, handle)
+                path = secret_directory / handle
+                await completed_thread(path.write_text, value)
+                if sys.platform.startswith("linux") and os.geteuid() == 0:
+                    await completed_thread(os.chown, path, 10000, 10000)
+                await completed_thread(path.chmod, 0o400)
+                secrets[handle] = path
+            yield secrets
+        finally:
+            if mounted and work is not None and work.quarantined:
+                self.quarantines.append((secret_volume, secret_directory))
+            elif mounted:
+                await completed_thread(secret_volume.__exit__, None, None, None)
+                await completed_thread(shutil.rmtree, secret_directory)
+            else:
+                await completed_thread(shutil.rmtree, secret_directory)
+
     async def credential(self, profile, arguments, context, runtime):
         config = self.load().get("templates", {}).get(profile.template)
         if (
@@ -639,62 +786,31 @@ class Services:
         if (
             not isinstance(program, list)
             or not program
-            or not all(isinstance(value, str) for value in program)
-            or not re.fullmatch(
-                r"/opt/maisya/templates/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}", program[0]
-            )
+            or not all(isinstance(value, str) and "\x00" not in value for value in program)
+            or not Path(program[0]).is_absolute()
         ):
-            raise ValueError("凭据模板必须是固定镜像内的受信程序")
+            raise ValueError("凭据模板程序必须是有效的绝对路径")
         if set(profile.secrets) != set(config.get("secrets", [])):
             raise PermissionError("档案凭据与固定模板绑定不一致")
-        targets = config.get("targets", [])
-        if not isinstance(targets, list) or not targets or len(targets) > 8:
-            raise ValueError("固定模板需要明确目标")
-        endpoints = []
-        for item in targets:
-            address = str(ipaddress.IPv4Address(item["address"]))
-            port = item["port"]
-            if type(port) is not int or not 1 <= port <= 65535:
-                raise ValueError("固定模板目标端口无效")
-            endpoints.append((address, port))
+        targets = config.get("targets") or list(profile.sandbox_targets)
+        endpoints = await completed_thread(validate_endpoint_targets, targets)
         blank = {**context, "workspace_id": "ws_" + os.urandom(12).hex()}
         manager = runtime.files.activity(blank)
         work = await completed_thread(manager.__enter__)
-        secret_directory = Path(
-            tempfile.mkdtemp(prefix="secrets-", dir=runtime.files.runtime)
-        )
-        secret_volume = runtime.sandbox.volume(secret_directory)
-        mounted = False
         try:
-            await completed_thread(secret_volume.__enter__)
-            mounted = True
-            secrets = {}
-            for handle in profile.secrets:
-                value = await completed_thread(self.vault.for_execution, handle)
-                path = secret_directory / handle
-                await completed_thread(path.write_text, value)
-                await completed_thread(os.chown, path, 10000, 10000)
-                await completed_thread(path.chmod, 0o400)
-                secrets[handle] = path
-            result = await runtime.sandbox.execute(
-                context,
-                work,
-                "fixed-template",
-                call_id=context["_tool_call_id"],
-                mode="restricted",
-                targets=endpoints,
-                secrets=secrets,
-                entrypoint=[*program, json.dumps(arguments, ensure_ascii=False)],
-            )
+            async with self.mount_secrets(runtime, profile.secrets, work=work) as secrets:
+                result = await runtime.sandbox.execute(
+                    context,
+                    work,
+                    "fixed-template",
+                    call_id=context["_tool_call_id"],
+                    mode="restricted",
+                    targets=endpoints,
+                    secrets=secrets,
+                    entrypoint=[*program, json.dumps(arguments, ensure_ascii=False)],
+                )
             return self.vault.redact(result)
         finally:
-            if mounted and work.quarantined:
-                self.quarantines.append((secret_volume, secret_directory))
-            elif mounted:
-                await completed_thread(secret_volume.__exit__, None, None, None)
-                await completed_thread(shutil.rmtree, secret_directory)
-            else:
-                await completed_thread(shutil.rmtree, secret_directory)
             await completed_thread(manager.__exit__, None, None, None)
 
     async def release_quarantines(self):
@@ -722,8 +838,32 @@ class Services:
             await self.sessions.pop(key).close()
 
     @staticmethod
-    def _prepare_web_args(kind, arguments, schema):
-        call_args = dict(arguments)
+    def apply_web_mapping(arguments, binding):
+        defaults = dict((binding or {}).get("defaults") or {})
+        arg_map = (binding or {}).get("arg_map") or {}
+        if not arg_map:
+            return {**defaults, **arguments}
+        mapped = dict(defaults)
+        for src, dst in arg_map.items():
+            if src in arguments:
+                mapped[dst] = arguments[src]
+            elif src == "limit" and "max_results" in arguments:
+                mapped[dst] = arguments["max_results"]
+            elif src == "max_results" and "limit" in arguments:
+                mapped[dst] = arguments["limit"]
+        for key, value in arguments.items():
+            if key in arg_map:
+                continue
+            if key in {"limit", "max_results"} and (
+                "limit" in arg_map or "max_results" in arg_map
+            ):
+                continue
+            mapped.setdefault(key, value)
+        return mapped
+
+    @staticmethod
+    def _prepare_web_args(kind, arguments, schema, binding=None):
+        call_args = Services.apply_web_mapping(arguments, binding)
         if (
             kind == "search"
             and isinstance(schema, dict)
@@ -733,11 +873,157 @@ class Services:
             call_args.pop("max_results", None)
         return call_args
 
+    async def _call_web_mcp(self, service, tool, kind, arguments, context, runtime, config, *, binding=None):
+        if (
+            not isinstance(config, dict)
+            or tool not in config.get("tools", [])
+            or (
+                config.get("readonly") is not True
+                and not (
+                    config.get("access") == "admins"
+                    and runtime is not None
+                    and await completed_thread(runtime.authorized, context)
+                )
+            )
+        ):
+            raise PermissionError("联网 MCP 服务仅允许只读工具或管理员显式授权工具")
+        if config.get("access", "everyone") == "admins":
+            if context.get("owner") == "self" or runtime is None or not await completed_thread(runtime.authorized, context):
+                raise PermissionError("该联网 MCP 服务需要当前管理员授权")
+        thread_id = context.get("thread_id") or "web"
+        lock = self.locks.setdefault((service, thread_id), asyncio.Lock())
+        async with lock:
+            session = await self._session(
+                service,
+                {"chat_id": context.get("chat_id", ""), "thread_id": thread_id},
+                config,
+            )
+            if tool not in session.tools:
+                raise PermissionError("MCP 未提供登记的联网工具")
+            schema = session.tools[tool].get("inputSchema", {})
+            call_args = self._prepare_web_args(kind, arguments, schema, binding)
+            await completed_thread(validate, schema, call_args)
+            try:
+                result = await session.request(
+                    "tools/call", {"name": tool, "arguments": call_args}
+                )
+                if result.get("isError"):
+                    raise RuntimeError("MCP 联网工具执行失败")
+            except BaseException:
+                for session_key in list(self.sessions):
+                    if self.sessions[session_key] is session:
+                        self.sessions.pop(session_key)
+                await session.close()
+                raise
+        parts = []
+        for item in result.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(self.vault.redact(item.get("text", "")))[:16000])
+            elif (
+                isinstance(item, dict)
+                and item.get("type") == "resource"
+                and isinstance(item.get("resource"), dict)
+                and "text" in item["resource"]
+            ):
+                parts.append(str(self.vault.redact(item["resource"]["text"]))[:16000])
+        joined = "\n".join(parts).strip()
+        try:
+            parsed = json.loads(joined)
+            if isinstance(parsed, dict):
+                return self.vault.redact(parsed)
+        except ValueError:
+            pass
+        if kind == "fetch":
+            return {
+                "url": arguments["url"],
+                "title": arguments["url"],
+                "content": joined[:16000],
+                "content_kind": "page_text",
+                "service": f"mcp:{service}:{tool}",
+            }
+        return {
+            "query": arguments["query"],
+            "results": [],
+            "summary": joined[:16000],
+            "content_kind": "search_results",
+            "service": f"mcp:{service}:{tool}",
+        }
+
+    async def _call_web_plugin_api(self, label, spec, kind, arguments, context, runtime, *, binding=None):
+        if not isinstance(spec, dict):
+            raise PermissionError(f"未找到联网 API {label}")
+        if (
+            spec.get("readonly") is not True
+            and spec.get("access") != "admins"
+        ):
+            raise PermissionError("联网 API 需要只读声明或管理员授权")
+        if spec.get("access", "everyone") == "admins":
+            if context.get("owner") == "self" or runtime is None or not await completed_thread(runtime.authorized, context):
+                raise PermissionError("该联网 API 需要当前管理员授权")
+        call_args = self._prepare_web_args(kind, arguments, spec.get("schema"), binding)
+        if "schema" in spec:
+            await completed_thread(validate, spec["schema"], call_args)
+        if runtime is None or runtime.host is None:
+            raise RuntimeError("跨插件 API 调用缺少宿主上下文")
+        raw = await call_capability(
+            runtime.host,
+            "api.call",
+            timeout_ms=30000,
+            api_name=spec["api_name"],
+            version=spec.get("version", ""),
+            args=call_args,
+        )
+        value = self.vault.redact(_unwrap_api_result(raw, "result"))
+        if isinstance(value, dict):
+            items = value.get("items") if isinstance(value.get("items"), list) else value.get("results")
+            return {
+                "provider": spec["api_name"],
+                **value,
+                **({"items": items, "results": items} if isinstance(items, list) else {}),
+            }
+        if kind == "fetch":
+            return {
+                "provider": spec["api_name"],
+                "url": arguments["url"],
+                "title": arguments["url"],
+                "content": str(value)[:16000],
+                "content_kind": "page_text",
+                "service": f"plugin_api:{label}",
+            }
+        return {
+            "provider": spec["api_name"],
+            "query": arguments["query"],
+            "items": [],
+            "results": [],
+            "summary": str(value)[:16000],
+            "content_kind": "search_results",
+            "service": f"plugin_api:{label}",
+        }
+
     async def call_web(self, kind, arguments, context, runtime, *, mode="any"):
         if self.closed:
             raise RuntimeError("能力服务正在关闭")
         configuration = self.load()
-        binding = (configuration.get("web") or {}).get(kind)
+        web_cfg = configuration.get("web") or {}
+        if mode.startswith("mcp:"):
+            service = mode.split(":", 1)[1]
+            config = (configuration.get("servers") or {}).get(service)
+            if not isinstance(config, dict) or not config.get("tools"):
+                raise RuntimeError(f"未登记 MCP 服务 {service}")
+            tool = next(
+                (t for t in config["tools"] if kind in t.lower()),
+                config["tools"][0],
+            )
+            return await self._call_web_mcp(
+                service, tool, kind, arguments, context, runtime, config
+            )
+        if mode.startswith("plugin_api:"):
+            api_id = mode.split(":", 1)[1]
+            spec = (configuration.get("apis") or {}).get(api_id)
+            return await self._call_web_plugin_api(
+                api_id, spec, kind, arguments, context, runtime
+            )
+        binding = web_cfg.get(kind)
         if not isinstance(binding, dict):
             if mode == "any":
                 return None
@@ -747,116 +1033,15 @@ class Services:
                 raise RuntimeError(f"services.web.{kind} 未绑定为 mcp 模式")
             service, tool = binding["service"], binding["tool"]
             config = (configuration.get("servers") or {}).get(service)
-            if (
-                not isinstance(config, dict)
-                or tool not in config.get("tools", [])
-                or config.get("readonly") is not True
-            ):
-                raise PermissionError("联网 MCP 服务仅允许 readonly=true 的只读工具")
-            if config.get("access", "everyone") == "admins":
-                if context.get("owner") == "self" or runtime is None or not await completed_thread(runtime.authorized, context):
-                    raise PermissionError("该只读联网 MCP 服务需要当前管理员授权")
-            thread_id = context.get("thread_id") or "web"
-            lock = self.locks.setdefault((service, thread_id), asyncio.Lock())
-            async with lock:
-                session = await self._session(
-                    service,
-                    {"chat_id": context.get("chat_id", ""), "thread_id": thread_id},
-                    config,
-                )
-                if tool not in session.tools:
-                    raise PermissionError("MCP 未提供登记的联网工具")
-                schema = session.tools[tool].get("inputSchema", {})
-                call_args = self._prepare_web_args(kind, arguments, schema)
-                await completed_thread(validate, schema, call_args)
-                try:
-                    result = await session.request(
-                        "tools/call", {"name": tool, "arguments": call_args}
-                    )
-                    if result.get("isError"):
-                        raise RuntimeError("MCP 联网工具执行失败")
-                except BaseException:
-                    for session_key in list(self.sessions):
-                        if self.sessions[session_key] is session:
-                            self.sessions.pop(session_key)
-                    await session.close()
-                    raise
-            parts = []
-            for item in result.get("content", []):
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(str(self.vault.redact(item.get("text", "")))[:16000])
-                elif (
-                    isinstance(item, dict)
-                    and item.get("type") == "resource"
-                    and isinstance(item.get("resource"), dict)
-                    and "text" in item["resource"]
-                ):
-                    parts.append(
-                        str(self.vault.redact(item["resource"]["text"]))[:16000]
-                    )
-            joined = "\n".join(parts).strip()
-            try:
-                parsed = json.loads(joined)
-                if isinstance(parsed, dict):
-                    return self.vault.redact(parsed)
-            except ValueError:
-                pass
-            if kind == "fetch":
-                return {
-                    "url": arguments["url"],
-                    "title": arguments["url"],
-                    "content": joined[:16000],
-                    "content_kind": "page_text",
-                    "service": f"mcp:{service}:{tool}",
-                }
-            return {
-                "query": arguments["query"],
-                "results": [],
-                "summary": joined[:16000],
-                "content_kind": "search_results",
-                "service": f"mcp:{service}:{tool}",
-            }
-
+            return await self._call_web_mcp(
+                service, tool, kind, arguments, context, runtime, config, binding=binding
+            )
         if "api" in binding:
             if mode not in {"any", "plugin_api"}:
                 raise RuntimeError(f"services.web.{kind} 未绑定为 plugin_api 模式")
             api_id = binding["api"]
             spec = (configuration.get("apis") or {}).get(api_id)
-            if not isinstance(spec, dict) or spec.get("readonly") is not True:
-                raise PermissionError("联网 API 仅允许 readonly=true 的只读接口")
-            if spec.get("access", "everyone") == "admins":
-                if context.get("owner") == "self" or runtime is None or not await completed_thread(runtime.authorized, context):
-                    raise PermissionError("该只读联网 API 需要当前管理员授权")
-            call_args = self._prepare_web_args(kind, arguments, spec.get("schema"))
-            if "schema" in spec:
-                await completed_thread(validate, spec["schema"], call_args)
-            if runtime is None or runtime.host is None:
-                raise RuntimeError("跨插件 API 调用缺少宿主上下文")
-            raw = await call_capability(
-                runtime.host,
-                "api.call",
-                timeout_ms=30000,
-                api_name=spec["api_name"],
-                version=spec.get("version", ""),
-                args=call_args,
+            return await self._call_web_plugin_api(
+                api_id, spec, kind, arguments, context, runtime, binding=binding
             )
-            value = self.vault.redact(_unwrap_api_result(raw, "result"))
-            if isinstance(value, dict):
-                return value
-            if kind == "fetch":
-                return {
-                    "url": arguments["url"],
-                    "title": arguments["url"],
-                    "content": str(value)[:16000],
-                    "content_kind": "page_text",
-                    "service": f"plugin_api:{api_id}",
-                }
-            return {
-                "query": arguments["query"],
-                "results": [],
-                "summary": str(value)[:16000],
-                "content_kind": "search_results",
-                "service": f"plugin_api:{api_id}",
-            }
-
         raise ValueError("未知联网服务绑定方式")

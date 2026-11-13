@@ -21,14 +21,17 @@ READONLY_TOOLS = frozenset(
         "image_read",
     }
 )
-SANDBOX_TOOLS = READONLY_TOOLS | {
-    "workspace_file",
-    "sandbox_exec",
-    "result_attach",
-    "mcp_call",
-    "plugin_api",
-    "credential_call",
-}
+WORKSPACE_TOOLS = frozenset({"workspace_file", "html_render", "result_attach"})
+HOST_TOOLS = (
+    READONLY_TOOLS
+    | WORKSPACE_TOOLS
+    | {"person_read", "recall_read", "mcp_call", "plugin_api"}
+)
+SANDBOX_TOOLS = HOST_TOOLS | {"sandbox_exec", "credential_call"}
+TASK_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+WEB_PROVIDER_RE = re.compile(
+    r"^(auto|host|google_search_plugin|mcp(:[A-Za-z][A-Za-z0-9_-]{0,63})?|plugin_api(:[A-Za-z][A-Za-z0-9_-]{0,63})?|plugin:[A-Za-z0-9_.-]{1,128}|web:[A-Za-z][A-Za-z0-9_-]{0,63})$"
+)
 ALLOWED_TASKS = frozenset({"utils", "planner", "replyer", "fast_model", "vlm"})
 DEFAULT_INSTRUCTIONS = (
     "你是 MaiBot 调度的只读探索能力。根据当前要求自主查证，保留出处，区分事实和推断。"
@@ -57,6 +60,18 @@ class Profile:
     skills: tuple[str, ...] = ()
     allow_users: tuple[str, ...] = ()
     allow_chats: tuple[str, ...] = ()
+    model_name: str = ""
+    max_tokens: int | None = None
+    temperature: float | None = None
+    max_steps: int | None = None
+    web_provider: str = ""
+    sandbox_targets: tuple[str, ...] = ()
+
+    @property
+    def uses_workspace(self):
+        return self.environment == "sandbox" or any(
+            name in WORKSPACE_TOOLS for name in self.tools
+        )
 
     @property
     def autonomous(self):
@@ -64,6 +79,7 @@ class Profile:
             self.access == "everyone"
             and not self.secrets
             and not self.template
+            and not self.sandbox_targets
             and self.bound
             and not self.allow_users
             and not self.allow_chats
@@ -111,8 +127,13 @@ class Profiles:
         if set(config) - {
             "title",
             "model",
+            "model_name",
             "fallback_models",
             "task",
+            "max_tokens",
+            "temperature",
+            "max_steps",
+            "web_provider",
             "environment",
             "tools",
             "access",
@@ -121,6 +142,7 @@ class Profiles:
             "apis",
             "secrets",
             "template",
+            "sandbox_targets",
             "bound",
             "skills",
             "allow_users",
@@ -128,7 +150,7 @@ class Profiles:
         }:
             raise ValueError("档案包含未声明字段，凭据只能使用句柄绑定")
         task = config.get("task", "utils")
-        if not isinstance(task, str) or task not in ALLOWED_TASKS:
+        if not isinstance(task, str) or not TASK_RE.fullmatch(task):
             raise ValueError("能力档案模型任务槽位无效")
         environment = config.get("environment", "readonly")
         if environment not in {"readonly", "sandbox"}:
@@ -137,12 +159,7 @@ class Profiles:
         fallback = config.get("fallback_models", [])
         if not isinstance(tools, list) or not all(
             isinstance(name, str)
-            and name
-            in (
-                SANDBOX_TOOLS
-                if environment == "sandbox"
-                else READONLY_TOOLS | {"mcp_call", "plugin_api"}
-            )
+            and name in (SANDBOX_TOOLS if environment == "sandbox" else HOST_TOOLS)
             for name in tools
         ):
             raise ValueError("能力档案含未注册或越权工具")
@@ -176,6 +193,41 @@ class Profiles:
             raise ValueError("备用模型列表无效")
         if not isinstance(config.get("model", ""), str):
             raise TypeError("模型名称必须是字符串")
+        model_name = config.get("model_name", "")
+        if not isinstance(model_name, str) or len(model_name) > 256:
+            raise ValueError("模型指定名称无效")
+        max_tokens = config.get("max_tokens")
+        if max_tokens is not None and (
+            type(max_tokens) is not int or not 1 <= max_tokens <= 1000000
+        ):
+            raise ValueError("max_tokens 必须在 1 到 1000000 之间")
+        temperature = config.get("temperature")
+        if temperature is not None:
+            if type(temperature) not in (int, float) or not 0.0 <= float(temperature) <= 2.0:
+                raise ValueError("temperature 必须在 0.0 到 2.0 之间")
+            temperature = float(temperature)
+        max_steps = config.get("max_steps")
+        if max_steps is not None and (
+            type(max_steps) is not int or not 1 <= max_steps <= 128
+        ):
+            raise ValueError("max_steps 必须在 1 到 128 之间")
+        web_provider = config.get("web_provider", "")
+        if not isinstance(web_provider, str) or (
+            web_provider and not WEB_PROVIDER_RE.fullmatch(web_provider)
+        ):
+            raise ValueError("档案联网搜索提供方配置无效")
+        sandbox_targets = config.get("sandbox_targets", [])
+        if (
+            not isinstance(sandbox_targets, list)
+            or len(sandbox_targets) > 64
+            or not all(
+                isinstance(item, str)
+                and 1 <= len(item) <= 256
+                and not any(ch.isspace() for ch in item)
+                for item in sandbox_targets
+            )
+        ):
+            raise ValueError("档案限定网络目标无效")
         network = config.get(
             "network", "public" if environment == "sandbox" else "none"
         )
@@ -191,6 +243,7 @@ class Profiles:
         if (
             config.get("secrets")
             or config.get("template")
+            or sandbox_targets
             or network == "restricted"
             or "credential_call" in tools
         ) and config.get("access") != "admins":
@@ -214,7 +267,26 @@ class Profiles:
             skills=tuple(config.get("skills", [])),
             allow_users=tuple(config.get("allow_users", [])),
             allow_chats=tuple(config.get("allow_chats", [])),
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            max_steps=max_steps,
+            web_provider=web_provider,
+            sandbox_targets=tuple(sandbox_targets),
         )
+
+    def delete(self, profile_id: str):
+        if not isinstance(profile_id, str) or not re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id
+        ):
+            raise ValueError("能力档案编号无效")
+        if profile_id in {"scout", "maker"}:
+            raise ValueError("预设能力档案不可删除")
+        directory = self.path / profile_id
+        if directory.is_symlink() or not directory.exists():
+            raise ValueError("能力档案不存在")
+        shutil.rmtree(directory)
+        return {"deleted": True, "profile": profile_id}
 
     def clone(self, source_id, target_id):
         self.get(source_id)
@@ -331,6 +403,7 @@ class Profiles:
                 or config.get("apis")
                 or config.get("secrets")
                 or config.get("template")
+                or config.get("sandbox_targets")
                 or config.get("access") == "listed"
             ):
                 lines = [

@@ -140,13 +140,19 @@ class WorkingCopy:
         }
 
     def write(self, path, content):
+        if not isinstance(content, str):
+            raise ValueError("写入内容格式无效")
+        return self.write_bytes(path, content.encode())
+
+    def write_bytes(self, path, data):
         if path.startswith("in/"):
             raise PermissionError("引用输入只读")
-        if not isinstance(content, str) or len(content.encode()) > self.owner.max_bytes:
+        if not isinstance(data, (bytes, bytearray)) or len(data) > self.owner.max_bytes:
             raise ValueError("写入内容过大或格式无效")
+        raw = bytes(data)
         files, used = self.owner.inventory(self.path)
         previous = next((size for name, size in files if name == path), 0)
-        if used - previous + len(content.encode()) > self.owner.max_bytes:
+        if used - previous + len(raw) > self.owner.max_bytes:
             raise ValueError("工作区超过容量配额")
         if (
             previous == 0
@@ -164,7 +170,7 @@ class WorkingCopy:
             )
             try:
                 with os.fdopen(descriptor, "wb") as output:
-                    output.write(content.encode())
+                    output.write(raw)
                     output.flush()
                     os.fsync(output.fileno())
                 if name in os.listdir(directory):
@@ -176,7 +182,7 @@ class WorkingCopy:
                     os.unlink(temporary, dir_fd=directory)
                 except FileNotFoundError:
                     pass
-        return {"path": path, "bytes": len(content.encode())}
+        return {"path": path, "bytes": len(raw)}
 
     def listing(self):
         files, size = self.owner.inventory(self.path)
@@ -394,7 +400,7 @@ class Workspaces:
                                 handle,
                                 row["chat_id"],
                                 row["thread_id"],
-                                row["revision"],
+                                row.get("revision", row.get("latest_revision", 0)),
                                 name,
                                 kind,
                                 size,

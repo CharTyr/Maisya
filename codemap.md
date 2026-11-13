@@ -4,13 +4,13 @@
 
 仓库根目录就是插件根目录，可直接支持 MaiBot 官方后台填写仓库地址安装和点按钮更新。运行期用户资产全部存放在插件目录外的 `<宿主根>/data/maisya/`。
 
-当前架构与实现已对齐产品设计期望：插件生命周期、外部数据目录与 `settings.base.json` 三路配置合并（`chat_proactive_levels` 等用户键映射整份原子替换）、可信消息与 `session_routes`（含 `human_count` / `last_human_at` 活跃统计）、管理员验身与 `@全体成员` 过滤、保险箱与输入/出站脱敏；`scout`/`maker` 档案（开箱内置 `source-checking` / `ongoing-workspace` 技能与 `HEARTBEAT.md` 脾性）、`task` 模型槽位校验、`call_capability` 显式超时与 `RPCError` 归一化；持久工作区、gVisor/Docker 沙箱与并发控制（`max_concurrent`）、stdio MCP 降权、私有固定模板与跨插件只读 `@API`（`plugin_api` 工具 + `services.json["apis"]` 白名单）；分层记忆、版本回滚、自身 `HEARTBEAT.md` 定期探索与恢复后短方法学习；`bridge.py` / `share.py` 原生回接（`file` 附件独立拆条 `send.hybrid` 跟发）；`intents.py` / `pulse.py`（每会话独立主动级别 `chat_proactive_levels`、冷私聊 `acquaintance_users` 边界、`self` 线程 `thread_later(kind="serendipity")` 偶遇路由、规则化 `_longing`、`<maisya_temperament>` 与 `<maisya_thread_result>` 注入、`wait_thread` 5s 顺延）；`incoming.py`（支持 `profile` + 可选 `workspace` 先跑自主线程后通知）；以及四页玻璃盒管理台（`system`/`memory`/`user`/`assistant`/`tool` 五段构成、`scheduled_intents`、`steer` 转向与新设置字段）。
+当前架构与实现已对齐产品设计期望：插件生命周期、外部数据目录与 `settings.base.json` 三路配置合并（`chat_proactive_levels` 等用户键映射整份原子替换）、可信消息与 `session_routes`（含 `human_count` / `last_human_at` 活跃统计）、管理员验身与 `@全体成员` 过滤、保险箱与输入/出站脱敏；`scout`/`maker` 档案（开箱内置 `source-checking` / `ongoing-workspace` 技能与 `HEARTBEAT.md` 脾性）、按档案覆盖 `model_name` / `max_tokens` / `temperature` / `max_steps` / `web_provider` / `sandbox_targets`、开放无容器工作区与宿主 `render.html2png` 渲染出图、`person_read` / `recall_read`、管理员可写 MCP / 跨插件 `@API` / 自定义模板与删除能力档案/技能、`web_provider` 多源自由映射（含 `plugin:<id>` / `web:<name>` / `mcp:<name>` / `plugin_api:<name>` 与 `arg_map` / `defaults`）、`call_capability` 显式超时与 `RPCError` 归一化；持久工作区、gVisor/Docker 沙箱与并发控制（`max_concurrent`）；分层记忆、版本回滚、可配置 `heartbeat_interval_minutes` / `heartbeat_profile` 定期探索与恢复后短方法学习；`bridge.py` / `share.py` 原生回接（`file` 附件独立拆条 `send.hybrid` 跟发）；`intents.py` / `pulse.py`（`daily_proactive_limit`、每会话独立主动级别 `chat_proactive_levels`、冷私聊 `acquaintance_users` 边界、`self` 线程 `thread_later(kind="serendipity")` 偶遇路由、规则化 `_longing`、`<maisya_temperament>` 与 `<maisya_thread_result>` 注入、`wait_thread` 5s 顺延、管理员定时/周期工作流 `every_seconds >= 300`）；`incoming.py`（支持 `profile` + 可选 `workspace` 先跑自主线程后通知）；以及四页玻璃盒管理台（现场直接发起工作流、五段构成、`scheduled_intents`、`steer` 转向、宿主发现只读参考与工作流计划调度）。
 
 ```text
 Maisya/
 ├── __init__.py                     # 只导出 create_plugin
-├── _manifest.json                  # 插件清单 chartyr.maisya（含 config.get_plugin / chat.open_session / send.hybrid / api.list / api.get / api.call）
-├── webui.json                      # MaiBot WebUI v2 扩展声明（含 note.steer）
+├── _manifest.json                  # 插件清单 chartyr.maisya（含 23 项宿主能力：discovery、person.*、render.html2png 等）
+├── webui.json                      # MaiBot WebUI v2 扩展声明（含 note 可选 thread_id、profile/chat_id/workspace 与 steer）
 ├── plugin.py                       # 宿主入口：生命周期、三路配置合并、Hook（before_planner 含 summary/autonomous 与条件提示）、@Tool、@API 胶水层
 ├── config.example.toml             # 默认关闭的配置示例（含 web_provider / chat_proactive_levels / acquaintance_users / longing_quiet_hours 等）
 ├── maisya/

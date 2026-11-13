@@ -134,6 +134,7 @@ class ThreadStore:
                                 "apis",
                                 "secrets",
                                 "template",
+                                "sandbox_targets",
                                 "bound",
                                 "allow_users",
                                 "allow_chats",
@@ -728,7 +729,7 @@ class ThreadEngine:
         deadline = asyncio.get_running_loop().time() + self.timeout
         try:
             async with asyncio.timeout(self.timeout):
-                for _ in range(self.max_steps):
+                for _ in range(profile.max_steps or self.max_steps):
                     pending = await asyncio.to_thread(
                         self.store.pending, thread_id, processed
                     )

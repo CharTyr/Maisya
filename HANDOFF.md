@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、坑和上线前核查；设计与规则的权威来源是根目录 `AGENTS.md`、`codemap.md` 和 `docs/` 文档。
 
-最后更新：2026-11-13（完成全量设计期望对齐 + `web_provider` 预设宿主优先且自动兼容第三方联网搜索插件、`194` 项本地单测/UI 测试、`21` 项真实宿主 SDK 契约与未篡改宿主配置的隔离实模联网冒烟）。
+最后更新：2026-11-13（完成全量设计期望对齐 + 工作流自由化升级：无容器工作区与 `render.html2png` 出图、自由 `web_provider` 映射、按档案自定义模型/参数与删除、管理员可写 MCP/跨插件 `@API`/自定义模板与 `sandbox_targets`、`person_read`/`recall_read`、`daily_proactive_limit`/`heartbeat_interval_minutes`/`heartbeat_profile`、控制台直起工作流与周期工作流调度；通过 `203` 项本地单测/UI 测试、`22` 项真实宿主 SDK 契约与未篡改宿主配置的隔离实模联网冒烟）。
 
 ## 这是什么
 
@@ -14,11 +14,11 @@ MaiBot 插件 `chartyr.maisya`。不改 MaiBot 宿主源码，给 MaiBot 提供�
 
 | 范围 | 状态 | 依据 |
 |---|---|---|
-| M0 基座 / M1 线程 / M2 回接 | 已实现、加固、对齐并验证 | 194 项本地单测/UI 测试 + 21 项宿主 SDK 契约（含 `web_provider` 回退、`send.hybrid` `file` 拆条与 `before_planner` 精简） |
-| M3 maker + 工作区 + 沙箱 + 凭据 + 只读 `@API` | **真实 runsc 验收通过** | `tests_sandbox/run_isolated.py --execute` 全绿，`host_unchanged` / `backup_cleaned` 复核通过，新增 `source-checking` / `ongoing-workspace` 开箱技能与 `plugin_api` / `services.web` |
-| M4 记忆与塑形 | 已实现并验证 | 本地单测 + `Learning._learn` 真实 LLM 冒烟 (`applied`)；含 `HEARTBEAT.md` 脾性/方向拆分 |
-| M5 意图 / Pulse / 克制主动性 | 已实现并对齐 | `session_routes` 活跃统计 + `chat_proactive_levels` + `acquaintance_users` + `longing_quiet_hours` + `serendipity` 偶遇路由 + `profile+workspace` 事件先跑线程 |
-| M6 四页管理台与三路配置合并 | 已实现并验证 | `webui/build.py --check` + 2 项 Chromium UI 测试（含 `web_provider` 设置、`web` 健康状态、五段上下文、`steer` 勾选与移动视口检查）+ `settings.base.json` 原子/三路合并 |
+| M0 基座 / M1 线程 / M2 回接 | 已实现、加固、对齐并验证 | 203 项本地单测/UI 测试 + 22 项宿主 SDK 契约（含 `web_provider` 多源回退/映射、`send.hybrid` `file` 拆条与 `before_planner` 精简） |
+| M3 maker + 工作区 + 沙箱 + 凭据 + `@API` | **真实 runsc 验收通过；工作流已放开** | `tests_sandbox/run_isolated.py --execute` 全绿，`host_unchanged` / `backup_cleaned` 复核通过；支持无容器 `workspace_file`/`html_render`/`result_attach`、管理员可写 MCP/跨插件 `@API`/自定义模板与 `sandbox_targets` |
+| M4 记忆与塑形 | 已实现并验证 | 本地单测 + `Learning._learn` 真实 LLM 冒烟 (`applied`)；含 `HEARTBEAT.md` 脾性/方向拆分、`allow_custom` 放开自定义正文与 `delete_profile`/`delete_skill` |
+| M5 意图 / Pulse / 克制主动性 | 已实现并对齐 | `daily_proactive_limit`（0..50）、`heartbeat_interval_minutes`（5..1440）、`heartbeat_profile`、管理员 `every_seconds >= 300` 周期工作流、`session_routes` 活跃统计 + `chat_proactive_levels` + `acquaintance_users` + `longing_quiet_hours` + `serendipity` |
+| M6 四页管理台与三路配置合并 | 已实现并验证 | `webui/build.py --check` + 2 项扩展 Chromium UI 测试（现场直接发起新工作流、能力增删与宿主 `discovery` 只读参考、设置自定义 `web_provider`、新参数与计划调度） |
 | 真实模型 + 第三方搜索插件 / EXA 联网冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开启宿主 `web_search`）：`scout` 调 `web.search` 后经 `config.get_plugin` 自动回退 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 抓取 `example.com` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | 部署到线上 `plugins/` | **未部署（红线未放行）** | `plugins/`、`src/`、`config/`、`data/` 零改动；上线部署需用户当次授权与先备份 |
 
@@ -31,7 +31,7 @@ PYTHONPATH=.:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -
 
 依赖安装（如 `.local-checks/deps` 未就绪）：`python -m pip install --target .local-checks/deps 'cryptography>=46,<51' 'jsonschema>=4.23,<5'`。
 
-真实宿主隔离契约（20 项）与隔离实模联网冒烟：
+真实宿主隔离契约（22 项）与隔离实模联网冒烟：
 
 ```bash
 python3 tests_host/run_contract.py
