@@ -1,0 +1,25 @@
+enabled_chats = []
+agent_max_steps = 16
+agent_timeout = 180
+agent_max_active = 8
+thread_idle_seconds = 900
+thread_context_chars = 48000
+sleep_window = ""
+proactive_level = "care"
+
+[plugin]
+enabled = false
+config_version = "0.1.0"
+
+[sandbox]
+enabled = false
+image = ""
+socket = "unix:///var/run/docker.sock"
+runtime = "runsc"
+subnet = "172.30.253.0/24"
+dns = ["1.1.1.1"]
+host_addresses = []
+memory_mib = 512
+work_mib = 256
+timeout = 60
+output_bytes = 2097152

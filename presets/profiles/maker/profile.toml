@@ -1,0 +1,9 @@
+title = "创作者"
+model = ""
+fallback_models = []
+environment = "sandbox"
+network = "public"
+access = "everyone"
+tools = ["web_search", "web_fetch", "chat_read", "message_read", "memory_read", "image_read", "workspace_file", "sandbox_exec", "result_attach"]
+mcp = []
+secrets = []

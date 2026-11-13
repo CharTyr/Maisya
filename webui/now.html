@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Maisya · 现场</title>
+<style>
+:root{--paper:#fafaf8;--panel:#fff;--ink:#262822;--muted:#777b70;--line:#e5e7df;--accent:#4d6845;--wash:#edf1e9;--danger:#a44837;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--paper);font-synthesis:none}
+:root.dark{--paper:#191c18;--panel:#20241e;--ink:#e3e7dc;--muted:#a1aa97;--line:#343c30;--accent:#b3c6a0;--wash:#2e3928;--danger:#efaa9b}
+*{box-sizing:border-box}body{margin:0;font-size:14px;line-height:1.6}button,select,textarea{font:inherit;color:inherit}button,select{cursor:pointer}button{border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:7px 13px}button:disabled{cursor:default;opacity:.45}button:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button.primary{color:var(--panel);background:var(--accent);border-color:var(--accent)}button.stop{color:var(--danger)}select{border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:7px;max-width:200px}h1,h2,p{margin:0}h1{font-size:22px;font-weight:620;letter-spacing:-.6px}h2{font-size:18px;font-weight:600;overflow-wrap:anywhere}.muted{color:var(--muted)}.eyebrow{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--muted)}.app{height:var(--maibot-viewport-height,100dvh);min-height:600px;display:flex;flex-direction:column;max-width:1440px;margin:auto}header{padding:25px 30px 21px;display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:1px solid var(--line)}header p{margin-top:3px;color:var(--muted);font-size:13px}.connection{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;white-space:nowrap}.dot{width:6px;height:6px;background:var(--accent);border-radius:50%;display:inline-block}.layout{display:grid;grid-template-columns:285px minmax(0,1fr);flex:1;min-height:0}aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}.filters{padding:18px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}.filters label{font-size:12px;color:var(--muted)}.thread-list{overflow:auto;padding:9px;flex:1}.thread{width:100%;text-align:left;display:block;padding:14px 12px;border:1px solid transparent;border-radius:7px;background:transparent;margin-bottom:3px}.thread[aria-current=true]{background:var(--wash);border-color:var(--line)}.thread-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:540;margin-bottom:7px}.thread-meta{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted)}.thread-state{color:var(--accent)}aside footer{font-size:11px;color:var(--muted);padding:12px 20px;border-top:1px solid var(--line)}.empty{padding:44px 24px;color:var(--muted);font-size:13px}.detail{min-width:0;min-height:0;display:flex;flex-direction:column}.detail-head{padding:22px 28px 17px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.detail-head .eyebrow{margin-bottom:5px}.detail-meta{color:var(--muted);font-size:12px;margin-top:7px;overflow-wrap:anywhere}.content{padding:0 28px 22px;overflow:auto;flex:1;min-height:0;scrollbar-gutter:stable}.context{padding:12px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px;font-size:11px;color:var(--muted)}.context-line{display:flex;justify-content:space-between;gap:8px;margin-bottom:7px}.context-bar{height:5px;background:var(--line);border-radius:3px;overflow:hidden;display:flex}.context-bar span{height:100%;flex-shrink:0}.role-user{background:#8eac75}.role-assistant{background:#566f50}.role-tool{background:#c1b68c}.legend{margin-top:6px;display:flex;gap:15px;flex-wrap:wrap}.legend i{width:6px;height:6px;display:inline-block;margin-right:4px;border-radius:50%}.result{border-left:2px solid var(--accent);padding:0 0 2px 16px;margin-bottom:26px}.result h3,.stream h3{font-weight:540;font-size:12px;margin:0 0 10px;color:var(--muted)}pre{font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;margin:0}.result pre{font:14px/1.85 inherit;font-family:inherit}.stream-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.follow{font-size:11px;color:var(--muted);padding:2px 7px}.event{border-top:1px solid var(--line);padding:12px 0}.event summary{cursor:pointer;font-size:12px;display:list-item;list-style-position:inside}.event time{float:right;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.event pre{color:var(--muted);margin-top:10px;padding-left:14px}.event small{display:block;margin-top:5px;color:var(--muted)}.intent-line{font-size:11px;color:var(--muted);margin:18px 0 4px}.composer{padding:15px 28px 20px;border-top:1px solid var(--line);background:var(--paper)}.composer label{font-size:12px;display:block;margin-bottom:8px}.composer textarea{display:block;width:100%;min-height:65px;max-height:160px;resize:vertical;border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:10px 12px;line-height:1.55}.composer-bottom{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:9px;font-size:11px;color:var(--muted)}.feedback{font-size:12px;min-height:20px;margin-top:5px}.feedback.error{color:var(--danger)}[hidden]{display:none!important}
+@media(hover:hover) and (pointer:fine){button:not(:disabled):hover{border-color:var(--accent)}button:not(:disabled):active:not(:focus-visible){transform:scale(.98)}}
+@media(max-width:700px){.app{height:auto;min-height:100dvh}header{padding:18px 18px 15px}header p{max-width:230px;font-size:12px}.layout{grid-template-columns:minmax(0,1fr)}aside{border-right:0;border-bottom:1px solid var(--line)}.filters{padding:12px 18px}.thread-list{display:flex;max-height:140px;padding:8px;overflow:auto}.thread{min-width:210px;max-width:240px;margin:0 4px 0 0}aside footer{display:none}.detail-head{padding:20px 18px 12px}.content{padding:0 18px 20px;max-height:65dvh}.composer{padding:14px 18px 18px}.composer-bottom{align-items:flex-start}.connection{font-size:11px}}
+</style>
+<style>.detail-head .stop{flex-shrink:0;white-space:nowrap}.result pre{font-size:14px;line-height:1.85;font-family:inherit}.event button{font-size:11px;margin:8px 0 0 14px}</style>
+</head>
+<body>
+<main class="app">
+<header><div><div class="eyebrow">Maisya</div><h1>现场</h1><p>查看线程的过程与结果，随时补充方向。</p></div><div class="connection" role="status"><span class="dot"></span><span id="connection">正在连接</span></div></header>
+<div class="layout">
+<aside aria-label="线程导航"><div class="filters"><label for="chat">会话</label><select id="chat"><option value="">全部会话</option></select></div><nav class="thread-list" id="threads" aria-label="线程列表"><p class="empty">正在读取线程…</p></nav><footer>最近 60 个线程 · 自动更新</footer></aside>
+<section class="detail" aria-label="线程详情"><div class="empty" id="welcome">选择一个线程，查看它的过程与结果。</div>
+<div id="detail-head" class="detail-head" hidden><div><div class="eyebrow" id="profile"></div><h2 id="title"></h2><p class="detail-meta" id="meta"></p></div><button class="stop" id="stop" type="button">停止线程</button></div>
+<div class="content" id="content" hidden>
+<section class="context" aria-label="上下文构成"><div class="context-line"><span id="context-label"></span><span id="context-archive"></span></div><div class="context-bar" role="img" aria-label="上下文使用情况"><span class="role-user" id="bar-user"></span><span class="role-assistant" id="bar-assistant"></span><span class="role-tool" id="bar-tool"></span></div><div class="legend"><span><i class="role-user"></i>输入</span><span><i class="role-assistant"></i>模型</span><span><i class="role-tool"></i>工具</span><span id="model"></span></div></section>
+<section class="result" id="result" hidden><h3>当前结果</h3><pre id="result-text"></pre></section>
+<section class="stream"><div class="stream-head"><h3>过程</h3><button class="follow" id="follow" type="button" aria-pressed="true">跟随最新</button></div><div id="events"></div></section><p class="intent-line" id="intents"></p>
+</div>
+<form class="composer" id="composer" hidden><label for="message">补充方向</label><textarea id="message" maxlength="16000" placeholder="补充一个线索，或告诉它接下来往哪里走。"></textarea><div class="composer-bottom"><span>在原线程继续，结果保留在线程中。</span><button class="primary" type="submit" id="send">递纸条</button></div><p class="feedback" id="feedback" role="status" aria-live="polite"></p></form>
+</section>
+</div>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const states = {active:'正在探索',waiting:'等待输入',idle:'可继续',closed:'已停止'};
+  const kinds = {opened:'开启线程',input:'收到补充',tools:'调用工具',result:'得到结果',question:'等待必要输入',stopped:'停止线程',redirect:'更新方向',context_archive:'归档完整历史',context_checkpoint:'保存上下文',continued:'继续探索'};
+  let selected='', cursor=0, filter='', polling=false, requested=false, timer, busy=false, following=false, fingerprint='', generation=0, stopped=false;
+  const seen = new Set(), chats = new Set(), drafts = new Map();
+  const text = (id,value) => { $(id).textContent=value; };
+  const theme = context => document.documentElement.classList.toggle('dark', context?.theme==='dark');
+  window.addEventListener('maibot:context', event => theme(event.detail));
+  function feedback(value,error=false) { text('feedback',value); $('feedback').classList.toggle('error',error); }
+  function choose(id) {
+    if(selected)drafts.set(selected,$('message').value);
+    selected=id; cursor=0; generation++; seen.clear(); $('events').replaceChildren(); fingerprint='';
+    $('message').value=drafts.get(id)||'';
+    feedback(''); refresh();
+  }
+  function list(rows) {
+    const next=JSON.stringify([rows,selected]); if(next===fingerprint) return; fingerprint=next;
+    const focus=document.activeElement?.dataset.thread;
+    $('threads').replaceChildren();
+    if(!rows.length){const p=document.createElement('p');p.className='empty';p.textContent='还没有线程。MaiBot 调用能力后，过程会出现在这里。';$('threads').append(p);}
+    rows.forEach(row=>{
+      chats.add(row.chat_id);
+      const button=document.createElement('button');button.type='button';button.className='thread';button.dataset.thread=row.thread_id;
+      button.setAttribute('aria-current',String(row.thread_id===selected));button.title=row.title+'\n'+row.chat_id;
+      const title=document.createElement('span');title.className='thread-title';title.textContent=row.title;
+      const meta=document.createElement('span');meta.className='thread-meta';
+      const profile=document.createElement('span');profile.textContent=row.profile+' · '+row.chat_id.slice(0,12);
+      const state=document.createElement('span');state.className='thread-state';state.textContent=row.has_error?'运行中断':states[row.state]||row.state;
+      meta.append(profile,state);button.append(title,meta);button.addEventListener('click',()=>choose(row.thread_id));$('threads').append(button);
+    });
+    const existing=new Set([...$('chat').options].map(item=>item.value));
+    chats.forEach(chat=>{if(!existing.has(chat)){const option=document.createElement('option');option.value=chat;option.textContent=chat;option.title=chat;$('chat').append(option);}});
+    if(focus) [...$('threads').children].find(item=>item.dataset.thread===focus)?.focus({preventScroll:true});
+  }
+  function detail(data) {
+    const row=data.selected;if(!row)return;
+    ['detail-head','content','composer'].forEach(id=>$(id).hidden=false);$('welcome').hidden=true;
+    const item=data.threads.find(item=>item.thread_id===selected);
+    text('title',item?.title||row.thread_id);text('profile',row.profile+' / '+(states[row.state]||row.state));text('meta',row.chat_id+' · '+row.thread_id);
+    const ctx=row.context, used=Math.round(ctx.chars/1000*10)/10;
+    text('context-label',ctx.messages+' 条上下文 · '+used+'k / '+Math.round(ctx.limit/1000)+'k 字符');text('context-archive',ctx.archived?'早期原文已归档':'');
+    ['user','assistant','tool'].forEach(role=>$('bar-'+role).style.width=Math.min(100,100*ctx.roles[role]/ctx.limit)+'%');text('model','模型 '+row.model);
+    const output=row.result.text||row.result.question||row.result.error||'';$('result').hidden=!output;text('result-text',output);
+    $('stop').disabled=busy||row.state==='closed';$('message').disabled=busy||row.state==='closed';$('send').disabled=busy||row.state==='closed';
+    data.events.forEach(event=>{
+      if(seen.has(event.seq))return;seen.add(event.seq);
+      const block=document.createElement('details');block.className='event';block.dataset.event=String(event.seq);
+      const summary=document.createElement('summary'), time=document.createElement('time');time.textContent=new Date(event.at*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      summary.append(document.createTextNode(kinds[event.kind]||event.kind),time);
+      const body=document.createElement('pre');try{body.textContent=JSON.stringify(JSON.parse(event.text),null,2);}catch{body.textContent=event.text;}
+      block.append(summary,body);if(event.truncated){const more=document.createElement('button');more.type='button';more.textContent='读取完整步骤';let offset=0,whole='';more.addEventListener('click',async()=>{if(busy)return;busy=true;more.disabled=true;const target=selected;try{const part=await window.maibot.query('event',{thread_id:target,event_seq:event.seq,offset});if(!part.success)throw new Error(part.error||'读取失败');if(target!==selected)return;whole+=part.text;body.textContent=whole;offset=part.next_offset;more.hidden=offset===null;more.textContent='继续读取';}catch(error){feedback(error.message,true);}finally{busy=false;more.disabled=false;refresh();}});block.append(more);}
+      $('events').append(block);
+    });
+    while($('events').children.length>200)$('events').firstElementChild.remove();
+    cursor=data.cursor;
+    const deliveries=data.deliveries||[];const latest=deliveries[0];
+    text('intents',latest?(latest.route==='reply'?'结果已交给原生回复':({sent:'准确载荷已发送',uncertain:'发送回执未确认，请先核对原会话',failed:'发送未成功，请核对原会话',preparing:'正在准备交付',sending:'正在发送准确载荷',cancelled:'已取消交付'}[latest.status]||latest.status)):(data.intents.length?'回接记录 '+data.intents.length+' 条':''));
+    if(following)$('content').scrollTop=$('content').scrollHeight;
+  }
+  async function refresh() {
+    if(stopped||document.hidden)return;if(polling){requested=true;return;}clearTimeout(timer);polling=true;requested=false;
+    const version=generation, target=selected;
+    try {
+      const data=await window.maibot.query('snapshot',{thread_id:target,chat_id:filter,cursor});
+      if(!data.success)throw new Error(data.error||'读取失败');
+      if(version!==generation){requested=true;return;}
+      list(data.threads);text('connection','已连接 · 自动更新');
+      if(!selected&&data.threads.length){selected=data.threads[0].thread_id;generation++;requested=true;return;}
+      if(target===selected)detail(data);
+    } catch(error) {text('connection','连接暂时中断');feedback(error.message,true);}
+    finally {polling=false;if(!stopped)timer=setTimeout(refresh,requested?0:1800);}
+  }
+  async function action(name,args) {
+    if(busy)return;busy=true;feedback('正在处理…');$('send').disabled=true;$('stop').disabled=true;
+    const target=selected;
+    try {const result=await window.maibot.action(name,args);if(!result.success)throw new Error(result.error||'操作未完成');if(name==='note'&&drafts.get(target)?.trim()===args.message)drafts.delete(target);if(target===selected){if(name==='note'&&$('message').value.trim()===args.message)$('message').value='';feedback(name==='note'?'纸条已递入原线程。':'线程已停止。');}}
+    catch(error){feedback(error.message+'；如已超时，请刷新核对后再操作。',true);}
+    finally{busy=false;refresh();}
+  }
+  $('chat').addEventListener('change',()=>{filter=$('chat').value;choose('');});
+  $('message').addEventListener('input',()=>{if(selected)drafts.set(selected,$('message').value);});
+  $('composer').addEventListener('submit',event=>{event.preventDefault();const message=$('message').value.trim();if(!message){feedback('写一句补充方向。',true);$('message').focus();return;}action('note',{thread_id:selected,message});});
+  $('stop').addEventListener('click',()=>action('stop',{thread_id:selected}));
+  $('follow').addEventListener('click',()=>{following=!following;$('follow').setAttribute('aria-pressed',String(following));text('follow',following?'跟随最新':'已暂停跟随');});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+  window.addEventListener('pagehide',()=>{stopped=true;clearTimeout(timer);});
+  (async()=>{if(!window.maibot){text('connection','等待宿主管理台');text('welcome','请从 MaiBot 管理台的 Maisya 工作区打开此页。');return;}await window.maibot.ready;theme(window.maibot.context);refresh();})();
+})();
+</script>
+</body>
+</html>
