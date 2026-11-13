@@ -1041,6 +1041,20 @@
     if (activeTrips.length) flightRaf = requestAnimationFrame(tickFlight);
   }
 
+  function chatMeta(snap, cid) {
+    const src = snap?.chat_sources?.[cid] || {};
+    const name = src.name || (cid === "self" ? "自身活动" : cid);
+    const plat = src.platform || (cid === "self" ? "self" : "");
+    const typeLabel = src.chat_type === "group" ? "群" : src.chat_type === "private" ? "私" : "";
+    const rawAv = String(src.avatar || "");
+    const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
+    const mono = (name || cid || "?").trim().slice(0, 1).toUpperCase();
+    return { name, plat, typeLabel, safeAv, mono };
+  }
+  function avatarHtml(meta, small = false) {
+    return `<span class="mil-avatar${small ? " mil-avatar--sm" : ""}" aria-hidden="true">${esc(meta.mono)}${meta.safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(meta.safeAv)}')"></span>` : ""}</span>`;
+  }
+
   function renderFlow(snap) {
     const threads = snap.threads || [];
     const pulse = snap.pulse || {};
@@ -1052,9 +1066,10 @@
     const chats = [...enabledChats].slice(0, 8);
     $("#fl-cnt-chat").textContent = String(chats.length);
     $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter));
+    const filterLabel = state.chatFilter ? chatMeta(snap, state.chatFilter).name : "";
     $("#flow-filter-hint").textContent = state.chatFilter
-      ? `当前按会话筛选：${state.chatFilter}`
-      : "点击会话筛选全页 · 点击线程直接检视";
+      ? `当前按会话筛选：${filterLabel}`
+      : "点击会话筛选全页 · 点击活动直接检视";
 
     const selThread = threads.find((t) => t.thread_id === state.threadId) || snap.selected || null;
     const selChat = state.chatFilter || selThread?.chat_id || "";
@@ -1064,10 +1079,15 @@
       ? chats.map((cid) => {
           const activeHere = threads.some((t) => t.chat_id === cid && (t.state === "active" || t.state === "waiting"));
           const on = selChat === cid;
-          const label = cid === "self" ? "自身活动 (self)" : cid;
-          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-port-out="1" data-flow-chat="${esc(cid)}">
-            <span class="fl-node-top"><span class="fl-node-name">${esc(label)}</span><span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span></span>
-            <span class="fl-node-sub">${threads.filter((t) => t.chat_id === cid).length} 条记录</span>
+          const m = chatMeta(snap, cid);
+          const cnt = threads.filter((t) => t.chat_id === cid).length;
+          const sub = [m.plat ? m.plat.toUpperCase() : "", m.typeLabel, `${cnt} 条活动`].filter(Boolean).join(" · ");
+          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-port-out="1" data-flow-chat="${esc(cid)}" title="${esc(m.name)} (${esc(cid)})">
+            <span class="fl-node-top">
+              <span class="mil-row" style="gap:7px;min-width:0;flex:1;flex-wrap:nowrap">${avatarHtml(m)}<span class="fl-node-name">${esc(m.name)}</span></span>
+              <span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span>
+            </span>
+            <span class="fl-node-sub">${esc(sub)}${m.name !== cid ? ` · <span class="mono">${esc(cid)}</span>` : ""}</span>
           </button>`;
         }).join("")
       : `<div class="fl-node fl-node--static" data-port-out="1"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;

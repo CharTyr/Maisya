@@ -189,3 +189,110 @@ async def test_console_snapshot_includes_system_memory_roles_intents_and_steer(t
         )
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_console_and_memory_resolve_chat_sources_with_avatars_and_cache(tmp_path):
+    plugin = await loaded(tmp_path)
+    calls: list[tuple[str, dict]] = []
+
+    async def capability(name, **arguments):
+        calls.append((name, dict(arguments)))
+        if name == "chat.get_all_streams":
+            return {
+                "success": True,
+                "streams": [
+                    {
+                        "session_id": "group_101",
+                        "stream_id": "group_101",
+                        "platform": "qq",
+                        "group_id": "101",
+                        "group_name": "机械排版研习社",
+                        "account_id": "bot_1",
+                        "scope": "global",
+                        "is_group_session": True,
+                        "chat_type": "group",
+                    },
+                    {
+                        "session_id": "dm_202",
+                        "stream_id": "dm_202",
+                        "platform": "telegram",
+                        "user_id": "202",
+                        "user_nickname": "Alice",
+                        "user_cardname": "Alice (TG)",
+                        "account_id": "tg_1",
+                        "scope": "dm",
+                        "is_group_session": False,
+                        "chat_type": "private",
+                    },
+                    {
+                        "session_id": "dm_unsafe",
+                        "stream_id": "dm_unsafe",
+                        "platform": "qq",
+                        "user_id": "303",
+                        "user_nickname": "Bob",
+                        "is_group_session": False,
+                        "chat_type": "private",
+                    },
+                ],
+            }
+        if name == "chat.get_avatar":
+            target_id = arguments.get("target_id")
+            if target_id == "101":
+                return {
+                    "success": True,
+                    "avatar": {"status": "available", "url": "https://example.org/group101.png"},
+                }
+            if target_id == "202":
+                return {
+                    "success": True,
+                    "avatar": {"status": "available", "url": "data:image/png;base64,iVBORw0KGgo="},
+                }
+            if target_id == "303":
+                return {
+                    "success": True,
+                    "avatar": {"status": "available", "url": "javascript:alert(1)"},
+                }
+        if name == "llm.generate_with_tools":
+            return {"success": True, "response": "Ok", "tool_calls": []}
+        return {"success": False}
+
+    plugin.ctx.call_capability = capability
+    try:
+        plugin.memory.write("memory", "讨论了机械键盘字体", chat_id="group_101")
+        plugin.memory.write("memory", "私聊约定明天同步", chat_id="dm_202")
+        plugin.memory.write("memory", "不安全头像测试", chat_id="dm_unsafe")
+        plugin.memory.write("memory", "自身观察记录", chat_id="self")
+
+        from maisya.abilities import Profile
+
+        plugin.threads.create(
+            Profile(), "Summarize", chat_id="group_101", platform="qq", user_id=""
+        )
+
+        snap = await plugin.console_query()
+        assert snap["success"]
+        sources = snap["chat_sources"]
+        assert sources["group_101"]["name"] == "机械排版研习社"
+        assert sources["group_101"]["platform"] == "qq"
+        assert sources["group_101"]["chat_type"] == "group"
+        assert sources["group_101"]["avatar"] == "https://example.org/group101.png"
+
+        mem = await plugin.manage_read("memory")
+        assert mem["success"]
+        mem_sources = mem["chat_sources"]
+        assert mem_sources["dm_202"]["name"] == "Alice (TG)"
+        assert mem_sources["dm_202"]["platform"] == "telegram"
+        assert mem_sources["dm_202"]["chat_type"] == "private"
+        assert mem_sources["dm_202"]["avatar"].startswith("data:image/png;base64,")
+        assert mem_sources["dm_unsafe"]["name"] == "Bob"
+        assert mem_sources["dm_unsafe"]["avatar"] == ""
+        assert mem_sources["self"]["chat_type"] == "self"
+
+        # Second call should use cached streams & avatars
+        before_count = len([c for c in calls if c[0] in ("chat.get_all_streams", "chat.get_avatar")])
+        await plugin.manage_read("memory")
+        after_count = len([c for c in calls if c[0] in ("chat.get_all_streams", "chat.get_avatar")])
+        assert after_count == before_count
+    finally:
+        await plugin.on_unload()

@@ -200,15 +200,15 @@ class Management:
     async def _discovery(self):
         ctx = getattr(self.plugin, "ctx", None)
 
-        async def probe(capability, default):
+        async def probe(capability, default, **kwargs):
             if ctx is None:
                 return default
             try:
-                return await call_capability(ctx, capability)
+                return await call_capability(ctx, capability, **kwargs)
             except Exception:
                 return default
 
-        raw_streams = await probe("chat.get_all_streams", [])
+        raw_streams = await probe("chat.get_all_streams", [], platform="all_platforms")
         streams = (
             raw_streams.get("streams") or raw_streams.get("data") or []
             if isinstance(raw_streams, dict)
@@ -270,6 +270,9 @@ class Management:
             result = {"configuration": config, "version": self._version(config)}
         elif section == "memory":
             result = await completed_thread(self._memory, options)
+            result["chat_sources"] = await self.plugin._resolve_chat_sources(
+                result.get("chats", [])
+            )
         elif section == "workspace":
             result = await completed_thread(self._workspace, options)
         elif section == "intents":

@@ -638,6 +638,34 @@ pre, code, .mono, .num {
 .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
 .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
 
+.mil-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  color: var(--mil-ink);
+  font-family: var(--mil-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+}
+.mil-avatar--sm {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+.mil-avatar-img {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+
 .mil-hint {
   font-size: 12px;
   color: var(--mil-muted);

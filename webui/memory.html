@@ -645,6 +645,34 @@ pre, code, .mono, .num {
 .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
 .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
 
+.mil-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  color: var(--mil-ink);
+  font-family: var(--mil-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+}
+.mil-avatar--sm {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+.mil-avatar-img {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+
 .mil-hint {
   font-size: 12px;
   color: var(--mil-muted);
@@ -1560,13 +1588,27 @@ pre, code, .mono, .num {
       memData = r;
       const prevChat = $("#chat").value;
       const chats = r.chats || [];
+      const srcs = r.chat_sources || {};
+      const chatLabel = (cid) => {
+        const s = srcs[cid];
+        return s?.name && s.name !== cid ? `${s.name} (${cid})` : cid;
+      };
       $("#chat").innerHTML = chats.length
-        ? chats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")
+        ? chats.map((c) => `<option value="${esc(c)}">${esc(chatLabel(c))}</option>`).join("")
         : `<option value="">暂无会话</option>`;
       if (prevChat && chats.includes(prevChat)) $("#chat").value = prevChat;
-      $("#chat-chips").innerHTML = chats.map((c) =>
-        `<button type="button" class="mil-key mil-key--sm" data-chat-chip="${esc(c)}" style="justify-content:space-between"><span>${esc(c)}</span></button>`
-      ).join("") || `<span class="mil-hint">暂无已启用会话</span>`;
+      $("#chat-chips").innerHTML = chats.map((c) => {
+        const s = srcs[c] || {};
+        const name = s.name || c;
+        const rawAv = String(s.avatar || "");
+        const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
+        const mono = (name || c || "?").trim().slice(0, 1).toUpperCase();
+        return `<button type="button" class="mil-key mil-key--sm" data-chat-chip="${esc(c)}" style="justify-content:flex-start;gap:7px" title="${esc(c)}">
+          <span class="mil-avatar mil-avatar--sm" aria-hidden="true">${esc(mono)}${safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(safeAv)}')"></span>` : ""}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span>
+          ${s.platform ? `<span class="mil-tag">${esc(s.platform)}</span>` : ""}
+        </button>`;
+      }).join("") || `<span class="mil-hint">暂无已启用会话</span>`;
       renderLayerBtns();
       renderCards($("#search-results"), r.results, "search");
       renderCards($("#experiences"), r.experiences, "exp");

@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import sqlite3
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -21,6 +22,7 @@ if __package__:
     from .maisya.management import Management
     from .maisya.memory import MemoryLayers
     from .maisya.pulse import Pulse
+    from .maisya.scout import call_capability
     from .maisya.share import Share
     from .maisya.threads import ThreadEngine, ThreadStore
     from .maisya.trust import (
@@ -51,6 +53,7 @@ else:
     from maisya.management import Management
     from maisya.memory import MemoryLayers
     from maisya.pulse import Pulse
+    from maisya.scout import call_capability
     from maisya.share import Share
     from maisya.threads import ThreadEngine, ThreadStore
     from maisya.trust import (
@@ -128,6 +131,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self.incoming = None
         self._pending_sources = {}
         self._turn_sources = {}
+        self._stream_cache = {"expires": 0.0, "streams": {}}
+        self._avatar_cache = {}
 
     async def on_load(self):
         file_settings = Settings.model_validate(self.get_plugin_config_data())
@@ -1490,6 +1495,164 @@ class MaisyaPlugin(MaiBotPlugin):
             },
         }
 
+    @staticmethod
+    def _safe_avatar_url(value) -> str:
+        text = str(value or "").strip()
+        if not text or len(text) > 131072 or any(ch.isspace() for ch in text):
+            return ""
+        lower = text.lower()
+        if lower.startswith(("https://", "http://", "data:image/")):
+            return text
+        return ""
+
+    async def _resolve_chat_sources(self, chat_ids) -> dict[str, dict]:
+        ordered = [cid for cid in dict.fromkeys(str(x or "").strip() for x in (chat_ids or [])) if cid][:16]
+        if not ordered:
+            return {}
+        now = time.monotonic()
+        ctx = getattr(self, "ctx", None)
+        if ctx is not None and now >= self._stream_cache.get("expires", 0.0):
+            raw_streams = None
+            try:
+                raw_streams = await call_capability(ctx, "chat.get_all_streams", platform="all_platforms")
+            except TypeError:
+                try:
+                    raw_streams = await call_capability(ctx, "chat.get_all_streams")
+                except Exception:
+                    raw_streams = None
+            except Exception:
+                raw_streams = None
+            items = (
+                raw_streams.get("streams") or raw_streams.get("data") or []
+                if isinstance(raw_streams, dict)
+                else raw_streams
+            )
+            indexed = {}
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    sid = str(item.get("session_id") or item.get("stream_id") or item.get("chat_id") or "").strip()
+                    if not sid:
+                        continue
+                    is_group = bool(
+                        item.get("is_group_session")
+                        or item.get("chat_type") == "group"
+                        or item.get("group_id")
+                    )
+                    target_id = str(
+                        (item.get("group_id") if is_group else item.get("user_id")) or ""
+                    ).strip()
+                    name = str(
+                        (
+                            item.get("group_name")
+                            if is_group
+                            else (item.get("user_cardname") or item.get("user_nickname"))
+                        )
+                        or item.get("name")
+                        or sid
+                    ).strip()
+                    indexed[sid] = {
+                        "chat_id": sid,
+                        "name": name or sid,
+                        "platform": str(item.get("platform") or "").strip(),
+                        "chat_type": "group" if is_group else "private",
+                        "target_id": target_id,
+                        "target_type": "group" if is_group else "user",
+                        "account_id": str(item.get("account_id") or "").strip(),
+                        "scope": str(item.get("scope") or "").strip(),
+                        "direct_avatar": self._safe_avatar_url(
+                            item.get("avatar") or item.get("avatar_url")
+                        ),
+                    }
+            self._stream_cache = {"expires": now + 60.0, "streams": indexed}
+
+        stream_map = self._stream_cache.get("streams", {})
+        sources = {}
+        pending_avatars = []
+        for cid in ordered:
+            if cid == "self":
+                sources[cid] = {
+                    "chat_id": "self",
+                    "name": "自身活动",
+                    "platform": "self",
+                    "chat_type": "self",
+                    "avatar": "",
+                }
+                continue
+            meta = stream_map.get(cid)
+            if meta:
+                avatar = meta.get("direct_avatar", "")
+                sources[cid] = {
+                    "chat_id": cid,
+                    "name": meta["name"],
+                    "platform": meta["platform"],
+                    "chat_type": meta["chat_type"],
+                    "avatar": avatar,
+                }
+                if not avatar and ctx is not None and meta["platform"] and meta["target_id"]:
+                    cache_key = (
+                        meta["platform"],
+                        meta["target_type"],
+                        meta["target_id"],
+                        meta["account_id"],
+                        meta["scope"],
+                    )
+                    cached = self._avatar_cache.get(cache_key)
+                    if cached and now < cached.get("expires", 0.0):
+                        sources[cid]["avatar"] = cached.get("url", "")
+                    else:
+                        pending_avatars.append((cid, cache_key, meta))
+            else:
+                platform = (
+                    await asyncio.to_thread(self.messages.platform_for, cid)
+                    if self.messages is not None
+                    else ""
+                )
+                sources[cid] = {
+                    "chat_id": cid,
+                    "name": cid,
+                    "platform": str(platform or "").strip(),
+                    "chat_type": "private" if platform else "",
+                    "avatar": "",
+                }
+
+        if pending_avatars and ctx is not None:
+            sem = asyncio.Semaphore(4)
+
+            async def _fetch(entry):
+                cid, cache_key, meta = entry
+                async with sem:
+                    url = ""
+                    expires = now + 60.0
+                    try:
+                        res = await call_capability(
+                            ctx,
+                            "chat.get_avatar",
+                            platform=meta["platform"],
+                            target_id=meta["target_id"],
+                            target_type=meta["target_type"],
+                            account_id=meta["account_id"],
+                            scope=meta["scope"],
+                        )
+                        if isinstance(res, dict) and res.get("success") and isinstance(res.get("avatar"), dict):
+                            av = res["avatar"]
+                            if av.get("status") == "available":
+                                url = self._safe_avatar_url(av.get("url"))
+                            if av.get("expires_at"):
+                                expires = min(now + 300.0, float(av["expires_at"]))
+                            else:
+                                expires = now + 300.0
+                    except Exception:
+                        url = ""
+                    self._avatar_cache[cache_key] = {"expires": expires, "url": url}
+                    if url:
+                        sources[cid]["avatar"] = url
+
+            await asyncio.gather(*(_fetch(item) for item in pending_avatars), return_exceptions=True)
+
+        return sources
+
     @API("maisya_now", description="读取线程现场与增量事件", version="1", public=False)
     async def console_query(self, thread_id="", chat_id="", cursor=0):
         try:
@@ -1554,6 +1717,19 @@ class MaisyaPlugin(MaiBotPlugin):
             result["profiles"] = profile_ids
             result["profile_cards"] = profile_cards
             result["enabled_chats"] = list(self.settings.enabled_chats)
+            source_chat_ids = list(
+                dict.fromkeys(
+                    [
+                        *self.settings.enabled_chats,
+                        *(
+                            t["chat_id"]
+                            for t in result.get("threads", [])
+                            if t.get("chat_id")
+                        ),
+                    ]
+                )
+            )
+            result["chat_sources"] = await self._resolve_chat_sources(source_chat_ids)
             result["pulse"] = {
                 "enabled": bool(self.settings.plugin.enabled),
                 "proactive_level": self.settings.proactive_level,
