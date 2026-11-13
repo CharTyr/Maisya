@@ -13,6 +13,7 @@ async def test_management_assets_versions_and_credentials_are_private(tmp_path):
         assert catalog["success"] and {p["id"] for p in catalog["profiles"]} == {
             "scout",
             "maker",
+            "digest",
         }
         current = await plugin.manage_read(
             "asset", json.dumps({"kind": "notes", "target": "scout"})

@@ -192,6 +192,45 @@ TOOL_DEFINITIONS = {
         {"arguments": {"type": "object"}},
         ["arguments"],
     ),
+    "digest_feed": definition(
+        "digest_feed",
+        "维护本工作区持续的 RSS 试订/退订状态机、硬条件+五维打分精选筛选、读者反馈及离线天光简报卡 HTML 渲染。",
+        {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "status",
+                    "poll",
+                    "discover",
+                    "add_feed",
+                    "score_select",
+                    "feedback",
+                    "render_card_html",
+                    "unsubscribe",
+                ],
+            },
+            "url": {"type": "string", "minLength": 1, "maxLength": 2048},
+            "title": {"type": "string", "minLength": 0, "maxLength": 256},
+            "origin": {"type": "string", "minLength": 0, "maxLength": 32},
+            "auto": {"type": "boolean"},
+            "feed_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "item_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "signal": {"type": "string", "enum": ["up", "down", "reply"]},
+            "note": {"type": "string", "minLength": 0, "maxLength": 512},
+            "max_items": {"type": "integer", "minimum": 1, "maximum": 20},
+            "lookback_days": {"type": "integer", "minimum": 1, "maximum": 90},
+            "slot_label": {"type": "string", "minLength": 0, "maxLength": 128},
+            "group_title": {"type": "string", "minLength": 0, "maxLength": 128},
+            "output_path": {"type": "string", "minLength": 1, "maxLength": 256},
+            "candidates": {
+                "type": "array",
+                "items": {"type": "object"},
+                "minItems": 0,
+                "maxItems": 64,
+            },
+        },
+        ["action"],
+    ),
 }
 
 
@@ -224,12 +263,21 @@ def validate_arguments(name, arguments):
             raise ValueError("工具浮点参数无效")
         if prop["type"] == "boolean" and type(value) is not bool:
             raise ValueError("工具布尔参数无效")
-        if prop["type"] == "array" and (
-            not isinstance(value, list)
-            or not prop.get("minItems", 0) <= len(value) <= prop.get("maxItems", 16)
-            or not all(isinstance(item, str) and len(item) <= 512 for item in value)
-        ):
-            raise ValueError("工具列表参数无效")
+        if prop["type"] == "array":
+            item_type = (
+                prop.get("items", {}).get("type", "string")
+                if isinstance(prop.get("items"), dict)
+                else "string"
+            )
+            if not isinstance(value, list) or not prop.get("minItems", 0) <= len(value) <= prop.get("maxItems", 16):
+                raise ValueError("工具列表参数无效")
+            if item_type == "object":
+                if not all(isinstance(item, dict) for item in value) or len(
+                    json.dumps(value, ensure_ascii=False)
+                ) > prop.get("maxBytes", 262144):
+                    raise ValueError("工具列表参数无效")
+            elif not all(isinstance(item, str) and len(item) <= 512 for item in value):
+                raise ValueError("工具列表参数无效")
         if prop["type"] == "object" and (
             not isinstance(value, dict)
             or len(json.dumps(value, ensure_ascii=False)) > 16000

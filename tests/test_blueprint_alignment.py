@@ -27,20 +27,26 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
         skills_dir = plugin.data_root / "abilities/skills"
         source_skill = skills_dir / "source-checking/SKILL.md"
         workspace_skill = skills_dir / "ongoing-workspace/SKILL.md"
+        digest_skill = skills_dir / "news-digest/SKILL.md"
         heartbeat_file = plugin.data_root / "memory/self/HEARTBEAT.md"
         assert source_skill.is_file()
         assert workspace_skill.is_file()
+        assert digest_skill.is_file()
         assert heartbeat_file.is_file()
 
         abilities = await plugin.manage_read("abilities", "{}")
         assert "source-checking" in abilities["skills"]
         assert "ongoing-workspace" in abilities["skills"]
+        assert "news-digest" in abilities["skills"]
+        assert plugin.profiles.get("digest").enabled is False
 
         for kind, content in [
             ("profile", (plugin.profiles.path / "scout/PROFILE.md").read_text()),
             ("profile", (plugin.profiles.path / "maker/PROFILE.md").read_text()),
+            ("profile", (plugin.profiles.path / "digest/PROFILE.md").read_text()),
             ("skill", source_skill.read_text()),
             ("skill", workspace_skill.read_text()),
+            ("skill", digest_skill.read_text()),
             ("heartbeat", heartbeat_file.read_text()),
         ]:
             assert "她" not in content

@@ -24,7 +24,7 @@ class Incoming:
         self.validate(config)
         return config
 
-    def validate(self, config):
+    def validate(self, config, *, strict_enabled=False):
         if not isinstance(config, dict) or len(config) > 16:
             raise ValueError("最多登记 16 个事件通道")
         for name, channel in config.items():
@@ -57,7 +57,12 @@ class Incoming:
                     raise ValueError("事件通道工作区编号格式无效")
             if has_profile:
                 ability = self.plugin.profiles.get(channel["profile"])
-                if not ability.autonomous:
+                if strict_enabled and not ability.enabled:
+                    raise ValueError("事件通道绑定的能力档案已停用")
+                allowed = (
+                    ability.autonomous if strict_enabled else ability.autonomous_config
+                )
+                if not allowed:
                     raise ValueError("事件通道绑定的能力档案必须允许自主使用")
             elif channel.get("kind") == "silent":
                 chat = channel["target"].split(":", 1)[1]

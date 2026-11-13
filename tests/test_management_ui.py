@@ -101,6 +101,23 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         assert await page.locator("img").count() == 0
                         assert await page.locator("iframe").count() == 0
                     elif name == "abilities":
+                        await expect(
+                            page.locator('[data-profile="digest"]')
+                        ).to_contain_text("已停用")
+                        await page.locator('[data-profile="digest"]').click()
+                        await expect(page.locator("#toggle-profile-enabled")).to_have_text(
+                            "开启所选"
+                        )
+                        await page.locator("#toggle-profile-enabled").click()
+                        await expect(
+                            page.locator('[data-profile="digest"]')
+                        ).to_contain_text("启用")
+                        assert plugin.profiles.get("digest").enabled is True
+                        await page.locator("#toggle-profile-enabled").click()
+                        await expect(
+                            page.locator('[data-profile="digest"]')
+                        ).to_contain_text("已停用")
+                        assert plugin.profiles.get("digest").enabled is False
                         await page.locator('[data-profile="scout"]').click()
                         await page.locator('[data-doc-tab="config"]').click()
                         await expect(page.locator("#content")).to_be_enabled()
@@ -217,6 +234,19 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(page.locator("#vault-value")).to_have_value("")
                         assert "drawing" in plugin.vault.handles()
                         assert "ui-private-secret-value" not in await page.content()
+                        await page.locator('[data-sched-preset="digest"]').click()
+                        await expect(page.locator("#intent-profile")).to_have_value(
+                            "digest"
+                        )
+                        await expect(page.locator("#intent-workspace")).to_have_value(
+                            "digest"
+                        )
+                        await expect(page.locator("#intent-every")).to_have_value(
+                            "86400"
+                        )
+                        await page.locator('[data-sched-preset="once"]').click()
+                        await page.locator("#intent-profile").fill("scout")
+                        await page.locator("#intent-workspace").fill("")
                         await page.locator("#intent-chat").fill("chat")
                         await page.locator("#intent-prompt").fill("每天巡检一次热点")
                         await page.locator("#schedule-intent").click()

@@ -147,6 +147,7 @@ class Management:
                                 "web_provider",
                                 "max_steps",
                                 "bound",
+                                "enabled",
                                 "skills",
                             }
                         }
@@ -864,7 +865,9 @@ class Management:
             if options.get("expected_version") != self._version(current):
                 raise ValueError("事件通道已变化，请刷新后重试")
             config = options["configuration"]
-            await completed_thread(plugin.incoming.validate, config)
+            await completed_thread(
+                plugin.incoming.validate, config, strict_enabled=True
+            )
             content = json.dumps(config, ensure_ascii=False).encode()
             if plugin.vault.contains_secret(content) or len(content) > 48000:
                 raise ValueError("事件通道只保存凭据句柄")
@@ -882,7 +885,9 @@ class Management:
                 raise ValueError("请填写目标会话 chat_id")
             profile_name = str(options.get("profile") or "").strip()
             if profile_name:
-                await completed_thread(plugin.profiles.get, profile_name)
+                ability = await completed_thread(plugin.profiles.get, profile_name)
+                if not ability.enabled:
+                    raise ValueError("能力档案已停用，请先在「能力」页开启后再加入计划")
             prompt = str(options.get("prompt") or "").strip()
             reason = str(options.get("reason") or prompt).strip()
             if not reason:
@@ -914,6 +919,38 @@ class Management:
                 bypass_limits=True,
             )
             result = {"intent": row}
+        elif action == "toggle_profile":
+            target = str(options.get("target") or "").strip()
+            enabled = options.get("enabled")
+            if not target or type(enabled) is not bool:
+                raise ValueError("toggle_profile 需要提供 target 与布尔值 enabled")
+            current = await completed_thread(
+                plugin.memory.read,
+                "profile",
+                target=target,
+                document="profile.toml",
+            )
+            text = current["content"]
+            replacement = f"enabled = {'true' if enabled else 'false'}"
+            if re.search(r"(?m)^enabled\s*=.*$", text):
+                updated = re.sub(r"(?m)^enabled\s*=.*$", replacement, text, count=1)
+            else:
+                updated = (text.rstrip("\n") + "\n" + replacement + "\n").lstrip("\n")
+            expected = options.get("expected_version") or current["version"]
+            saved = await completed_thread(
+                plugin.memory.write,
+                "profile",
+                updated,
+                target=target,
+                document="profile.toml",
+                expected_version=expected,
+                allow_custom=True,
+            )
+            result = {
+                "target": target,
+                "enabled": enabled,
+                "version": saved["version"],
+            }
         elif action == "import":
             result = await completed_thread(self._upload, options)
         else:

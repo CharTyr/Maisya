@@ -644,6 +644,8 @@ pre, code, .mono, .num {
 .mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
 .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
 .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+.mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
+[data-profile][data-enabled="false"] { opacity: 0.78; }
 
 .mil-avatar {
   position: relative;
@@ -1143,9 +1145,11 @@ pre, code, .mono, .num {
         <button type="button" class="mil-key mil-key--sm" data-sched-preset="once">单次 60s</button>
         <button type="button" class="mil-key mil-key--sm" data-sched-preset="hourly">每小时巡检</button>
         <button type="button" class="mil-key mil-key--sm" data-sched-preset="daily">每日简报</button>
+        <button type="button" class="mil-key mil-key--sm" data-sched-preset="digest">资讯简报（预设）</button>
       </div>
     </div>
   </div>
+  <p class="mil-hint" style="margin-bottom:10px">点击「资讯简报（预设）」可一键填入 <span class="mono">digest</span> 周期模板（该档案默认停用，需先在「能力」页开启后再加入队列）。</p>
   <div class="mil-grid-2" style="margin-bottom:10px">
     <div class="mil-field">
       <label class="mil-label" for="intent-chat">目标会话 chat_id</label>
@@ -1288,7 +1292,7 @@ pre, code, .mono, .num {
   if (page === "abilities") {
     const ALL_TOOLS = [
       "web_search", "web_fetch", "chat_read", "message_read", "memory_read", "image_read",
-      "recall_read", "person_read", "workspace_file", "html_render", "result_attach",
+      "recall_read", "person_read", "digest_feed", "workspace_file", "html_render", "result_attach",
       "mcp_call", "plugin_api", "sandbox_exec", "credential_call",
     ];
     let catalog = { profiles: [], skills: [], handles: [] };
@@ -1324,6 +1328,7 @@ pre, code, .mono, .num {
     function syncVisualFromToml() {
       loadingConfig = true;
       const p = parseSimpleToml($("#content").value);
+      $("#cfg-enabled").checked = p.enabled !== false;
       $("#cfg-title").value = p.title || "";
       $("#cfg-env").value = p.environment === "sandbox" ? "sandbox" : "readonly";
       $("#cfg-access").value = ["everyone", "admins", "listed"].includes(p.access) ? p.access : "everyone";
@@ -1419,10 +1424,14 @@ pre, code, .mono, .num {
     function renderCatalog() {
       $("#profiles").innerHTML = (catalog.profiles || []).map((p) => {
         const on = p.id === selectedProfile;
-        return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" aria-current="${on}">
+        const isEnabled = p.enabled !== false;
+        return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" data-enabled="${isEnabled}" aria-current="${on}">
           <div class="mil-row" style="justify-content:space-between;gap:6px">
             <strong>${esc(p.title || p.id)}</strong>
-            <span class="mil-tag">${esc(p.environment || "readonly")}</span>
+            <span class="mil-row" style="gap:4px">
+              <span class="mil-tag ${isEnabled ? "mil-tag--ok" : "mil-tag--off"}">${isEnabled ? "启用" : "已停用"}</span>
+              <span class="mil-tag">${esc(p.environment || "readonly")}</span>
+            </span>
           </div>
           <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
             <span class="mono">${esc(p.id)}</span>
@@ -1430,6 +1439,14 @@ pre, code, .mono, .num {
           </div>
         </button>`;
       }).join("") || `<p class="mil-hint">暂无能力档案</p>`;
+
+      const currentProfile = (catalog.profiles || []).find((p) => p.id === selectedProfile);
+      const toggleBtn = $("#toggle-profile-enabled");
+      if (toggleBtn && currentProfile) {
+        const currentlyOn = currentProfile.enabled !== false;
+        toggleBtn.textContent = currentlyOn ? "停用所选" : "开启所选";
+        toggleBtn.className = currentlyOn ? "mil-key mil-key--sm" : "mil-key mil-key--sm mil-key--hot";
+      }
 
       $("#skill-list").innerHTML = (catalog.skills || []).map((s) => `<option value="${esc(s)}">`).join("");
       $("#skill-chips").innerHTML = (catalog.skills || []).map((s) =>
@@ -1535,7 +1552,10 @@ pre, code, .mono, .num {
       });
     });
     $("#cfg-visual").addEventListener("change", (ev) => {
-      if (ev.target.matches("[data-cfg-tool]")) {
+      if (ev.target.id === "cfg-enabled") {
+        setDirty(true);
+        writeTomlKey("enabled", ev.target.checked ? "true" : "false");
+      } else if (ev.target.matches("[data-cfg-tool]")) {
         setDirty(true);
         const tools = $$("[data-cfg-tool]:checked").map((x) => x.dataset.cfgTool);
         writeTomlKey("tools", tomlArr(tools));
@@ -1582,6 +1602,15 @@ pre, code, .mono, .num {
       say("新能力已创建");
       await loadCatalog();
       await loadAsset(false);
+    };
+    $("#toggle-profile-enabled").onclick = async () => {
+      const currentProfile = (catalog.profiles || []).find((p) => p.id === selectedProfile);
+      const nextEnabled = currentProfile ? currentProfile.enabled === false : true;
+      const r = await rpc("write", "toggle_profile", { target: selectedProfile, enabled: nextEnabled });
+      if (!r?.success) return say(r?.error || "切换启用状态失败", true);
+      say(nextEnabled ? `已开启能力档案 ${selectedProfile}` : `已停用能力档案 ${selectedProfile}`);
+      await loadCatalog();
+      if ($("#document").value === "config") await loadAsset(false);
     };
     $("#delete-profile").onclick = async () => {
       const r = await rpc("write", "delete_profile", { target: selectedProfile });
@@ -2415,6 +2444,16 @@ pre, code, .mono, .num {
         if (k === "once") { $("#intent-in").value = "60"; $("#intent-every").value = "0"; }
         else if (k === "hourly") { $("#intent-in").value = "120"; $("#intent-every").value = "3600"; }
         else if (k === "daily") { $("#intent-in").value = "3600"; $("#intent-every").value = "86400"; }
+        else if (k === "digest") {
+          $("#intent-profile").value = "digest";
+          $("#intent-workspace").value = "digest";
+          $("#intent-in").value = "60";
+          $("#intent-every").value = "86400";
+          if (!$("#intent-prompt").value.trim()) {
+            $("#intent-prompt").value = "结合近期对话与手账兴趣巡检 RSS 与一手信源，经硬门槛与五维打分后生成今日资讯简报卡（若无达标新资讯则静默结束）。";
+          }
+          say("已填入资讯简报周期模板，确认参数后点「加入计划队列」（需先在能力页开启 digest）。");
+        }
       }
     });
 

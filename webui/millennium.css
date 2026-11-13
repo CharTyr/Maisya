@@ -637,6 +637,8 @@ pre, code, .mono, .num {
 .mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
 .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
 .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+.mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
+[data-profile][data-enabled="false"] { opacity: 0.78; }
 
 .mil-avatar {
   position: relative;

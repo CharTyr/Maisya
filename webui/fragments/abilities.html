@@ -12,6 +12,7 @@
         <input id="new-id" class="mil-input mono" placeholder="例如 painter">
       </div>
       <div class="mil-row">
+        <button id="toggle-profile-enabled" class="mil-key mil-key--sm" type="button">停用所选</button>
         <button id="clone" class="mil-key mil-key--sm" type="button">从所选能力克隆</button>
         <button id="delete-profile" class="mil-key mil-key--sm mil-key--danger" type="button">删除所选能力</button>
       </div>
@@ -62,6 +63,9 @@
           <span class="mil-hint">常见字段直接点选；复杂数组仍在下方源码完整保留</span>
         </div>
         <div class="mil-grid-2" style="margin-bottom:8px">
+          <div class="mil-field" style="grid-column:1/-1">
+            <label class="mil-chk"><input type="checkbox" id="cfg-enabled"><span>启用此能力档案（关闭后对话、脉搏与外部通道均不触发）</span></label>
+          </div>
           <div class="mil-field"><label class="mil-label" for="cfg-title">显示标题</label><input id="cfg-title" class="mil-input"></div>
           <div class="mil-field"><label class="mil-label" for="cfg-env">运行环境</label><select id="cfg-env" class="mil-select"><option value="readonly">readonly（无容器轻量环境）</option><option value="sandbox">sandbox（Docker 隔离沙箱）</option></select></div>
           <div class="mil-field"><label class="mil-label" for="cfg-access">调用权限</label><select id="cfg-access" class="mil-select"><option value="everyone">everyone（所有人与自主探索）</option><option value="admins">admins（仅管理员消息或控制台）</option><option value="listed">listed（仅白名单用户/会话）</option></select></div>

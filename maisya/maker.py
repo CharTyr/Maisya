@@ -49,6 +49,15 @@ class AgentRuntime(Scout):
         )
 
     def available(self, profile):
+        if not profile.enabled:
+            raise PermissionError("能力档案已停用")
+        if (
+            self.memory
+            and (self.memory.profiles.path / profile.id / "profile.toml").is_file()
+        ):
+            live = self.memory.profiles.get(profile.id)
+            if not live.enabled:
+                raise PermissionError("能力档案已停用")
         if not profile.bound:
             raise PermissionError("能力档案的服务或凭据尚未绑定")
         if profile.environment == "sandbox" and not self.sandbox.ready:
@@ -77,6 +86,7 @@ class AgentRuntime(Scout):
             live = await completed_thread(self.memory.profiles.get, profile.id)
             profile = replace(
                 profile,
+                enabled=live.enabled,
                 instructions=live.instructions,
                 model=live.model,
                 model_name=live.model_name,
@@ -315,10 +325,14 @@ class AgentRuntime(Scout):
             profile.access == "admins" or live_restricted
         ) and not await completed_thread(self.authorized, context):
             raise PermissionError("本次活动的管理员授权已失效")
-        if name in {"workspace_file", "html_render", "result_attach"}:
+        if name in {"workspace_file", "html_render", "result_attach", "digest_feed"}:
             if not profile.uses_workspace:
                 raise PermissionError("当前能力档案未启用工作区工具")
             work = await self._work(context)
+            if name == "digest_feed":
+                from .digest import run_digest_tool
+
+                return await run_digest_tool(work, arguments)
             if name == "workspace_file":
                 action = arguments["action"]
                 if action == "list":

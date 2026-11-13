@@ -644,6 +644,8 @@ pre, code, .mono, .num {
 .mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
 .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
 .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+.mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
+[data-profile][data-enabled="false"] { opacity: 0.78; }
 
 .mil-avatar {
   position: relative;
@@ -1909,13 +1911,15 @@ pre, code, .mono, .num {
       <span class="fl-node-sub">联网：${esc(pulse.web_provider || "auto")}</span>
     </div>`;
 
-    $("#fl-cnt-prof").textContent = String(cards.length);
-    $("#fl-profiles").innerHTML = cards.slice(0, 6).map((p) => {
+    const orderedCards = [...cards].sort((a, b) => Number(b.enabled !== false) - Number(a.enabled !== false));
+    $("#fl-cnt-prof").textContent = String(cards.filter((p) => p.enabled !== false).length);
+    $("#fl-profiles").innerHTML = orderedCards.slice(0, 6).map((p) => {
       const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
       const selectedMatch = selProf === p.id;
-      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}">
-        <span class="fl-node-top"><span class="fl-node-name">${esc(p.title || p.id)}</span><span class="mil-tag">${esc(p.environment === "sandbox" ? "沙箱" : "只读")}</span></span>
-        <span class="fl-node-sub mono">${esc(p.id)}${p.autonomous ? " · 可自主" : " · 需授权"}</span>
+      const isOff = p.enabled === false;
+      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" style="${isOff ? "opacity:0.65" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}">
+        <span class="fl-node-top"><span class="fl-node-name">${esc(p.title || p.id)}</span><span class="mil-tag ${isOff ? "mil-tag--off" : ""}">${esc(isOff ? "已停用" : (p.environment === "sandbox" ? "沙箱" : "只读"))}</span></span>
+        <span class="fl-node-sub mono">${esc(p.id)}${isOff ? " · 停用" : p.autonomous ? " · 可自主" : " · 需授权"}</span>
       </button>`;
     }).join("");
 

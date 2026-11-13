@@ -21,7 +21,7 @@ READONLY_TOOLS = frozenset(
         "image_read",
     }
 )
-WORKSPACE_TOOLS = frozenset({"workspace_file", "html_render", "result_attach"})
+WORKSPACE_TOOLS = frozenset({"workspace_file", "html_render", "result_attach", "digest_feed"})
 HOST_TOOLS = (
     READONLY_TOOLS
     | WORKSPACE_TOOLS
@@ -57,6 +57,7 @@ class Profile:
     secrets: tuple[str, ...] = ()
     template: str = ""
     bound: bool = True
+    enabled: bool = True
     skills: tuple[str, ...] = ()
     allow_users: tuple[str, ...] = ()
     allow_chats: tuple[str, ...] = ()
@@ -74,7 +75,7 @@ class Profile:
         )
 
     @property
-    def autonomous(self):
+    def autonomous_config(self):
         return (
             self.access == "everyone"
             and not self.secrets
@@ -85,8 +86,12 @@ class Profile:
             and not self.allow_chats
         )
 
+    @property
+    def autonomous(self):
+        return self.enabled and self.autonomous_config
+
     def permits(self, chat_id, platform, *, user_id="", is_admin=False):
-        if not self.bound or self.access == "admins" and not is_admin:
+        if not self.enabled or not self.bound or self.access == "admins" and not is_admin:
             return False
         if self.allow_chats and chat_id not in self.allow_chats:
             return False
@@ -101,7 +106,7 @@ class Profiles:
     def __init__(self, path: Path, *, contains_secret=lambda content: False):
         self.path = private_directory(path)
         self.contains_secret = contains_secret
-        for profile_id in ("scout", "maker"):
+        for profile_id in ("scout", "maker", "digest"):
             target = private_directory(path / profile_id)
             presets = (
                 Path(__file__).resolve().parents[1] / "presets/profiles" / profile_id
@@ -144,6 +149,7 @@ class Profiles:
             "template",
             "sandbox_targets",
             "bound",
+            "enabled",
             "skills",
             "allow_users",
             "allow_chats",
@@ -248,6 +254,10 @@ class Profiles:
             or "credential_call" in tools
         ) and config.get("access") != "admins":
             raise ValueError("私有凭据与限定执行模板必须仅管理员可用")
+        if "enabled" in config and type(config["enabled"]) is not bool:
+            raise ValueError("能力档案启用开关必须为布尔值")
+        if "bound" in config and type(config["bound"]) is not bool:
+            raise ValueError("能力档案绑定状态必须为布尔值")
         return Profile(
             id=profile_id,
             title=str(config.get("title", profile_id)),
@@ -264,6 +274,7 @@ class Profiles:
             secrets=tuple(config.get("secrets", [])),
             template=str(config.get("template", "")),
             bound=config.get("bound", True) is True,
+            enabled=config.get("enabled", True) is True,
             skills=tuple(config.get("skills", [])),
             allow_users=tuple(config.get("allow_users", [])),
             allow_chats=tuple(config.get("allow_chats", [])),
@@ -280,7 +291,7 @@ class Profiles:
             r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id
         ):
             raise ValueError("能力档案编号无效")
-        if profile_id in {"scout", "maker"}:
+        if profile_id in {"scout", "maker", "digest"}:
             raise ValueError("预设能力档案不可删除")
         directory = self.path / profile_id
         if directory.is_symlink() or not directory.exists():

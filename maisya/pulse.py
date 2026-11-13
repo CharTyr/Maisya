@@ -194,6 +194,14 @@ class Pulse:
             and self.profiles is not None
         ):
             ability = await asyncio.to_thread(self.profiles.get, row["payload"]["profile"])
+            if not ability.enabled:
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "profile_disabled",
+                )
+                return
             if not ability.autonomous and not row["payload"].get("scheduled_admin"):
                 await asyncio.to_thread(
                     self.intents.finish,
@@ -317,6 +325,14 @@ class Pulse:
             ability = await asyncio.to_thread(
                 self.profiles.get, row["payload"]["profile"]
             )
+            if not ability.enabled:
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "profile_disabled",
+                )
+                return
             if not ability.autonomous and not row["payload"].get("scheduled_admin"):
                 await asyncio.to_thread(
                     self.intents.finish,

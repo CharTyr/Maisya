@@ -322,11 +322,13 @@ class MaisyaPlugin(MaiBotPlugin):
         )
 
     def _activity_permitted(self, row):
+        live = self.profiles.get(row["profile"])
+        if not live.enabled:
+            return False
         grant = row.get("grant") or {}
         if grant.get("console_admin") is True or grant.get("scheduled_admin") is True:
             return True
         original = Profile(**row["profile_snapshot"])
-        live = self.profiles.get(row["profile"])
         if row["owner"] == "self":
             return original.autonomous and live.autonomous
         source = grant.get("source_msg_id", "")
@@ -762,6 +764,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         raise PermissionError("停止线程需要发起人或管理员身份")
                     result = await self.engine.stop(thread_id, chat_id=target_chat)
                 else:
+                    self.runtime.available(self.profiles.get(row["profile"]))
                     route = (
                         await self.bridge.route(
                             chat_id,
@@ -1687,6 +1690,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             "title": card.title or card.id,
                             "environment": card.environment,
                             "access": card.access,
+                            "enabled": card.enabled,
                             "autonomous": card.autonomous,
                         }
                     )
@@ -1697,6 +1701,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             "title": pid,
                             "environment": "readonly",
                             "access": "everyone",
+                            "enabled": True,
                             "autonomous": True,
                         }
                     )
@@ -1714,7 +1719,9 @@ class MaisyaPlugin(MaiBotPlugin):
                         (start, end),
                     ).fetchone()["count"]
 
-            result["profiles"] = profile_ids
+            result["profiles"] = [
+                card["id"] for card in profile_cards if card.get("enabled", True)
+            ]
             result["profile_cards"] = profile_cards
             result["enabled_chats"] = list(self.settings.enabled_chats)
             source_chat_ids = list(
@@ -1903,6 +1910,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 ):
                     raise PermissionError("目标会话尚未启用 Maisya")
                 ability = await asyncio.to_thread(self.profiles.get, str(profile))
+                self.runtime.available(ability)
                 started = await self.engine.start(
                     ability,
                     message,
@@ -1922,6 +1930,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 else self.enabled_for(row["chat_id"], row["platform"])
             ):
                 raise PermissionError("原会话尚未启用 Maisya")
+            live_ability = await asyncio.to_thread(self.profiles.get, row["profile"])
+            self.runtime.available(live_ability)
             result = await self.engine.send(
                 thread_id,
                 message,

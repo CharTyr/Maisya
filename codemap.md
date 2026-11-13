@@ -15,7 +15,8 @@ Maisya/
 ├── config.example.toml             # 默认关闭的配置示例（含 web_provider / chat_proactive_levels / acquaintance_users / longing_quiet_hours 等）
 ├── maisya/
 │   ├── config.py                   # SDK 配置模型、web_provider/per-chat 主动级别/熟人/久违静默阈值校验与外部数据初始化
-│   ├── abilities.py                # scout/maker 档案、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全档案包
+│   ├── abilities.py                # scout/maker/digest 档案（含 enabled 开关）、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全档案包
+│   ├── digest.py                   # SSRF/XXE 防护 RSS 试订/退订状态机、硬过滤与五维打分精选、离线天光简报卡 HTML 生成与 digest_feed 工具
 │   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、附件、联网路由、MCP/模板/跨插件 API 与 planner 路由
 │   ├── workspaces.py               # 安全文件访问、串行写入、原子检查点、配额与不可变附件
 │   ├── sandbox.py                  # 专用 Docker/gVisor、max_concurrent 信号量、出站规则、资源参数、取消与清理恢复
@@ -36,8 +37,8 @@ Maisya/
 │   ├── vault.py                    # Fernet 加密保险箱、原子写入与已知凭据脱敏
 │   └── console.py                  # 玻璃盒 @API：五段上下文统计（system/memory/user/assistant/tool）、scheduled_intents、游标事件回读
 ├── presets/
-│   ├── profiles/                   # scout（utils）与 maker（planner），首次加载释放后保留用户修改
-│   ├── skills/                     # 开箱方法技能（source-checking / ongoing-workspace）
+│   ├── profiles/                   # scout（utils）、maker（planner）与默认关闭的 digest（资讯简报），首次加载释放后保留用户修改
+│   ├── skills/                     # 开箱方法技能（source-checking / ongoing-workspace / news-digest）
 │   └── memory/                     # HEARTBEAT.md（含脾性基线与空白自主探索区）与 JOURNAL.md 模板
 ├── sandbox/
 │   ├── Dockerfile                  # maisya-sandbox:py313 可复现镜像定义（Python 3.13 + Node 22 + 非 root 用户）
