@@ -1135,6 +1135,98 @@ class HostContract(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 store.read_history(row["thread_id"], "another-chat", query="台风")
 
+    def test_cold_session_reopen_via_chat_open_session(self):
+        validator = ManifestValidator()
+        manifest = validator.load_from_plugin_path(PLUGIN_DIR)
+        self.assertIsNotNone(manifest, validator.errors)
+        self.assertIn("chat.open_session", manifest.capabilities)
+
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+                calls = []
+                attempts = 0
+
+                async def rpc(method, plugin_id, payload, **kwargs):
+                    nonlocal attempts
+                    name, args = payload["capability"], payload["args"]
+                    calls.append((name, args, kwargs.get("timeout_ms")))
+                    if name == "config.get":
+                        return {"success": True, "value": ["qq:Alice"]}
+                    if name == "maisaka.proactive.trigger":
+                        attempts += 1
+                        if attempts == 1:
+                            return {
+                                "success": False,
+                                "error": "未找到已存在的聊天流: contract-chat",
+                            }
+                        return {"success": True, "queued": True}
+                    if name == "chat.open_session":
+                        return {
+                            "success": True,
+                            "created": True,
+                            "stream_id": "contract-chat",
+                        }
+                    raise AssertionError(name)
+
+                plugin = create_plugin()
+                plugin._set_context(
+                    PluginContext(
+                        PLUGIN_ID,
+                        rpc_call=rpc,
+                        paths=build_plugin_paths(PLUGIN_ID, Path(directory)),
+                    )
+                )
+                plugin.set_plugin_config(
+                    {
+                        "plugin": {"enabled": True, "config_version": "0.1.0"},
+                        "enabled_chats": ["contract-chat"],
+                    }
+                )
+                await plugin.on_load()
+                try:
+                    group_event = {
+                        **event(),
+                        "message_info": {
+                            "user_info": {"user_id": "Alice", "user_nickname": "Alice"},
+                            "group_info": {"group_id": "contract-group"},
+                            "additional_config": {},
+                        },
+                    }
+                    await plugin.after_receive(message=group_event)
+                    with plugin.threads.connect() as db, db:
+                        db.execute("DELETE FROM trusted_sources")
+                    self.assertTrue(plugin.intents.known_chat("contract-chat"))
+                    row = plugin.intents.schedule(
+                        kind="proactive",
+                        source="longing",
+                        target="chat:contract-chat",
+                        due_at=plugin.intents.clock() - 1,
+                        reason="重启后确认群会话可以自动唤醒",
+                        payload={"platform": "qq"},
+                        bypass_limits=True,
+                    )
+                    await plugin.pulse._intents()
+                    cap_names = [name for name, _, _ in calls if name != "config.get"]
+                    self.assertEqual(
+                        cap_names,
+                        [
+                            "maisaka.proactive.trigger",
+                            "chat.open_session",
+                            "maisaka.proactive.trigger",
+                        ],
+                    )
+                    open_args = calls[2][1]
+                    self.assertEqual(open_args["platform"], "qq")
+                    self.assertEqual(open_args["chat_type"], "group")
+                    self.assertEqual(open_args["group_id"], "contract-group")
+                    saved = plugin.intents.get(row["intent_id"])
+                    self.assertEqual(saved["status"], "done")
+                    self.assertEqual(saved["wake_status"], "accepted")
+                finally:
+                    await plugin.on_unload()
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     print("SDK:", importlib.metadata.version("maibot-plugin-sdk"))
