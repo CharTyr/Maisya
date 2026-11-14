@@ -76,6 +76,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     ("memory", "手账"),
                     ("settings", "设置"),
                 ]:
+                    await page.set_viewport_size({"width": 1100, "height": 850})
                     await page.evaluate(
                         "window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(_,args)=>window.backend('read',args),action:(_,args)=>window.backend('write',args),navigate:()=>Promise.resolve()}"
                     )
@@ -278,12 +279,24 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await page.locator("#cfg-model-add").click()
                         await page.locator("#cfg-model-name").fill("glm-5")
                         await page.locator("#cfg-model-add").click()
-                        await expect(page.locator("#cfg-model-chain")).to_contain_text(
-                            "#1 主选"
-                        )
-                        await expect(page.locator("#cfg-model-chain")).to_contain_text(
-                            "#2 备选"
-                        )
+                        await expect(
+                            page.locator("#cfg-model-chain .m-model-row").nth(0)
+                        ).to_contain_text("1")
+                        await expect(
+                            page.locator("#cfg-model-chain .m-model-row").nth(0)
+                        ).to_contain_text("主选")
+                        await expect(
+                            page.locator("#cfg-model-chain .m-model-row").nth(0)
+                        ).to_contain_text("step-5-preview")
+                        await expect(
+                            page.locator("#cfg-model-chain .m-model-row").nth(1)
+                        ).to_contain_text("2")
+                        await expect(
+                            page.locator("#cfg-model-chain .m-model-row").nth(1)
+                        ).to_contain_text("备选")
+                        await expect(
+                            page.locator("#cfg-model-chain .m-model-row").nth(1)
+                        ).to_contain_text("glm-5")
                         await page.locator('[data-model-move="down"][data-model-idx="0"]').click()
                         await page.locator('[data-cfg-tool="workspace_file"]').check()
                         await expect(page.locator("#content")).to_have_value(

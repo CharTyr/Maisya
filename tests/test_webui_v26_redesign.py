@@ -774,11 +774,10 @@ api_provider = "DemoProvider"
                     assert await page.evaluate(
                         "document.documentElement.scrollWidth <= window.innerWidth"
                     )
-                    close_sheet = page.locator(
-                        ".m-mob-sheet [data-mob-sheet-close], .m-mob-sheet-scrim, .m-mob-scrim"
-                    ).first
-                    if await close_sheet.count() > 0 and await close_sheet.is_visible():
-                        await close_sheet.click()
+                    close_btn = page.locator(".m-mob-sheet [data-mob-sheet-close]").first
+                    await expect(close_btn).to_be_visible()
+                    await close_btn.click()
+                    await expect(page.locator(".m-mob-sheet").first).to_be_hidden()
                     await page.locator("button[data-mob-back]").first.click()
                     await expect(page.locator("#settings-mob-hub, .m-mob-hub").first).to_be_visible()
 

@@ -2793,7 +2793,7 @@ html.dark .out-ico--ws { color: #fde047; }
       const inDiscovery = viewMode === "discovery";
 
       $("#skills-gallery-panel").hidden = !inGallery;
-      if ($("#ab-mob-head")) $("#ab-mob-head").hidden = !inRoles;
+      if ($("#ab-mob-head")) $("#ab-mob-head").hidden = inDiscovery || inSkillEditor;
       $("#editor-panel").hidden = !(inSkillEditor || inRoles);
       $("#role-package-panel").hidden = !inRoles;
       $("#discovery-panel").hidden = !inDiscovery;
@@ -3172,7 +3172,8 @@ html.dark .out-ico--ws { color: #fde047; }
         renderCatalog();
         say("");
         await loadAsset(false);
-        try { mobRoleBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }); } catch (_) {}
+        const activeEl = $(`#mob-role-carousel [data-mob-role="${CSS.escape(selectedProfile)}"]`);
+        try { activeEl?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }); } catch (_) {}
         return;
       }
       const mobStepBtn = ev.target.closest("[data-mob-step]");
