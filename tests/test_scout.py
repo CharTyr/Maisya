@@ -39,12 +39,12 @@ def test_profiles_seed_without_overwriting_and_reject_write_tools(tmp_path):
     profile = profiles.get("scout")
     assert profile.environment == "readonly"
     notes = profiles.path / "scout/PROFILE.md"
-    notes.write_text("custom exploration style")
+    notes.write_text("custom exploration style", encoding="utf-8")
     assert (
         Profiles(profiles.path).get("scout").instructions == "custom exploration style"
     )
     config = profiles.path / "scout/profile.toml"
-    config.write_text('environment="readonly"\ntools=["shell_exec"]')
+    config.write_text('environment="readonly"\ntools=["shell_exec"]', encoding="utf-8")
     with pytest.raises(ValueError):
         profiles.get("scout")
 
@@ -193,7 +193,8 @@ async def test_profile_model_list_and_three_step_fallback(tmp_path):
 
     profiles = Profiles(tmp_path / "profiles")
     (tmp_path / "profiles" / "scout" / "profile.toml").write_text(
-        'title = "探索者"\nmodel_list = ["primary-m", "backup-a", "backup-b"]\n'
+        'title = "探索者"\nmodel_list = ["primary-m", "backup-a", "backup-b"]\n',
+        encoding="utf-8",
     )
     loaded_profile = profiles.get("scout")
     assert loaded_profile.model_list == ("primary-m", "backup-a", "backup-b")
@@ -275,7 +276,7 @@ async def test_host_model_config_broadcast_sanitizes_secrets_and_feeds_abilities
         serialized = (
             str(disc)
             + str(abilities)
-            + (plugin.data_root / "host_models.json").read_text()
+            + (plugin.data_root / "host_models.json").read_text(encoding="utf-8")
         )
         assert "sk-secret-do-not-leak" not in serialized
         assert "secret.example" not in serialized

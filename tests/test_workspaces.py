@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from conftest import safe_symlink
 
 from maisya.abilities import Profile
 from maisya.threads import ThreadStore
@@ -60,7 +61,7 @@ def test_private_workspace_cannot_be_republished_by_profile_access_edit(tmp_path
 def test_paths_links_special_files_and_oversize_are_rejected(tmp_path):
     _store, files, row = build(tmp_path, max_bytes=64, max_files=4)
     secret = tmp_path / "outside"
-    secret.write_text("outside")
+    secret.write_text("outside", encoding="utf-8")
     with files.activity(row) as work:
         for path in (
             "../outside",
@@ -70,7 +71,7 @@ def test_paths_links_special_files_and_oversize_are_rejected(tmp_path):
         ):
             with pytest.raises((ValueError, PermissionError)):
                 work.write(path, "bad")
-        os.symlink(secret, work.path / "project/link")
+        safe_symlink(work.path / "project/link", secret)
         with pytest.raises((ValueError, OSError)):
             work.read("project/link")
         with pytest.raises(ValueError):
@@ -83,7 +84,7 @@ def test_paths_links_special_files_and_oversize_are_rejected(tmp_path):
         os.link(work.path / "project/a", work.path / "project/hard")
         with pytest.raises(ValueError):
             work.commit()
-    assert secret.read_text() == "outside"
+    assert secret.read_text(encoding="utf-8") == "outside"
 
 
 def test_checkpoint_rollback_and_immutable_attachments(tmp_path):
@@ -94,7 +95,7 @@ def test_checkpoint_rollback_and_immutable_attachments(tmp_path):
         work.commit()
         attachment = files.attach(row, work, ["out/report.txt"])[0]
         work.write("out/report.txt", "modified")
-        assert files.resolve(attachment["handle"], "chat").read_text() == "original"
+        assert files.resolve(attachment["handle"], "chat").read_text(encoding="utf-8") == "original"
         with pytest.raises(PermissionError):
             files.resolve(attachment["handle"], "other")
         work.write("project/state", "interrupted")
@@ -138,7 +139,7 @@ def test_crashed_checkpoint_staging_is_reclaimed_on_next_activity(tmp_path):
         durable = work.durable
     abandoned = durable / ("v_" + "0" * 32)
     abandoned.mkdir()
-    (abandoned / "partial").write_text("interrupted copy")
+    (abandoned / "partial").write_text("interrupted copy", encoding="utf-8")
     with files.activity(row) as work:
         assert work.read("project/value")["text"] == "committed"
         assert not abandoned.exists()

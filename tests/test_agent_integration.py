@@ -128,9 +128,9 @@ async def test_admin_profile_hidden_and_execution_rechecks_source(tmp_path):
     plugin = await loaded(tmp_path, ["qq:Alice"])
     plugin.ctx.call_capability = llm_rpc
     config = plugin.profiles.path / "scout/profile.toml"
-    config.write_text('access="admins"\nenvironment="readonly"')
+    config.write_text('access="admins"\nenvironment="readonly"', encoding="utf-8")
     maker_config = plugin.profiles.path / "maker/profile.toml"
-    maker_config.write_text('access="admins"\nenvironment="sandbox"')
+    maker_config.write_text('access="admins"\nenvironment="sandbox"', encoding="utf-8")
     msg_id = await source(plugin, user="Mallory")
     tools = [
         {"name": "reply"},

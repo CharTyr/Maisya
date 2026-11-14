@@ -79,7 +79,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     await page.evaluate(
                         "window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(_,args)=>window.backend('read',args),action:(_,args)=>window.backend('write',args),navigate:()=>Promise.resolve()}"
                     )
-                    document = Path("webui/" + name + ".html").read_text()
+                    document = Path("webui/" + name + ".html").read_text(encoding="utf-8")
                     document = document.replace(
                         "<head>",
                         "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:\">",

@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from .abilities import FISH_SEED_RE
 from .config import Settings
 from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
+from .pathsafe import is_absolute_program_path
 from .shaping import collect_known_chats, resolve_chat_target, resolve_stream_spec
 from .recipes import (
     build_recipe_draft,
@@ -1773,9 +1774,7 @@ class Management:
                 or not all(
                     isinstance(part, str) and "\x00" not in part for part in command
                 )
-                or not re.match(
-                    r"^(?:/(?!/)[^\x00]+|[A-Za-z]:[\\/][^\x00]+)$", command[0]
-                )
+                or not is_absolute_program_path(command[0])
             ):
                 raise ValueError("MCP 程序使用绝对路径与固定参数")
             for handle in server.get("credentials", {}).values():

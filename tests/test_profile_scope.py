@@ -14,8 +14,9 @@ async def test_listed_profile_uses_verified_speaker_and_chat_scope(tmp_path):
     plugin.ctx.call_capability = capability
     settings = plugin.profiles.path / "scout/profile.toml"
     settings.write_text(
-        settings.read_text().replace('access = "everyone"', 'access = "listed"')
-        + '\nallow_users=["qq:Alice"]\nallow_chats=["chat"]\n'
+        settings.read_text(encoding="utf-8").replace('access = "everyone"', 'access = "listed"')
+        + '\nallow_users=["qq:Alice"]\nallow_chats=["chat"]\n',
+        encoding="utf-8",
     )
     try:
         forged = await plugin.agent_tool(
@@ -62,8 +63,9 @@ async def test_chat_only_profile_allows_autonomy_inside_its_scope(tmp_path):
     plugin.ctx.call_capability = capability
     settings = plugin.profiles.path / "scout/profile.toml"
     settings.write_text(
-        settings.read_text().replace('access = "everyone"', 'access = "listed"')
-        + '\nallow_chats=["chat"]\n'
+        settings.read_text(encoding="utf-8").replace('access = "everyone"', 'access = "listed"')
+        + '\nallow_chats=["chat"]\n',
+        encoding="utf-8",
     )
     plugin.settings.enabled_chats.append("other")
     try:

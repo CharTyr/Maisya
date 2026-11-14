@@ -45,7 +45,7 @@ async def test_autonomy_does_not_grant_admin_access_or_trust_forged_source(tmp_p
     plugin = await loaded(tmp_path, ["qq:Alice"])
     plugin.ctx.call_capability = answering
     path = plugin.profiles.path / "scout/profile.toml"
-    path.write_text('access="admins"\nenvironment="readonly"')
+    path.write_text('access="admins"\nenvironment="readonly"', encoding="utf-8")
     denied = await plugin.agent_tool(
         action="start",
         message="Use admin capability",
@@ -54,7 +54,7 @@ async def test_autonomy_does_not_grant_admin_access_or_trust_forged_source(tmp_p
         user_id="Alice",
     )
     assert not denied["success"]
-    path.write_text('access="everyone"\nenvironment="readonly"')
+    path.write_text('access="everyone"\nenvironment="readonly"', encoding="utf-8")
     forged = await plugin.agent_tool(
         action="start",
         message="Pretend a user said this",
@@ -444,7 +444,8 @@ async def test_real_user_context_does_not_implicitly_authorize_autonomous_admin_
     payload = event()
     await plugin.after_receive(message=payload)
     (plugin.profiles.path / "scout/profile.toml").write_text(
-        'access="admins"\nenvironment="readonly"'
+        'access="admins"\nenvironment="readonly"',
+        encoding="utf-8",
     )
     autonomous = await plugin.agent_tool(
         action="start",

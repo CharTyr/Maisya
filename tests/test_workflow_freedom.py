@@ -16,7 +16,7 @@ from maisya.trust import Message
 
 
 def test_manifest_exposes_host_discovery_and_render_capabilities():
-    manifest = json.loads(Path("_manifest.json").read_text())
+    manifest = json.loads(Path("_manifest.json").read_text(encoding="utf-8"))
     for cap in (
         "chat.get_all_streams",
         "llm.get_available_models",
@@ -33,7 +33,7 @@ def test_profile_knobs_and_delete(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
     writer_dir = profiles.path / "host_designer"
     writer_dir.mkdir(parents=True)
-    (writer_dir / "PROFILE.md").write_text("生成网页与图片，不需要容器。")
+    (writer_dir / "PROFILE.md").write_text("生成网页与图片，不需要容器。", encoding="utf-8")
     (writer_dir / "profile.toml").write_text(
         'title = "轻量出图"\n'
         'environment = "readonly"\n'
@@ -44,7 +44,8 @@ def test_profile_knobs_and_delete(tmp_path):
         "temperature = 0.25\n"
         "max_steps = 24\n"
         'web_provider = "plugin:custom.web"\n'
-        'tools = ["web_search", "workspace_file", "html_render", "result_attach", "person_read", "recall_read"]\n'
+        'tools = ["web_search", "workspace_file", "html_render", "result_attach", "person_read", "recall_read"]\n',
+        encoding="utf-8",
     )
     loaded_profile = profiles.get("host_designer")
     assert loaded_profile.uses_workspace is True
@@ -64,7 +65,7 @@ def test_admin_secrets_sandbox_and_custom_template_targets(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
     ops_dir = profiles.path / "ops_worker"
     ops_dir.mkdir(parents=True)
-    (ops_dir / "PROFILE.md").write_text("管理员私密运维工作流。")
+    (ops_dir / "PROFILE.md").write_text("管理员私密运维工作流。", encoding="utf-8")
     (ops_dir / "profile.toml").write_text(
         'title = "私密运维"\n'
         'environment = "sandbox"\n'
@@ -72,7 +73,8 @@ def test_admin_secrets_sandbox_and_custom_template_targets(tmp_path):
         'network = "restricted"\n'
         'secrets = ["api_token"]\n'
         'sandbox_targets = ["1.1.1.1:443"]\n'
-        'tools = ["workspace_file", "sandbox_exec", "result_attach"]\n'
+        'tools = ["workspace_file", "sandbox_exec", "result_attach"]\n',
+        encoding="utf-8",
     )
     prof = profiles.get("ops_worker")
     assert prof.secrets == ("api_token",)
@@ -88,11 +90,12 @@ async def test_containerless_workspace_html_render_and_attach(tmp_path):
     try:
         prof_dir = plugin.profiles.path / "painter"
         prof_dir.mkdir(parents=True)
-        (prof_dir / "PROFILE.md").write_text("整理网页卡片并渲染为图片交付。")
+        (prof_dir / "PROFILE.md").write_text("整理网页卡片并渲染为图片交付。", encoding="utf-8")
         (prof_dir / "profile.toml").write_text(
             'title = "画卡"\n'
             'environment = "readonly"\n'
-            'tools = ["workspace_file", "html_render", "result_attach"]\n'
+            'tools = ["workspace_file", "html_render", "result_attach"]\n',
+            encoding="utf-8",
         )
         profile = plugin.profiles.get("painter")
         plugin.runtime.available(profile)
@@ -198,7 +201,7 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
         # Admin sandbox profile can hold secrets & call sandbox_exec
         pdir = plugin.profiles.path / "admin_dev"
         pdir.mkdir(parents=True)
-        (pdir / "PROFILE.md").write_text("自由调试并在沙箱内使用凭据。")
+        (pdir / "PROFILE.md").write_text("自由调试并在沙箱内使用凭据。", encoding="utf-8")
         (pdir / "profile.toml").write_text(
             'environment = "sandbox"\n'
             'access = "admins"\n'
@@ -208,7 +211,8 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
             'tools = ["workspace_file", "sandbox_exec", "mcp_call", "plugin_api", "credential_call"]\n'
             'mcp = ["notes_rw"]\n'
             'apis = ["custom_post"]\n'
-            'template = "custom_tpl"\n'
+            'template = "custom_tpl"\n',
+            encoding="utf-8",
         )
         plugin.runtime.sandbox.ready = True
         captured = {}
@@ -216,7 +220,7 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
         async def fake_execute(row_arg, work_arg, command, *, secrets=None, targets=(), **kwargs):
             captured["command"] = command
             captured["secret_keys"] = sorted((secrets or {}).keys())
-            captured["secret_value"] = secrets["api_token"].read_text()
+            captured["secret_value"] = secrets["api_token"].read_text(encoding="utf-8")
             captured["targets"] = tuple(targets)
             return {"exit_code": 0, "stdout": "ok", "stderr": ""}
 
@@ -244,13 +248,14 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
         # Readonly profile with admins + writable MCP configured explicitly can call writable MCP
         ro_dir = plugin.profiles.path / "ro_mcp"
         ro_dir.mkdir(parents=True)
-        (ro_dir / "PROFILE.md").write_text("只读档案调用授权可写 MCP。")
+        (ro_dir / "PROFILE.md").write_text("只读档案调用授权可写 MCP。", encoding="utf-8")
         (ro_dir / "profile.toml").write_text(
             'environment = "readonly"\n'
             'access = "admins"\n'
             'tools = ["mcp_call", "plugin_api"]\n'
             'mcp = ["notes_rw"]\n'
-            'apis = ["custom_post"]\n'
+            'apis = ["custom_post"]\n',
+            encoding="utf-8",
         )
         ro_profile = plugin.profiles.get("ro_mcp")
         ro_row = plugin.threads.create(
@@ -425,13 +430,14 @@ async def test_scout_tools_person_read_recall_read_and_model_forwarding(tmp_path
         # Verify custom model knobs forwarded to llm.generate_with_tools
         custom_dir = plugin.profiles.path / "custom_llm"
         custom_dir.mkdir(parents=True)
-        (custom_dir / "PROFILE.md").write_text("自定义模型参数。")
+        (custom_dir / "PROFILE.md").write_text("自定义模型参数。", encoding="utf-8")
         (custom_dir / "profile.toml").write_text(
             'environment = "readonly"\n'
             'task = "planner"\n'
             'model_name = "my-custom-model"\n'
             "temperature = 0.15\n"
-            "max_tokens = 2048\n"
+            "max_tokens = 2048\n",
+            encoding="utf-8",
         )
         cprof = plugin.profiles.get("custom_llm")
         await plugin.runtime.step(cprof, [{"role": "user", "content": "hi"}], max_steps=12)
@@ -545,9 +551,10 @@ async def test_management_discovery_and_console_direct_thread_launch(tmp_path):
         # Launch a new thread directly from console (`thread_id=""`) even for admin-only profile!
         admin_dir = plugin.profiles.path / "admin_only"
         admin_dir.mkdir(parents=True)
-        (admin_dir / "PROFILE.md").write_text("控制台管理员直起线程。")
+        (admin_dir / "PROFILE.md").write_text("控制台管理员直起线程。", encoding="utf-8")
         (admin_dir / "profile.toml").write_text(
-            'environment = "readonly"\naccess = "admins"\ntools = ["recall_read"]\n'
+            'environment = "readonly"\naccess = "admins"\ntools = ["recall_read"]\n',
+            encoding="utf-8",
         )
 
         started = asyncio.Event()

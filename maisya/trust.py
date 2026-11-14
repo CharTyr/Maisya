@@ -2,13 +2,14 @@
 
 import base64
 import hashlib
-import os
 import re
 import sqlite3
 import time
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+
+from .pathsafe import safe_chmod
 
 PRIVATE_KEY = re.compile(
     r"-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]+?-----END (?P=kind)-----"
@@ -219,8 +220,7 @@ class MessageStore:
                 db.execute(
                     "ALTER TABLE session_routes ADD COLUMN last_human_at REAL NOT NULL DEFAULT 0"
                 )
-        if os.name != "nt":
-            path.chmod(0o600)
+        safe_chmod(path, 0o600)
 
     def record(self, message: Message) -> None:
         if not all(

@@ -411,7 +411,8 @@ for line in sys.stdin:
   result = {'content':[{'type':'text','text':json.dumps({'url':request['params']['arguments']['url'],'title':'MCP Page','content':'MCP fetched body'})}]}
  else: result = {}
  print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)
-"""
+""",
+            encoding="utf-8",
         )
         services_state = await plugin.manage_read("services")
         # Reject writable MCP binding in services.web.

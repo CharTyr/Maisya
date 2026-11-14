@@ -31,12 +31,12 @@ def test_profile_package_rejects_unknown_secret_fields_and_known_secret_assets(
     vault.set("test", "test-secret-value-for-export")
     profiles = Profiles(tmp_path / "profiles", contains_secret=vault.contains_secret)
     profile_file = profiles.path / "maker/profile.toml"
-    original = profile_file.read_text()
-    profile_file.write_text(original + '\napi_key = "raw-key-must-not-be-in-profile"\n')
+    original = profile_file.read_text(encoding="utf-8")
+    profile_file.write_text(original + '\napi_key = "raw-key-must-not-be-in-profile"\n', encoding="utf-8")
     with pytest.raises(ValueError):
         profiles.export("maker")
-    profile_file.write_text(original)
-    (profiles.path / "maker/NOTES.md").write_text("test-secret-value-for-export")
+    profile_file.write_text(original, encoding="utf-8")
+    (profiles.path / "maker/NOTES.md").write_text("test-secret-value-for-export", encoding="utf-8")
     with pytest.raises(ValueError, match="凭据"):
         profiles.export("maker")
 
@@ -60,9 +60,10 @@ async def test_unavailable_maker_refuses_execution_without_affecting_scout(tmp_p
         # Strict container-only profile still refuses execution when sandbox is unavailable
         strict_dir = plugin.profiles.path / "strict_shell"
         strict_dir.mkdir(parents=True)
-        (strict_dir / "PROFILE.md").write_text("仅允许隔离容器命令执行。")
+        (strict_dir / "PROFILE.md").write_text("仅允许隔离容器命令执行。", encoding="utf-8")
         (strict_dir / "profile.toml").write_text(
-            'environment = "sandbox"\naccess = "everyone"\ntools = ["sandbox_exec"]\n'
+            'environment = "sandbox"\naccess = "everyone"\ntools = ["sandbox_exec"]\n',
+            encoding="utf-8",
         )
         rejected = await plugin.agent_tool(
             action="start",

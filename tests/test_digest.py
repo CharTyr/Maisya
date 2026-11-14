@@ -33,8 +33,8 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
 
     bad_dir = profiles.path / "bad_toggle"
     bad_dir.mkdir()
-    (bad_dir / "PROFILE.md").write_text("bad profile")
-    (bad_dir / "profile.toml").write_text('title = "坏开关"\nenabled = "yes"\n')
+    (bad_dir / "PROFILE.md").write_text("bad profile", encoding="utf-8")
+    (bad_dir / "profile.toml").write_text('title = "坏开关"\nenabled = "yes"\n', encoding="utf-8")
     with pytest.raises(ValueError, match="布尔"):
         profiles.get("bad_toggle")
 

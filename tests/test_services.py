@@ -25,7 +25,7 @@ for line in sys.stdin:
   result = {'content':[{'type':'text','text':str(count)+' '+os.environ['DRAWING_KEY']}]}
  else: result = {}
  print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)
-""")
+""", encoding="utf-8")
     config = {
         "servers": {
             "drawing": {
@@ -37,7 +37,7 @@ for line in sys.stdin:
         },
         "templates": {},
     }
-    (plugin.data_root / "abilities/services.json").write_text(json.dumps(config))
+    (plugin.data_root / "abilities/services.json").write_text(json.dumps(config), encoding="utf-8")
     from maisya.services import Services
 
     plugin.runtime.services = Services(
@@ -75,7 +75,8 @@ for line in sys.stdin:
                 {**row, "_tool_call_id": "d"},
             )
         (plugin.data_root / "abilities/services.json").write_text(
-            json.dumps({"servers": {}, "templates": {}})
+            json.dumps({"servers": {}, "templates": {}}),
+            encoding="utf-8",
         )
         with pytest.raises(PermissionError):
             await plugin.runtime.call(
@@ -105,7 +106,7 @@ for line in sys.stdin:
   assert request['params']['arguments']['file_ref']=='opaque-platform-reference'
   result={'content':[{'type':'resource','resource':{'uri':'file:///input.csv','mimeType':'text/csv','blob':base64.b64encode(b'a,b\\n1,2').decode()}}]}
  print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
-""")
+""", encoding="utf-8")
     configuration = {
         "servers": {
             "files": {
@@ -117,12 +118,13 @@ for line in sys.stdin:
         "templates": {},
         "inputs": {"qq": {"service": "files", "tool": "read_file"}},
     }
-    plugin.runtime.services.path.write_text(json.dumps(configuration))
+    plugin.runtime.services.path.write_text(json.dumps(configuration), encoding="utf-8")
     profile_file = plugin.profiles.path / "maker/profile.toml"
     profile_file.write_text(
-        profile_file.read_text()
+        profile_file.read_text(encoding="utf-8")
         .replace('"result_attach"', '"result_attach", "mcp_call"')
-        .replace("mcp = []", 'mcp = ["files"]')
+        .replace("mcp = []", 'mcp = ["files"]'),
+        encoding="utf-8",
     )
     prompts = []
 

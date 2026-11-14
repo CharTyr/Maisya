@@ -84,7 +84,7 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 await page.evaluate(
                     """window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(name,args)=>window.queryBackend(name,args),action:(name,args)=>window.actionBackend(name,args)}"""
                 )
-                document = Path("webui/now.html").read_text()
+                document = Path("webui/now.html").read_text(encoding="utf-8")
                 document = document.replace(
                     "<head>",
                     "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:\">",

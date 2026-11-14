@@ -86,7 +86,7 @@ def test_methods_reload_and_external_edits_are_versioned(tmp_path):
     assert "中文字体" in memory.methods(profile)
     assert "检查字体列表" in memory.methods(profile)
     path = memory.profiles.path / "scout/NOTES.md"
-    path.write_text("先检查字体文件是否存在。")
+    path.write_text("先检查字体文件是否存在。", encoding="utf-8")
     assert memory.read("notes", target="scout")["content"] == "先检查字体文件是否存在。"
     assert len(memory.history("notes", target="scout")) == 3
 

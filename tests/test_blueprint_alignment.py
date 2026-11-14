@@ -41,13 +41,13 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
         assert plugin.profiles.get("digest").enabled is False
 
         for kind, content in [
-            ("profile", (plugin.profiles.path / "scout/PROFILE.md").read_text()),
-            ("profile", (plugin.profiles.path / "maker/PROFILE.md").read_text()),
-            ("profile", (plugin.profiles.path / "digest/PROFILE.md").read_text()),
-            ("skill", source_skill.read_text()),
-            ("skill", workspace_skill.read_text()),
-            ("skill", digest_skill.read_text()),
-            ("heartbeat", heartbeat_file.read_text()),
+            ("profile", (plugin.profiles.path / "scout/PROFILE.md").read_text(encoding="utf-8")),
+            ("profile", (plugin.profiles.path / "maker/PROFILE.md").read_text(encoding="utf-8")),
+            ("profile", (plugin.profiles.path / "digest/PROFILE.md").read_text(encoding="utf-8")),
+            ("skill", source_skill.read_text(encoding="utf-8")),
+            ("skill", workspace_skill.read_text(encoding="utf-8")),
+            ("skill", digest_skill.read_text(encoding="utf-8")),
+            ("heartbeat", heartbeat_file.read_text(encoding="utf-8")),
         ]:
             assert "她" not in content
             plugin.memory._guard(kind, content, "")
@@ -69,19 +69,19 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
     # Custom edits are preserved across reloads
     custom_skill = "自定义核验规范。"
     custom_hb = "## 气质与分寸\n保持安静。\n\n## 自主探索方向\n本地工具生态"
-    source_skill.write_text(custom_skill)
-    heartbeat_file.write_text(custom_hb)
+    source_skill.write_text(custom_skill, encoding="utf-8")
+    heartbeat_file.write_text(custom_hb, encoding="utf-8")
     again = await loaded(tmp_path)
     try:
-        assert (again.data_root / "abilities/skills/source-checking/SKILL.md").read_text() == custom_skill
-        assert (again.data_root / "memory/self/HEARTBEAT.md").read_text() == custom_hb
+        assert (again.data_root / "abilities/skills/source-checking/SKILL.md").read_text(encoding="utf-8") == custom_skill
+        assert (again.data_root / "memory/self/HEARTBEAT.md").read_text(encoding="utf-8") == custom_hb
     finally:
         await again.on_unload()
 
 
 @pytest.mark.asyncio
 async def test_cross_plugin_readonly_api_validation_binding_and_execution(tmp_path):
-    manifest = json.loads(Path("_manifest.json").read_text())
+    manifest = json.loads(Path("_manifest.json").read_text(encoding="utf-8"))
     for cap in ("api.list", "api.get", "api.call"):
         assert cap in manifest["capabilities"]
 
@@ -170,9 +170,10 @@ async def test_cross_plugin_readonly_api_validation_binding_and_execution(tmp_pa
         # Unregistered api fails runtime.available
         missing_dir = plugin.profiles.path / "bad_api"
         missing_dir.mkdir(parents=True)
-        (missing_dir / "PROFILE.md").write_text("查接口。")
+        (missing_dir / "PROFILE.md").write_text("查接口。", encoding="utf-8")
         (missing_dir / "profile.toml").write_text(
-            'environment = "readonly"\ntools = ["plugin_api"]\napis = ["nonexistent"]\n'
+            'environment = "readonly"\ntools = ["plugin_api"]\napis = ["nonexistent"]\n',
+            encoding="utf-8",
         )
         with pytest.raises(PermissionError):
             plugin.runtime.available(plugin.profiles.get("bad_api"))

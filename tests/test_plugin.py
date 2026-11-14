@@ -43,7 +43,7 @@ async def async_get(key, default=None):
 
 
 def test_manifest_and_webui():
-    manifest = json.loads(Path("_manifest.json").read_text())
+    manifest = json.loads(Path("_manifest.json").read_text(encoding="utf-8"))
     assert manifest["id"] == "chartyr.maisya"
     assert "config.get" in manifest["capabilities"]
-    assert json.loads(Path("webui.json").read_text())["schema_version"] == 2
+    assert json.loads(Path("webui.json").read_text(encoding="utf-8"))["schema_version"] == 2

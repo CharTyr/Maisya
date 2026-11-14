@@ -160,7 +160,7 @@ async def test_playwright_fish_avatars_abilities_outputs_and_now(tmp_path):
             await page.evaluate(
                 "window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(_,args)=>window.backend('read',args),action:(_,args)=>window.backend('write',args),navigate:()=>Promise.resolve()}"
             )
-            abilities_html = Path("webui/abilities.html").read_text().replace("<head>", CSP_META, 1)
+            abilities_html = Path("webui/abilities.html").read_text(encoding="utf-8").replace("<head>", CSP_META, 1)
             await page.set_content(abilities_html, wait_until="domcontentloaded")
             await page.wait_for_selector('#profiles [data-profile="scout"] svg.fish')
             assert await page.locator("img").count() == 0
@@ -205,7 +205,7 @@ async def test_playwright_fish_avatars_abilities_outputs_and_now(tmp_path):
             await page.set_viewport_size({"width": 1200, "height": 880})
 
             # 2) outputs.html: deliverable list, workspace chips, metadata bar
-            outputs_html = Path("webui/outputs.html").read_text().replace("<head>", CSP_META, 1)
+            outputs_html = Path("webui/outputs.html").read_text(encoding="utf-8").replace("<head>", CSP_META, 1)
             await page.set_content(outputs_html, wait_until="domcontentloaded")
             await page.wait_for_selector("#out-list svg.fish")
             await page.wait_for_selector("#workspaces svg.fish")
@@ -220,7 +220,7 @@ async def test_playwright_fish_avatars_abilities_outputs_and_now(tmp_path):
             await now_page.evaluate(
                 "window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(name,args)=>window.nowQuery(name,args),action:(name,args)=>window.nowAction(name,args),navigate:()=>Promise.resolve()}"
             )
-            now_html = Path("webui/now.html").read_text().replace("<head>", CSP_META, 1)
+            now_html = Path("webui/now.html").read_text(encoding="utf-8").replace("<head>", CSP_META, 1)
             await now_page.set_content(now_html, wait_until="domcontentloaded")
             await now_page.wait_for_selector("#fl-profiles svg.fish")
             await now_page.wait_for_selector("#threads svg.fish")

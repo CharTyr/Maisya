@@ -21,10 +21,10 @@ def test_profile_task_slot_validation_and_preset_defaults(tmp_path):
     assert profiles.get("maker").task == "planner"
 
     cfg = profiles.path / "scout/profile.toml"
-    cfg.write_text('environment = "readonly"\ntask = "custom_reasoning"\n')
+    cfg.write_text('environment = "readonly"\ntask = "custom_reasoning"\n', encoding="utf-8")
     assert profiles.get("scout").task == "custom_reasoning"
 
-    cfg.write_text('environment = "readonly"\ntask = "bad task!"\n')
+    cfg.write_text('environment = "readonly"\ntask = "bad task!"\n', encoding="utf-8")
     with pytest.raises(ValueError):
         profiles.get("scout")
 

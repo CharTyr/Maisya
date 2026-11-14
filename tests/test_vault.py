@@ -3,6 +3,7 @@ import json
 import os
 
 import pytest
+from conftest import safe_symlink
 
 from maisya.vault import Vault, VaultError
 
@@ -15,8 +16,9 @@ def test_encryption_restart_replacement_and_deletion(tmp_path):
     assert all(
         secret.encode() not in path.read_bytes() for path in vault.path.iterdir()
     )
-    assert all(path.stat().st_mode & 0o777 == 0o600 for path in vault.path.iterdir())
-    assert vault.path.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert all(path.stat().st_mode & 0o777 == 0o600 for path in vault.path.iterdir())
+        assert vault.path.stat().st_mode & 0o777 == 0o700
     assert not hasattr(vault, "get")
     restarted = Vault(vault.path)
     assert restarted.redact(
@@ -56,7 +58,7 @@ def test_invalid_handles_never_write(tmp_path, handle):
 def test_symlink_and_ciphertext_swap_rejected(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
-    (tmp_path / "link").symlink_to(outside)
+    safe_symlink(tmp_path / "link", outside)
     with pytest.raises(VaultError):
         Vault(tmp_path / "link")
     vault = Vault(tmp_path / "vault")
