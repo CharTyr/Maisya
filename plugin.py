@@ -249,6 +249,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self._turn_ops_receipts: dict[str, dict] = {}
         self._bootstrap_messages = {}
         self._bootstrap_platforms = {}
+        self._relayed_bootstrap_sources = {}
         self._stream_cache = {"expires": 0.0, "streams": {}}
         self._avatar_cache = {}
         self._host_model_catalog = {"models": [], "tasks": {}, "updated": 0.0}
@@ -866,10 +867,22 @@ class MaisyaPlugin(MaiBotPlugin):
         if not identity.message_id or not identity.session_id or not identity.platform:
             return
         now = self._message_now()
-        cutoff = now - 300.0
-        for key in [k for k, (ts, _) in self._bootstrap_messages.items() if ts < cutoff]:
+        direct_cache: dict[str, bool] = {}
+
+        def _cutoff_for(sid: str) -> float:
+            if sid not in direct_cache:
+                direct_cache[sid] = bool(
+                    self.bridge and self.bridge.has_admin_direct_for(sid)
+                )
+            return now - (3600.0 if direct_cache[sid] else 300.0)
+
+        for key in [
+            k for k, (ts, _) in self._bootstrap_messages.items() if ts < _cutoff_for(k[0])
+        ]:
             self._bootstrap_messages.pop(key, None)
-        for sid in [k for k, (ts, _) in self._bootstrap_platforms.items() if ts < cutoff]:
+        for sid in [
+            k for k, (ts, _) in self._bootstrap_platforms.items() if ts < _cutoff_for(k)
+        ]:
             self._bootstrap_platforms.pop(sid, None)
         self._bootstrap_messages[
             (identity.session_id, identity.platform, identity.message_id)
@@ -883,9 +896,91 @@ class MaisyaPlugin(MaiBotPlugin):
         if plat:
             return plat
         entry = self._bootstrap_platforms.get(session_id)
-        if entry and self._message_now() - entry[0] <= 300.0:
-            return entry[1]
+        if entry:
+            limit = (
+                3600.0
+                if self.bridge and self.bridge.has_admin_direct_for(session_id)
+                else 300.0
+            )
+            if self._message_now() - entry[0] <= limit:
+                return entry[1]
         return ""
+
+    def _is_verified_admin_private_chat(
+        self, session_id: str, platform: str = ""
+    ) -> bool:
+        if not session_id or not self.admins:
+            return False
+        plat_hint = str(platform or "").strip().lower() or self._platform_for(session_id)
+        spec = self.canonical_stream_spec(session_id, plat_hint)
+        parsed = parse_stream_spec(spec)
+        if parsed is None:
+            return False
+        plat, kind, tid = parsed
+        return kind == "private" and f"{plat}:{tid}" in self.admins
+
+    def _admin_source_max_age(self, session_id: str, platform: str = "") -> float:
+        if (
+            self.bridge is not None
+            and self.bridge.has_admin_direct_for(session_id)
+            and self._is_verified_admin_private_chat(session_id, platform)
+        ):
+            return 3600.0
+        return 300.0
+
+    def _record_relayed_bootstrap_source(self, identity: Message) -> None:
+        plat = str(identity.platform or "").strip().lower()
+        if (
+            not identity.is_plugin_relayed
+            or not identity.message_id
+            or not identity.session_id
+            or not plat
+        ):
+            return
+        cache = getattr(self, "_relayed_bootstrap_sources", None)
+        if cache is None:
+            cache = {}
+            self._relayed_bootstrap_sources = cache
+        now = self._message_now()
+        cutoff = now - 86400.0
+        for key in [k for k, ts in cache.items() if ts < cutoff]:
+            cache.pop(key, None)
+        cache[(identity.session_id, plat, identity.message_id)] = now
+        alias = message_alias(identity.message_id)
+        if alias and alias != identity.message_id:
+            cache[(identity.session_id, plat, alias)] = now
+        while len(cache) > 256:
+            cache.pop(next(iter(cache)), None)
+
+    def _is_relayed_bootstrap_source(
+        self, message_id: str, session_id: str, platform: str
+    ) -> bool:
+        cache = getattr(self, "_relayed_bootstrap_sources", None)
+        plat = str(platform or "").strip().lower()
+        if not cache or not message_id or not session_id or not plat:
+            return False
+        now = self._message_now()
+        cutoff = now - 86400.0
+        alias = message_alias(message_id)
+        for cand in (message_id, alias):
+            if not cand:
+                continue
+            ts = cache.get((session_id, plat, cand))
+            if ts is not None and ts >= cutoff:
+                return True
+        return False
+
+    @staticmethod
+    def _thread_context_has_admin_direct(row: dict | None) -> bool:
+        if not isinstance(row, dict):
+            return False
+        grant = row.get("grant")
+        if isinstance(grant, dict) and grant.get("admin_direct"):
+            return True
+        ctx = row.get("thread_context")
+        if isinstance(ctx, dict) and isinstance(ctx.get("grant"), dict):
+            return bool(ctx["grant"].get("admin_direct"))
+        return False
 
     def _lookup_message(
         self, message_id: str, session_id: str, platform: str, *, max_age: float = 300
@@ -911,7 +1006,10 @@ class MaisyaPlugin(MaiBotPlugin):
     def authorize_admin_source(self, source_msg_id, session_id, platform) -> bool:
         if not self.settings.plugin.enabled or not source_msg_id:
             return False
-        msg = self._lookup_message(source_msg_id, session_id, platform, max_age=300)
+        max_age = self._admin_source_max_age(session_id, platform)
+        msg = self._lookup_message(
+            source_msg_id, session_id, platform, max_age=max_age
+        )
         return self.is_verified_admin_identity(msg)
 
     @staticmethod
@@ -1276,6 +1374,23 @@ class MaisyaPlugin(MaiBotPlugin):
                     )
             elif admin_bootstrap:
                 self._record_bootstrap_message(identity)
+            elif (
+                not chat_enabled
+                and self.settings.plugin.enabled
+                and identity.is_plugin_relayed
+                and (
+                    (self.bridge and self.bridge.has_admin_direct_for(identity.session_id))
+                    or self._is_verified_admin_private_chat(
+                        identity.session_id, identity.platform
+                    )
+                    or (
+                        not identity.group_id
+                        and f"{str(identity.platform or '').strip().lower()}:{identity.user_id}"
+                        in self.admins
+                    )
+                )
+            ):
+                self._record_relayed_bootstrap_source(identity)
             if chat_enabled or admin_bootstrap:
                 pending = self._pending_sources.setdefault(identity.session_id, [])
                 pending.append(identity.message_id)
@@ -1452,6 +1567,7 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             raw_target_chat = str(target_chat or "").strip()
             effective_chat_id, effective_platform = chat_id, platform
+            pre_row = None
             if raw_target_chat:
                 effective_chat_id, effective_platform = await self.resolve_chat_id(
                     raw_target_chat, current_chat_id=chat_id, current_platform=platform
@@ -1470,12 +1586,30 @@ class MaisyaPlugin(MaiBotPlugin):
             cross_chat = effective_chat_id != chat_id
             if cross_chat and not is_admin_caller:
                 raise PermissionError("跨会话调度需要真实管理员消息授权")
+            if (
+                pre_row is None
+                and action == "send"
+                and cross_chat
+                and deliver_to == "auto"
+                and thread_id
+            ):
+                pre_row = await asyncio.to_thread(
+                    self.threads.get,
+                    thread_id,
+                    effective_chat_id,
+                    allow_self=True,
+                    allow_any_chat=True,
+                )
             admin_direct_share = bool(
                 action == "share"
                 and not cross_chat
                 and not is_admin_caller
-                and not source_msg_id
-                and not self.enabled_for(effective_chat_id, effective_platform)
+                and (
+                    not self.enabled_for(effective_chat_id, effective_platform)
+                    or self._is_verified_admin_private_chat(
+                        effective_chat_id, effective_platform
+                    )
+                )
                 and thread_id
                 and self.bridge
                 and await asyncio.to_thread(
@@ -1483,9 +1617,25 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             )
             effective_admin = is_admin_caller or admin_direct_share
+            inherit_current = bool(
+                action == "send"
+                and cross_chat
+                and deliver_to == "auto"
+                and (
+                    not self.enabled_for(chat_id, platform)
+                    or (
+                        thread_id
+                        and self.bridge
+                        and await asyncio.to_thread(
+                            self.bridge.has_admin_direct_for, chat_id, thread_id
+                        )
+                    )
+                    or self._thread_context_has_admin_direct(pre_row)
+                )
+            )
             if deliver_to == "none":
                 delivery_mode = "none"
-            elif not cross_chat or deliver_to == "current":
+            elif not cross_chat or deliver_to == "current" or inherit_current:
                 delivery_mode = "current"
             else:
                 delivery_mode = "target"
@@ -1519,11 +1669,33 @@ class MaisyaPlugin(MaiBotPlugin):
                 raise ValueError("steer 仅用于 send 的显式转向")
             identity = None
             if source_msg_id:
+                lookup_max_age = self._admin_source_max_age(chat_id, platform)
                 identity = await asyncio.to_thread(
-                    self._lookup_message, source_msg_id, chat_id, platform, max_age=300
+                    self._lookup_message,
+                    source_msg_id,
+                    chat_id,
+                    platform,
+                    max_age=lookup_max_age,
                 )
-                if identity is None or identity.is_plugin_relayed:
+                if identity is not None and identity.is_plugin_relayed:
                     raise PermissionError("本次调用的来源消息无法核验")
+                if identity is None:
+                    if admin_direct_share:
+                        relayed_probe = await asyncio.to_thread(
+                            self._lookup_message,
+                            source_msg_id,
+                            chat_id,
+                            platform,
+                            max_age=86400,
+                        )
+                        if (
+                            relayed_probe is not None and relayed_probe.is_plugin_relayed
+                        ) or self._is_relayed_bootstrap_source(
+                            source_msg_id, chat_id, platform
+                        ):
+                            raise PermissionError("本次调用的来源消息无法核验")
+                    else:
+                        raise PermissionError("本次调用的来源消息无法核验")
             if (
                 not isinstance(ref_msg_ids or [], list)
                 or len(ref_msg_ids or []) > 10
@@ -2673,8 +2845,23 @@ class MaisyaPlugin(MaiBotPlugin):
         if has_pending_sources:
             self._turn_sources[chat_id] = self._pending_sources.pop(chat_id)
             self._turn_ops_receipts.pop(chat_id, None)
-        elif self._turn_ops_receipts.get(chat_id, {}).get("consumed"):
-            self._turn_ops_receipts.pop(chat_id, None)
+        else:
+            existing_sources = list(self._turn_sources.get(chat_id) or ())
+            if existing_sources:
+                fresh_sources = await asyncio.to_thread(
+                    lambda: [
+                        item
+                        for item in existing_sources
+                        if self._lookup_message(item, chat_id, platform, max_age=300)
+                        is not None
+                    ]
+                )
+                if fresh_sources:
+                    self._turn_sources[chat_id] = fresh_sources
+                else:
+                    self._turn_sources.pop(chat_id, None)
+            if self._turn_ops_receipts.get(chat_id, {}).get("consumed"):
+                self._turn_ops_receipts.pop(chat_id, None)
         sources = self._turn_sources.get(chat_id, [])
         is_admin = await asyncio.to_thread(
             lambda: any(
@@ -2712,7 +2899,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         "parts": [
                             {
                                 "type": "text",
-                                "text": "当前管理员私聊存在待交付的后台试跑预览结果；含图片/文件附件或精确链接的结果请直接调用 maisya_agent(action='share', thread_id=...) 发送后结束本轮，纯文字结论可直接调用 reply 回复（reply_style='长回复'）。\n<maisya_returns>"
+                                "text": "当前管理员私聊存在待交付的后台试跑预览结果；含图片/文件附件或精确链接的结果请直接调用 maisya_agent(action='share', thread_id=...)（无需传 source_msg_id）发送后结束本轮，纯文字结论可直接调用 reply 回复（reply_style='长回复'）。\n<maisya_returns>"
                                 + html.escape(json.dumps(returned, ensure_ascii=False))
                                 + "</maisya_returns>",
                             }

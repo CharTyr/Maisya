@@ -610,3 +610,107 @@ def test_digest_uses_real_viz_spec_and_renders_static_card():
     assert "vs-bars" in html_out
     assert ".vs-bar-t" in html_out
     assert "<script" not in html_out.lower()
+    assert html_out.index("item-summary") < html_out.index("card-viz")
+
+
+@pytest.mark.asyncio
+async def test_prepare_covers_preserves_viz_without_explicit_image_url():
+    called_urls: list[str] = []
+
+    async def trap_fetcher(url: str):
+        called_urls.append(url)
+        return {
+            "body": b'<meta property="og:image" content="https://realviz.example.org/banner.jpg">',
+            "content_type": "text/html",
+            "status": 200,
+            "url": url,
+            "error": "",
+        }
+
+    dw = digest.DigestWorkspace(_MemoryWork(), fetcher=trap_fetcher, clock=lambda: NOW_TS)
+    items = [
+        {
+            "title": "Latency Dropped",
+            "url": "https://realviz.example.org/a1",
+            "summary": "Latency improved across regions.",
+            "why": "2x speedup",
+            "viz": {"type": "bars", "title": "p95", "items": [{"label": "Now", "value": 40, "unit": "ms"}]},
+        }
+    ]
+    await dw.prepare_covers(items)
+    assert called_urls == []
+    assert "cover_data" not in items[0]
+
+
+@pytest.mark.asyncio
+async def test_seed_starter_feeds_disambiguation_concurrent_poll_and_flexible_unsubscribe():
+    rss_body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<rss version="2.0"><channel><title>Dev Feed</title>'
+        "<item><title>Release Notes</title><link>https://dev.example/p1</link>"
+        "<pubDate>Thu, 22 Oct 2026 10:00:00 GMT</pubDate>"
+        "<description>Engine details</description></item>"
+        "</channel></rss>"
+    ).encode()
+
+    async def fast_fetcher(url: str):
+        return {
+            "body": rss_body,
+            "content_type": "application/rss+xml",
+            "status": 200,
+            "url": url,
+            "error": "",
+        }
+
+    # 1. "独立开发者, AI Agent, 开源工具" 严禁误订任何游戏媒体源
+    dw_dev = digest.DigestWorkspace(_MemoryWork(), fetcher=fast_fetcher, clock=lambda: NOW_TS)
+    seed_dev = await dw_dev.seed_starter_feeds("独立开发者, AI Agent, 开源工具", max_add=4)
+    assert seed_dev["count"] == 4
+    game_hosts = {"gcores.com", "chuapp.com", "yystv.cn", "itch.io", "rockpapershotgun.com"}
+    assert all(f["host"].removeprefix("www.") not in game_hosts for f in seed_dev["added"])
+
+    # 2. 单独 2 字 "独立" 禁止子串命中 "独立游戏"
+    dw_short = digest.DigestWorkspace(_MemoryWork(), fetcher=fast_fetcher, clock=lambda: NOW_TS)
+    seed_short = await dw_short.seed_starter_feeds(["独立"], max_add=4)
+    assert all(f["host"].removeprefix("www.") not in game_hosts for f in seed_short["added"])
+
+    # 3. 明确 "独立游戏" 仍可正常命中游戏媒体源
+    dw_game = digest.DigestWorkspace(_MemoryWork(), fetcher=fast_fetcher, clock=lambda: NOW_TS)
+    seed_game = await dw_game.seed_starter_feeds(["独立游戏", "indie"], max_add=2)
+    assert seed_game["count"] == 2
+    assert all(f["host"].removeprefix("www.") in game_hosts for f in seed_game["added"])
+
+    # 4. 灵活退订：支持 id、规范化 URL（含跟踪参数）、不区分大小写 title、域名 host
+    dw_unsub = digest.DigestWorkspace(_MemoryWork(), fetcher=fast_fetcher, clock=lambda: NOW_TS)
+    await dw_unsub.add_feed("https://blog.cloudflare.com/rss/", title="Cloudflare Blog", origin="manual")
+    await dw_unsub.add_feed("https://www.gcores.com/rss", title="机核 GCORES", origin="manual")
+    await dw_unsub.add_feed("https://github.blog/feed/", title="The GitHub Blog", origin="manual")
+
+    u1 = dw_unsub.unsubscribe("https://gcores.com/rss?utm_source=digest")
+    assert u1["ok"] is True and "gcores.com" in u1["url"]
+    u2 = dw_unsub.unsubscribe("the github blog")
+    assert u2["ok"] is True and u2["title"] == "The GitHub Blog"
+    u3 = dw_unsub.unsubscribe("blog.cloudflare.com")
+    assert u3["ok"] is True and "cloudflare.com" in u3["url"]
+    assert dw_unsub.unsubscribe("   ")["ok"] is False
+
+    # 5. poll() 并发抓取 6 个源，远快于串行 6 * 0.08 = 0.48s
+    async def slow_fetcher(url: str):
+        await asyncio.sleep(0.08)
+        return {
+            "body": rss_body,
+            "content_type": "application/rss+xml",
+            "status": 200,
+            "url": url,
+            "error": "",
+        }
+
+    dw_poll = digest.DigestWorkspace(_MemoryWork(), fetcher=slow_fetcher, clock=lambda: NOW_TS)
+    for idx in range(6):
+        await dw_poll.add_feed(f"https://feed{idx}.example/rss.xml", title=f"Feed {idx}", auto=False)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    polled = await dw_poll.poll(lookback_days=14)
+    elapsed = loop.time() - t0
+    assert polled["feeds_count"] == 6
+    assert elapsed < 0.30, f"poll 应并发执行而非串行，实测耗时 {elapsed:.3f}s"

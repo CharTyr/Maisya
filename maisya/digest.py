@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .page_date import published_from_text
-from . import viz_spec
+from . import digest_card, viz_spec
 
 DAYS_TO_SECS = 86400.0
 UTC8_OFFSET = 8 * 3600.0
@@ -112,6 +112,7 @@ NOVELTY_REJECT_MAX = 2.0
 
 RSS_SOURCES_FILE = "project/rss_sources.json"
 DIGEST_HISTORY_FILE = "project/digest_history.json"
+DIGEST_POOL_FILE = "project/digest_pool.json"
 
 
 def _is_public_ip(raw_ip: str) -> bool:
@@ -176,7 +177,7 @@ def _sync_fetch_public_bytes(url: str, timeout: float, max_bytes: int) -> dict[s
             current,
             headers={
                 "User-Agent": "MaisyaDigest/1.0 (+https://example.invalid)",
-                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.8",
+                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html, image/*;q=0.9, */*;q=0.7",
             },
         )
         try:
@@ -235,7 +236,7 @@ def _sync_fetch_public_bytes(url: str, timeout: float, max_bytes: int) -> dict[s
 
 
 async def fetch_public_bytes(
-    url: str, *, timeout: float = 12.0, max_bytes: int = 2_097_152
+    url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152
 ) -> dict[str, Any]:
     _validate_public_url(url)
     return await asyncio.to_thread(_sync_fetch_public_bytes, url, timeout, max_bytes)
@@ -276,6 +277,144 @@ def _parse_timestamp(value: Any) -> float | None:
 
 def _local_tag(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower() if "}" in tag else tag.lower()
+
+
+def _extract_first_img_src(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+    unescaped = html.unescape(raw_html)
+    m = re.search(
+        r"""<img\b[^>]*?\bsrc\s*=\s*(?:"(https?://[^"\s>]+)"|'(https?://[^'\s>]+)')""",
+        unescaped,
+        re.IGNORECASE,
+    )
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or "").strip()
+
+
+def _extract_item_image(node: ET.Element, html_blobs: list[str]) -> str:
+    """从 RSS/Atom 条目节点抽取封面图片链接（enclosure/media:content/media:thumbnail/正文 img）。"""
+    for child in node:
+        tag = _local_tag(child.tag)
+        if tag == "enclosure":
+            u = (child.attrib.get("url") or "").strip()
+            t = (child.attrib.get("type") or "").strip().lower()
+            if u.lower().startswith(("http://", "https://")) and (
+                t.startswith("image/")
+                or (not t and re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)", u, re.I))
+            ):
+                return u
+        elif tag == "link":
+            rel = (child.attrib.get("rel") or "").strip().lower()
+            t = (child.attrib.get("type") or "").strip().lower()
+            href = (child.attrib.get("href") or "").strip()
+            if rel == "enclosure" and href.lower().startswith(("http://", "https://")) and t.startswith("image/"):
+                return href
+
+    for elem in node.iter():
+        etag = _local_tag(elem.tag)
+        if etag == "thumbnail":
+            u = (elem.attrib.get("url") or "").strip()
+            if u.lower().startswith(("http://", "https://")):
+                return u
+        elif etag == "content" and "media" in elem.tag.lower():
+            u = (elem.attrib.get("url") or "").strip()
+            medium = (elem.attrib.get("medium") or "").strip().lower()
+            t = (elem.attrib.get("type") or "").strip().lower()
+            if u.lower().startswith(("http://", "https://")) and (
+                medium == "image"
+                or t.startswith("image/")
+                or re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)", u, re.I)
+            ):
+                return u
+
+    for blob in html_blobs:
+        img_url = _extract_first_img_src(blob)
+        if img_url:
+            return img_url
+    return ""
+
+
+class _MetaImageParser(HTMLParser):
+    """提取文章 HTML 中的 og:image / twitter:image 地址。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.candidates: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "meta":
+            return
+        attr_map = {k.lower(): (v or "").strip() for k, v in attrs if k}
+        key = (
+            attr_map.get("property")
+            or attr_map.get("name")
+            or attr_map.get("itemprop")
+            or ""
+        ).lower()
+        content = attr_map.get("content") or ""
+        if (
+            key
+            in {
+                "og:image",
+                "og:image:secure_url",
+                "og:image:url",
+                "twitter:image",
+                "twitter:image:src",
+            }
+            and content
+            and key not in self.candidates
+        ):
+            self.candidates[key] = content
+
+
+def _extract_meta_image(html_bytes: bytes | str, page_url: str) -> str:
+    text = (
+        html_bytes.decode("utf-8", errors="replace")
+        if isinstance(html_bytes, (bytes, bytearray))
+        else str(html_bytes or "")
+    )
+    parser = _MetaImageParser()
+    try:
+        parser.feed(text[:200_000])
+    except Exception:
+        return ""
+    for key in (
+        "og:image:secure_url",
+        "og:image",
+        "og:image:url",
+        "twitter:image",
+        "twitter:image:src",
+    ):
+        raw = parser.candidates.get(key)
+        if not raw:
+            continue
+        resolved = urllib.parse.urljoin(page_url, html.unescape(raw).strip())
+        if resolved.lower().startswith(("http://", "https://")):
+            return resolved
+    return ""
+
+
+def _is_safe_http_url(url: str) -> bool:
+    if not isinstance(url, str) or not url.strip():
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host or host == "localhost" or host.endswith(".local"):
+        return False
+    try:
+        literal = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return True
+    return _is_public_ip(str(literal))
 
 
 def parse_feed_xml(
@@ -324,6 +463,7 @@ def parse_feed_xml(
             item_nodes = [c for c in root if _local_tag(c.tag) == "item"]
         for node in item_nodes:
             title = link = pub_raw = summary = ""
+            html_blobs: list[str] = []
             for child in node:
                 tag = _local_tag(child.tag)
                 text = (child.text or "").strip()
@@ -333,8 +473,12 @@ def parse_feed_xml(
                     link = text or (child.attrib.get("href") or "").strip()
                 elif tag in {"pubdate", "date", "published", "updated"} and not pub_raw:
                     pub_raw = text
-                elif tag in {"description", "encoded", "summary", "content"} and not summary:
-                    summary = _strip_html(text)
+                elif tag in {"description", "encoded", "summary", "content"} and "media" not in child.tag.lower():
+                    raw_blob = text or "".join(ET.tostring(sub, encoding="unicode") for sub in child)
+                    if raw_blob:
+                        html_blobs.append(raw_blob)
+                    if not summary:
+                        summary = _strip_html(text or "".join(child.itertext()))
             pub_ts = _parse_timestamp(pub_raw)
             if pub_ts is not None and pub_ts < cutoff:
                 continue
@@ -346,6 +490,7 @@ def parse_feed_xml(
                         "published": pub_raw,
                         "published_ts": pub_ts,
                         "summary": summary[:400],
+                        "image_url": _extract_item_image(node, html_blobs),
                     }
                 )
     elif root_name == "feed":
@@ -357,6 +502,7 @@ def parse_feed_xml(
             if _local_tag(node.tag) != "entry":
                 continue
             title = link = pub_raw = summary = ""
+            html_blobs = []
             for child in node:
                 tag = _local_tag(child.tag)
                 text = "".join(child.itertext()).strip()
@@ -365,12 +511,18 @@ def parse_feed_xml(
                 elif tag == "link":
                     rel = (child.attrib.get("rel") or "alternate").lower()
                     href = (child.attrib.get("href") or "").strip()
-                    if href and (not link or rel == "alternate"):
+                    if href and rel != "enclosure" and (not link or rel == "alternate"):
                         link = href
                 elif tag in {"published", "updated"} and not pub_raw:
                     pub_raw = text
-                elif tag in {"summary", "content"} and not summary:
-                    summary = _strip_html(text)
+                elif tag in {"summary", "content"} and "media" not in child.tag.lower():
+                    raw_blob = (child.text or "") or "".join(
+                        ET.tostring(sub, encoding="unicode") for sub in child
+                    )
+                    if raw_blob:
+                        html_blobs.append(raw_blob)
+                    if not summary:
+                        summary = _strip_html(text)
             pub_ts = _parse_timestamp(pub_raw)
             if pub_ts is not None and pub_ts < cutoff:
                 continue
@@ -382,6 +534,7 @@ def parse_feed_xml(
                         "published": pub_raw,
                         "published_ts": pub_ts,
                         "summary": summary[:400],
+                        "image_url": _extract_item_image(node, html_blobs),
                     }
                 )
     else:
@@ -515,67 +668,204 @@ STARTER_FEEDS: tuple[dict[str, Any], ...] = (
         "url": "https://simonwillison.net/atom/everything/",
         "title": "Simon Willison's Weblog",
         "category": "ai-dev",
-        "keywords": ("ai", "llm", "agent", "python", "sqlite", "dev", "tool", "编程", "开发", "大模型"),
+        "keywords": (
+            "ai",
+            "llm",
+            "agent",
+            "python",
+            "sqlite",
+            "dev",
+            "tool",
+            "indie dev",
+            "indie hacker",
+            "solo dev",
+            "编程",
+            "开发",
+            "大模型",
+            "独立开发",
+            "独立开发者",
+            "开源",
+            "工具",
+        ),
     },
     {
         "url": "https://hnrss.org/frontpage",
         "title": "Hacker News",
         "category": "tech-dev",
-        "keywords": ("tech", "programming", "startup", "open-source", "ai", "编程", "开源", "科技", "技术"),
+        "keywords": (
+            "tech",
+            "programming",
+            "startup",
+            "open-source",
+            "ai",
+            "engineering",
+            "indie dev",
+            "indie hacker",
+            "solo dev",
+            "编程",
+            "开源",
+            "科技",
+            "技术",
+            "独立开发",
+            "独立开发者",
+        ),
+    },
+    {
+        "url": "https://blog.cloudflare.com/rss/",
+        "title": "Cloudflare Blog",
+        "category": "dev",
+        "keywords": (
+            "cloudflare",
+            "engineering",
+            "systems",
+            "network",
+            "security",
+            "ai",
+            "indie dev",
+            "indie hacker",
+            "solo dev",
+            "独立开发",
+            "独立开发者",
+            "系统",
+            "后端",
+            "开源",
+        ),
+    },
+    {
+        "url": "https://blog.rust-lang.org/feed.xml",
+        "title": "Rust Blog",
+        "category": "dev",
+        "keywords": (
+            "rust",
+            "systems",
+            "engineering",
+            "open-source",
+            "compiler",
+            "indie dev",
+            "独立开发",
+            "编程",
+            "系统",
+            "后端",
+            "开源",
+        ),
+    },
+    {
+        "url": "https://go.dev/blog/feed.atom",
+        "title": "The Go Blog",
+        "category": "dev",
+        "keywords": (
+            "go",
+            "golang",
+            "systems",
+            "backend",
+            "engineering",
+            "open-source",
+            "indie dev",
+            "独立开发",
+            "编程",
+            "系统",
+            "后端",
+            "开源",
+        ),
     },
     {
         "url": "https://feeds.arstechnica.com/arstechnica/index",
         "title": "Ars Technica",
         "category": "tech-media",
-        "keywords": ("tech", "hardware", "science", "ai", "security", "game", "科技", "硬件", "科学"),
+        "keywords": ("tech", "hardware", "science", "ai", "security", "科技", "硬件", "科学"),
     },
     {
         "url": "https://www.gcores.com/rss",
         "title": "机核 GCORES",
         "category": "game",
-        "keywords": ("game", "indie", "hardware", "acg", "culture", "游戏", "独立游戏", "主机", "文化"),
+        "keywords": ("game", "indie game", "gamedev", "hardware", "acg", "culture", "游戏", "独立游戏", "主机", "文化"),
     },
     {
         "url": "https://www.chuapp.com/feed",
         "title": "触乐",
         "category": "game",
-        "keywords": ("game", "indie", "mobile", "review", "游戏", "独立游戏", "评测", "行业"),
+        "keywords": ("game", "indie game", "gamedev", "mobile", "review", "游戏", "独立游戏", "评测", "行业"),
     },
     {
         "url": "https://www.yystv.cn/rss/feed",
         "title": "游研社",
         "category": "game",
-        "keywords": ("game", "indie", "retro", "hardware", "游戏", "独立游戏", "复古", "主机"),
+        "keywords": ("game", "indie game", "gamedev", "retro", "hardware", "游戏", "独立游戏", "复古", "主机"),
     },
     {
         "url": "https://itch.io/blog.xml",
         "title": "itch.io Blog",
         "category": "indie-game",
-        "keywords": ("indie", "game", "gamedev", "独立游戏", "游戏开发", "像素"),
+        "keywords": ("indie game", "game", "gamedev", "独立游戏", "游戏开发", "像素"),
     },
     {
         "url": "https://www.rockpapershotgun.com/feed",
         "title": "Rock Paper Shotgun",
         "category": "pc-game",
-        "keywords": ("pc", "game", "indie", "steam", "review", "游戏", "独立游戏", "评测"),
+        "keywords": ("pc", "game", "indie game", "gamedev", "steam", "review", "游戏", "独立游戏", "评测"),
     },
     {
         "url": "https://lobste.rs/rss",
         "title": "Lobsters",
         "category": "dev",
-        "keywords": ("programming", "systems", "rust", "linux", "security", "open-source", "编程", "系统", "开源"),
+        "keywords": (
+            "programming",
+            "systems",
+            "engineering",
+            "rust",
+            "linux",
+            "security",
+            "open-source",
+            "indie dev",
+            "独立开发",
+            "编程",
+            "系统",
+            "后端",
+            "开源",
+        ),
     },
     {
         "url": "https://github.blog/feed/",
         "title": "The GitHub Blog",
         "category": "dev",
-        "keywords": ("github", "dev", "open-source", "copilot", "ai", "编程", "开源", "工程"),
+        "keywords": (
+            "github",
+            "dev",
+            "engineering",
+            "open-source",
+            "copilot",
+            "ai",
+            "indie dev",
+            "indie hacker",
+            "solo dev",
+            "独立开发",
+            "独立开发者",
+            "系统",
+            "后端",
+            "编程",
+            "开源",
+            "工程",
+        ),
     },
     {
         "url": "https://sspai.com/feed",
         "title": "少数派",
         "category": "tech-life",
-        "keywords": ("tech", "app", "hardware", "tool", "efficiency", "科技", "效率", "工具", "硬件", "数码"),
+        "keywords": (
+            "tech",
+            "app",
+            "hardware",
+            "tool",
+            "efficiency",
+            "indie dev",
+            "独立开发",
+            "独立开发者",
+            "科技",
+            "效率",
+            "工具",
+            "硬件",
+            "数码",
+        ),
     },
     {
         "url": "https://lilianweng.github.io/index.xml",
@@ -1138,6 +1428,25 @@ class DigestWorkspace:
             DIGEST_HISTORY_FILE, json.dumps(data, ensure_ascii=False, indent=2)
         )
 
+    def _load_pool(self) -> dict[str, Any]:
+        raw = self._read_text(DIGEST_POOL_FILE)
+        if not raw:
+            return {"total_discovered": 0, "by_url": {}}
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return {"total_discovered": 0, "by_url": {}}
+        if not isinstance(data, dict):
+            return {"total_discovered": 0, "by_url": {}}
+        data.setdefault("total_discovered", 0)
+        data.setdefault("by_url", {})
+        return data
+
+    def _save_pool(self, data: dict[str, Any]) -> None:
+        self.work.write(
+            DIGEST_POOL_FILE, json.dumps(data, ensure_ascii=False, indent=2)
+        )
+
     def _prune_rejected(self, sources: dict[str, Any], now: float) -> bool:
         kept = []
         changed = False
@@ -1336,7 +1645,38 @@ class DigestWorkspace:
     ) -> dict[str, Any]:
         now = self.clock()
         sources = self._load_sources()
-        target = next((f for f in sources["feeds"] if f.get("id") == feed_id), None)
+        key = str(feed_id or "").strip()
+        if not key:
+            return {"ok": False, "reason": "未找到对应订阅源"}
+        key_low = key.lower()
+        key_norm = _normalize_url_key(key) if "://" in key else ""
+        key_host = _host_of(key) if "://" in key else key_low
+        if key_host.startswith("www."):
+            key_host = key_host[4:]
+
+        feeds = sources.get("feeds", [])
+        target = next((f for f in feeds if f.get("id") == key), None)
+        if not target and key_norm:
+            target = next(
+                (f for f in feeds if _normalize_url_key(f.get("url", "")) == key_norm),
+                None,
+            )
+        if not target:
+            target = next(
+                (
+                    f
+                    for f in feeds
+                    if str(f.get("title") or "").strip().lower() == key_low
+                ),
+                None,
+            )
+        if not target and key_host:
+            def _bare_host(f: dict[str, Any]) -> str:
+                h = str(f.get("host") or _host_of(f.get("url", ""))).strip().lower()
+                return h[4:] if h.startswith("www.") else h
+
+            target = next((f for f in feeds if _bare_host(f) == key_host), None)
+
         if not target:
             return {"ok": False, "reason": "未找到对应订阅源"}
         info = self._retire_feed(
@@ -1533,44 +1873,60 @@ class DigestWorkspace:
                     subscribed.append(res["feed"])
                     sources = self._load_sources()
 
-        # Phase 3: Fetch remaining active & trial feeds
-        for feed in sources.get("feeds", []):
-            resp = await self.fetcher(feed["url"])
-            body = resp.get("body")
-            status_code = int(resp.get("status", 0) or 0)
-            feed["last_polled_at"] = now
-            if not body or status_code >= 400:
-                feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
-                if not feed.get("first_fail_at"):
-                    feed["first_fail_at"] = now
+        # Phase 3: Fetch remaining active & trial feeds concurrently (Semaphore(6))
+        feeds_list = list(sources.get("feeds", []))
+        if feeds_list:
+            sem_poll = asyncio.Semaphore(6)
+
+            async def _fetch_feed(feed_obj: dict[str, Any]) -> dict[str, Any]:
+                async with sem_poll:
+                    try:
+                        return await self.fetcher(feed_obj["url"])
+                    except Exception as exc:
+                        return {
+                            "body": None,
+                            "status": 0,
+                            "url": feed_obj["url"],
+                            "error": str(exc),
+                        }
+
+            responses = await asyncio.gather(*(_fetch_feed(f) for f in feeds_list))
+            for feed, resp in zip(feeds_list, responses):
+                body = resp.get("body")
+                status_code = int(resp.get("status", 0) or 0)
+                feed["last_polled_at"] = now
+                if not body or status_code >= 400:
+                    feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
+                    if not feed.get("first_fail_at"):
+                        feed["first_fail_at"] = now
+                    changed = True
+                    continue
+                try:
+                    parsed = parse_feed_xml(
+                        body, now=now, lookback_days=lookback_days, max_items=20
+                    )
+                except ValueError:
+                    feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
+                    if not feed.get("first_fail_at"):
+                        feed["first_fail_at"] = now
+                    changed = True
+                    continue
+                feed["fail_count"] = 0
+                feed["first_fail_at"] = 0.0
+                cap = TRIAL_CAND_CAP if feed.get("status") == "trial" else 8
+                picked = parsed["items"][:cap]
+                for it in picked:
+                    if feed.get("status") == "trial":
+                        feed.setdefault("candidates_14d", []).append(now)
+                    candidates.append(
+                        {
+                            **it,
+                            "feed_id": feed["id"],
+                            "source": feed.get("host") or _host_of(it.get("url", "")),
+                            "feed_title": feed.get("title", ""),
+                        }
+                    )
                 changed = True
-                continue
-            try:
-                parsed = parse_feed_xml(
-                    body, now=now, lookback_days=lookback_days, max_items=20
-                )
-            except ValueError:
-                feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
-                if not feed.get("first_fail_at"):
-                    feed["first_fail_at"] = now
-                changed = True
-                continue
-            feed["fail_count"] = 0
-            feed["first_fail_at"] = 0.0
-            cap = TRIAL_CAND_CAP if feed.get("status") == "trial" else 8
-            picked = parsed["items"][:cap]
-            for it in picked:
-                if feed.get("status") == "trial":
-                    feed.setdefault("candidates_14d", []).append(now)
-                candidates.append(
-                    {
-                        **it,
-                        "feed_id": feed["id"],
-                        "source": feed.get("host") or _host_of(it.get("url", "")),
-                        "feed_title": feed.get("title", ""),
-                    }
-                )
-            changed = True
 
         if changed:
             self._save_sources(sources)
@@ -1602,32 +1958,63 @@ class DigestWorkspace:
             if len(tok) >= 2
         ]
 
+        indie_dev_terms = ("独立开发", "indie dev", "indie hacker", "solo dev")
+        game_terms = ("游戏", "game")
+        indie_dev_without_game = any(t in hint_lower for t in indie_dev_terms) and not any(
+            t in hint_lower for t in game_terms
+        )
+
         def _match_score(entry: dict[str, Any]) -> int:
             if not hint_lower.strip():
                 return 0
+            cat_l = str(entry.get("category") or "").lower()
+            if indie_dev_without_game and "game" in cat_l:
+                return 0
             score = 0
             title_l = str(entry.get("title") or "").lower()
-            cat_l = str(entry.get("category") or "").lower()
+            title_cat_words = {
+                w for w in re.split(r"[^a-z0-9\u4e00-\u9fff]+", f"{title_l} {cat_l}") if w
+            }
             for kw in entry.get("keywords") or ():
                 kw_l = str(kw).lower()
-                if kw_l and kw_l in hint_lower:
+                if not kw_l:
+                    continue
+                if kw_l in hint_lower:
                     score += 3
-                elif any(tok in kw_l or kw_l in tok for tok in hint_tokens):
+                elif any(
+                    tok == kw_l or (len(kw_l) >= 4 and kw_l in tok)
+                    for tok in hint_tokens
+                ):
                     score += 1
-            if any(tok in title_l or tok in cat_l for tok in hint_tokens):
+            if any(
+                tok in title_cat_words or (len(tok) >= 4 and (tok in title_l or tok in cat_l))
+                for tok in hint_tokens
+            ):
                 score += 2
             return score
 
-        ranked = [
-            entry
-            for _idx, entry in sorted(
-                enumerate(STARTER_FEEDS),
-                key=lambda pair: (-_match_score(pair[1]), pair[0]),
-            )
+        scored = [
+            (entry, _match_score(entry), idx)
+            for idx, entry in enumerate(STARTER_FEEDS)
         ]
+        has_positive = any(sc > 0 for _, sc, _ in scored)
+        if has_positive:
+            ranked = [
+                entry
+                for entry, _sc, _idx in sorted(
+                    (row for row in scored if row[1] > 0),
+                    key=lambda row: (-row[1], row[2]),
+                )
+            ]
+        else:
+            ranked = [
+                entry
+                for entry, _sc, _idx in sorted(scored, key=lambda row: (-row[1], row[2]))
+            ]
 
         now = self.clock()
         sources = self._load_sources()
+        self._prune_rejected(sources, now)
         existing_urls = {
             _normalize_url_key(f.get("url", ""))
             for f in sources.get("feeds", [])
@@ -1636,9 +2023,16 @@ class DigestWorkspace:
 
         added: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
+        if cap == 0:
+            return {
+                "added": added,
+                "skipped": skipped,
+                "count": 0,
+                "total_feeds": len(sources.get("feeds", [])),
+            }
+
+        eligible: list[dict[str, Any]] = []
         for entry in ranked:
-            if len(added) >= cap:
-                break
             url = str(entry["url"])
             norm = _normalize_url_key(url)
             if norm in existing_urls:
@@ -1647,23 +2041,75 @@ class DigestWorkspace:
             if self._is_rejected(sources, url, _host_of(url), now) is not None:
                 skipped.append({"url": url, "reason": "位于退订冷却列表"})
                 continue
-            try:
-                res = await self.add_feed(
-                    url,
-                    title=str(entry.get("title") or ""),
-                    auto=True,
-                    origin="starter",
-                )
-            except Exception as exc:
-                skipped.append({"url": url, "reason": f"抓取异常: {exc}"})
+            eligible.append(entry)
+
+        probe_limit = max(cap * 2, cap + 6)
+        to_probe = eligible[:probe_limit]
+        sem_seed = asyncio.Semaphore(5)
+
+        async def _probe_entry(entry: dict[str, Any]) -> tuple[dict[str, Any], bool, str, dict[str, Any] | None]:
+            url = str(entry["url"])
+            async with sem_seed:
+                try:
+                    resp = await self.fetcher(url)
+                    body = resp.get("body")
+                    status_code = int(resp.get("status", 0) or 0)
+                    if not body or status_code >= 400:
+                        return (
+                            entry,
+                            False,
+                            f"抓取订阅源失败: {resp.get('error') or resp.get('status')}",
+                            None,
+                        )
+                    parsed = parse_feed_xml(body, now=now, lookback_days=30.0)
+                except Exception as exc:
+                    return entry, False, f"抓取异常: {exc}", None
+            final_url = str(resp.get("url") or url)
+            host = _host_of(final_url) or _host_of(url)
+            resolved_title = str(entry.get("title") or "").strip() or str(parsed.get("title") or "").strip() or host
+            feed_meta = {
+                "id": _feed_id_for(url),
+                "url": final_url,
+                "host": host,
+                "title": resolved_title,
+                "origin": "starter",
+                "status": "trial",
+                "added_at": now,
+                "trial_until": now + TRIAL_DAYS * DAYS_TO_SECS,
+                "candidates_14d": [],
+                "kept_total": 0,
+                "up": 0,
+                "down": 0,
+                "reply": 0,
+                "fail_count": 0,
+                "first_fail_at": 0.0,
+                "last_polled_at": 0.0,
+            }
+            return entry, True, "", feed_meta
+
+        probe_results = await asyncio.gather(*(_probe_entry(e) for e in to_probe))
+        changed = False
+        for entry, ok, reason, feed_meta in probe_results:
+            if len(added) >= cap:
+                break
+            url = str(entry["url"])
+            norm = _normalize_url_key(url)
+            if not ok or feed_meta is None:
+                skipped.append({"url": url, "reason": reason})
                 continue
-            if res.get("ok"):
-                feed_meta = res.get("feed") or {}
-                if not res.get("existing"):
-                    added.append(feed_meta)
-                existing_urls.add(norm)
-            else:
-                skipped.append({"url": url, "reason": str(res.get("reason") or "订阅失败")})
+            final_norm = _normalize_url_key(feed_meta.get("url") or url)
+            if norm in existing_urls or final_norm in existing_urls:
+                skipped.append({"url": url, "reason": "已存在订阅"})
+                continue
+            sources["feeds"].append(feed_meta)
+            existing_urls.add(norm)
+            existing_urls.add(final_norm)
+            added.append(feed_meta)
+            changed = True
+
+        if changed:
+            self._save_sources(sources)
+            self.work.commit()
 
         total_feeds = len(self._load_sources().get("feeds", []))
         return {
@@ -1876,6 +2322,9 @@ class DigestWorkspace:
                     not cand.get("title") or cand.get("title") == cand.get("url")
                 ):
                     cand["title"] = fetched_title
+                fetched_img = str(page.get("image_url") or page.get("og_image") or "").strip()
+                if fetched_img and not cand.get("image_url"):
+                    cand["image_url"] = fetched_img
                 for link in page.get("feed_links") or ():
                     if isinstance(link, str) and link.strip():
                         discovered_feed_candidates.append((cand["url"], link.strip()))
@@ -1898,6 +2347,39 @@ class DigestWorkspace:
             cand["has_numbers"] = _has_distinct_numbers(src_txt)
             cand.pop("body", None)
             final_candidates.append(cand)
+
+        pool_by_url: dict[str, dict[str, Any]] = {}
+        for cand in [*combined, *final_candidates]:
+            c_url = str(cand.get("url") or "").strip()
+            if not c_url:
+                continue
+            u_key = _normalize_url_key(c_url)
+            prev = pool_by_url.get(u_key) or {}
+            pool_by_url[u_key] = {
+                "url": c_url,
+                "image_url": str(cand.get("image_url") or prev.get("image_url") or ""),
+                "published": str(
+                    cand.get("published")
+                    or cand.get("published_at")
+                    or prev.get("published")
+                    or ""
+                ),
+                "published_ts": (
+                    cand.get("published_ts")
+                    if cand.get("published_ts") is not None
+                    else prev.get("published_ts")
+                ),
+                "feed_id": str(cand.get("feed_id") or prev.get("feed_id") or ""),
+                "feed_title": str(cand.get("feed_title") or prev.get("feed_title") or ""),
+            }
+        self._save_pool(
+            {
+                "updated_at": now,
+                "total_discovered": max(len(combined), len(final_candidates)),
+                "by_url": pool_by_url,
+            }
+        )
+        self.work.commit()
 
         # Opportunistically subscribe to at most 1 non-big-platform RSS feed found during fetch
         discovered_feeds: list[str] = []
@@ -1954,6 +2436,9 @@ class DigestWorkspace:
         now = self.clock()
         history = self._load_history()
         sources = self._load_sources()
+        pool = self._load_pool()
+        pool_by_url = pool.get("by_url") if isinstance(pool.get("by_url"), dict) else {}
+        pool_total = int(pool.get("total_discovered") or 0)
         blocked_domains = {
             d.lower() for d in history.get("blocked_domains", []) if isinstance(d, str)
         }
@@ -1983,6 +2468,7 @@ class DigestWorkspace:
             if isinstance(f, dict) and f.get("id")
         }
         prev_last_selected = list(history.get("last_selected") or [])
+        prev_total_candidates = int(history.get("last_total_candidates") or 0)
 
         for raw in candidates:
             if not isinstance(raw, dict):
@@ -1999,6 +2485,25 @@ class DigestWorkspace:
                 item["reject_reason"] = "付费墙内容无法直读"
                 rejected.append(item)
                 continue
+
+            url_key = _normalize_url_key(url)
+            pool_meta = pool_by_url.get(url_key)
+            if isinstance(pool_meta, dict):
+                if not item.get("image_url") and pool_meta.get("image_url"):
+                    item["image_url"] = str(pool_meta["image_url"])
+                if (
+                    not item.get("published")
+                    and not item.get("published_at")
+                    and item.get("published_ts") is None
+                ):
+                    if pool_meta.get("published"):
+                        item["published"] = str(pool_meta["published"])
+                    if pool_meta.get("published_ts") is not None:
+                        item["published_ts"] = pool_meta["published_ts"]
+                if not item.get("feed_id") and pool_meta.get("feed_id"):
+                    item["feed_id"] = str(pool_meta["feed_id"])
+                if not item.get("feed_title") and pool_meta.get("feed_title"):
+                    item["feed_title"] = str(pool_meta["feed_title"])
 
             kind = str(item.get("kind") or "news").strip().lower()
             pub_ts = _parse_timestamp(
@@ -2028,6 +2533,13 @@ class DigestWorkspace:
                     item["reject_reason"] = "引用片段未能在原文中找到对照依据"
                     rejected.append(item)
                     continue
+
+            summary_text = str(item.get("brief") or item.get("summary") or "").strip()
+            if not summary_text:
+                item["reject_reason"] = "缺少中文摘要（请提供 1~2 句 brief 或 summary 事实摘要）"
+                rejected.append(item)
+                continue
+            item["summary"] = summary_text
 
             if "viz" in item and item["viz"] is not None:
                 valid_viz, viz_drop = _validate_and_check_viz(item.get("viz"), source_text)
@@ -2080,16 +2592,18 @@ class DigestWorkspace:
                 rejected.append(item)
                 continue
 
+            feed_meta = feed_map.get(str(item.get("feed_id") or "")) or {}
+            feed_title = str(item.get("feed_title") or feed_meta.get("title") or "").strip()
             raw_source = item.get("source")
             if (
-                isinstance(raw_source, str)
-                and raw_source.strip()
-                and _numeric_score(raw_source) is None
+                not isinstance(raw_source, str)
+                or not raw_source.strip()
+                or _numeric_score(raw_source) is not None
             ):
-                source_label = raw_source.strip()
-            else:
-                feed_meta = feed_map.get(str(item.get("feed_id") or "")) or {}
-                source_label = str(item.get("source_name") or feed_meta.get("title") or host)
+                raw_source = item.get("source_name") or feed_title or host
+            source_label = digest_card.clean_source_label(
+                raw_source, url=url, feed_title=feed_title
+            )
 
             enriched = {
                 **item,
@@ -2099,6 +2613,10 @@ class DigestWorkspace:
                 "avg": avg,
                 "_rank_tuple": (avg, info, rel, chat),
             }
+            if feed_title:
+                enriched["feed_title"] = feed_title
+            if pub_ts is not None:
+                enriched["published_ts"] = pub_ts
 
             if kind == "guide":
                 if rel >= 4.0 and info >= 4.0 and avg >= 3.8:
@@ -2222,8 +2740,14 @@ class DigestWorkspace:
             if fid and fid in feed_map:
                 feed_map[fid]["kept_total"] = int(feed_map[fid].get("kept_total", 0)) + 1
 
+        total_candidates = max(len(candidates), pool_total)
         history["last_selected"] = clean_selected
-        if clean_selected or prev_last_selected:
+        history["last_total_candidates"] = total_candidates
+        if (
+            clean_selected
+            or prev_last_selected
+            or total_candidates != prev_total_candidates
+        ):
             self._save_history(history)
             if clean_selected:
                 self._save_sources(sources)
@@ -2236,8 +2760,96 @@ class DigestWorkspace:
         return {
             "selected": clean_selected,
             "rejected": clean_rejected,
-            "total_candidates": len(candidates),
+            "total_candidates": total_candidates,
         }
+
+    async def prepare_covers(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """并发抓取与校验候选条目封面图及染底配色，任何异常静默降级。"""
+        target_items = list(items or [])
+        if not target_items:
+            return []
+        sem = asyncio.Semaphore(3)
+
+        def _apply_cover_bytes(item: dict[str, Any], raw_bytes: bytes, url: str) -> bool:
+            if not raw_bytes:
+                return False
+            if digest_card.judge_cover(raw_bytes, url=url):
+                return False
+            data_uri, cover_small = digest_card.encode_cover_data_uri(raw_bytes, url=url)
+            if not data_uri:
+                return False
+            item["cover_data"] = data_uri
+            item["cover_small"] = bool(cover_small)
+            tint = digest_card.cover_tint(raw_bytes)
+            if tint is not None:
+                item["cover_tint"] = tint
+            return True
+
+        async def _one(item: Any) -> None:
+            if not isinstance(item, dict):
+                return
+            if str(item.get("cover_data") or "").startswith("data:image/"):
+                return
+            img_url = str(item.get("image_url") or item.get("cover_url") or "").strip()
+            article_url = str(item.get("url") or "").strip()
+
+            async with sem:
+                if (
+                    img_url
+                    and _is_safe_http_url(img_url)
+                    and not digest_card._url_rejection_reason(img_url)
+                ):
+                    try:
+                        resp = await self.fetcher(img_url)
+                        body = resp.get("body")
+                        status_code = int(resp.get("status", 0) or 0)
+                        ctype = str(resp.get("content_type") or "").lower()
+                        final_img_url = str(resp.get("url") or img_url)
+                        if (
+                            body
+                            and status_code < 400
+                            and "text/html" not in ctype
+                            and _apply_cover_bytes(item, body, final_img_url)
+                        ):
+                            return
+                    except Exception:
+                        pass
+
+                if not img_url and isinstance(item.get("viz"), dict):
+                    return
+                if article_url and _is_safe_http_url(article_url):
+                    try:
+                        page_resp = await self.fetcher(article_url)
+                        page_body = page_resp.get("body")
+                        page_status = int(page_resp.get("status", 0) or 0)
+                        page_ctype = str(page_resp.get("content_type") or "").lower()
+                        final_page_url = str(page_resp.get("url") or article_url)
+                        if (
+                            not page_body
+                            or page_status >= 400
+                            or page_ctype.startswith("image/")
+                        ):
+                            return
+                        og_url = _extract_meta_image(page_body, final_page_url)
+                        if (
+                            not og_url
+                            or og_url == img_url
+                            or not _is_safe_http_url(og_url)
+                            or digest_card._url_rejection_reason(og_url)
+                        ):
+                            return
+                        img_resp = await self.fetcher(og_url)
+                        img_body = img_resp.get("body")
+                        img_status = int(img_resp.get("status", 0) or 0)
+                        img_ctype = str(img_resp.get("content_type") or "").lower()
+                        final_og_url = str(img_resp.get("url") or og_url)
+                        if img_body and img_status < 400 and "text/html" not in img_ctype:
+                            _apply_cover_bytes(item, img_body, final_og_url)
+                    except Exception:
+                        return
+
+        await asyncio.gather(*(_one(it) for it in target_items))
+        return target_items
 
     def render_card_html(
         self,
@@ -2246,166 +2858,52 @@ class DigestWorkspace:
         slot_label: str = "",
         group_title: str = "",
         output_path: str = "out/digest-card.html",
+        total_candidates: int = 0,
     ) -> dict[str, Any]:
         if not output_path.startswith("out/") or not output_path.endswith(".html"):
             raise ValueError("简报卡 HTML 必须写入 out/*.html")
-        now_dt = datetime.fromtimestamp(self.clock() + UTC8_OFFSET, tz=timezone.utc)
-        hour = now_dt.hour
-        if "夜" in slot_label or "晚" in slot_label or hour >= 20 or hour < 5:
-            palette = ("#0F172A", "#1E293B", "#F8FAFC", "#CBD5E1", "#60A5FA", "#1E293B")
-            band = "夜览"
-        elif "晨" in slot_label or "早" in slot_label or 5 <= hour < 10:
-            palette = ("#FFF8EE", "#FFE4C4", "#231815", "#6B4F43", "#D97706", "#FFFFFF")
-            band = "晨报"
-        elif "傍晚" in slot_label or "暮" in slot_label or 17 <= hour < 20:
-            palette = ("#FFF2EC", "#FFD6C2", "#26181A", "#6D4C52", "#E11D48", "#FFFDFC")
-            band = "暮色"
-        elif "上午" in slot_label or 10 <= hour < 13:
-            palette = ("#F1F8FF", "#DCEEFF", "#16202A", "#4A6075", "#2563EB", "#FFFFFF")
-            band = "午前"
-        else:
-            palette = ("#F4F9F6", "#DDF1E6", "#18241E", "#4A6355", "#0F766E", "#FFFFFF")
-            band = "午后"
 
-        bg1, bg2, ink, muted, accent, card_bg = palette
-        is_dark = band == "夜览"
-        line_col = "rgba(148, 163, 184, 0.24)" if is_dark else "rgba(15, 23, 42, 0.12)"
-        fill_col = "rgba(255, 255, 255, 0.06)" if is_dark else "rgba(15, 23, 42, 0.045)"
-        fill2_col = "rgba(255, 255, 255, 0.10)" if is_dark else "rgba(15, 23, 42, 0.08)"
-        label_text = html.escape(slot_label or now_dt.strftime("%m月%d日 · %H:%M"))
-        title_text = html.escape(group_title or "今日高信噪比资讯精选")
-
-        cards_html: list[str] = []
+        picked: list[dict[str, Any]] = []
         total_viz_h = 0
         total_viz_chars = 0
         any_viz = False
-        for idx, it in enumerate(items[:8], 1):
-            is_explore = it.get("slot") == "explore"
-            badge = "跨界视角" if is_explore else (html.escape(str(it.get("topic") or "精选")))
-            source_host = html.escape(str(it.get("source") or _host_of(it.get("url", ""))))
-            summary = _esc_br(it.get("summary") or it.get("why") or "")
-            why_line = _esc_br(
-                (it.get("bridge") if is_explore and it.get("bridge") else "")
-                or it.get("why")
-                or it.get("note")
-                or it.get("bridge")
-                or ""
-            )
-            avg_score = it.get("avg")
-            score_tag = f" · 评分 {avg_score:.1f}" if isinstance(avg_score, (int, float)) else ""
-            viz_html = ""
-            if isinstance(it.get("viz"), dict):
+        for idx, raw_it in enumerate((items or [])[:8], 1):
+            if not isinstance(raw_it, dict):
+                continue
+            it = dict(raw_it)
+            if not str(it.get("cover_data") or "").startswith("data:image/") and isinstance(
+                it.get("viz"), dict
+            ):
                 frag, est_h = _render_viz_fragment(it["viz"], uid=f"vs-{idx}")
                 if (
                     frag
                     and (total_viz_h + est_h) <= _VIZ_STATIC_MAX_H
                     and (total_viz_chars + len(frag)) <= 40000
                 ):
-                    viz_html = f'<div class="card-viz">{frag}</div>'
+                    it["viz_frag"] = frag
                     any_viz = True
                     total_viz_h += est_h
                     total_viz_chars += len(frag)
-            cards_html.append(
-                f"""<article class="card">
-  <div class="meta">
-    <span class="num">{idx:02d}</span>
-    <span class="badge">{badge}</span>
-    <span class="src">{source_host}{html.escape(score_tag)}</span>
-  </div>
-  <h2>{_esc_br(it.get("title") or "")}</h2>
-  <p class="sum">{summary}</p>
-  {f'<p class="why">看点：{why_line}</p>' if why_line else ''}
-  {viz_html}
-</article>"""
-            )
+            picked.append(it)
 
         viz_css = _load_viz_css_text() if any_viz else ""
-        body_theme = ' data-theme="dark"' if is_dark else ""
-        doc = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>{title_text} — {label_text}</title>
-<style>
-  :root {{
-    color-scheme: {"dark" if is_dark else "light"};
-    --bg: {bg1};
-    --bg-elev: {card_bg};
-    --vs-card: {card_bg};
-    --ink: {ink};
-    --ink-2: {muted};
-    --gray: {muted};
-    --muted: {muted};
-    --accent: {accent};
-    --blue: {accent};
-    --line: {line_col};
-    --fill: {fill_col};
-    --fill-2: {fill2_col};
-  }}
-  {viz_css}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0;
-    padding: 32px 28px;
-    font-family: "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
-    background: linear-gradient(155deg, {bg1} 0%, {bg2} 100%);
-    color: var(--ink);
-  }}
-  .wrap {{ max-width: 780px; margin: 0 auto; }}
-  header {{
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    padding-bottom: 16px;
-    margin-bottom: 18px;
-    border-bottom: 2px solid var(--accent);
-  }}
-  .kicker {{ font-size: 12px; letter-spacing: 0.14em; color: var(--accent); font-weight: 700; text-transform: uppercase; }}
-  h1 {{ margin: 4px 0 0; font-size: 24px; line-height: 1.25; }}
-  .slot {{ font-size: 13px; color: var(--ink-2); font-weight: 600; }}
-  .card {{
-    background: var(--bg-elev);
-    border: 1px solid var(--line);
-    border-left: 4px solid var(--accent);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 12px;
-  }}
-  .meta {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; color: var(--ink-2); }}
-  .num {{ font-family: ui-monospace, monospace; font-weight: 700; color: var(--accent); }}
-  .badge {{
-    padding: 1px 7px;
-    border-radius: 4px;
-    background: var(--fill-2);
-    color: var(--ink);
-    font-weight: 600;
-  }}
-  .src {{ margin-left: auto; font-family: ui-monospace, monospace; }}
-  h2 {{ margin: 0 0 6px; font-size: 16px; line-height: 1.38; }}
-  p {{ margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }}
-  .why {{ margin-top: 6px; color: var(--ink); font-size: 13px; }}
-  .card-viz {{ margin-top: 8px; }}
-  footer {{ margin-top: 14px; font-size: 11.5px; color: var(--ink-2); text-align: right; }}
-</style>
-</head>
-<body{body_theme}>
-<div class="wrap">
-  <header>
-    <div>
-      <div class="kicker">DIGEST · {band}简报</div>
-      <h1>{title_text}</h1>
-    </div>
-    <div class="slot">{label_text}</div>
-  </header>
-  {"".join(cards_html)}
-  <footer>共入选 {len(items[:8])} 条 · 基于时效、引文核验与五维精选</footer>
-</div>
-</body>
-</html>"""
+        resolved_total = int(total_candidates or 0)
+        if resolved_total <= 0:
+            hist_total = int(self._load_history().get("last_total_candidates") or 0)
+            resolved_total = max(len(picked), hist_total)
+
+        doc = digest_card.build_card_html(
+            picked,
+            slot_label=slot_label,
+            group_title=group_title,
+            total_candidates=resolved_total,
+            viz_css=viz_css,
+            now_ts=self.clock(),
+        )
         doc = _strip_script_tags(doc)
         res = self.work.write(output_path, doc)
         self.work.commit()
-        return {"path": output_path, "bytes": res["bytes"], "count": len(items[:8])}
+        return {"path": output_path, "bytes": res["bytes"], "count": len(picked)}
 
 
 async def run_digest_tool(
@@ -2470,13 +2968,26 @@ async def run_digest_tool(
             max_items=int(arguments.get("max_items", 5) or 5),
         )
     if action == "render_card_html":
+        raw_max = arguments.get("max_items")
+        max_items = max(1, min(int(raw_max if raw_max is not None else 3), 8))
         candidates = arguments.get("candidates")
+        history = dw._load_history()
         if candidates is None:
-            candidates = dw._load_history().get("last_selected") or []
+            candidates = history.get("last_selected") or []
+        picked = [
+            dict(c) for c in list(candidates or [])[:max_items] if isinstance(c, dict)
+        ]
+        await dw.prepare_covers(picked)
+        total_cand = int(
+            arguments.get("total_candidates")
+            or history.get("last_total_candidates")
+            or len(picked)
+        )
         return dw.render_card_html(
-            list(candidates or []),
+            picked,
             slot_label=str(arguments.get("slot_label") or ""),
             group_title=str(arguments.get("group_title") or ""),
             output_path=str(arguments.get("output_path") or "out/digest-card.html"),
+            total_candidates=total_cand,
         )
     raise ValueError("未知 digest_feed 操作")

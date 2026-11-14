@@ -1,12 +1,16 @@
 import hashlib
 import hmac
+import io
 import json
 import time
 from email.utils import formatdate
 
+from PIL import Image, ImageDraw
 import pytest
 from test_foundation import loaded
 
+import maisya.digest as digest_mod
+from maisya import digest_card
 from maisya.abilities import Profiles
 from maisya.digest import DigestWorkspace, fetch_public_bytes, parse_feed_xml
 
@@ -454,7 +458,11 @@ async def test_rss_xml_xxe_ssrf_and_auto_trial_unsubscribe_state_machine(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_path):
+async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_path, monkeypatch):
+    async def _offline_fetch(url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152):
+        return {"body": None, "content_type": "", "status": 404, "url": url, "error": "offline"}
+
+    monkeypatch.setattr(digest_mod, "fetch_public_bytes", _offline_fetch)
     now = 1_794_480_000.0
     plugin = await loaded(tmp_path)
     try:
@@ -724,15 +732,7 @@ async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_pat
             ctx,
         )
         assert card_res["path"] == "out/digest-card.html"
-        chunks = []
-        offset = 0
-        while True:
-            page = work.read("out/digest-card.html", offset=offset)
-            chunks.append(page["text"])
-            if not page.get("truncated"):
-                break
-            offset = page["next_offset"]
-        html_doc = "".join(chunks)
+        html_doc = (work.path / "out/digest-card.html").read_text(encoding="utf-8")
         assert "11月13日 · 下午" in html_doc
         assert "SQLite 3.51" in html_doc
         assert "<script" not in html_doc.lower()
@@ -742,7 +742,11 @@ async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_score_select_top_level_source_and_render_card_default_candidates(tmp_path):
+async def test_score_select_top_level_source_and_render_card_default_candidates(tmp_path, monkeypatch):
+    async def _offline_fetch(url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152):
+        return {"body": None, "content_type": "", "status": 404, "url": url, "error": "offline"}
+
+    monkeypatch.setattr(digest_mod, "fetch_public_bytes", _offline_fetch)
     plugin = await loaded(tmp_path)
     try:
         cur = plugin.memory.read("profile", target="digest", document="profile.toml")
@@ -829,18 +833,10 @@ async def test_score_select_top_level_source_and_render_card_default_candidates(
             ctx,
         )
         assert card_res["count"] == 2
-        chunks = []
-        offset = 0
-        while True:
-            page = work.read("out/digest-card.html", offset=offset)
-            chunks.append(page["text"])
-            if not page.get("truncated"):
-                break
-            offset = page["next_offset"]
-        html_doc = "".join(chunks)
+        html_doc = (work.path / "out/digest-card.html").read_text(encoding="utf-8")
         assert "AI 编程代理的工作流架构复盘" in html_doc
         assert "simonwillison.net" in html_doc
-        assert "看点：对当前调试多步编排与工具返回格式很有参考价值。" in html_doc
+        assert '<span class="why-k">值得看</span>对当前调试多步编排与工具返回格式很有参考价值。' in html_doc
         assert "本地轻量终端渲染器发布 0.9 版本" in html_doc
 
         # Subsequent 0-selected score_select clears last_selected so stale items aren't re-rendered
@@ -861,3 +857,430 @@ async def test_score_select_top_level_source_and_render_card_default_candidates(
         assert empty_card["count"] == 0
     finally:
         await plugin.on_unload()
+
+
+def _make_photo_bytes(width: int = 640, height: int = 360, *, hue_shift: int = 0) -> bytes:
+    """合成具有连续丰富色调变化的模拟照片图像。"""
+    img = Image.new("RGB", (width, height))
+    px = img.load()
+    assert px is not None
+    for y in range(height):
+        for x in range(width):
+            r = (x * 255 // max(1, width - 1) + hue_shift) % 256
+            g = (y * 230 // max(1, height - 1) + (x * 40 // max(1, width - 1))) % 256
+            b = ((width - x) * 180 // max(1, width - 1) + y * 50 // max(1, height - 1)) % 256
+            px[x, y] = (r, g, b)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _make_solid_logo_bytes(width: int = 640, height: int = 360) -> bytes:
+    img = Image.new("RGB", (width, height), (28, 76, 156))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([280, 140, 360, 220], fill=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _make_text_banner_bytes(width: int = 640, height: int = 360) -> bytes:
+    """构造占主色 30%~45% 之间且边缘密集的纯底大字横幅。"""
+    img = Image.new("RGB", (width, height), (24, 34, 58))
+    draw = ImageDraw.Draw(img)
+    # 铺三块纯底色块，令单一主色调落在 30%~45% 之间
+    draw.rectangle([0, 0, width, 150], fill=(24, 34, 58))
+    draw.rectangle([0, 150, width, 255], fill=(42, 62, 102))
+    draw.rectangle([0, 255, width, height], fill=(64, 92, 140))
+    # 在中下区域画高对比大字横幅文字块（边缘占比 >= 2.5%）
+    for row in range(160, 250, 16):
+        for col in range(60, 580, 22):
+            draw.rectangle([col, row, col + 10, row + 8], fill=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_cover_filter_palette_and_apple_weather_card_themes():
+    photo = _make_photo_bytes(800, 450, hue_shift=30)
+    small_photo = _make_photo_bytes(320, 180, hue_shift=60)
+    solid_logo = _make_solid_logo_bytes(640, 360)
+    text_banner = _make_text_banner_bytes(640, 360)
+
+    # URL 关键词及 SVG 过滤
+    for bad_url in (
+        "https://cdn.example/logo.png",
+        "https://cdn.example/favicon.ico",
+        "https://cdn.example/site-icon-256.png",
+        "https://cdn.example/avatar/u1.jpg",
+        "https://cdn.example/placeholder-img.jpg",
+        "https://cdn.example/default-cover.png",
+        "https://cdn.example/brand-mark.jpg",
+        "https://cdn.example/sprite.png",
+        "https://cdn.example/badge.png",
+        "https://cdn.example/apple-touch-icon.png",
+        "https://cdn.example/og-default.jpg",
+        "https://cdn.example/share-default.png",
+        "https://cdn.example/hero.svg",
+        "https://cdn.example/hero.svg?v=2",
+    ):
+        assert digest_card.judge_cover(photo, url=bad_url), f"应拒收 URL: {bad_url}"
+
+    # silicon 含子串 icon 但非词元，应正常放行
+    assert digest_card.judge_cover(photo, url="https://cdn.example/silicon/photo.jpg") == ""
+    assert digest_card.judge_cover(b"<svg viewBox='0 0 10 10'></svg>", url="https://cdn.example/a.png")
+
+    # 尺寸与宽高比校验
+    tiny = _make_photo_bytes(120, 80)
+    wide = _make_photo_bytes(640, 160)
+    tall = _make_photo_bytes(200, 500)
+    assert digest_card.judge_cover(tiny)
+    assert digest_card.judge_cover(wide)
+    assert digest_card.judge_cover(tall)
+
+    # 纯色 Logo 与大字横幅过滤
+    assert digest_card.judge_cover(solid_logo)
+    assert digest_card.judge_cover(text_banner)
+
+    # 正常编码与小图标记
+    data_uri, is_small = digest_card.encode_cover_data_uri(photo, url="https://cdn.example/cover.jpg")
+    assert data_uri.startswith("data:image/jpeg;base64,")
+    assert is_small is False
+
+    small_uri, is_small2 = digest_card.encode_cover_data_uri(small_photo, url="https://cdn.example/sm.jpg")
+    assert small_uri.startswith("data:image/jpeg;base64,")
+    assert is_small2 is True
+
+    # 主色提取：彩色图产出调色板，纯灰图返回 None
+    tint = digest_card.cover_tint(photo)
+    assert tint is not None and set(tint) == {"why_bg", "why_ink", "glow"}
+    gray = Image.new("RGB", (200, 120), (140, 140, 140))
+    assert digest_card.cover_tint(gray) is None
+
+    # 5 档天光主题、600px 画布、教程隐藏相对时间、来源清洗
+    now_ts = 1_794_480_000.0
+    sample_items = [
+        {
+            "title": "Rust 编译器并发 frontend 新进展",
+            "url": "https://blog.rust-lang.org/2026/11/parallel-fe/",
+            "brief": "开启多线程前端后大型工程增量编译耗时平均缩短 28%。",
+            "why": "核心开发者长期痛点出现实质提速。",
+            "source": "这是一段不该出现在卡片上的超长模型评价而且还写了评分4.9分",
+            "feed_title": "Rust Blog",
+            "topic": "系统工程",
+            "published_ts": now_ts - 3600,
+            "kind": "news",
+            "avg": 4.8,
+            "cover_data": data_uri,
+            "cover_small": False,
+            "cover_tint": tint,
+        },
+        {
+            "title": "SQLite WAL 调优实用指南",
+            "url": "https://sqlite.org/wal-guide.html",
+            "brief": "给出写放大控制与 checkpoint 阈值配置的完整参考步骤。",
+            "why": "本地服务可直接对照调整参数。",
+            "source": "sqlite.org",
+            "topic": "数据库",
+            "published_ts": now_ts - 20 * 86400,
+            "kind": "guide",
+            "cover_data": small_uri,
+            "cover_small": True,
+        },
+        {
+            "title": "无封面条目验证默认 SVG 分类徽章",
+            "url": "https://simonwillison.net/2026/11/no-cover/",
+            "brief": "验证无封面条目时保留精致内联 SVG 分类徽章而不输出外链。",
+            "why": "确保降级视觉稳定。",
+            "source": "simonwillison.net",
+            "topic": "AI工具",
+            "kind": "explore",
+            "bridge": "虽然偏底层但架构思路相通。",
+            "published_ts": now_ts - 7200,
+        },
+    ]
+
+    for label, expected_sky in (
+        ("凌晨特刊", "dawn"),
+        ("早安资讯", "morning"),
+        ("正午速览", "noon"),
+        ("下午茶", "afternoon"),
+        ("深夜精选", "night"),
+    ):
+        html_doc = digest_card.build_card_html(
+            sample_items,
+            slot_label=label,
+            group_title="架构研发组",
+            total_candidates=12,
+            now_ts=now_ts,
+        )
+        assert f'data-sky="{expected_sky}"' in html_doc
+        assert "width: 600px" in html_doc
+        assert label in html_doc
+        assert "共找到 12 条" in html_doc
+        assert "Rust Blog" in html_doc
+        assert "超长模型评价" not in html_doc
+        assert "1小时前" in html_doc
+        assert "20天前" not in html_doc  # kind == "guide" 隐藏相对时间
+        assert "frame small" in html_doc
+        assert "<svg " in html_doc
+        assert "<script" not in html_doc.lower()
+        assert "http://" not in html_doc and "https://" not in html_doc
+        assert len(html_doc.encode("utf-8")) <= 524_288
+
+
+@pytest.mark.asyncio
+async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers(tmp_path, monkeypatch):
+    now = 1_794_480_000.0
+    pub_rfc = formatdate(now - 3600, usegmt=True)
+    photo_ok = _make_photo_bytes(800, 450, hue_shift=15)
+    photo_og = _make_photo_bytes(320, 180, hue_shift=90)
+    bad_logo = _make_solid_logo_bytes(640, 360)
+
+    rss_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+      <channel>
+        <title>Engineering Dispatch</title>
+        <item>
+          <title>Cloudflare 发布边缘 KV 延迟优化</title>
+          <link>https://blog.cloudflare.com/kv-latency-2026/</link>
+          <pubDate>{pub_rfc}</pubDate>
+          <enclosure url="https://blog.cloudflare.com/images/kv-hero.jpg" type="image/jpeg" />
+          <description>Reduced p99 read latency by 35% globally.</description>
+        </item>
+        <item>
+          <title>带有正文插图和失败封面的工具发布</title>
+          <link>https://indietool.example/posts/v2-release</link>
+          <pubDate>{pub_rfc}</pubDate>
+          <media:thumbnail url="https://indietool.example/static/logo.png" />
+          <description>&lt;p&gt;Benchmark summary&lt;/p&gt;</description>
+        </item>
+        <item>
+          <title>Atom 嵌入正文图测试</title>
+          <link>https://rust-notes.example/posts/mir</link>
+          <pubDate>{pub_rfc}</pubDate>
+          <description>&lt;p&gt;Details&lt;/p&gt;&lt;img src="https://rust-notes.example/assets/mir-chart.jpg" /&gt;</description>
+        </item>
+      </channel>
+    </rss>"""
+    parsed = parse_feed_xml(rss_xml, now=now, lookback_days=7)
+    by_link = {it["url"]: it for it in parsed["items"]}
+    assert by_link["https://blog.cloudflare.com/kv-latency-2026/"]["image_url"] == "https://blog.cloudflare.com/images/kv-hero.jpg"
+    assert by_link["https://indietool.example/posts/v2-release"]["image_url"] == "https://indietool.example/static/logo.png"
+    assert by_link["https://rust-notes.example/posts/mir"]["image_url"] == "https://rust-notes.example/assets/mir-chart.jpg"
+
+    async def fake_fetch(url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152):
+        if url == "https://eng.example/rss.xml":
+            return {"body": rss_xml.encode(), "content_type": "application/rss+xml", "status": 200, "url": url, "error": ""}
+        if url == "https://blog.cloudflare.com/images/kv-hero.jpg":
+            return {"body": photo_ok, "content_type": "image/jpeg", "status": 200, "url": url, "error": ""}
+        if url == "https://indietool.example/posts/v2-release":
+            html_page = b'<html><head><meta content="https://indietool.example/img/og-shot.jpg" property="og:image"></head><body>ok</body></html>'
+            return {"body": html_page, "content_type": "text/html", "status": 200, "url": url, "error": ""}
+        if url == "https://indietool.example/img/og-shot.jpg":
+            return {"body": photo_og, "content_type": "image/jpeg", "status": 200, "url": url, "error": ""}
+        if url == "https://rust-notes.example/assets/mir-chart.jpg":
+            return {"body": bad_logo, "content_type": "image/png", "status": 200, "url": url, "error": ""}
+        return {"body": None, "content_type": "", "status": 404, "url": url, "error": "not found"}
+
+    monkeypatch.setattr(digest_mod, "fetch_public_bytes", fake_fetch)
+
+    plugin = await loaded(tmp_path)
+    try:
+        cur = plugin.memory.read("profile", target="digest", document="profile.toml")
+        plugin.memory.write(
+            "profile",
+            cur["content"].replace("enabled = false", "enabled = true"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
+        enabled_profile = plugin.profiles.get("digest")
+        row = plugin.threads.create(
+            enabled_profile,
+            "检验 digest_pool 回填、brief 必填及封面渲染",
+            chat_id="chat",
+            platform="qq",
+            user_id="",
+            workspace="digest_covers_pool",
+        )
+        ctx = {**row, "profile_snapshot": row["profile_snapshot"]}
+        work = await plugin.runtime._work(ctx)
+
+        await plugin.runtime.call(
+            "digest_feed",
+            {
+                "action": "add_feed",
+                "url": "https://eng.example/rss.xml",
+                "title": "Engineering Dispatch",
+                "auto": False,
+            },
+            ctx,
+        )
+        col = await plugin.runtime.call("digest_feed", {"action": "collect", "max_items": 10}, ctx)
+        assert col["stats"]["rss_kept"] == 3
+        pool_doc = json.loads(work.read("project/digest_pool.json")["text"])
+        assert pool_doc["total_discovered"] == 3
+        assert "blog.cloudflare.com/kv-latency-2026" in pool_doc["by_url"]
+
+        # 刻意省去 image_url/published/feed_title 检验从 pool 回填，同时提交 1 条空摘要检验拒收
+        score_res = await plugin.runtime.call(
+            "digest_feed",
+            {
+                "action": "score_select",
+                "candidates": [
+                    {
+                        "title": "Cloudflare 边缘 KV 延迟优化落地",
+                        "url": "https://blog.cloudflare.com/kv-latency-2026/",
+                        "brief": "全局边缘节点读取优化后 p99 延迟下降 35%。",
+                        "why": "对依赖边缘缓存的独立应用收益直观。",
+                        "topic": "系统工程",
+                        "source": "这是一句冗长不干净的来源描述并且附带模型自评 4.9 分超过二十八个字",
+                        "info": 5,
+                        "source_score": 5,
+                        "relevance": 5,
+                        "timeliness": 5,
+                        "chat": 4,
+                    },
+                    {
+                        "title": "v2.0 工具发布并改用正文 og:image 封面",
+                        "url": "https://indietool.example/posts/v2-release",
+                        "brief": "自动剔除 logo 缩略图后回退抓取文章 og:image。",
+                        "why": "验证多级封面退化链。",
+                        "topic": "开源工具",
+                        "source": "IndieTool",
+                        "info": 4,
+                        "source_score": 4,
+                        "relevance": 4,
+                        "timeliness": 5,
+                        "chat": 4,
+                    },
+                    {
+                        "title": "纯色 Logo 被拒收后降级无封面条目",
+                        "url": "https://rust-notes.example/posts/mir",
+                        "brief": "单色 Logo 图会被封面过滤器拦掉，改用内联 SVG 徽章。",
+                        "why": "保证版式不被假封面污染。",
+                        "topic": "系统",
+                        "info": 4,
+                        "source": "Rust Notes",
+                        "source_score": 4,
+                        "relevance": 4,
+                        "timeliness": 4,
+                        "chat": 4,
+                    },
+                    {
+                        "title": "缺少摘要的偷懒候选应当直接淘汰",
+                        "url": "https://empty-brief.example/post",
+                        "published": pub_rfc,
+                        "brief": "",
+                        "summary": "",
+                        "info": 5,
+                        "source": 5,
+                        "relevance": 5,
+                        "timeliness": 5,
+                        "chat": 5,
+                    },
+                ],
+                "max_items": 5,
+            },
+            ctx,
+        )
+        assert len(score_res["selected"]) == 3
+        rej_map = {r["url"]: r["reject_reason"] for r in score_res["rejected"]}
+        assert "缺少中文摘要" in rej_map["https://empty-brief.example/post"]
+        sel_by_url = {it["url"]: it for it in score_res["selected"]}
+        cf = sel_by_url["https://blog.cloudflare.com/kv-latency-2026/"]
+        assert cf["image_url"] == "https://blog.cloudflare.com/images/kv-hero.jpg"
+        assert cf["source"] == "Engineering Dispatch"
+        assert cf.get("published_ts") is not None
+
+        # 调用 run_digest_tool("render_card_html") 不传 candidates/max_items -> 默认前 3 条 + 并发 prepare_covers
+        card_res = await plugin.runtime.call(
+            "digest_feed",
+            {
+                "action": "render_card_html",
+                "slot_label": "早上好",
+                "group_title": "研发交流室",
+                "output_path": "out/digest-card.html",
+            },
+            ctx,
+        )
+        assert card_res["count"] == 3
+        html_doc = (work.path / "out/digest-card.html").read_text(encoding="utf-8")
+        assert "data:image/jpeg;base64," in html_doc
+        assert "frame small" in html_doc  # og:image 320px 触发小图虚化框
+        assert "badge" in html_doc  # 第 3 条被拒纯色 Logo 降级为内联分类图标
+        assert "http://" not in html_doc and "https://" not in html_doc
+        assert "超长" not in html_doc
+        assert "Engineering Dispatch" in html_doc
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_digest_presets_pass_memory_layers_and_guard(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        prof = plugin.memory.read("profile", target="digest", document="PROFILE.md")["content"]
+        skill = plugin.memory.read("skill", target="news-digest", document="SKILL.md")["content"]
+        for label, content in (("PROFILE.md", prof), ("SKILL.md", skill)):
+            assert "她" not in content, f"{label} 含禁用词 '她'"
+            assert "本群" not in content, f"{label} 含禁用词 '本群'"
+            assert "brief" in content and "why" in content
+            assert "width=600" in content and 'selector=".card"' in content
+            assert "result_attach" in content
+        plugin.memory._guard("profile", prof, "")
+        plugin.memory._guard("skill", skill, "")
+
+        # 模拟老版本未编辑过的 digest/PROFILE.md（含旧 width=780 与 v0 索引），重启加载后自动同步
+        prof_path = plugin.profiles.path / "digest/PROFILE.md"
+        legacy_prof = "# 资讯编辑\n\n使用 html_render(..., width=780) 出图。\n"
+        prof_path.write_text(legacy_prof, encoding="utf-8")
+        with plugin.memory.store.connect() as db, db:
+            db.execute(
+                "INSERT OR REPLACE INTO memory_versions VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    "profile:digest:PROFILE.md",
+                    0,
+                    "profile",
+                    "digest",
+                    "",
+                    "PROFILE.md",
+                    legacy_prof,
+                    "preset",
+                    1.0,
+                ),
+            )
+            db.execute("DELETE FROM memory_search WHERE asset=?", ("profile:digest:PROFILE.md",))
+            db.execute(
+                "INSERT INTO memory_search VALUES (?,?)",
+                ("profile:digest:PROFILE.md", legacy_prof),
+            )
+    finally:
+        await plugin.on_unload()
+
+    reloaded = await loaded(tmp_path)
+    try:
+        refreshed = reloaded.memory.read("profile", target="digest", document="PROFILE.md")["content"]
+        assert "width=600" in refreshed and 'selector=".card"' in refreshed
+        assert "width=780" not in refreshed
+        with reloaded.memory.store.connect() as db:
+            v0 = db.execute(
+                "SELECT content FROM memory_versions WHERE asset=? AND version=0",
+                ("profile:digest:PROFILE.md",),
+            ).fetchone()
+        assert v0 is not None and "width=600" in v0["content"]
+
+        # 若管理员主动改过 digest/PROFILE.md（version >= 1），重加载绝不覆盖用户版本
+        custom_prof = "# 资讯编辑\n\n管理员定制版规范：width=600，保留自定义风格。\n"
+        reloaded.memory.write("profile", custom_prof, target="digest", document="PROFILE.md", author="admin")
+    finally:
+        await reloaded.on_unload()
+
+    reloaded_custom = await loaded(tmp_path)
+    try:
+        preserved = reloaded_custom.memory.read("profile", target="digest", document="PROFILE.md")["content"]
+        assert preserved == custom_prof
+    finally:
+        await reloaded_custom.on_unload()

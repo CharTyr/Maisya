@@ -11,6 +11,7 @@ import sqlite3
 import time
 import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .config import Settings
 from .digest import DigestWorkspace
@@ -29,8 +30,30 @@ _LOCKOUT_MESSAGE = (
     "拒绝在聊天内关闭总开关（plugin.enabled=false 会锁死所有管理入口，请前往 WebUI「设置」操作）"
 )
 DEFAULT_DIGEST_SCHEDULE_PROMPT = (
-    "结合本群 MEMORY.md 中记录的关注主题、已订阅资讯源与读者反馈，"
-    "完成新一期公开资讯搜集、硬条件筛选、五维精选打分并生成天光简报卡交付。"
+    "结合当前会话 MEMORY.md 中记录的关注主题、已订阅资讯源与读者反馈，"
+    "完成新一期公开资讯搜集、硬条件筛选与精选打分，生成中文标题、1~2 句中文摘要与 1 句入选理由后，"
+    "调用 digest_feed(action='render_card_html', ...) 输出卡片 HTML，"
+    "再用 html_render(html_path='out/digest-card.html', output_path='out/digest-card.png', width=600, selector='.card') 渲染出图并 result_attach 交付。"
+)
+_DIGEST_ADD_KEYS = ("rss_urls", "add_urls", "urls", "add", "feeds")
+_DIGEST_ADD_SOURCE_KEYS = ("add_urls", "urls", "add", "feeds", "rss_urls")
+_DIGEST_DISCOVER_KEYS = ("discover_urls", "discover")
+_DIGEST_UNSUB_KEYS = (
+    "unsubscribe_ids",
+    "remove_ids",
+    "remove",
+    "unsubscribe",
+    "delete",
+    "remove_urls",
+    "unsubscribe_urls",
+)
+_DIGEST_SOURCE_OP_KEYS = (
+    *_DIGEST_ADD_KEYS,
+    *_DIGEST_DISCOVER_KEYS,
+    *_DIGEST_UNSUB_KEYS,
+)
+_NON_CHAT_ENABLE_TOKENS = frozenset(
+    {"", "true", "false", "yes", "no", "on", "off", "1", "0", "y", "n", "maybe"}
 )
 _DIGEST_WORKSPACE_ALIASES = frozenset(
     {"", "digest", "digest-feeds", "digest_feeds", "digest-news", "digest-daily", "digest_feed"}
@@ -1864,6 +1887,124 @@ async def _run_in_digest_workspace(
     return result
 
 
+def _collect_digest_source_items(
+    opts: dict, keys: tuple[str, ...], *, allow_url_dict: bool = False
+) -> list:
+    """从多个兼容字段别名中提取资讯源条目列表，支持单条字符串与列表。"""
+    collected: list = []
+    for key in keys:
+        if key not in opts or opts[key] is None:
+            continue
+        raw = opts[key]
+        if isinstance(raw, str):
+            text = raw.strip()
+            if text:
+                collected.append(text)
+        elif allow_url_dict and isinstance(raw, dict) and "url" in raw:
+            collected.append(raw)
+        elif isinstance(raw, (list, tuple)):
+            collected.extend(raw)
+        else:
+            raise ValueError(f"{key} 必须是字符串或列表")
+    return collected
+
+
+def _normalize_feed_url(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if "://" in text:
+        parsed = urlparse(text)
+    elif "/" in text or "?" in text:
+        parsed = urlparse(f"https://{text}")
+    else:
+        return ""
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return ""
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path or ""
+    path = "" if path == "/" else path.rstrip("/")
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{host}{port}{path}{query}"
+
+
+def _bare_feed_host(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text or any(ch.isspace() for ch in text):
+        return ""
+    if "://" in text:
+        parsed = urlparse(text)
+        if parsed.path.strip("/") or parsed.query:
+            return ""
+        host = (parsed.hostname or "").lower()
+    elif "/" in text or "?" in text:
+        cleaned = text.rstrip("/")
+        if "/" in cleaned or "?" in cleaned:
+            return ""
+        host = (urlparse(f"https://{cleaned}").hostname or "").lower()
+    else:
+        host = (urlparse(f"https://{text}").hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host if "." in host else ""
+
+
+def _feed_url_host(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    host = (parsed.hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _resolve_unsub_feed_ids(feeds: list[dict], token: str) -> list[str]:
+    """按精确 ID -> 规范化 URL -> 不区分大小写标题 -> 裸域名 host 解析退订目标。"""
+    clean = str(token or "").strip()
+    if not clean:
+        return []
+    exact_ids = [
+        str(f.get("id") or "").strip()
+        for f in feeds
+        if str(f.get("id") or "").strip() == clean
+    ]
+    if exact_ids:
+        return list(dict.fromkeys(exact_ids))
+    norm_tok = _normalize_feed_url(clean)
+    if norm_tok:
+        url_matches = [
+            str(f.get("id") or "").strip()
+            for f in feeds
+            if str(f.get("id") or "").strip()
+            and _normalize_feed_url(str(f.get("url") or "")) == norm_tok
+        ]
+        if url_matches:
+            return list(dict.fromkeys(url_matches))
+    low_tok = clean.lower()
+    title_matches = [
+        str(f.get("id") or "").strip()
+        for f in feeds
+        if str(f.get("id") or "").strip()
+        and str(f.get("title") or "").strip().lower() == low_tok
+    ]
+    if title_matches:
+        return list(dict.fromkeys(title_matches))
+    host_tok = _bare_feed_host(clean)
+    if host_tok:
+        host_matches = [
+            str(f.get("id") or "").strip()
+            for f in feeds
+            if str(f.get("id") or "").strip()
+            and _feed_url_host(str(f.get("url") or "")) == host_tok
+        ]
+        if host_matches:
+            return list(dict.fromkeys(host_matches))
+    return [clean]
+
+
 async def handle_digest_sources(
     plugin,
     *,
@@ -1939,27 +2080,11 @@ async def handle_digest_sources(
 
         return await completed_thread(_read_sources)
 
-    add_raw = opts.get("add_urls") if "add_urls" in opts else opts.get("urls", [])
-    discover_raw = (
-        opts.get("discover_urls")
-        if "discover_urls" in opts
-        else opts.get("discover", [])
+    add_raw = _collect_digest_source_items(
+        opts, _DIGEST_ADD_SOURCE_KEYS, allow_url_dict=True
     )
-    unsub_raw = (
-        opts.get("unsubscribe_ids")
-        if "unsubscribe_ids" in opts
-        else opts.get("remove_ids", [])
-    )
-    if add_raw is None:
-        add_raw = []
-    if discover_raw is None:
-        discover_raw = []
-    if unsub_raw is None:
-        unsub_raw = []
-    if not isinstance(add_raw, (list, tuple)) or not isinstance(
-        discover_raw, (list, tuple)
-    ) or not isinstance(unsub_raw, (list, tuple)):
-        raise ValueError("add_urls / discover_urls / unsubscribe_ids 必须是列表")
+    discover_raw = _collect_digest_source_items(opts, _DIGEST_DISCOVER_KEYS)
+    unsub_raw = _collect_digest_source_items(opts, _DIGEST_UNSUB_KEYS)
 
     raw_auto = opts.get("auto")
     auto_default = _coerce_bool(raw_auto, "auto") if raw_auto is not None else False
@@ -1991,17 +2116,17 @@ async def handle_digest_sources(
             if u:
                 discovered.append(await dw.discover(u, origin="admin"))
         if unsub_raw:
-            sources_snapshot = dw._load_sources()
-            by_url = {
-                str(f.get("url") or "").strip(): str(f.get("id") or "")
-                for f in sources_snapshot.get("feeds", [])
-            }
+            feeds_snapshot = list(dw._load_sources().get("feeds", []) or ())
+            seen_fids: set[str] = set()
             for raw_id in unsub_raw:
                 token = str(raw_id or "").strip()
                 if not token:
                     continue
-                fid = by_url.get(token, token)
-                unsubscribed.append(dw.unsubscribe(fid, reason="管理员退订"))
+                for fid in _resolve_unsub_feed_ids(feeds_snapshot, token):
+                    if fid in seen_fids:
+                        continue
+                    seen_fids.add(fid)
+                    unsubscribed.append(dw.unsubscribe(fid, reason="管理员退订"))
         cur_sources = dw._load_sources()
         cur_history = dw._load_history()
         return {
@@ -2182,10 +2307,7 @@ _SETUP_CHAT_FIELDS = frozenset(
         "replace_memory",
         "daily_at",
         "schedules",
-        "rss_urls",
-        "add_urls",
-        "discover_urls",
-        "unsubscribe_ids",
+        *_DIGEST_SOURCE_OP_KEYS,
         "topics",
         "auto_seed_sources",
         "run_now",
@@ -2261,6 +2383,89 @@ async def _resolve_setup_target(
     return effective_chat_id, effective_platform, stream_spec
 
 
+async def _resolve_chat_spec_list(
+    plugin,
+    raw: object,
+    *,
+    field_name: str,
+    effective_chat_id: str,
+    effective_platform: str,
+) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items: list = [raw.strip()] if raw.strip() else []
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        raise ValueError(f"{field_name} 必须是字符串或列表")
+    resolved: list[str] = []
+    for item in items:
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            raise ValueError(f"{field_name} 列表元素必须是会话标识")
+        token = str(item).strip()
+        if not token:
+            continue
+        spec = await resolve_stream_spec(
+            plugin,
+            token,
+            current_chat_id=effective_chat_id,
+            current_platform=effective_platform,
+            allow_unknown_ascii=True,
+        )
+        resolved.append(spec)
+    return list(dict.fromkeys(resolved))
+
+
+async def _parse_setup_enable_chat(
+    plugin,
+    raw_enable_chat: object,
+    *,
+    effective_chat_id: str,
+    effective_platform: str,
+    stream_spec: str,
+) -> tuple[bool | None, list[str]]:
+    if raw_enable_chat is None:
+        return None, []
+    if isinstance(raw_enable_chat, (list, tuple)):
+        specs = await _resolve_chat_spec_list(
+            plugin,
+            raw_enable_chat,
+            field_name="enable_chat",
+            effective_chat_id=effective_chat_id,
+            effective_platform=effective_platform,
+        )
+        if not specs:
+            return False, []
+        return stream_spec in specs, specs
+    if isinstance(raw_enable_chat, str):
+        cleaned = raw_enable_chat.strip()
+        low = cleaned.lower()
+        if low in _NON_CHAT_ENABLE_TOKENS:
+            return _coerce_bool(raw_enable_chat, "enable_chat"), []
+        if parse_stream_spec(cleaned) is not None or ":" in cleaned or cleaned.isdigit():
+            spec = await resolve_stream_spec(
+                plugin,
+                cleaned,
+                current_chat_id=effective_chat_id,
+                current_platform=effective_platform,
+                allow_unknown_ascii=True,
+            )
+            return stream_spec == spec, [spec]
+        try:
+            spec = await resolve_stream_spec(
+                plugin,
+                cleaned,
+                current_chat_id=effective_chat_id,
+                current_platform=effective_platform,
+                allow_unknown_ascii=False,
+            )
+            return stream_spec == spec, [spec]
+        except ValueError:
+            return _coerce_bool(raw_enable_chat, "enable_chat"), []
+    return _coerce_bool(raw_enable_chat, "enable_chat"), []
+
+
 async def _apply_setup_settings(
     plugin,
     opts: dict,
@@ -2271,19 +2476,39 @@ async def _apply_setup_settings(
     stream_spec: str,
     author: str,
 ) -> dict | None:
-    raw_enable_chat = opts.get("enable_chat")
-    enable_chat = (
-        _coerce_bool(raw_enable_chat, "enable_chat")
-        if raw_enable_chat is not None
-        else None
+    enable_chat, enable_chat_specs = await _parse_setup_enable_chat(
+        plugin,
+        opts.get("enable_chat"),
+        effective_chat_id=effective_chat_id,
+        effective_platform=effective_platform,
+        stream_spec=stream_spec,
     )
+    extra_add_chats: list[str] = []
+    for key in ("add_chats", "enable_chats"):
+        if key in opts and opts[key] is not None:
+            extra_add_chats.extend(
+                await _resolve_chat_spec_list(
+                    plugin,
+                    opts[key],
+                    field_name=key,
+                    effective_chat_id=effective_chat_id,
+                    effective_platform=effective_platform,
+                )
+            )
     should_enable = (enable_chat is True) or (
         enable_chat is None
         and (has_explicit_target or any(key in opts for key in _SETUP_CHAT_FIELDS))
     )
     settings_patch: dict = {}
-    if should_enable:
-        settings_patch["add_chats"] = [stream_spec]
+    merged_add_chats = list(
+        dict.fromkeys(
+            ([stream_spec] if should_enable else [])
+            + enable_chat_specs
+            + extra_add_chats
+        )
+    )
+    if merged_add_chats:
+        settings_patch["add_chats"] = merged_add_chats
     if "remove_chats" in opts:
         settings_patch["remove_chats"] = opts["remove_chats"]
     if "sleep_window" in opts:
@@ -2312,7 +2537,11 @@ async def _apply_setup_settings(
     )
     applied_settings = res.get("settings") or {}
     return {
-        "enabled_chat": stream_spec if should_enable else "",
+        "enabled_chat": (
+            stream_spec
+            if should_enable
+            else (enable_chat_specs[0] if enable_chat_specs else "")
+        ),
         "enabled_chats": list(applied_settings.get("enabled_chats") or ()),
         "sleep_window": applied_settings.get("sleep_window", ""),
         "proactive_level": applied_settings.get("proactive_level", ""),
@@ -2333,14 +2562,7 @@ def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
         else False
     )
     if any(
-        opts.get(key)
-        for key in (
-            "rss_urls",
-            "add_urls",
-            "discover_urls",
-            "unsubscribe_ids",
-            "topics",
-        )
+        opts.get(key) for key in (*_DIGEST_SOURCE_OP_KEYS, "topics")
     ) or auto_seed_flag:
         return True
     for item in opts.get("schedules") or ():
@@ -2542,11 +2764,9 @@ async def _apply_setup_digest_sources(
     digest_involved: bool,
     warnings: list[str],
 ) -> dict | None:
-    rss_raw = _clean_setup_items(
-        opts.get("rss_urls") if "rss_urls" in opts else opts.get("add_urls"), "rss_urls"
-    )
-    discover_raw = _clean_setup_items(opts.get("discover_urls"), "discover_urls")
-    unsub_raw = _clean_setup_items(opts.get("unsubscribe_ids"), "unsubscribe_ids")
+    rss_raw = _collect_digest_source_items(opts, _DIGEST_ADD_KEYS)
+    discover_raw = _collect_digest_source_items(opts, _DIGEST_DISCOVER_KEYS)
+    unsub_raw = _collect_digest_source_items(opts, _DIGEST_UNSUB_KEYS)
     topics_raw = [
         str(t).strip()
         for t in _clean_setup_items(opts.get("topics"), "topics")
@@ -2583,7 +2803,10 @@ async def _apply_setup_digest_sources(
         unsubscribed_count = 0
         seeded_count = 0
 
-        for item in rss_raw:
+        add_sem = asyncio.Semaphore(6)
+        discover_sem = asyncio.Semaphore(4)
+
+        async def _add_one(item: object) -> tuple[int, str | None]:
             if isinstance(item, dict):
                 url = str(item.get("url") or "").strip()
                 title = str(item.get("title") or "").strip()
@@ -2598,51 +2821,81 @@ async def _apply_setup_digest_sources(
                 title = ""
                 auto_flag = False
             if not url:
-                continue
-            try:
-                res = await dw.add_feed(url, title=title, auto=auto_flag, origin="admin")
-                if res.get("ok"):
-                    added_count += 1
-                else:
-                    warnings.append(
-                        f"RSS 源 {url} 未订阅成功：{res.get('reason') or '未知原因'}"
+                return 0, None
+            async with add_sem:
+                try:
+                    res = await asyncio.wait_for(
+                        dw.add_feed(url, title=title, auto=auto_flag, origin="admin"),
+                        timeout=8.0,
                     )
-            except (OSError, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
-                warnings.append(f"RSS 源 {url} 订阅异常：{exc}")
+                    if res.get("ok"):
+                        return 1, None
+                    return (
+                        0,
+                        f"RSS 源 {url} 未订阅成功：{res.get('reason') or '未知原因'}",
+                    )
+                except TimeoutError:
+                    return 0, f"RSS 源 {url} 订阅超时（>8s），已跳过"
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    return 0, f"RSS 源 {url} 订阅异常：{exc}"
 
-        for item in discover_raw:
+        async def _discover_one(item: object) -> tuple[int, str | None]:
             url = str(item or "").strip()
             if not url:
-                continue
-            try:
-                res = await dw.discover(url, origin="admin")
-                if res.get("ok"):
-                    discovered_count += 1
-                else:
-                    warnings.append(
-                        f"主页嗅探 {url} 未发现可用订阅：{res.get('reason') or '未知原因'}"
+                return 0, None
+            async with discover_sem:
+                try:
+                    res = await asyncio.wait_for(
+                        dw.discover(url, origin="admin"), timeout=8.0
                     )
-            except (OSError, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
-                warnings.append(f"主页嗅探 {url} 异常：{exc}")
+                    if res.get("ok"):
+                        return 1, None
+                    return (
+                        0,
+                        f"主页嗅探 {url} 未发现可用订阅：{res.get('reason') or '未知原因'}",
+                    )
+                except TimeoutError:
+                    return 0, f"主页嗅探 {url} 超时（>8s），已跳过"
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    return 0, f"主页嗅探 {url} 异常：{exc}"
+
+        if rss_raw:
+            for count_delta, warn in await asyncio.gather(
+                *(_add_one(item) for item in rss_raw)
+            ):
+                added_count += count_delta
+                if warn:
+                    warnings.append(warn)
+
+        if discover_raw:
+            for count_delta, warn in await asyncio.gather(
+                *(_discover_one(item) for item in discover_raw)
+            ):
+                discovered_count += count_delta
+                if warn:
+                    warnings.append(warn)
 
         if unsub_raw:
-            snap = dw._load_sources()
-            by_url = {
-                str(f.get("url") or "").strip(): str(f.get("id") or "")
-                for f in snap.get("feeds", [])
-            }
+            feeds_snap = list(dw._load_sources().get("feeds", []) or ())
+            seen_fids: set[str] = set()
             for item in unsub_raw:
                 token = str(item or "").strip()
                 if not token:
                     continue
-                try:
-                    res = dw.unsubscribe(by_url.get(token, token), reason="管理员退订")
-                    if res.get("ok"):
-                        unsubscribed_count += 1
-                    else:
-                        warnings.append(f"退订 {token} 未生效：{res.get('reason') or '未找到'}")
-                except (OSError, ValueError, RuntimeError, TypeError) as exc:
-                    warnings.append(f"退订 {token} 异常：{exc}")
+                for fid in _resolve_unsub_feed_ids(feeds_snap, token):
+                    if fid in seen_fids:
+                        continue
+                    seen_fids.add(fid)
+                    try:
+                        res = dw.unsubscribe(fid, reason="管理员退订")
+                        if res.get("ok"):
+                            unsubscribed_count += 1
+                        else:
+                            warnings.append(
+                                f"退订 {token} 未生效：{res.get('reason') or '未找到'}"
+                            )
+                    except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                        warnings.append(f"退订 {token} 异常：{exc}")
 
         cur_sources = dw._load_sources()
         cur_feeds = list(cur_sources.get("feeds") or ())
@@ -2689,7 +2942,7 @@ async def _apply_setup_digest_sources(
                 else:
                     seed_res = seed_fn()
                 if inspect.isawaitable(seed_res):
-                    seed_res = await seed_res
+                    seed_res = await asyncio.wait_for(seed_res, timeout=12.0)
                 if isinstance(seed_res, dict):
                     seeded_items = (
                         seed_res.get("added")
@@ -2709,7 +2962,9 @@ async def _apply_setup_digest_sources(
                     if seed_res.get("ok") is False and seed_res.get("reason"):
                         warnings.append(f"冷启动试订提示：{seed_res['reason']}")
                 cur_sources = dw._load_sources()
-            except (OSError, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
+            except TimeoutError:
+                warnings.append("初期试订源冷启动超时（>12s），已跳过")
+            except (OSError, ValueError, RuntimeError, TypeError) as exc:
                 warnings.append(f"初期试订源冷启动异常：{exc}")
 
         feeds_after = list(cur_sources.get("feeds") or ())
@@ -2952,7 +3207,10 @@ async def _apply_setup_trial(
 
     wait_seconds = 0
     if opts.get("wait_seconds") is not None:
-        wait_seconds = _coerce_int(opts["wait_seconds"], "wait_seconds")
+        wait_seconds = min(
+            max(0, _coerce_int(opts["wait_seconds"], "wait_seconds")),
+            5,
+        )
     route = (
         await plugin.bridge.route(current_chat_id, source_msg_id, wait_seconds)
         if delivery_mode == "current" and current_chat_id and hasattr(plugin, "bridge")

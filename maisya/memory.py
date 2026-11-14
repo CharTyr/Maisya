@@ -306,6 +306,33 @@ class MemoryLayers:
                     else b""
                 )
                 atomic_private_write(path, initial)
+        def _sync_unedited_preset(asset: str, destination: Path, preset_bytes: bytes) -> None:
+            if not destination.is_file() or path_is_link_like(destination):
+                return
+            with store.connect() as db:
+                edited = db.execute(
+                    "SELECT 1 FROM memory_versions WHERE asset=? AND version >= 1 LIMIT 1",
+                    (asset,),
+                ).fetchone()
+            if not edited and self._bytes(destination) != preset_bytes:
+                atomic_private_write(destination, preset_bytes)
+                preset_text = preset_bytes.decode("utf-8", errors="replace")
+                with store.connect() as db, db:
+                    has_v0 = db.execute(
+                        "SELECT 1 FROM memory_versions WHERE asset=? AND version=0 LIMIT 1",
+                        (asset,),
+                    ).fetchone()
+                    if has_v0 is not None:
+                        db.execute(
+                            "UPDATE memory_versions SET content=?, updated=? WHERE asset=? AND version=0",
+                            (preset_text, self.clock(), asset),
+                        )
+                        db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
+                        db.execute(
+                            "INSERT INTO memory_search VALUES (?,?)",
+                            (asset, preset_text),
+                        )
+
         skills_presets = PRESETS_DIR / "skills"
         if skills_presets.is_dir():
             for source_dir in sorted(skills_presets.iterdir()):
@@ -319,35 +346,17 @@ class MemoryLayers:
                 preset_bytes = skill_file.read_bytes()
                 if not destination.exists() and not path_is_link_like(destination):
                     atomic_private_write(destination, preset_bytes)
-                elif (
-                    source_dir.name == "news-digest"
-                    and destination.is_file()
-                    and not path_is_link_like(destination)
-                ):
-                    asset = "skill:news-digest:SKILL.md"
-                    with store.connect() as db:
-                        edited = db.execute(
-                            "SELECT 1 FROM memory_versions WHERE asset=? AND version >= 1 LIMIT 1",
-                            (asset,),
-                        ).fetchone()
-                    if not edited and self._bytes(destination) != preset_bytes:
-                        atomic_private_write(destination, preset_bytes)
-                        preset_text = preset_bytes.decode("utf-8", errors="replace")
-                        with store.connect() as db, db:
-                            has_v0 = db.execute(
-                                "SELECT 1 FROM memory_versions WHERE asset=? AND version=0 LIMIT 1",
-                                (asset,),
-                            ).fetchone()
-                            if has_v0 is not None:
-                                db.execute(
-                                    "UPDATE memory_versions SET content=?, updated=? WHERE asset=? AND version=0",
-                                    (preset_text, self.clock(), asset),
-                                )
-                                db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
-                                db.execute(
-                                    "INSERT INTO memory_search VALUES (?,?)",
-                                    (asset, preset_text),
-                                )
+                elif source_dir.name == "news-digest":
+                    _sync_unedited_preset(
+                        "skill:news-digest:SKILL.md", destination, preset_bytes
+                    )
+        digest_profile_preset = PRESETS_DIR / "profiles/digest/PROFILE.md"
+        if digest_profile_preset.is_file() and not path_is_link_like(digest_profile_preset):
+            _sync_unedited_preset(
+                "profile:digest:PROFILE.md",
+                self.profiles.path / "digest/PROFILE.md",
+                digest_profile_preset.read_bytes(),
+            )
 
     @staticmethod
     def heartbeat_parts(content: str) -> tuple[str, str]:
