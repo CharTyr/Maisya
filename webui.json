@@ -7,9 +7,9 @@
   "pages": [
     {
       "id": "now",
-      "title": "现场",
+      "title": "Maisya",
+      "icon": "puzzle",
       "mode": "custom",
-      "placement": "workspace",
       "entry": "webui/now.html",
       "layout": "viewport",
       "queries": {
@@ -17,41 +17,26 @@
           "api": "maisya_event",
           "version": "1",
           "parameters": {
-            "thread_id": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "event_seq": {
-              "type": "integer",
-              "required": true,
-              "minimum": 1,
-              "maximum": 9007199254740991
-            },
-            "offset": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 1000000000
-            }
+            "thread_id": { "type": "string", "required": true, "max_length": 64 },
+            "event_seq": { "type": "integer", "required": true, "minimum": 1, "maximum": 9007199254740991 },
+            "offset": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
           }
         },
         "snapshot": {
           "api": "maisya_now",
           "version": "1",
           "parameters": {
-            "thread_id": {
-              "type": "string",
-              "max_length": 64
-            },
-            "chat_id": {
-              "type": "string",
-              "max_length": 256
-            },
-            "cursor": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            }
+            "thread_id": { "type": "string", "max_length": 64 },
+            "chat_id": { "type": "string", "max_length": 256 },
+            "cursor": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          }
+        },
+        "read": {
+          "api": "maisya_manage_read",
+          "version": "1",
+          "parameters": {
+            "section": { "type": "string", "required": true, "max_length": 64 },
+            "payload": { "type": "string", "max_length": 60000 }
           }
         }
       },
@@ -60,242 +45,38 @@
           "api": "maisya_note",
           "version": "1",
           "parameters": {
-            "thread_id": {
-              "type": "string",
-              "required": false,
-              "max_length": 64
-            },
-            "message": {
-              "type": "string",
-              "required": true,
-              "max_length": 16000
-            },
-            "steer": {
-              "type": "boolean"
-            },
-            "profile": {
-              "type": "string",
-              "max_length": 64
-            },
-            "chat_id": {
-              "type": "string",
-              "max_length": 128
-            },
-            "workspace": {
-              "type": "string",
-              "max_length": 64
-            }
+            "thread_id": { "type": "string", "required": false, "max_length": 64 },
+            "message": { "type": "string", "required": true, "max_length": 16000 },
+            "steer": { "type": "boolean" },
+            "profile": { "type": "string", "max_length": 64 },
+            "chat_id": { "type": "string", "max_length": 128 },
+            "workspace": { "type": "string", "max_length": 64 }
           }
         },
         "stop": {
           "api": "maisya_stop",
           "version": "1",
           "parameters": {
-            "thread_id": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            }
+            "thread_id": { "type": "string", "required": true, "max_length": 64 }
           }
-        }
-      }
-    },
-    {
-      "id": "outputs",
-      "title": "产物",
-      "mode": "custom",
-      "placement": "workspace",
-      "entry": "webui/outputs.html",
-      "layout": "viewport",
-      "queries": {
-        "read": {
-          "api": "maisya_manage_read",
-          "version": "1",
-          "parameters": {
-            "section": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      },
-      "actions": {
+        },
         "write": {
           "api": "maisya_manage_write",
           "version": "1",
           "parameters": {
-            "action": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      }
-    },
-    {
-      "id": "abilities",
-      "title": "能力",
-      "mode": "custom",
-      "placement": "workspace",
-      "entry": "webui/abilities.html",
-      "layout": "viewport",
-      "queries": {
-        "read": {
-          "api": "maisya_manage_read",
-          "version": "1",
-          "parameters": {
-            "section": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      },
-      "actions": {
-        "write": {
-          "api": "maisya_manage_write",
-          "version": "1",
-          "parameters": {
-            "action": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      }
-    },
-    {
-      "id": "memory",
-      "title": "手账",
-      "mode": "custom",
-      "placement": "workspace",
-      "entry": "webui/memory.html",
-      "layout": "viewport",
-      "queries": {
-        "read": {
-          "api": "maisya_manage_read",
-          "version": "1",
-          "parameters": {
-            "section": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      },
-      "actions": {
-        "write": {
-          "api": "maisya_manage_write",
-          "version": "1",
-          "parameters": {
-            "action": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      }
-    },
-    {
-      "id": "settings",
-      "title": "设置",
-      "mode": "custom",
-      "placement": "workspace",
-      "entry": "webui/settings.html",
-      "layout": "viewport",
-      "queries": {
-        "read": {
-          "api": "maisya_manage_read",
-          "version": "1",
-          "parameters": {
-            "section": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
-          }
-        }
-      },
-      "actions": {
-        "write": {
-          "api": "maisya_manage_write",
-          "version": "1",
-          "parameters": {
-            "action": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "payload": {
-              "type": "string",
-              "max_length": 60000
-            }
+            "action": { "type": "string", "required": true, "max_length": 64 },
+            "payload": { "type": "string", "max_length": 60000 }
           }
         },
         "incoming_event": {
           "api": "maisya_incoming_event",
           "version": "1",
           "parameters": {
-            "channel": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            },
-            "event_id": {
-              "type": "string",
-              "required": true,
-              "max_length": 128
-            },
-            "timestamp": {
-              "type": "integer",
-              "required": true,
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "payload": {
-              "type": "string",
-              "required": true,
-              "max_length": 16000
-            },
-            "signature": {
-              "type": "string",
-              "required": true,
-              "max_length": 64
-            }
+            "channel": { "type": "string", "required": true, "max_length": 64 },
+            "event_id": { "type": "string", "required": true, "max_length": 128 },
+            "timestamp": { "type": "integer", "required": true, "minimum": 0, "maximum": 9007199254740991 },
+            "payload": { "type": "string", "required": true, "max_length": 16000 },
+            "signature": { "type": "string", "required": true, "max_length": 64 }
           }
         }
       }

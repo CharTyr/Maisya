@@ -7,6 +7,7 @@
 <style>
 {{MILLENNIUM_CSS}}
 
+/* ==MGMT_CSS_START== */
 /* ───────────── 管理页专用交互样式 ───────────── */
 .ab-roster {
   display: flex;
@@ -926,6 +927,7 @@ html.dark .out-ico--ws { color: #fde047; }
     transition: none;
   }
 }
+/* ==MGMT_CSS_END== */
 </style>
 </head>
 <body data-page="{{PAGE_ID}}">
@@ -1142,6 +1144,17 @@ html.dark .out-ico--ws { color: #fde047; }
   }
   initHelpPopovers();
 
+  /* ==MGMT_BOOT_START== */
+  function bootManagementTab(page, sig) {
+    const rpc = async (op, key, body) => {
+      if (sig?.aborted) return { success: false, aborted: true };
+      const r = await hostRpc(op, key, body);
+      return sig?.aborted ? { success: false, aborted: true } : r;
+    };
+    const say = (text, isErr = false) => {
+      if (!sig?.aborted) hostSay(text, isErr);
+    };
+
   /* ════════════════════════════════════════════════════════════════
      1. 能力页 (abilities)
      ════════════════════════════════════════════════════════════════ */
@@ -1284,7 +1297,8 @@ html.dark .out-ico--ws { color: #fde047; }
       const r = await rpc("write", "set_profile_fish", { target, fish_seed: nextSeed });
       if (!r?.success) return say(r?.error || "保存角色小鱼头像失败", true);
       freshFishProfile = target;
-      setTimeout(() => {
+      const fishTid = setTimeout(() => {
+        if (sig?.aborted) return;
         if (freshFishProfile === target) {
           freshFishProfile = "";
           if ($("#profiles")?.isConnected) {
@@ -1293,6 +1307,7 @@ html.dark .out-ico--ws { color: #fde047; }
           }
         }
       }, 700);
+      sig?.addEventListener("abort", () => clearTimeout(fishTid), { once: true });
       await loadCatalog();
       if (viewMode === "roles" && $("#document").value === "config" && target === selectedProfile) {
         if (!hadDirtyDraft) {
@@ -1757,7 +1772,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $("#save").disabled = true;
       try {
         const r = await rpc("read", "asset", q);
-        if (seq !== assetLoadSeq) return;
+        if (sig?.aborted || seq !== assetLoadSeq) return;
         if (!r?.success) return say(r?.error || "读取资产失败", true);
         if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
         if (preserveDraft && prevDraft !== (r.content || "")) {
@@ -1774,14 +1789,14 @@ html.dark .out-ico--ws { color: #fde047; }
           if (!hostModelsProbed && !(catalog.model_catalog || []).some((m) => m && m.source && m.source !== "profile")) {
             hostModelsProbed = true;
             await refreshDiscovery();
-            if (seq === assetLoadSeq && viewMode === "roles" && $("#document").value === "config") {
+            if (!sig?.aborted && seq === assetLoadSeq && viewMode === "roles" && $("#document").value === "config") {
               renderModelChainEditor();
             }
           }
         }
-        if (viewMode === "skill-editor" && $("#document").value === "skill") syncSkillVisualFromMarkdown();
+        if (!sig?.aborted && viewMode === "skill-editor" && $("#document").value === "skill") syncSkillVisualFromMarkdown();
       } finally {
-        if (seq === assetLoadSeq) {
+        if (!sig?.aborted && seq === assetLoadSeq) {
           $("#content").disabled = false;
           $("#save").disabled = false;
         }
@@ -1910,6 +1925,7 @@ html.dark .out-ico--ws { color: #fde047; }
 
     async function refreshDiscovery() {
       const d = await rpc("read", "discovery", {});
+      if (sig?.aborted) return;
       if (!d?.success) {
         $("#discovery-info").textContent = d?.error || "宿主环境探测失败";
         return;
@@ -2066,7 +2082,7 @@ html.dark .out-ico--ws { color: #fde047; }
         renderRoleFishPanel();
         $(`.fish-drawer [data-fish-pick="${k}"][data-fish-val="${CSS.escape(v)}"]`)?.focus();
       }
-    });
+    }, { signal: sig });
 
     $("#back-to-skills").onclick = async () => {
       viewMode = "skills-gallery";
@@ -2130,12 +2146,13 @@ html.dark .out-ico--ws { color: #fde047; }
       say("");
       try {
         const r = await rpc("write", "bind_skill", { skill: selectedSkill, profile: roleId, bound: nextBound });
+        if (sig?.aborted) return;
         if (!r?.success) {
           cb.checked = !nextBound;
           return say(r?.error || "装配角色失败", true);
         }
         await loadCatalog();
-        if ($("#document").value === "config" && selectedProfile === roleId) await loadAsset(false);
+        if (!sig?.aborted && $("#document")?.value === "config" && selectedProfile === roleId) await loadAsset(false);
         say(nextBound ? `已将技能 ${selectedSkill} 装配给角色 ${roleId}` : `已从角色 ${roleId} 卸下技能 ${selectedSkill}`);
       } finally {
         cb.disabled = false;
@@ -2586,10 +2603,11 @@ html.dark .out-ico--ws { color: #fde047; }
       const currentProfile = (catalog.profiles || []).find((p) => p.id === selectedProfile);
       const nextEnabled = currentProfile ? currentProfile.enabled === false : true;
       const r = await rpc("write", "toggle_profile", { target: selectedProfile, enabled: nextEnabled });
+      if (sig?.aborted) return;
       if (!r?.success) return say(r?.error || "切换启用状态失败", true);
       say(nextEnabled ? `已开启角色 ${selectedProfile}` : `已停用角色 ${selectedProfile}`);
       await loadCatalog();
-      if ($("#document").value === "config") await loadAsset(false);
+      if (!sig?.aborted && $("#document")?.value === "config") await loadAsset(false);
     };
     $("#delete-profile").onclick = async () => {
       const r = await rpc("write", "delete_profile", { target: selectedProfile });
@@ -2613,6 +2631,7 @@ html.dark .out-ico--ws { color: #fde047; }
         dl.removeAttribute("href");
       }
     }
+    sig?.addEventListener("abort", revokeRecipeBlob, { once: true });
 
     function recipeDraftOptions() {
       const secret_notes = {};
@@ -3048,12 +3067,16 @@ html.dark .out-ico--ws { color: #fde047; }
     });
     $("#refresh-discovery").onclick = refreshDiscovery;
 
-    Promise.resolve(window.maibot?.ready).then(async () => {
+    (async () => {
+      await Promise.resolve(window.maibot?.ready);
+      if (sig?.aborted) return;
       applyTheme();
       await loadCatalog();
+      if (sig?.aborted) return;
       await loadAsset(false);
+      if (sig?.aborted) return;
       await refreshDiscovery();
-    });
+    })();
   }
 
   /* ════════════════════════════════════════════════════════════════
@@ -3138,6 +3161,7 @@ html.dark .out-ico--ws { color: #fde047; }
         activeBlobUrl = "";
       }
     };
+    sig?.addEventListener("abort", revokeBlob, { once: true });
 
     const SAFE_HTML_TAGS = new Set([
       "H1", "H2", "H3", "H4", "P", "UL", "OL", "LI", "PRE", "CODE", "BLOCKQUOTE",
@@ -3433,7 +3457,7 @@ html.dark .out-ico--ws { color: #fde047; }
         $("#out-copy-drawer").hidden = true;
       }
       const r = await rpc("read", "artifact", req);
-      if (seq !== openSeq) return;
+      if (sig?.aborted || seq !== openSeq) return;
       if (!r?.success) return say(r?.error || "读取产物内容失败", true);
       say("");
 
@@ -3442,7 +3466,7 @@ html.dark .out-ico--ws { color: #fde047; }
         let nextOff = r.next_offset;
         while (nextOff !== null && nextOff !== undefined && chunks.length < 48) {
           const nxt = await rpc("read", "artifact", { ...req, offset: nextOff });
-          if (seq !== openSeq) return;
+          if (sig?.aborted || seq !== openSeq) return;
           if (!nxt?.success) return say(nxt?.error || "图片分块读取失败", true);
           chunks.push(nxt.base64 || "");
           nextOff = nxt.next_offset;
@@ -3585,11 +3609,12 @@ html.dark .out-ico--ws { color: #fde047; }
         const wsid = fileBtn.dataset.wsId;
         const fpath = fileBtn.dataset.wsPath;
         await loadArtifact({ kind: "workspace_file", workspace_id: wsid, path: fpath, offset: 0 });
+        if (sig?.aborted) return;
         if (curArtifact && curArtifact.workspace_id === wsid && curArtifact.path === fpath) {
           $("#workspace-content").textContent = curArtifact.text || `[${curArtifact.media_kind}] ${curArtifact.name} (${curArtifact.bytes} B · 已在上方检视器打开)`;
         }
       }
-    });
+    }, { signal: sig });
 
     $("#out-chat").addEventListener("change", async () => {
       filterChat = $("#out-chat").value;
@@ -3606,7 +3631,7 @@ html.dark .out-ico--ws { color: #fde047; }
       }
     };
     $("#out-goto-now").onclick = () => {
-      if (window.maibot?.navigate) window.maibot.navigate("now");
+      switchWorkspaceTab("now");
     };
     $("#out-copy-btn").onclick = async () => {
       if (!copyBuffer) return say("当前无可复制的文本内容。", true);
@@ -3629,10 +3654,12 @@ html.dark .out-ico--ws { color: #fde047; }
       }
     };
 
-    Promise.resolve(window.maibot?.ready).then(async () => {
+    (async () => {
+      await Promise.resolve(window.maibot?.ready);
+      if (sig?.aborted) return;
       applyTheme();
       await loadOutputs(true);
-    });
+    })();
   }
 
   /* ════════════════════════════════════════════════════════════════
@@ -3690,7 +3717,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $("#save").disabled = true;
       try {
         const r = await rpc("read", "asset", kind === "memory" ? { kind, chat_id } : { kind });
-        if (seq !== memLoadSeq) return;
+        if (sig?.aborted || seq !== memLoadSeq) return;
         if (!r?.success) return say(r?.error || "读取手账失败", true);
         if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
         if (preserveDraft && prevDraft !== (r.content || "")) {
@@ -3704,7 +3731,7 @@ html.dark .out-ico--ws { color: #fde047; }
         versionHistory(r.history, expectedVersion);
         updateMeter();
       } finally {
-        if (seq === memLoadSeq) {
+        if (!sig?.aborted && seq === memLoadSeq) {
           $("#content").disabled = kind === "memory" && !$("#chat").value;
           $("#save").disabled = false;
         }
@@ -3847,7 +3874,7 @@ html.dark .out-ico--ws { color: #fde047; }
         say("意图已取消");
         await loadIntents();
       }
-    });
+    }, { signal: sig });
 
     $("#chat").addEventListener("change", () => { say(""); loadAsset(false); });
     $("#kind").addEventListener("change", () => { say(""); loadAsset(false); });
@@ -3903,12 +3930,16 @@ html.dark .out-ico--ws { color: #fde047; }
       }
     });
 
-    Promise.resolve(window.maibot?.ready).then(async () => {
+    (async () => {
+      await Promise.resolve(window.maibot?.ready);
+      if (sig?.aborted) return;
       applyTheme();
       await loadOverview();
+      if (sig?.aborted) return;
       await loadAsset(false);
+      if (sig?.aborted) return;
       await loadIntents();
-    });
+    })();
   }
 
   /* ════════════════════════════════════════════════════════════════
@@ -4274,6 +4305,7 @@ html.dark .out-ico--ws { color: #fde047; }
 
     async function loadHealth() {
       const [h, ir] = await Promise.all([rpc("read", "health", {}), rpc("read", "intents", {})]);
+      if (sig?.aborted) return;
       if (h?.success) {
         const prov = curSettings?.web_provider || h.web?.provider || "auto";
         const webEngines = Array.isArray(h.web?.third_party_engines) ? h.web.third_party_engines.filter(Boolean) : [];
@@ -4340,14 +4372,14 @@ html.dark .out-ico--ws { color: #fde047; }
         if (v) $("#intent-profile").value = v;
         updateSchedSummary();
       }
-    });
+    }, { signal: sig });
 
     document.addEventListener("keydown", (ev) => {
       if (ev.target?.id === "wl-add-id" && ev.key === "Enter") {
         ev.preventDefault();
         $("#wl-add-btn")?.click();
       }
-    });
+    }, { signal: sig });
 
     document.addEventListener("click", (ev) => {
       const modeBtn = ev.target.closest("[data-settings-mode]");
@@ -4417,7 +4449,7 @@ html.dark .out-ico--ws { color: #fde047; }
         }
         updateSchedSummary();
       }
-    });
+    }, { signal: sig });
 
     ["#intent-chat", "#intent-profile", "#intent-in", "#intent-every"].forEach((sel) => {
       $(sel)?.addEventListener("input", updateSchedSummary);
@@ -4566,14 +4598,21 @@ html.dark .out-ico--ws { color: #fde047; }
     };
     $("#check").onclick = loadHealth;
 
-    Promise.resolve(window.maibot?.ready).then(async () => {
+    (async () => {
+      await Promise.resolve(window.maibot?.ready);
+      if (sig?.aborted) return;
       applyTheme();
       await loadSettings();
+      if (sig?.aborted) return;
       await loadServices();
+      if (sig?.aborted) return;
       await loadWebhooks();
+      if (sig?.aborted) return;
       await loadHealth();
-    });
+    })();
   }
+  }
+  /* ==MGMT_BOOT_END== */
 })();
 </script>
 </body>
