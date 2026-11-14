@@ -9,11 +9,13 @@ import re
 import socket
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any, Callable
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+from .page_date import published_from_html, published_from_text
 from .scout import call_capability, safe_url
 from .vault import redact_values, secret_variants
 from .workspaces import completed_thread
@@ -59,6 +61,57 @@ def _is_valid_http_url(url: Any) -> bool:
     return parts.scheme in {"http", "https"} and bool(parts.hostname)
 
 
+_BROAD_API_ENGINE_ORDER = ("exa", "tavily", "you_news", "you", "anysearch")
+_BROAD_TRACKING_PARAM_PREFIXES = ("utm_", "mtm_", "pk_")
+_BROAD_TRACKING_PARAMS = frozenset(
+    {
+        "fbclid",
+        "gclid",
+        "dclid",
+        "msclkid",
+        "yclid",
+        "spm",
+        "from",
+        "ref",
+        "source",
+        "_ga",
+        "mc_cid",
+        "mc_eid",
+        "igshid",
+        "share_token",
+    }
+)
+
+
+def _normalize_search_url_key(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw.lower()
+    host = (parts.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host.endswith(":80") or host.endswith(":443"):
+        host = host.rsplit(":", 1)[0]
+    path = re.sub(r"/+", "/", parts.path or "/")
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    kept_q = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=False)
+        if not (
+            k.lower() in _BROAD_TRACKING_PARAMS
+            or k.lower().startswith(_BROAD_TRACKING_PARAM_PREFIXES)
+        )
+    ]
+    kept_q.sort()
+    query = urlencode(kept_q)
+    return urlunsplit(("", host, path, query, ""))
+
+
 def _normalize_search_item(item: dict[str, Any]) -> dict[str, Any] | None:
     raw_url = item.get("url")
     url = raw_url.strip() if isinstance(raw_url, str) else ""
@@ -94,13 +147,23 @@ def normalize_search_payload(query: str, items: list[dict[str, Any]], service: s
     }
 
 
-def normalize_fetch_payload(url: str, title: str, content: str, service: str) -> dict[str, Any]:
+def normalize_fetch_payload(
+    url: str,
+    title: str,
+    content: str,
+    service: str,
+    *,
+    published_at: str = "",
+    feed_links: list[str] | None = None,
+) -> dict[str, Any]:
     return {
         "url": url,
         "title": title,
         "content": content,
         "content_kind": "page_text",
         "service": service,
+        "published_at": str(published_at or ""),
+        "feed_links": list(feed_links or []),
         "retrieved_at": _now_iso(),
     }
 
@@ -222,15 +285,36 @@ class _TextExtractor(HTMLParser):
         }
     )
 
-    def __init__(self) -> None:
+    def __init__(self, base_url: str = "") -> None:
         super().__init__(convert_charrefs=True)
         self._skip_depth = 0
         self._in_title = False
+        self._base_url = base_url
         self.title_parts: list[str] = []
         self.parts: list[str] = []
+        self.feed_links: list[str] = []
+        self._seen_feed_links: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs) -> None:
         name = tag.lower()
+        if name == "link":
+            attr_map = {k.lower(): (v or "").strip() for k, v in attrs if k}
+            rels = set(attr_map.get("rel", "").lower().split())
+            ltype = attr_map.get("type", "").lower().split(";", 1)[0].strip()
+            href = attr_map.get("href", "").strip()
+            if (
+                "alternate" in rels
+                and ltype in {"application/rss+xml", "application/atom+xml"}
+                and href
+            ):
+                resolved = urljoin(self._base_url, href) if self._base_url else href
+                try:
+                    scheme = urlsplit(resolved).scheme.lower()
+                except ValueError:
+                    scheme = ""
+                if scheme in {"http", "https"} and resolved not in self._seen_feed_links:
+                    self._seen_feed_links.add(resolved)
+                    self.feed_links.append(resolved)
         if name == "title" and self._skip_depth == 0:
             self._in_title = True
         if name in self._SKIP_TAGS:
@@ -273,16 +357,21 @@ def _decode_bytes(raw: bytes, content_type: str) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _extract_readable_text(url: str, raw: bytes, content_type: str, max_chars: int) -> tuple[str, str]:
+def _extract_readable_with_meta(
+    url: str, raw: bytes, content_type: str, max_chars: int
+) -> tuple[str, str, str, list[str]]:
     decoded = _decode_bytes(raw, content_type)
     if "html" not in content_type.lower() and "<html" not in decoded[:512].lower():
-        return url, decoded.strip()[:max_chars]
+        content = decoded.strip()[:max_chars]
+        return url, content, published_from_text(content), []
 
-    parser = _TextExtractor()
+    parser = _TextExtractor(base_url=url)
     parser.feed(decoded)
     parser.close()
     title = parser.title() or url
+    feed_links = list(parser.feed_links)
 
+    content = ""
     try:
         import trafilatura
 
@@ -290,26 +379,36 @@ def _extract_readable_text(url: str, raw: bytes, content_type: str, max_chars: i
             decoded, include_comments=False, include_tables=True, no_fallback=False
         )
         if extracted and len(extracted.strip()) > 100:
-            return title, extracted.strip()[:max_chars]
+            content = extracted.strip()[:max_chars]
     except Exception:
         pass
 
-    try:
-        from readability import Document
+    if not content:
+        try:
+            from readability import Document
 
-        summary_html = Document(
-            decoded, min_text_length=50, retry_length=250, url=url
-        ).summary()
-        summary_parser = _TextExtractor()
-        summary_parser.feed(summary_html)
-        summary_parser.close()
-        text = summary_parser.text()
-        if text and len(text) > 100:
-            return title, text[:max_chars]
-    except Exception:
-        pass
+            summary_html = Document(
+                decoded, min_text_length=50, retry_length=250, url=url
+            ).summary()
+            summary_parser = _TextExtractor()
+            summary_parser.feed(summary_html)
+            summary_parser.close()
+            text = summary_parser.text()
+            if text and len(text) > 100:
+                content = text[:max_chars]
+        except Exception:
+            pass
 
-    return title, parser.text()[:max_chars]
+    if not content:
+        content = parser.text()[:max_chars]
+
+    pub = published_from_html(decoded) or published_from_text(content)
+    return title, content, pub, feed_links
+
+
+def _extract_readable_text(url: str, raw: bytes, content_type: str, max_chars: int) -> tuple[str, str]:
+    title, content, _pub, _feeds = _extract_readable_with_meta(url, raw, content_type, max_chars)
+    return title, content
 
 
 def _ephemeral_secrets(cfg: dict[str, Any]) -> set[str]:
@@ -824,6 +923,142 @@ def _search_duckduckgo(query: str, limit: int, engines: dict[str, Any], timeout:
     ]
 
 
+def _query_third_party_engine(
+    engine: str,
+    query: str,
+    limit: int,
+    engines: dict[str, Any],
+    timeout: float,
+    proxy: str,
+    http_request: Callable[..., tuple[int, dict[str, str], bytes, str]],
+) -> tuple[bool, list[dict[str, Any]]]:
+    if engine == "exa":
+        return _search_exa(query, limit, engines, timeout, proxy, http_request)
+    if engine == "tavily":
+        return _search_tavily(query, limit, engines, timeout, proxy, http_request)
+    if engine == "anysearch":
+        return _search_anysearch(query, limit, engines, timeout, proxy, http_request)
+    if engine == "you":
+        return _search_you(query, limit, engines, timeout, proxy, http_request, news=False)
+    if engine == "you_news":
+        return _search_you(query, limit, engines, timeout, proxy, http_request, news=True)
+    if engine == "deepseek":
+        return _search_deepseek(query, limit, engines, timeout, proxy, http_request)
+    if engine == "duckduckgo":
+        return _search_duckduckgo(query, limit, engines, timeout)
+    return False, []
+
+
+def _select_broad_engines(cfg: dict[str, Any], max_engines: int) -> list[str]:
+    candidates = enabled_third_party_engines(cfg)
+    if not candidates:
+        return []
+    active = set(candidates)
+    selected = [e for e in _BROAD_API_ENGINE_ORDER if e in active]
+    if len(selected) < 2 and "duckduckgo" in active:
+        selected.append("duckduckgo")
+    if not selected:
+        selected = list(candidates)
+    cap = max(1, min(int(max_engines or 3), 5))
+    return selected[:cap]
+
+
+def _run_third_party_broad_search(
+    query: str,
+    max_results: int,
+    cfg: dict[str, Any],
+    http_request: Callable[..., tuple[int, dict[str, str], bytes, str]],
+    max_engines: int = 3,
+) -> dict[str, Any]:
+    backend = (
+        cfg.get("search_backend") if isinstance(cfg.get("search_backend"), dict) else {}
+    )
+    engines = cfg.get("engines") if isinstance(cfg.get("engines"), dict) else {}
+    timeout = float(max(5, min(int(backend.get("timeout") or 20), 45)))
+    proxy = str(backend.get("proxy") or "").strip()
+    configured_max = int(backend.get("max_results") or 10)
+    per_engine_limit = max(1, min(int(max_results or 8), configured_max, 10))
+    total_limit = max(per_engine_limit, min(int(max_results or 8), 24))
+    selected = _select_broad_engines(cfg, max_engines)
+    if not selected:
+        raise RuntimeError("第三方联网搜索插件未启用任何可用搜索引擎")
+
+    per_engine_rows: dict[str, tuple[bool, list[dict[str, Any]]]] = {}
+    with ThreadPoolExecutor(max_workers=len(selected)) as pool:
+        futures = {
+            pool.submit(
+                _query_third_party_engine,
+                engine,
+                query,
+                per_engine_limit,
+                engines,
+                timeout,
+                proxy,
+                http_request,
+            ): engine
+            for engine in selected
+        }
+        for fut in as_completed(futures):
+            engine = futures[fut]
+            try:
+                per_engine_rows[engine] = fut.result()
+            except Exception:
+                per_engine_rows[engine] = (False, [])
+
+    merged_by_key: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    ok_engines: list[str] = []
+    for engine in selected:
+        ok, items = per_engine_rows.get(engine, (False, []))
+        if ok:
+            ok_engines.append(engine)
+        if not ok or not items:
+            continue
+        for raw_item in items:
+            row = _normalize_search_item(raw_item)
+            if row is None:
+                continue
+            key = _normalize_search_url_key(row["url"]) or row["url"]
+            existing = merged_by_key.get(key)
+            if existing is None:
+                row["engines"] = [engine]
+                merged_by_key[key] = row
+                ordered_keys.append(key)
+            else:
+                if engine not in existing["engines"]:
+                    existing["engines"].append(engine)
+                if not existing.get("published_at") and row.get("published_at"):
+                    existing["published_at"] = row["published_at"]
+                if (
+                    existing.get("title") == existing.get("url")
+                    and row.get("title")
+                    and row["title"] != row["url"]
+                ):
+                    existing["title"] = row["title"]
+                if (not existing.get("snippet") or len(existing["snippet"]) < 20) and row.get("snippet"):
+                    existing["snippet"] = row["snippet"]
+                    existing["summary"] = row["summary"]
+
+    if not ok_engines and not ordered_keys:
+        raise RuntimeError("第三方联网搜索未返回可用结果，请检查搜索引擎与密钥配置")
+
+    merged = [merged_by_key[k] for k in ordered_keys[:total_limit]]
+    used = ok_engines or selected
+    payload = {
+        "query": query,
+        "results": merged,
+        "content_kind": "search_results",
+        "service": (
+            "google_search_plugin:broad"
+            if len(used) > 1
+            else f"google_search_plugin:{used[0]}"
+        ),
+        "engines": used,
+        "retrieved_at": _now_iso(),
+    }
+    return redact_values(payload, _ephemeral_secrets(cfg))
+
+
 def _run_third_party_search(
     query: str,
     max_results: int,
@@ -844,22 +1079,9 @@ def _run_third_party_search(
     ok_engine = ""
     for engine in candidates:
         try:
-            if engine == "exa":
-                ok, items = _search_exa(query, limit, engines, timeout, proxy, http_request)
-            elif engine == "tavily":
-                ok, items = _search_tavily(query, limit, engines, timeout, proxy, http_request)
-            elif engine == "anysearch":
-                ok, items = _search_anysearch(query, limit, engines, timeout, proxy, http_request)
-            elif engine == "you":
-                ok, items = _search_you(query, limit, engines, timeout, proxy, http_request, news=False)
-            elif engine == "you_news":
-                ok, items = _search_you(query, limit, engines, timeout, proxy, http_request, news=True)
-            elif engine == "deepseek":
-                ok, items = _search_deepseek(query, limit, engines, timeout, proxy, http_request)
-            elif engine == "duckduckgo":
-                ok, items = _search_duckduckgo(query, limit, engines, timeout)
-            else:
-                ok, items = False, []
+            ok, items = _query_third_party_engine(
+                engine, query, limit, engines, timeout, proxy, http_request
+            )
             if ok:
                 payload = normalize_search_payload(
                     query, items, f"google_search_plugin:{engine}"
@@ -922,8 +1144,27 @@ def _run_third_party_fetch(
                         continue
                     text = item.get(fmt) or item.get("markdown") or item.get("html") or ""
                     if isinstance(text, str) and text.strip():
+                        trimmed = text.strip()[:max_chars]
+                        pub = ""
+                        links: list[str] = []
+                        if fmt == "html" or "<html" in text[:512].lower():
+                            pub = published_from_html(text)
+                            parser = _TextExtractor(base_url=url)
+                            try:
+                                parser.feed(text)
+                                parser.close()
+                                links = list(parser.feed_links)
+                            except Exception:
+                                links = []
+                        if not pub:
+                            pub = published_from_text(trimmed)
                         return normalize_fetch_payload(
-                            url, url, text.strip()[:max_chars], "google_search_plugin:you_contents"
+                            url,
+                            url,
+                            trimmed,
+                            "google_search_plugin:you_contents",
+                            published_at=pub,
+                            feed_links=links,
                         )
             except Exception:
                 continue
@@ -947,9 +1188,16 @@ def _run_third_party_fetch(
     ctype = str(headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if any(ctype.startswith(prefix) for prefix in NON_HTML_PREFIXES):
         raise ValueError("目标链接不是可读取的网页或文本内容")
-    title, content = _extract_readable_text(final_url or url, raw, headers.get("content-type", ""), max_chars)
+    title, content, pub, feed_links = _extract_readable_with_meta(
+        final_url or url, raw, headers.get("content-type", ""), max_chars
+    )
     return normalize_fetch_payload(
-        final_url or url, title, content, "google_search_plugin:http_fetch"
+        final_url or url,
+        title,
+        content,
+        "google_search_plugin:http_fetch",
+        published_at=pub,
+        feed_links=feed_links,
     )
 
 
@@ -1023,7 +1271,16 @@ class WebRouter:
             )
         secrets = _ephemeral_secrets(cfg)
         try:
-            if kind == "search":
+            if kind == "search_broad":
+                raw = await completed_thread(
+                    _run_third_party_broad_search,
+                    arguments["query"],
+                    arguments.get("max_results", 8),
+                    cfg,
+                    self._http_request,
+                    arguments.get("max_engines", 3),
+                )
+            elif kind == "search":
                 raw = await completed_thread(
                     _run_third_party_search,
                     arguments["query"],
@@ -1262,6 +1519,66 @@ class WebRouter:
             if cfg is not None:
                 return await self._call_third_party(
                     "search", {"query": query, "max_results": count}, cfg=cfg
+                )
+            raise RuntimeError(
+                "宿主统一联网未启用，且未检测到可用的第三方联网插件或服务登记"
+            ) from None
+
+    async def search_broad(
+        self,
+        query: str,
+        max_results: int = 8,
+        context: dict[str, Any] | None = None,
+        *,
+        provider: str = "",
+        max_engines: int = 3,
+    ):
+        ctx = context or {}
+        mode = str(provider or ctx.get("web_provider") or self.current_provider() or "auto")
+        if mode == "google_search_plugin":
+            cfg = await self.load_third_party_config()
+            if cfg is not None and len(enabled_third_party_engines(cfg)) > 1:
+                return await self._call_third_party(
+                    "search_broad",
+                    {
+                        "query": query,
+                        "max_results": max_results,
+                        "max_engines": max_engines,
+                    },
+                    cfg=cfg,
+                )
+            return await self.search(
+                query, max_results=max_results, context=ctx, provider=mode
+            )
+        if mode != "auto":
+            return await self.search(
+                query, max_results=max_results, context=ctx, provider=provider
+            )
+        try:
+            return await self._call_host_web(
+                "web.search", query=query, max_results=max_results
+            )
+        except _HostWebDisabledError:
+            via_service = await self._call_service_web(
+                "search", {"query": query, "max_results": max_results}, ctx, "any"
+            )
+            if via_service is not None:
+                return via_service
+            cfg = await self.load_third_party_config()
+            if cfg is not None:
+                kind = (
+                    "search_broad"
+                    if len(enabled_third_party_engines(cfg)) > 1
+                    else "search"
+                )
+                return await self._call_third_party(
+                    kind,
+                    {
+                        "query": query,
+                        "max_results": max_results,
+                        "max_engines": max_engines,
+                    },
+                    cfg=cfg,
                 )
             raise RuntimeError(
                 "宿主统一联网未启用，且未检测到可用的第三方联网插件或服务登记"

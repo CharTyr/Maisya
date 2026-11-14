@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import html
+import inspect
 import ipaddress
 import json
 import re
@@ -16,7 +17,15 @@ import xml.parsers.expat
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
+
+from .page_date import published_from_text
+
+try:
+    from . import viz_spec
+except ImportError:
+    viz_spec = None
 
 DAYS_TO_SECS = 86400.0
 UTC8_OFFSET = 8 * 3600.0
@@ -499,13 +508,587 @@ def _feed_id_for(url: str) -> str:
     return "rss_" + hashlib.sha256(url.encode()).hexdigest()[:12]
 
 
+STARTER_FEEDS: tuple[dict[str, Any], ...] = (
+    {
+        "url": "https://huggingface.co/blog/feed.xml",
+        "title": "Hugging Face Blog",
+        "category": "ai",
+        "keywords": ("ai", "llm", "agent", "ml", "model", "open-source", "人工智能", "大模型", "开源"),
+    },
+    {
+        "url": "https://simonwillison.net/atom/everything/",
+        "title": "Simon Willison's Weblog",
+        "category": "ai-dev",
+        "keywords": ("ai", "llm", "agent", "python", "sqlite", "dev", "tool", "编程", "开发", "大模型"),
+    },
+    {
+        "url": "https://hnrss.org/frontpage",
+        "title": "Hacker News",
+        "category": "tech-dev",
+        "keywords": ("tech", "programming", "startup", "open-source", "ai", "编程", "开源", "科技", "技术"),
+    },
+    {
+        "url": "https://feeds.arstechnica.com/arstechnica/index",
+        "title": "Ars Technica",
+        "category": "tech-media",
+        "keywords": ("tech", "hardware", "science", "ai", "security", "game", "科技", "硬件", "科学"),
+    },
+    {
+        "url": "https://www.gcores.com/rss",
+        "title": "机核 GCORES",
+        "category": "game",
+        "keywords": ("game", "indie", "hardware", "acg", "culture", "游戏", "独立游戏", "主机", "文化"),
+    },
+    {
+        "url": "https://www.chuapp.com/feed",
+        "title": "触乐",
+        "category": "game",
+        "keywords": ("game", "indie", "mobile", "review", "游戏", "独立游戏", "评测", "行业"),
+    },
+    {
+        "url": "https://www.yystv.cn/rss/feed",
+        "title": "游研社",
+        "category": "game",
+        "keywords": ("game", "indie", "retro", "hardware", "游戏", "独立游戏", "复古", "主机"),
+    },
+    {
+        "url": "https://itch.io/blog.xml",
+        "title": "itch.io Blog",
+        "category": "indie-game",
+        "keywords": ("indie", "game", "gamedev", "独立游戏", "游戏开发", "像素"),
+    },
+    {
+        "url": "https://www.rockpapershotgun.com/feed",
+        "title": "Rock Paper Shotgun",
+        "category": "pc-game",
+        "keywords": ("pc", "game", "indie", "steam", "review", "游戏", "独立游戏", "评测"),
+    },
+    {
+        "url": "https://lobste.rs/rss",
+        "title": "Lobsters",
+        "category": "dev",
+        "keywords": ("programming", "systems", "rust", "linux", "security", "open-source", "编程", "系统", "开源"),
+    },
+    {
+        "url": "https://github.blog/feed/",
+        "title": "The GitHub Blog",
+        "category": "dev",
+        "keywords": ("github", "dev", "open-source", "copilot", "ai", "编程", "开源", "工程"),
+    },
+    {
+        "url": "https://sspai.com/feed",
+        "title": "少数派",
+        "category": "tech-life",
+        "keywords": ("tech", "app", "hardware", "tool", "efficiency", "科技", "效率", "工具", "硬件", "数码"),
+    },
+    {
+        "url": "https://lilianweng.github.io/index.xml",
+        "title": "Lil'Log",
+        "category": "ai-research",
+        "keywords": ("ai", "llm", "agent", "research", "safety", "大模型", "智能体", "论文"),
+    },
+)
+
+_ENCYCLOPEDIA_EXACT_HOSTS = frozenset(
+    {
+        "wikipedia.org",
+        "wiktionary.org",
+        "baike.baidu.com",
+        "zh.moegirl.org.cn",
+        "moegirl.org.cn",
+        "en.moegirl.org.cn",
+        "baike.sogou.com",
+        "baike.so.com",
+        "wiki.biligame.com",
+        "fandom.com",
+    }
+)
+_ENCYCLOPEDIA_SUFFIXES = (".wikipedia.org", ".wiktionary.org", ".fandom.com", ".moegirl.org.cn")
+_ENCYCLOPEDIA_TITLE_RE = re.compile(
+    r"(?:-\s*(?:维基百科|wikipedia|萌娘百科)|_百度百科|\(disambiguation\)|（消歧义）)\s*$",
+    re.I,
+)
+_YEAR_ARCHIVE_RE = re.compile(
+    r"(?:^|/)(?:year/|archives?/)?(?:19|20)\d{2}(?:/(?:0?[1-9]|1[0-2])(?:/(?:0?[1-9]|[12]\d|3[01]))?)?(?:/page/\d+|/index\.html?)?/?$",
+    re.I,
+)
+_LISTING_SEGMENT_RE = re.compile(
+    r"/(?:tags?|categor(?:y|ies)|topics?|archives?)(?:/|$)|/page(?:/\d+)?/?$",
+    re.I,
+)
+_LOGIN_NOISE_HOST_RE = re.compile(
+    r"^(?:accounts\.google\.com|(?:login|signin|auth|sso|passport)\.)",
+    re.I,
+)
+_LOGIN_NOISE_PATH_RE = re.compile(
+    r"(?:^|/)(?:login|signin|sign-in|signup|sign-up|register|logout|oauth\d*|sso|wp-login\.php|user/login|account/login|auth(?:/|$)|intent/(?:tweet|like|retweet)|sharer\.php)(?:/|$|\?)",
+    re.I,
+)
+_LOGIN_NOISE_TITLE_RE = re.compile(
+    r"^\s*(?:登录|注册|请登录|sign\s*in|log\s*in|just a moment\.{0,3}|access denied|403 forbidden|404 not found)\s*$",
+    re.I,
+)
+_NUM_RE = re.compile(r"(?<![0-9A-Za-z_.#])\d[\d,]*(?:\.\d+)?")
+_VIZ_STATIC_MAX_H = 2400
+_VIZ_MAX_HTML_CHARS = 16000
+_FALLBACK_VIZ_TYPES = frozenset(
+    {
+        "stat",
+        "stats",
+        "kpi",
+        "metric",
+        "bars",
+        "bar",
+        "compare",
+        "timeline",
+        "steps",
+        "ratio",
+        "spark",
+        "callout",
+        "table",
+        "grid",
+        "pills",
+    }
+)
+_FALLBACK_VIZ_DATA_KEYS = frozenset(
+    {
+        "items",
+        "rows",
+        "cards",
+        "steps",
+        "left",
+        "right",
+        "value",
+        "values",
+        "text",
+        "body",
+        "points",
+        "bars",
+        "segments",
+        "cells",
+        "blocks",
+    }
+)
+
+
+def _significant_numbers(text: str) -> set[float]:
+    nums: set[float] = set()
+    for raw in _NUM_RE.findall(str(text or "")):
+        cleaned = raw.replace(",", "")
+        try:
+            val = float(cleaned)
+        except ValueError:
+            continue
+        if val > 10.0 and val == val:
+            nums.add(round(val, 4))
+    return nums
+
+
+def _has_distinct_numbers(source_text: str) -> bool:
+    return len(_significant_numbers(source_text)) >= 2
+
+
+def _collect_viz_strings(node: Any, *, key_name: str = "") -> list[str]:
+    if key_name in {"type", "v", "color", "accent", "id", "uid", "tone", "icon", "style"}:
+        return []
+    if isinstance(node, bool) or node is None:
+        return []
+    if isinstance(node, (int, float)):
+        return [str(node)]
+    if isinstance(node, str):
+        if re.fullmatch(r"#[0-9a-fA-F]{3,8}", node.strip()):
+            return []
+        return [node]
+    if isinstance(node, list):
+        out: list[str] = []
+        for item in node:
+            out.extend(_collect_viz_strings(item))
+        return out
+    if isinstance(node, dict):
+        out = []
+        for k, v in node.items():
+            out.extend(_collect_viz_strings(v, key_name=str(k)))
+        return out
+    return []
+
+
+def _check_viz_result(res: Any) -> tuple[bool, str]:
+    if res is True or res is None:
+        return True, ""
+    if res is False:
+        return False, "viz 数字未在原文出现"
+    if isinstance(res, tuple) and res and isinstance(res[0], bool):
+        ok = res[0]
+        detail = str(res[1]) if len(res) > 1 and res[1] else ""
+        return ok, ("" if ok else (detail or "viz 数字未在原文出现"))
+    if isinstance(res, dict) and "ok" in res:
+        ok = bool(res["ok"])
+        return ok, ("" if ok else str(res.get("reason") or res.get("missing") or "viz 数字未在原文出现"))
+    if isinstance(res, (list, set, tuple)):
+        bad = [str(x) for x in res if x is not None]
+        if bad:
+            return False, f"viz 数字未在原文出现: {', '.join(bad[:5])}"
+        return True, ""
+    return True, ""
+
+
+def _validate_and_check_viz(
+    viz_raw: Any, source_text: Any
+) -> tuple[dict[str, Any] | None, str]:
+    if not isinstance(viz_raw, dict):
+        return None, "viz 必须为对象"
+    spec_cand = (
+        viz_raw
+        if ("blocks" in viz_raw and "type" not in viz_raw)
+        else {"v": 1, "blocks": [viz_raw]}
+    )
+
+    if viz_spec is not None:
+        try:
+            validated = viz_spec.validate(spec_cand, "news")
+        except Exception as exc:
+            return None, f"viz 结构校验失败: {exc}"
+        if source_text is not None:
+            try:
+                res = viz_spec.check_spec_numbers(validated, str(source_text))
+            except Exception as exc:
+                return None, f"viz 数字核验失败: {exc}"
+            ok, reason = _check_viz_result(res)
+            if not ok:
+                return None, reason or "viz 数字未在原文出现"
+        return dict(viz_raw), ""
+
+    # Fallback validation & anti-hallucination number verification before viz_spec is merged
+    blocks = (
+        spec_cand.get("blocks")
+        if isinstance(spec_cand.get("blocks"), list)
+        else []
+    )
+    if not blocks or not all(isinstance(b, dict) for b in blocks):
+        return None, "viz 缺少有效的 blocks"
+    for blk in blocks:
+        btype = str(blk.get("type") or "").strip().lower()
+        if btype not in _FALLBACK_VIZ_TYPES:
+            return None, f"viz 块类型不受支持: {btype or 'empty'}"
+        if not any(k in blk and blk[k] not in (None, "", [], {}) for k in _FALLBACK_VIZ_DATA_KEYS):
+            return None, "viz 块缺少数据字段"
+
+    if source_text is not None:
+        src_nums = _significant_numbers(str(source_text))
+        viz_texts = _collect_viz_strings(spec_cand)
+        viz_nums = _significant_numbers(" ".join(viz_texts))
+        missing = sorted(viz_nums - src_nums)
+        if missing:
+            shown = ", ".join(str(int(n) if n.is_integer() else n) for n in missing[:5])
+            return None, f"viz 数字未在原文出现: {shown}"
+    return dict(viz_raw), ""
+
+
+def _fallback_viz_css() -> str:
+    return """
+.vs{margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--fill);border:1px solid var(--line);color:var(--ink);font-size:12.5px}
+.vs-title{font-weight:700;font-size:12.5px;color:var(--ink);margin:0 0 8px}
+.vs-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.vs-stat{background:var(--bg-elev);border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.vs-stat-val{font-size:17px;font-weight:700;color:var(--accent);line-height:1.2}
+.vs-stat-lbl{font-size:11.5px;color:var(--ink-2);margin-top:3px}
+.vs-bars{display:flex;flex-direction:column;gap:6px}
+.vs-bar-row{display:grid;grid-template-columns:minmax(72px,130px) 1fr auto;align-items:center;gap:8px}
+.vs-bar-lbl{color:var(--ink);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vs-bar-track{height:8px;border-radius:999px;background:var(--fill-2);overflow:hidden}
+.vs-bar-fill{height:100%;border-radius:999px;background:var(--accent)}
+.vs-bar-val{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--ink-2)}
+.vs-compare{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.vs-cmp-col{background:var(--bg-elev);border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.vs-cmp-head{font-weight:700;color:var(--accent);margin-bottom:4px;font-size:12px}
+.vs-list{margin:0;padding-left:16px;color:var(--ink-2);font-size:12px;line-height:1.45}
+.vs-steps{display:flex;flex-direction:column;gap:6px}
+.vs-step{display:flex;gap:8px;align-items:flex-start}
+.vs-step-dot{font-weight:700;color:var(--accent);min-width:44px;font-size:11.5px}
+.vs-callout{border-left:3px solid var(--accent);padding:6px 10px;background:var(--bg-elev);border-radius:0 6px 6px 0;color:var(--ink)}
+.vs-table{width:100%;border-collapse:collapse;font-size:12px}
+.vs-table th,.vs-table td{padding:5px 7px;border-bottom:1px solid var(--line);text-align:left}
+.vs-table th{color:var(--ink-2);font-weight:600}
+""".strip()
+
+
+def _load_viz_css_text() -> str:
+    css = ""
+    if viz_spec is not None and hasattr(viz_spec, "load_viz_css"):
+        try:
+            css = str(viz_spec.load_viz_css() or "")
+        except Exception:
+            css = ""
+    if not css:
+        css_path = Path(__file__).with_name("viz.css")
+        if css_path.is_file():
+            try:
+                css = css_path.read_text(encoding="utf-8")
+            except OSError:
+                css = ""
+    if not css:
+        css = _fallback_viz_css()
+    return css.replace("</style", "<\\/style")
+
+
+def _esc_br(value: Any) -> str:
+    return html.escape(str(value or "")).replace("\n", "<br>")
+
+
+def _render_fallback_viz_block(blk: dict[str, Any]) -> tuple[str, int]:
+    btype = str(blk.get("type") or "").strip().lower()
+    title = str(blk.get("title") or blk.get("label") or "").strip()
+    head_html = f'<div class="vs-title">{_esc_br(title)}</div>' if title else ""
+    parts: list[str] = ['<div class="vs vs-static">', head_html]
+    est_h = 44 if title else 24
+
+    if btype in {"stat", "stats", "kpi", "metric"}:
+        items = blk.get("items") or blk.get("cards") or (
+            [{"label": blk.get("label") or title or "", "value": blk.get("value")}]
+            if blk.get("value") is not None
+            else []
+        )
+        parts.append('<div class="vs-stats">')
+        for entry in list(items)[:6]:
+            if not isinstance(entry, dict):
+                continue
+            val = entry.get("value", "")
+            unit = entry.get("unit") or ""
+            lbl = entry.get("label") or entry.get("name") or ""
+            parts.append(
+                f'<div class="vs-stat"><div class="vs-stat-val">{_esc_br(f"{val}{unit}")}</div>'
+                f'<div class="vs-stat-lbl">{_esc_br(lbl)}</div></div>'
+            )
+        parts.append("</div>")
+        est_h += 76
+    elif btype in {"bars", "bar", "ratio"}:
+        items = list(blk.get("items") or blk.get("bars") or blk.get("segments") or [])[:8]
+        max_v = 0.0
+        parsed_rows: list[tuple[str, float, str]] = []
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            lbl = str(entry.get("label") or entry.get("name") or "")
+            raw_v = entry.get("value")
+            num = _numeric_score(raw_v)
+            if num is None and isinstance(raw_v, str):
+                m = _NUM_RE.search(raw_v)
+                num = float(m.group(0).replace(",", "")) if m else 0.0
+            v = float(num or 0.0)
+            max_v = max(max_v, v)
+            disp = str(entry.get("display") or f"{raw_v}{entry.get('unit') or ''}")
+            parsed_rows.append((lbl, v, disp))
+        denom = max_v if max_v > 0 else 1.0
+        parts.append('<div class="vs-bars">')
+        for lbl, v, disp in parsed_rows:
+            pct = max(4.0, min(100.0, (v / denom) * 100.0)) if v > 0 else 0.0
+            parts.append(
+                f'<div class="vs-bar-row"><span class="vs-bar-lbl">{_esc_br(lbl)}</span>'
+                f'<div class="vs-bar-track"><div class="vs-bar-fill" style="width:{pct:.1f}%"></div></div>'
+                f'<span class="vs-bar-val">{_esc_br(disp)}</span></div>'
+            )
+            est_h += 24
+        parts.append("</div>")
+    elif btype == "compare":
+        left = blk.get("left") if isinstance(blk.get("left"), dict) else {}
+        right = blk.get("right") if isinstance(blk.get("right"), dict) else {}
+        parts.append('<div class="vs-compare">')
+        for col in (left, right):
+            ctitle = col.get("title") or col.get("label") or ""
+            citems = col.get("items") or col.get("points") or []
+            lis = "".join(f"<li>{_esc_br(x)}</li>" for x in list(citems)[:5])
+            parts.append(
+                f'<div class="vs-cmp-col"><div class="vs-cmp-head">{_esc_br(ctitle)}</div>'
+                f'<ul class="vs-list">{lis}</ul></div>'
+            )
+        parts.append("</div>")
+        est_h += 120
+    elif btype in {"timeline", "steps"}:
+        rows = list(blk.get("items") or blk.get("steps") or [])[:8]
+        parts.append('<div class="vs-steps">')
+        for entry in rows:
+            if not isinstance(entry, dict):
+                parts.append(f'<div class="vs-step"><span>{_esc_br(entry)}</span></div>')
+                est_h += 22
+                continue
+            dot = entry.get("time") or entry.get("step") or entry.get("label") or "•"
+            desc = entry.get("text") or entry.get("detail") or entry.get("title") or ""
+            parts.append(
+                f'<div class="vs-step"><span class="vs-step-dot">{_esc_br(dot)}</span>'
+                f'<span>{_esc_br(desc)}</span></div>'
+            )
+            est_h += 24
+        parts.append("</div>")
+    elif btype == "table":
+        cols = list(blk.get("columns") or blk.get("headers") or [])[:6]
+        rows = list(blk.get("rows") or [])[:8]
+        parts.append('<table class="vs-table">')
+        if cols:
+            parts.append("<thead><tr>" + "".join(f"<th>{_esc_br(c)}</th>" for c in cols) + "</tr></thead>")
+            est_h += 28
+        parts.append("<tbody>")
+        for r in rows:
+            if isinstance(r, (list, tuple)):
+                parts.append("<tr>" + "".join(f"<td>{_esc_br(c)}</td>" for c in r[:6]) + "</tr>")
+            elif isinstance(r, dict):
+                cells = [r.get(c, "") for c in cols] if cols else list(r.values())[:6]
+                parts.append("<tr>" + "".join(f"<td>{_esc_br(c)}</td>" for c in cells) + "</tr>")
+            est_h += 26
+        parts.append("</tbody></table>")
+    else:
+        body = blk.get("body") or blk.get("text") or ""
+        parts.append(f'<div class="vs-callout">{_esc_br(body)}</div>')
+        est_h += 56
+
+    parts.append("</div>")
+    return "".join(parts), est_h
+
+
+def _strip_script_tags(fragment: str) -> str:
+    return re.sub(r"<script\b[^>]*>.*?</script>", "", fragment, flags=re.I | re.S)
+
+
+def _render_viz_fragment(viz_raw: Any) -> tuple[str, int]:
+    if not isinstance(viz_raw, dict):
+        return "", 0
+    spec = (
+        viz_raw
+        if ("blocks" in viz_raw and "type" not in viz_raw)
+        else {"v": 1, "blocks": [viz_raw]}
+    )
+    if viz_spec is not None:
+        try:
+            validated = viz_spec.validate(spec, "news")
+            render_fn = viz_spec.render
+            sig = inspect.signature(render_fn)
+            kwargs: dict[str, Any] = {}
+            if "static" in sig.parameters:
+                kwargs["static"] = True
+            rendered = render_fn(validated, **kwargs)
+            if isinstance(rendered, tuple):
+                frag = str(rendered[0] or "")
+                est_h = int(rendered[1] or 180) if len(rendered) > 1 else 180
+            else:
+                frag = str(rendered or "")
+                est_h = max(120, min(600, 60 + frag.count("vs-") * 18))
+            frag = _strip_script_tags(frag)
+            if not frag.strip() or "<script" in frag.lower() or len(frag) > _VIZ_MAX_HTML_CHARS:
+                return "", 0
+            return frag, est_h
+        except Exception:
+            return "", 0
+
+    validated_blk, err = _validate_and_check_viz(viz_raw, None)
+    if validated_blk is None or err:
+        return "", 0
+    blocks = (
+        spec.get("blocks")
+        if isinstance(spec.get("blocks"), list)
+        else [validated_blk]
+    )
+    rendered_parts: list[str] = []
+    total_h = 0
+    for blk in blocks[:2]:
+        frag, h = _render_fallback_viz_block(blk)
+        rendered_parts.append(frag)
+        total_h += h
+    joined = _strip_script_tags("".join(rendered_parts))
+    if not joined or "<script" in joined.lower() or len(joined) > _VIZ_MAX_HTML_CHARS:
+        return "", 0
+    return joined, total_h
+
+
+def prefilter_search_item(
+    url: str,
+    title: str,
+    prior_urls: set[str] | frozenset[str] | list[str] | tuple[str, ...] = (),
+    prior_titles: list[str] | tuple[str, ...] | set[str] = (),
+    blocked_domains: set[str] | frozenset[str] | list[str] | tuple[str, ...] = (),
+) -> str | None:
+    """Programmatic coarse filter for search candidates; returns rejection reason or None."""
+    raw_url = str(url or "").strip()
+    clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not raw_url or not clean_title:
+        return "缺少标题或链接"
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+    except ValueError:
+        return "无效链接"
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return "非公开 HTTP 链接"
+
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "无效域名"
+    bare_host = host[4:] if host.startswith("www.") else host
+
+    blocked_set = {str(d).strip().lower() for d in (blocked_domains or ()) if str(d).strip()}
+    for bd in blocked_set:
+        bd_bare = bd[4:] if bd.startswith("www.") else bd
+        if bare_host == bd_bare or bare_host.endswith("." + bd_bare):
+            return "来源域名已屏蔽"
+
+    # Encyclopedia entries
+    if (
+        host in _ENCYCLOPEDIA_EXACT_HOSTS
+        or bare_host in _ENCYCLOPEDIA_EXACT_HOSTS
+        or host.endswith(_ENCYCLOPEDIA_SUFFIXES)
+        or _ENCYCLOPEDIA_TITLE_RE.search(clean_title)
+    ):
+        return "百科词条页"
+
+    # Strip tracking params before checking query-less homepages
+    kept_q = [
+        (k, v)
+        for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=False)
+        if k.lower() not in _TRACKING_PARAMS and not k.lower().startswith("utm_")
+    ]
+    path = parsed.path or "/"
+    path_lower = path.lower()
+
+    if (
+        path_lower in {"", "/"}
+        or re.fullmatch(r"/(?:index|default|home)\.(?:html?|php|aspx?|jsp)", path_lower)
+    ) and not kept_q:
+        return "网站首页"
+
+    if _YEAR_ARCHIVE_RE.search(path_lower) and not kept_q:
+        return "年月归档索引页"
+
+    if _LISTING_SEGMENT_RE.search(path_lower):
+        return "列表/分类/标签归档页"
+
+    if (
+        _LOGIN_NOISE_HOST_RE.search(host)
+        or _LOGIN_NOISE_PATH_RE.search(path_lower)
+        or _LOGIN_NOISE_TITLE_RE.search(clean_title)
+    ):
+        return "登录或社交噪点页"
+
+    norm_prior_urls: set[str] = set()
+    for u in prior_urls or ():
+        s = str(u or "").strip()
+        if not s:
+            continue
+        norm_prior_urls.add(_normalize_url_key(s) if "://" in s else s)
+    url_key = _normalize_url_key(raw_url)
+    if url_key in norm_prior_urls:
+        return "14 天已记录重复链接"
+
+    for pt in prior_titles or ():
+        if pt and _title_similarity(clean_title, str(pt)) >= 0.78:
+            return "与已有标题高度重复"
+
+    return None
+
+
 class DigestWorkspace:
     """Manages RSS source trial/graduation/unsubscribe and digest history inside a workspace."""
 
-    def __init__(self, work, *, fetcher=fetch_public_bytes, clock=time.time):
+    def __init__(self, work, *, fetcher=None, clock=None):
         self.work = work
-        self.fetcher = fetcher
-        self.clock = clock
+        self.fetcher = fetcher or fetch_public_bytes
+        self.clock = clock or time.time
 
     def _read_text(self, path: str) -> str | None:
         offset = 0
@@ -1003,6 +1586,370 @@ class DigestWorkspace:
             "feeds_count": len(sources.get("feeds", [])),
         }
 
+    async def seed_starter_feeds(
+        self,
+        topics_or_text: str | list[str] | tuple[str, ...] = "",
+        *,
+        max_add: int = 4,
+    ) -> dict[str, Any]:
+        cap = max(0, int(max_add or 0))
+        if isinstance(topics_or_text, (list, tuple, set)):
+            hint_text = " ".join(str(x) for x in topics_or_text if str(x).strip())
+        else:
+            hint_text = str(topics_or_text or "")
+        hint_lower = hint_text.lower()
+        hint_tokens = [
+            tok
+            for tok in re.split(r"[\s,，、;；/|]+", hint_lower)
+            if len(tok) >= 2
+        ]
+
+        def _match_score(entry: dict[str, Any]) -> int:
+            if not hint_lower.strip():
+                return 0
+            score = 0
+            title_l = str(entry.get("title") or "").lower()
+            cat_l = str(entry.get("category") or "").lower()
+            for kw in entry.get("keywords") or ():
+                kw_l = str(kw).lower()
+                if kw_l and kw_l in hint_lower:
+                    score += 3
+                elif any(tok in kw_l or kw_l in tok for tok in hint_tokens):
+                    score += 1
+            if any(tok in title_l or tok in cat_l for tok in hint_tokens):
+                score += 2
+            return score
+
+        ranked = [
+            entry
+            for _idx, entry in sorted(
+                enumerate(STARTER_FEEDS),
+                key=lambda pair: (-_match_score(pair[1]), pair[0]),
+            )
+        ]
+
+        now = self.clock()
+        sources = self._load_sources()
+        existing_urls = {
+            _normalize_url_key(f.get("url", ""))
+            for f in sources.get("feeds", [])
+            if isinstance(f, dict) and f.get("url")
+        }
+
+        added: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        for entry in ranked:
+            if len(added) >= cap:
+                break
+            url = str(entry["url"])
+            norm = _normalize_url_key(url)
+            if norm in existing_urls:
+                skipped.append({"url": url, "reason": "已存在订阅"})
+                continue
+            if self._is_rejected(sources, url, _host_of(url), now) is not None:
+                skipped.append({"url": url, "reason": "位于退订冷却列表"})
+                continue
+            try:
+                res = await self.add_feed(
+                    url,
+                    title=str(entry.get("title") or ""),
+                    auto=True,
+                    origin="starter",
+                )
+            except Exception as exc:
+                skipped.append({"url": url, "reason": f"抓取异常: {exc}"})
+                continue
+            if res.get("ok"):
+                feed_meta = res.get("feed") or {}
+                if not res.get("existing"):
+                    added.append(feed_meta)
+                existing_urls.add(norm)
+            else:
+                skipped.append({"url": url, "reason": str(res.get("reason") or "订阅失败")})
+
+        total_feeds = len(self._load_sources().get("feeds", []))
+        return {
+            "added": added,
+            "skipped": skipped,
+            "count": len(added),
+            "total_feeds": total_feeds,
+        }
+
+    async def collect(
+        self,
+        *,
+        web: Any = None,
+        context: dict[str, Any] | None = None,
+        queries: list[str] | tuple[str, ...] = (),
+        topics: list[str] | tuple[str, ...] = (),
+        lookback_days: float = 7,
+        max_items: int = 12,
+        broad: bool = True,
+    ) -> dict[str, Any]:
+        cap_items = max(1, min(int(max_items or 12), 24))
+        clean_queries = [str(q).strip() for q in (queries or ()) if str(q).strip()][:16]
+        if isinstance(topics, str):
+            clean_topics = [t.strip() for t in re.split(r"[,，、;；\s]+", topics) if t.strip()]
+        else:
+            clean_topics = [str(t).strip() for t in (topics or ()) if str(t).strip()]
+
+        seeded_urls: list[str] = []
+        sources_before = self._load_sources()
+        if not sources_before.get("feeds") and (clean_topics or clean_queries):
+            topic_hint = " ".join([*clean_topics, *clean_queries])
+            try:
+                seed_res = await self.seed_starter_feeds(topic_hint, max_add=4)
+                seeded_urls = [
+                    str(f.get("url") or "")
+                    for f in (seed_res.get("added") or [])
+                    if isinstance(f, dict) and f.get("url")
+                ]
+            except Exception:
+                seeded_urls = []
+
+        poll_res = await self.poll(lookback_days=float(lookback_days or 7))
+        rss_raw = list(poll_res.get("candidates") or [])
+
+        now = self.clock()
+        history = self._load_history()
+        blocked_domains = {
+            str(d).lower()
+            for d in history.get("blocked_domains", [])
+            if isinstance(d, str) and d.strip()
+        }
+        prior_14d = [
+            it
+            for it in history.get("items", [])
+            if float(it.get("created", 0.0) or 0.0) >= now - HISTORY_DEDUP_DAYS * DAYS_TO_SECS
+        ]
+        seen_urls: set[str] = {
+            (it.get("url_key") or _normalize_url_key(it.get("url", "")))
+            for it in prior_14d
+            if it.get("url_key") or it.get("url")
+        }
+        seen_titles: list[str] = [
+            str(it.get("title") or "") for it in prior_14d if it.get("title")
+        ]
+
+        prefilter_reasons: dict[str, int] = {}
+        rss_kept: list[dict[str, Any]] = []
+        for it in rss_raw:
+            if not isinstance(it, dict):
+                continue
+            r_url = str(it.get("url") or "").strip()
+            r_title = str(it.get("title") or "").strip()
+            reason = prefilter_search_item(
+                r_url, r_title, seen_urls, seen_titles, blocked_domains
+            )
+            if reason is not None:
+                prefilter_reasons[reason] = prefilter_reasons.get(reason, 0) + 1
+                continue
+            seen_urls.add(_normalize_url_key(r_url))
+            seen_titles.append(r_title)
+            cand = dict(it)
+            cand.setdefault("origin", "rss")
+            cand.setdefault("source", cand.get("feed_title") or _host_of(r_url))
+            rss_kept.append(cand)
+
+        search_raw_count = 0
+        search_errors = 0
+        search_kept: list[dict[str, Any]] = []
+        if web is not None and clean_queries:
+            sem_search = asyncio.Semaphore(4)
+            use_broad = bool(broad and hasattr(web, "search_broad"))
+
+            async def _run_one_query(q: str) -> list[dict[str, Any]]:
+                async with sem_search:
+                    if use_broad:
+                        res = await web.search_broad(q, max_results=8, context=context)
+                    else:
+                        res = await web.search(q, max_results=8, context=context)
+                    if isinstance(res, dict) and isinstance(res.get("results"), list):
+                        return list(res["results"])
+                    if isinstance(res, list):
+                        return list(res)
+                    return []
+
+            query_results = await asyncio.gather(
+                *(_run_one_query(q) for q in clean_queries),
+                return_exceptions=True,
+            )
+            for q_res in query_results:
+                if isinstance(q_res, Exception):
+                    search_errors += 1
+                    continue
+                for row in q_res:
+                    if not isinstance(row, dict):
+                        continue
+                    search_raw_count += 1
+                    s_url = str(row.get("url") or "").strip()
+                    s_title = str(row.get("title") or "").strip()
+                    reason = prefilter_search_item(
+                        s_url, s_title, seen_urls, seen_titles, blocked_domains
+                    )
+                    if reason is not None:
+                        prefilter_reasons[reason] = prefilter_reasons.get(reason, 0) + 1
+                        continue
+                    seen_urls.add(_normalize_url_key(s_url))
+                    seen_titles.append(s_title)
+                    cand: dict[str, Any] = {
+                        "title": s_title,
+                        "url": s_url,
+                        "source": _host_of(s_url),
+                        "snippet": str(row.get("snippet") or row.get("summary") or "").strip(),
+                        "summary": str(row.get("summary") or row.get("snippet") or "").strip(),
+                        "origin": "search",
+                    }
+                    if row.get("published_at"):
+                        cand["published"] = str(row["published_at"])
+                        cand["published_at"] = str(row["published_at"])
+                    if row.get("engines"):
+                        cand["engines"] = list(row["engines"])
+                    search_kept.append(cand)
+
+        # Domain round-robin scatter to ensure diverse sources in the fetch window
+        combined = rss_kept + search_kept
+        buckets: dict[str, list[dict[str, Any]]] = {}
+        bucket_order: list[str] = []
+        for cand in combined:
+            dom = _host_of(cand.get("url", "")) or "unknown"
+            if dom.startswith("www."):
+                dom = dom[4:]
+            if dom not in buckets:
+                buckets[dom] = []
+                bucket_order.append(dom)
+            buckets[dom].append(cand)
+
+        scattered: list[dict[str, Any]] = []
+        idx = 0
+        while len(scattered) < len(combined):
+            added_any = False
+            for dom in bucket_order:
+                bucket = buckets[dom]
+                if idx < len(bucket):
+                    scattered.append(bucket[idx])
+                    added_any = True
+            if not added_any:
+                break
+            idx += 1
+
+        working_pool = [dict(c) for c in scattered[:cap_items]]
+
+        # Fetch pages missing body text concurrently (max concurrency 5)
+        fetched_count = 0
+        fetch_errors = 0
+        discovered_feed_candidates: list[tuple[str, str]] = []
+
+        if web is not None and hasattr(web, "fetch"):
+            sem_fetch = asyncio.Semaphore(5)
+
+            async def _fetch_candidate(cand: dict[str, Any]) -> None:
+                nonlocal fetched_count, fetch_errors
+                existing_body = str(cand.get("source_text") or cand.get("body") or "").strip()
+                if len(existing_body) >= 200:
+                    return
+                async with sem_fetch:
+                    try:
+                        page = await web.fetch(cand["url"], context=context)
+                    except Exception:
+                        fetch_errors += 1
+                        return
+                if not isinstance(page, dict):
+                    return
+                fetched_count += 1
+                raw_content = str(page.get("content") or page.get("text") or "").strip()
+                if raw_content:
+                    cleaned = re.sub(r"[ \t]+", " ", raw_content)
+                    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()[:2600]
+                    cand["source_text"] = cleaned
+                pub = str(
+                    page.get("published_at")
+                    or cand.get("published")
+                    or cand.get("published_at")
+                    or ""
+                ).strip()
+                if not pub and cand.get("source_text"):
+                    pub = published_from_text(cand["source_text"])
+                if pub:
+                    cand["published"] = pub
+                    cand["published_at"] = pub
+                fetched_title = str(page.get("title") or "").strip()
+                if fetched_title and (
+                    not cand.get("title") or cand.get("title") == cand.get("url")
+                ):
+                    cand["title"] = fetched_title
+                for link in page.get("feed_links") or ():
+                    if isinstance(link, str) and link.strip():
+                        discovered_feed_candidates.append((cand["url"], link.strip()))
+
+            await asyncio.gather(*(_fetch_candidate(c) for c in working_pool))
+
+        final_candidates: list[dict[str, Any]] = []
+        for cand in working_pool:
+            if not cand.get("source_text"):
+                fallback_body = str(cand.get("body") or cand.get("summary") or cand.get("snippet") or "").strip()
+                if fallback_body:
+                    cand["source_text"] = re.sub(r"\s+", " ", fallback_body).strip()[:2600]
+            src_txt = str(cand.get("source_text") or "")
+            if not cand.get("published"):
+                fallback_pub = str(cand.get("published_at") or "").strip()
+                if not fallback_pub and src_txt:
+                    fallback_pub = published_from_text(src_txt)
+                if fallback_pub:
+                    cand["published"] = fallback_pub
+            cand["has_numbers"] = _has_distinct_numbers(src_txt)
+            cand.pop("body", None)
+            final_candidates.append(cand)
+
+        # Opportunistically subscribe to at most 1 non-big-platform RSS feed found during fetch
+        discovered_feeds: list[str] = []
+        if discovered_feed_candidates:
+            current_sources = self._load_sources()
+            known_feed_keys = {
+                _normalize_url_key(f.get("url", ""))
+                for f in current_sources.get("feeds", [])
+                if isinstance(f, dict) and f.get("url")
+            }
+            for page_url, feed_url in discovered_feed_candidates:
+                if _is_big_platform(page_url) or _is_big_platform(feed_url):
+                    continue
+                if _is_comment_feed(feed_url):
+                    continue
+                f_key = _normalize_url_key(feed_url)
+                if f_key in known_feed_keys:
+                    continue
+                if self._is_rejected(current_sources, feed_url, _host_of(feed_url), now) is not None:
+                    continue
+                try:
+                    add_res = await self.add_feed(
+                        feed_url, auto=True, origin="collect-auto"
+                    )
+                except Exception:
+                    continue
+                if add_res.get("ok") and not add_res.get("existing"):
+                    discovered_feeds.append(str((add_res.get("feed") or {}).get("url") or feed_url))
+                    break
+
+        return {
+            "candidates": final_candidates,
+            "stats": {
+                "seeded_feeds": seeded_urls,
+                "feeds_total": int(poll_res.get("feeds_count", 0) or 0),
+                "rss_candidates": len(rss_raw),
+                "rss_kept": len(rss_kept),
+                "queries_run": len(clean_queries),
+                "search_raw": search_raw_count,
+                "search_kept": len(search_kept),
+                "search_errors": search_errors,
+                "prefiltered": sum(prefilter_reasons.values()),
+                "prefilter_reasons": prefilter_reasons,
+                "fetched": fetched_count,
+                "fetch_errors": fetch_errors,
+                "discovered_feeds": discovered_feeds,
+                "returned": len(final_candidates),
+            },
+        }
+
     def score_select(
         self, candidates: list[dict[str, Any]], *, max_items: int = 5
     ) -> dict[str, Any]:
@@ -1056,7 +2003,9 @@ class DigestWorkspace:
                 continue
 
             kind = str(item.get("kind") or "news").strip().lower()
-            pub_ts = _parse_timestamp(item.get("published") or item.get("published_ts"))
+            pub_ts = _parse_timestamp(
+                item.get("published") or item.get("published_at") or item.get("published_ts")
+            )
             if kind == "guide":
                 if pub_ts is None:
                     item["reject_reason"] = "教程/指南缺少可核实的发布时间"
@@ -1081,6 +2030,14 @@ class DigestWorkspace:
                     item["reject_reason"] = "引用片段未能在原文中找到对照依据"
                     rejected.append(item)
                     continue
+
+            if "viz" in item and item["viz"] is not None:
+                valid_viz, viz_drop = _validate_and_check_viz(item.get("viz"), source_text)
+                if valid_viz is not None:
+                    item["viz"] = valid_viz
+                else:
+                    item.pop("viz", None)
+                    item["viz_dropped_reason"] = viz_drop
 
             scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
 
@@ -1313,26 +2270,42 @@ class DigestWorkspace:
             band = "午后"
 
         bg1, bg2, ink, muted, accent, card_bg = palette
+        is_dark = band == "夜览"
+        line_col = "rgba(148, 163, 184, 0.24)" if is_dark else "rgba(15, 23, 42, 0.12)"
+        fill_col = "rgba(255, 255, 255, 0.06)" if is_dark else "rgba(15, 23, 42, 0.045)"
+        fill2_col = "rgba(255, 255, 255, 0.10)" if is_dark else "rgba(15, 23, 42, 0.08)"
+        viz_css = _load_viz_css_text()
         label_text = html.escape(slot_label or now_dt.strftime("%m月%d日 · %H:%M"))
         title_text = html.escape(group_title or "今日高信噪比资讯精选")
 
         cards_html: list[str] = []
+        total_viz_h = 0
+        total_viz_chars = 0
         for idx, it in enumerate(items[:8], 1):
             is_explore = it.get("slot") == "explore"
             badge = "跨界视角" if is_explore else (html.escape(str(it.get("topic") or "精选")))
             source_host = html.escape(str(it.get("source") or _host_of(it.get("url", ""))))
-            summary = html.escape(str(it.get("summary") or it.get("why") or ""))
-            why_line = html.escape(
-                str(
-                    (it.get("bridge") if is_explore and it.get("bridge") else "")
-                    or it.get("why")
-                    or it.get("note")
-                    or it.get("bridge")
-                    or ""
-                )
+            summary = _esc_br(it.get("summary") or it.get("why") or "")
+            why_line = _esc_br(
+                (it.get("bridge") if is_explore and it.get("bridge") else "")
+                or it.get("why")
+                or it.get("note")
+                or it.get("bridge")
+                or ""
             )
             avg_score = it.get("avg")
             score_tag = f" · 评分 {avg_score:.1f}" if isinstance(avg_score, (int, float)) else ""
+            viz_html = ""
+            if isinstance(it.get("viz"), dict):
+                frag, est_h = _render_viz_fragment(it["viz"])
+                if (
+                    frag
+                    and (total_viz_h + est_h) <= _VIZ_STATIC_MAX_H
+                    and (total_viz_chars + len(frag)) <= 40000
+                ):
+                    viz_html = f'<div class="card-viz">{frag}</div>'
+                    total_viz_h += est_h
+                    total_viz_chars += len(frag)
             cards_html.append(
                 f"""<article class="card">
   <div class="meta">
@@ -1340,25 +2313,43 @@ class DigestWorkspace:
     <span class="badge">{badge}</span>
     <span class="src">{source_host}{html.escape(score_tag)}</span>
   </div>
-  <h2>{html.escape(str(it.get("title") or ""))}</h2>
+  <h2>{_esc_br(it.get("title") or "")}</h2>
   <p class="sum">{summary}</p>
   {f'<p class="why">看点：{why_line}</p>' if why_line else ''}
+  {viz_html}
 </article>"""
             )
 
+        body_theme = ' data-theme="dark"' if is_dark else ""
         doc = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <title>{title_text} — {label_text}</title>
 <style>
+  :root {{
+    color-scheme: {"dark" if is_dark else "light"};
+    --bg: {bg1};
+    --bg-elev: {card_bg};
+    --vs-card: {card_bg};
+    --ink: {ink};
+    --ink-2: {muted};
+    --gray: {muted};
+    --muted: {muted};
+    --accent: {accent};
+    --blue: {accent};
+    --line: {line_col};
+    --fill: {fill_col};
+    --fill-2: {fill2_col};
+  }}
+  {viz_css}
   * {{ box-sizing: border-box; }}
   body {{
     margin: 0;
     padding: 32px 28px;
     font-family: "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
     background: linear-gradient(155deg, {bg1} 0%, {bg2} 100%);
-    color: {ink};
+    color: var(--ink);
   }}
   .wrap {{ max-width: 780px; margin: 0 auto; }}
   header {{
@@ -1367,36 +2358,37 @@ class DigestWorkspace:
     align-items: flex-end;
     padding-bottom: 16px;
     margin-bottom: 18px;
-    border-bottom: 2px solid {accent};
+    border-bottom: 2px solid var(--accent);
   }}
-  .kicker {{ font-size: 12px; letter-spacing: 0.14em; color: {accent}; font-weight: 700; text-transform: uppercase; }}
+  .kicker {{ font-size: 12px; letter-spacing: 0.14em; color: var(--accent); font-weight: 700; text-transform: uppercase; }}
   h1 {{ margin: 4px 0 0; font-size: 24px; line-height: 1.25; }}
-  .slot {{ font-size: 13px; color: {muted}; font-weight: 600; }}
+  .slot {{ font-size: 13px; color: var(--ink-2); font-weight: 600; }}
   .card {{
-    background: {card_bg};
-    border: 1px solid rgba(120, 130, 145, 0.22);
-    border-left: 4px solid {accent};
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
     border-radius: 10px;
     padding: 14px 16px;
     margin-bottom: 12px;
   }}
-  .meta {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; color: {muted}; }}
-  .num {{ font-family: ui-monospace, monospace; font-weight: 700; color: {accent}; }}
+  .meta {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; color: var(--ink-2); }}
+  .num {{ font-family: ui-monospace, monospace; font-weight: 700; color: var(--accent); }}
   .badge {{
     padding: 1px 7px;
     border-radius: 4px;
-    background: rgba(120, 130, 145, 0.14);
-    color: {ink};
+    background: var(--fill-2);
+    color: var(--ink);
     font-weight: 600;
   }}
   .src {{ margin-left: auto; font-family: ui-monospace, monospace; }}
   h2 {{ margin: 0 0 6px; font-size: 16px; line-height: 1.38; }}
-  p {{ margin: 0; font-size: 13.5px; line-height: 1.55; color: {muted}; }}
-  .why {{ margin-top: 6px; color: {ink}; font-size: 13px; }}
-  footer {{ margin-top: 14px; font-size: 11.5px; color: {muted}; text-align: right; }}
+  p {{ margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }}
+  .why {{ margin-top: 6px; color: var(--ink); font-size: 13px; }}
+  .card-viz {{ margin-top: 8px; }}
+  footer {{ margin-top: 14px; font-size: 11.5px; color: var(--ink-2); text-align: right; }}
 </style>
 </head>
-<body>
+<body{body_theme}>
 <div class="wrap">
   <header>
     <div>
@@ -1410,16 +2402,43 @@ class DigestWorkspace:
 </div>
 </body>
 </html>"""
+        doc = _strip_script_tags(doc)
         res = self.work.write(output_path, doc)
         self.work.commit()
         return {"path": output_path, "bytes": res["bytes"], "count": len(items[:8])}
 
 
-async def run_digest_tool(work, arguments: dict[str, Any]) -> dict[str, Any]:
+async def run_digest_tool(
+    work,
+    arguments: dict[str, Any],
+    *,
+    web: Any = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     dw = DigestWorkspace(work)
     action = arguments["action"]
     if action == "status":
         return dw.status()
+    if action == "seed":
+        return await dw.seed_starter_feeds(
+            arguments.get("topics") or arguments.get("query") or arguments.get("note") or "",
+            max_add=int(arguments.get("max_items", 4) or 4),
+        )
+    if action == "collect":
+        raw_topics = arguments.get("topics") or ()
+        if isinstance(raw_topics, str):
+            topics_arg: Any = raw_topics
+        else:
+            topics_arg = list(raw_topics)
+        return await dw.collect(
+            web=web,
+            context=context,
+            queries=list(arguments.get("queries") or ()),
+            topics=topics_arg,
+            lookback_days=float(arguments.get("lookback_days", 7) or 7),
+            max_items=int(arguments.get("max_items", 12) or 12),
+            broad=bool(arguments.get("broad", True)),
+        )
     if action == "poll":
         return await dw.poll(lookback_days=float(arguments.get("lookback_days", 14) or 14))
     if action == "discover":
