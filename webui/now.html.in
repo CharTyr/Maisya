@@ -790,7 +790,8 @@
 }
 .ms-view[hidden],
 .mil-led-pill[hidden],
-.mil-key[hidden] {
+.mil-key[hidden],
+.ms-mob-dock[hidden] {
   display: none;
 }
 </style>
@@ -815,7 +816,7 @@
       </nav>
     </div>
     <div class="mil-top-right">
-      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 清朗手账）">千禧机械</button>
+      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 默认主题）">千禧机械</button>
       <div class="mil-led-pill" id="top-led-pill"{{NOW_HIDDEN}}>
         <span class="mil-led" id="top-led"></span>
         <span id="top-state-text">待命</span>
@@ -1070,6 +1071,29 @@
 <!-- ==NOW_BODY_END== -->
   </div>
 
+  <nav id="ms-mob-dock" class="ms-mob-dock" aria-label="移动端导航"{{MGMT_HIDDEN}}>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_NOW_CURRENT}} data-mob-nav="now">
+      <span class="ms-mob-dock-ic" data-dock-icon="cpu"></span>
+      <span class="ms-mob-dock-lbl">现场</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_OUTPUTS_CURRENT}} data-mob-nav="outputs">
+      <span class="ms-mob-dock-ic" data-dock-icon="grid"></span>
+      <span class="ms-mob-dock-lbl">产物</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_ABILITIES_CURRENT}} data-mob-nav="abilities">
+      <span class="ms-mob-dock-ic" data-dock-icon="plug"></span>
+      <span class="ms-mob-dock-lbl">能力</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_MEMORY_CURRENT}} data-mob-nav="memory">
+      <span class="ms-mob-dock-ic" data-dock-icon="book"></span>
+      <span class="ms-mob-dock-lbl">手账</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_SETTINGS_CURRENT}} data-mob-nav="settings">
+      <span class="ms-mob-dock-ic" data-dock-icon="sliders"></span>
+      <span class="ms-mob-dock-lbl">设置</span>
+    </button>
+  </nav>
+
 </div>
 
 <!-- 悬浮提示、说明气泡 & 上下文条目原文阅读器 -->
@@ -1093,10 +1117,14 @@
 </div>
 
 <script>
+{{ICONS_JS}}
+</script>
+<script>
 (() => {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => [...document.querySelectorAll(sel)];
+  window.MaisyaIcons?.ensureDefs?.();
   {{FISH_JS}}
 
   const PAGES = { now: "现场", outputs: "产物", abilities: "能力", memory: "手账", settings: "设置" };
@@ -1147,15 +1175,15 @@
   let lastSnapshotAt = 0;
   let pendingOutputTarget = null;
 
-  // 全局严格保证读请求 <= 1 串行、读写合计 <= 2 并发（避免触及宿主 inflight 上限）
-  let inflight = 0;
+  // 读请求按单通道串行，读写合计严格 <= 2 个并发排队
+  let activeQueue = 0;
   const waiters = [];
   async function acquire() {
-    while (inflight >= 2) await new Promise((res) => waiters.push(res));
-    inflight++;
+    while (activeQueue >= 2) await new Promise((res) => waiters.push(res));
+    activeQueue++;
   }
   function release() {
-    inflight--;
+    activeQueue--;
     if (waiters.length) waiters.shift()();
   }
   async function withSlot(fn) {
@@ -1247,6 +1275,14 @@
     if (pref === "auto") return hostStyle === "millennium" ? "millennium" : "maiwork";
     return pref === "maiwork" ? "maiwork" : "millennium";
   }
+  function renderMobDockIcons() {
+    const ic = window.MaisyaIcons;
+    if (!ic) return;
+    $$("#ms-mob-dock [data-dock-icon]").forEach((el) => {
+      const key = el.dataset.dockIcon || "grid";
+      el.innerHTML = ic.ctrl(key, 18, 1.9);
+    });
+  }
   function applyTheme(ctx) {
     if (ctx) lastCtx = ctx;
     const c = ctx || lastCtx || window.maibot?.context || {};
@@ -1258,9 +1294,11 @@
     document.documentElement.setAttribute("data-ui-style", eff);
     const btn = $("#ui-style-toggle");
     if (btn) {
-      btn.textContent = eff === "millennium" ? "千禧机械" : "清朗手账";
+      btn.textContent = eff === "millennium" ? "千禧机械" : "默认主题";
       btn.setAttribute("aria-pressed", String(eff === "millennium"));
     }
+    renderMobDockIcons();
+    window.dispatchEvent(new CustomEvent("maisya:themechange", { detail: { uiStyle: eff, dark: theme === "dark" } }));
   }
   applyTheme();
   window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
@@ -2161,9 +2199,9 @@
   /* ───────────── 事件交互绑定 ───────────── */
 
   document.addEventListener("click", (ev) => {
-    const navBtn = ev.target.closest("[data-nav]");
+    const navBtn = ev.target.closest("[data-nav], [data-mob-nav]");
     if (navBtn) {
-      const p = navBtn.dataset.nav;
+      const p = navBtn.dataset.nav || navBtn.dataset.mobNav;
       if (Object.prototype.hasOwnProperty.call(PAGES, p)) switchWorkspaceTab(p);
     }
   });
@@ -2534,8 +2572,9 @@
     document.title = `Maisya · ${PAGES[targetPage] || "现场"}`;
     const titleEl = $("#ms-page-title");
     if (titleEl) titleEl.textContent = PAGES[targetPage] || "现场";
-    $$("[data-nav]").forEach((btn) => {
-      if (btn.dataset.nav === targetPage) btn.setAttribute("aria-current", "page");
+    $$("[data-nav], [data-mob-nav]").forEach((btn) => {
+      const target = btn.dataset.nav || btn.dataset.mobNav;
+      if (target === targetPage) btn.setAttribute("aria-current", "page");
       else btn.removeAttribute("aria-current");
     });
     if (nowView) nowView.hidden = !isNow;
@@ -2543,9 +2582,14 @@
     const topLedPill = $("#top-led-pill");
     const openLaunch = $("#open-launch");
     const mgmtLedPill = $("#mgmt-led-pill");
+    const mobDock = $("#ms-mob-dock");
     if (topLedPill) topLedPill.hidden = !isNow;
     if (openLaunch) openLaunch.hidden = !isNow;
     if (mgmtLedPill) mgmtLedPill.hidden = isNow;
+    if (mobDock) {
+      mobDock.hidden = isNow;
+      if (!isNow) renderMobDockIcons();
+    }
     const mled = $("#mgmt-led");
     if (mled) mled.className = "mil-led";
 

@@ -1,142 +1,161 @@
 /* Maisya WebUI · 双主题设计系统
-   1. 默认主题：MaiBot 千禧机械风 [data-ui-style="millennium"]（0px 直角 / 塑料机壳凹凸导角与纹理 / 百叶散热窗与丝印 / 下沉液晶屏与深色示波器 / 立体机械键帽 / 高可读系统无衬线正文）
-   2. 可选主题：MaiWork 清朗手账风 [data-ui-style="maiwork"]（白底/深黑画布、发丝分割线、胶囊按键、毛玻璃导航条、清晰可读留白，为 :root 基础层） */
+   1. 千禧机械 [data-ui-style="millennium"]（0px 直角 / 塑料机壳凹凸导角与纹理 / 百叶散热窗与丝印 / 下沉液晶屏与深色示波器 / 立体机械键帽 / 高可读系统无衬线正文）
+   2. 默认主题 [data-ui-style="maiwork"]（Warm Editorial Studio：暖白编辑画布 #F6F4EF / 深炭绿室暗色 #0F1011 / 陶土与松石绿强调 / 清晰可读留白，为 :root 基础层） */
 
-:root {
-  --mil-shell: #ffffff;
-  --mil-panel: #ffffff;
-  --mil-screen: #f7f7f9;
-  --mil-well: #f2f2f5;
-  --mil-scope: #181c20;
-  --mil-scope-ink: #e5f3e9;
+:root,
+:root[data-ui-style="maiwork"] {
+  --mil-shell: #F6F4EF;
+  --mil-panel: #FFFFFF;
+  --mil-screen: #EFECE5;
+  --mil-well: #ECE8DF;
+  --mil-scope: #181C20;
+  --mil-scope-ink: #E5F3E9;
   --mil-scope-grid: rgba(255, 255, 255, 0.06);
-  --mil-glass: rgba(255, 255, 255, 0.84);
+  --mil-glass: rgba(246, 244, 239, 0.88);
 
-  --mil-ink: #111114;
-  --mil-ink-2: #3a3a3c;
-  --mil-muted: #6e6e73;
-  --mil-print: #3a3a3c;
-  --mil-line: #ececf0;
-  --mil-rule: #ececf0;
+  --mil-ink: #141413;
+  --mil-ink-2: #3A3935;
+  --mil-muted: #6C6962;
+  --mil-print: #3A3935;
+  --mil-line: #E2DDD3;
+  --mil-rule: #E2DDD3;
   --mil-hi: transparent;
-  --mil-lo: #d1d1d6;
-  --mil-drop: rgba(17, 17, 20, 0.05);
+  --mil-lo: #CBC5B9;
+  --mil-drop: rgba(20, 20, 19, 0.04);
   --mil-vent: transparent;
 
-  --mil-key: #f2f2f5;
-  --mil-key-hi: #e7e7ec;
-  --mil-key-side: #d1d1d6;
+  --mil-key: #ECE8DF;
+  --mil-key-hi: #FFFFFF;
+  --mil-key-side: #D6D0C4;
 
-  --mil-accent: #2f6fe8;
-  --mil-accent-soft: rgba(47, 111, 232, 0.09);
-  --mil-accent-border: rgba(47, 111, 232, 0.28);
+  --mil-accent: #D95D39;
+  --mil-accent-soft: rgba(217, 93, 57, 0.11);
+  --mil-accent-border: rgba(217, 93, 57, 0.34);
 
-  --mil-on: #111114;
-  --mil-on-side: #111114;
-  --mil-on-ink: #ffffff;
-  --mil-hot: #111114;
-  --mil-hot-side: #111114;
-  --mil-hot-ink: #ffffff;
+  --mil-on: #141413;
+  --mil-on-side: #141413;
+  --mil-on-ink: #FFFFFF;
+  --mil-hot: #D95D39;
+  --mil-hot-side: #B44829;
+  --mil-hot-ink: #FFFFFF;
 
-  --mil-live: #2f6fe8;
-  --mil-ok: #34c759;
-  --mil-ok-soft: rgba(52, 199, 89, 0.14);
-  --mil-ok-ink: #1c7c36;
-  --mil-warn: #ff9f0a;
-  --mil-warn-soft: rgba(255, 159, 10, 0.15);
-  --mil-warn-ink: #ad6200;
-  --mil-danger: #ff3b30;
-  --mil-danger-side: #d70015;
-  --mil-danger-soft: rgba(255, 59, 48, 0.12);
-  --mil-danger-ink: #d70015;
-  --mil-led: #34c759;
-  --mil-led-run: #2f6fe8;
-  --mil-led-bad: #ff3b30;
-  --mil-meter: #111114;
+  --mil-live: #D95D39;
+  --mil-ok: #1B8A6B;
+  --mil-ok-soft: #E0F2EB;
+  --mil-ok-ink: #115E49;
+  --mil-warn: #B86E1A;
+  --mil-warn-soft: #F7EBDA;
+  --mil-warn-ink: #7A470E;
+  --mil-danger: #C53D32;
+  --mil-danger-side: #982A21;
+  --mil-danger-soft: #FBE4E1;
+  --mil-danger-ink: #982A21;
+  --mil-led: #1B8A6B;
+  --mil-led-run: #D95D39;
+  --mil-led-bad: #C53D32;
+  --mil-meter: #1B8A6B;
 
   --mil-screen-shade: transparent;
   --mil-screen-grid: transparent;
   --mil-grain-shell: none;
   --mil-grain-panel: none;
   --mil-lcd-grid: none;
-  --mil-raise: 0 2px 12px rgba(17, 17, 20, 0.04);
+  --mil-raise: none;
   --mil-sunk: none;
-  --mil-radius: 18px;
+  --mil-radius: 16px;
   --mil-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --mil-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --mil-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  --ctx-system: #dbeafe;
-  --ctx-memory: #dcfce7;
-  --ctx-user: #fef3c7;
-  --ctx-assistant: #ccfbf1;
-  --ctx-tool: #ffedd5;
-  --ctx-free: #ededf2;
-  --ctx-tile-ink: #111114;
+  --shadow-card: none;
+  --m-card: #FFFFFF;
+  --m-card-hi: #FBF9F5;
+  --m-lit-sand: #E8DFCF;
+  --m-lit-sage: #D7E2D2;
+  --m-lit-clay: #F1DFD6;
+  --m-btn-bg: #141413;
+  --m-btn-fg: #FFFFFF;
+
+  --ctx-system: #DBEAFE;
+  --ctx-memory: #D7E2D2;
+  --ctx-user: #F5E6C8;
+  --ctx-assistant: #D2EDE6;
+  --ctx-tool: #F1DFD6;
+  --ctx-free: #ECE8DF;
+  --ctx-tile-ink: #141413;
   color-scheme: light;
 }
 
-:root.dark {
-  --mil-shell: #0e0e10;
-  --mil-panel: #1c1c1f;
-  --mil-screen: #161618;
-  --mil-well: #242427;
-  --mil-scope: #14171a;
-  --mil-scope-ink: #e5f3e9;
+:root.dark,
+:root.dark[data-ui-style="maiwork"] {
+  --mil-shell: #0F1011;
+  --mil-panel: #17191B;
+  --mil-screen: #131517;
+  --mil-well: #1F2225;
+  --mil-scope: #111417;
+  --mil-scope-ink: #D8EDE1;
   --mil-scope-grid: rgba(255, 255, 255, 0.06);
-  --mil-glass: rgba(22, 22, 25, 0.84);
+  --mil-glass: rgba(15, 16, 17, 0.88);
 
-  --mil-ink: #f2f2f5;
-  --mil-ink-2: #d1d1d6;
-  --mil-muted: #98989f;
-  --mil-print: #d1d1d6;
-  --mil-line: #2a2a2e;
-  --mil-rule: #2a2a2e;
-  --mil-hi: transparent;
-  --mil-lo: #48484e;
+  --mil-ink: #F2F0EC;
+  --mil-ink-2: #D4D0C8;
+  --mil-muted: #93959B;
+  --mil-print: #C6C3BB;
+  --mil-line: #282B2F;
+  --mil-rule: #282B2F;
+  --mil-hi: rgba(255, 255, 255, 0.04);
+  --mil-lo: #35393F;
   --mil-drop: rgba(0, 0, 0, 0.45);
   --mil-vent: transparent;
 
-  --mil-key: #242427;
-  --mil-key-hi: #2f2f34;
-  --mil-key-side: #3a3a40;
+  --mil-key: #1F2225;
+  --mil-key-hi: #292C30;
+  --mil-key-side: #34383D;
 
-  --mil-accent: #5b8cff;
-  --mil-accent-soft: rgba(91, 140, 255, 0.16);
-  --mil-accent-border: rgba(91, 140, 255, 0.36);
+  --mil-accent: #D95D39;
+  --mil-accent-soft: rgba(217, 93, 57, 0.18);
+  --mil-accent-border: rgba(217, 93, 57, 0.42);
 
-  --mil-on: #f2f2f5;
-  --mil-on-side: #d1d1d6;
-  --mil-on-ink: #111114;
-  --mil-hot: #f2f2f5;
-  --mil-hot-side: #d1d1d6;
-  --mil-hot-ink: #111114;
+  --mil-on: #F2F0EC;
+  --mil-on-side: #CFCBC2;
+  --mil-on-ink: #0F1011;
+  --mil-hot: #D95D39;
+  --mil-hot-side: #B44829;
+  --mil-hot-ink: #FFFFFF;
 
-  --mil-live: #5b8cff;
-  --mil-ok: #30d158;
-  --mil-ok-soft: rgba(48, 209, 88, 0.16);
-  --mil-ok-ink: #66e087;
-  --mil-warn: #ff9f0a;
-  --mil-warn-soft: rgba(255, 159, 10, 0.18);
-  --mil-warn-ink: #ffd479;
-  --mil-danger: #ff453a;
-  --mil-danger-side: #a92820;
-  --mil-danger-soft: rgba(255, 69, 58, 0.18);
-  --mil-danger-ink: #ff6961;
-  --mil-led: #30d158;
-  --mil-led-run: #5b8cff;
-  --mil-led-bad: #ff453a;
-  --mil-meter: #5b8cff;
+  --mil-live: #D95D39;
+  --mil-ok: #1B8A6B;
+  --mil-ok-soft: rgba(27, 138, 107, 0.22);
+  --mil-ok-ink: #64D3B0;
+  --mil-warn: #E5A033;
+  --mil-warn-soft: rgba(229, 160, 51, 0.18);
+  --mil-warn-ink: #FBD38D;
+  --mil-danger: #EF5350;
+  --mil-danger-side: #B71C1C;
+  --mil-danger-soft: rgba(239, 83, 80, 0.18);
+  --mil-danger-ink: #FF8A80;
+  --mil-led: #1B8A6B;
+  --mil-led-run: #D95D39;
+  --mil-led-bad: #EF5350;
+  --mil-meter: #1B8A6B;
 
-  --mil-raise: 0 2px 16px rgba(0, 0, 0, 0.32);
+  --mil-raise: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --m-card: #17191B;
+  --m-card-hi: #1F2225;
+  --m-lit-sand: #24211C;
+  --m-lit-sage: #1B231E;
+  --m-lit-clay: #271E1B;
+  --m-btn-bg: #F2F0EC;
+  --m-btn-fg: #0F1011;
 
-  --ctx-system: #1d3557;
-  --ctx-memory: #164430;
-  --ctx-user: #583f14;
-  --ctx-assistant: #134e4a;
-  --ctx-tool: #5c2f18;
-  --ctx-free: #232328;
-  --ctx-tile-ink: #f2f2f5;
+  --ctx-system: #1D3557;
+  --ctx-memory: #1B3B2B;
+  --ctx-user: #523A14;
+  --ctx-assistant: #15403A;
+  --ctx-tool: #542818;
+  --ctx-free: #1F2225;
+  --ctx-tile-ink: #F2F0EC;
   color-scheme: dark;
 }
 
@@ -214,6 +233,15 @@
   --ctx-tool: #f08a5d;
   --ctx-free: #e5decb;
   --ctx-tile-ink: #2b2623;
+
+  --shadow-card: var(--mil-raise);
+  --m-card: var(--mil-panel);
+  --m-card-hi: var(--mil-key);
+  --m-lit-sand: #e3dac4;
+  --m-lit-sage: #dce7d8;
+  --m-lit-clay: #ecdcd2;
+  --m-btn-bg: var(--mil-on);
+  --m-btn-fg: var(--mil-on-ink);
 }
 
 /* ───────────── MaiBot 宿主千禧机械主题 (深色 · 炭石墨机壳 + 护眼深绿OLED内屏) ───────────── */
@@ -281,6 +309,15 @@
   --ctx-tool: #de784b;
   --ctx-free: #2a302a;
   --ctx-tile-ink: #eee9de;
+
+  --shadow-card: var(--mil-raise);
+  --m-card: var(--mil-panel);
+  --m-card-hi: var(--mil-key);
+  --m-lit-sand: #35312b;
+  --m-lit-sage: #27322a;
+  --m-lit-clay: #3b2d28;
+  --m-btn-bg: var(--mil-on);
+  --m-btn-fg: var(--mil-on-ink);
 }
 
 *, *::before, *::after {
@@ -1806,6 +1843,394 @@ pre, code, .mono, .num {
   font-variant-numeric: tabular-nums;
 }
 
+/* ───────────── 双主题管理组件与 4 级图标系统 ───────────── */
+.m-ic,
+.m-ic-soft3d,
+.m-ic-mil,
+.m-ic-brand,
+.m-ic-ui,
+.m-ic-mil-ui {
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+}
+
+.m-card {
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--m-card);
+  border: 1px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--shadow-card);
+}
+
+:root[data-ui-style="millennium"] .m-card {
+  border-width: 2px;
+  border-radius: 0;
+  background: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 6px 6px;
+  box-shadow: var(--mil-raise);
+}
+
+.m-lit {
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--m-lit-sand);
+  border: 1px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--shadow-card);
+}
+
+.m-lit--sand {
+  background: var(--m-lit-sand);
+}
+
+.m-lit--sage {
+  background: var(--m-lit-sage);
+}
+
+.m-lit--clay {
+  background: var(--m-lit-clay);
+}
+
+:root[data-ui-style="millennium"] .m-lit {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--mil-hi), inset -1px -1px 0 var(--mil-lo);
+}
+
+.m-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.m-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--mil-ink-2);
+  font-family: var(--mil-font-body);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.m-rail-item:hover {
+  background: var(--mil-well);
+  color: var(--mil-ink);
+}
+
+.m-rail-item.is-active,
+.m-rail-item[aria-current="true"],
+.m-rail-item[aria-selected="true"] {
+  background: var(--m-card);
+  border-color: var(--mil-line);
+  color: var(--mil-ink);
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+}
+
+:root[data-ui-style="millennium"] .m-rail-item {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+:root[data-ui-style="millennium"] .m-rail-item.is-active,
+:root[data-ui-style="millennium"] .m-rail-item[aria-current="true"],
+:root[data-ui-style="millennium"] .m-rail-item[aria-selected="true"] {
+  background: var(--mil-screen);
+  border-color: var(--mil-line);
+  box-shadow: var(--mil-sunk);
+}
+
+.m-drawer {
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--m-card);
+  border: 1px solid var(--mil-line);
+  border-radius: var(--mil-radius);
+  box-shadow: var(--shadow-card);
+}
+
+:root[data-ui-style="millennium"] .m-drawer {
+  border-width: 2px;
+  border-radius: 0;
+  background: var(--mil-panel);
+  box-shadow: var(--mil-raise);
+}
+
+.m-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.m-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 10px;
+  background: var(--mil-screen);
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+:root[data-ui-style="millennium"] .m-model-row {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--mil-screen-shade);
+}
+
+/* 无边框裸鱼角色轮播 */
+.m-mob-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.m-mob-carousel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding: 6px 16px;
+}
+
+.m-mob-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.mob-role-item {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  scroll-snap-align: center;
+  background: transparent;
+  border: 0 solid transparent;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.mob-role-avatar,
+:root[data-ui-style="millennium"] .mob-role-avatar,
+:root.dark[data-ui-style="millennium"] .mob-role-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0 solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  transform: scale(0.76);
+  filter: saturate(0.28);
+  opacity: 0.58;
+  transition: transform 0.2s ease, filter 0.2s ease, opacity 0.2s ease;
+}
+
+.mob-role-item.is-active .mob-role-avatar,
+.mob-role-item[aria-selected="true"] .mob-role-avatar,
+.mob-role-avatar.is-active,
+:root[data-ui-style="millennium"] .mob-role-item.is-active .mob-role-avatar,
+:root[data-ui-style="millennium"] .mob-role-avatar.is-active {
+  transform: scale(1.06);
+  filter: none;
+  opacity: 1;
+}
+
+.mob-role-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mil-ink);
+  white-space: nowrap;
+}
+
+.mob-role-sub {
+  font-size: 11px;
+  color: var(--mil-muted);
+  white-space: nowrap;
+}
+
+/* 移动端底部导航栏 & 抽屉面板（桌面端隐藏） */
+.ms-mob-dock {
+  display: none;
+}
+
+.m-mob-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.m-mob-sub-title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mil-ink);
+}
+
+.mob-circle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  padding: 0;
+  background: var(--m-card);
+  border: 1px solid var(--mil-line);
+  border-radius: 999px;
+  color: var(--mil-ink);
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+
+:root[data-ui-style="millennium"] .mob-circle-btn {
+  border-width: 2px;
+  border-radius: 0;
+  background: var(--mil-key);
+  box-shadow: 2px 2px 0 var(--mil-drop);
+}
+
+.m-mob-role-card1 {
+  min-width: 0;
+}
+
+.m-mob-scrim,
+.m-mob-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(15, 16, 17, 0.42);
+}
+
+.m-mob-scrim[hidden],
+.m-mob-sheet-scrim[hidden] {
+  display: none;
+}
+
+.m-mob-sheet {
+  width: 100%;
+  max-width: 720px;
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 14px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  background: var(--m-card);
+  border-top: 1px solid var(--mil-line);
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-ui-style="millennium"] .m-mob-sheet {
+  border-top-width: 2px;
+  border-radius: 0;
+  background: var(--mil-panel);
+  box-shadow: inset 0 2px 0 var(--mil-hi), 0 -6px 0 var(--mil-drop);
+}
+
+@media (max-width: 720px) {
+  body:not([data-page="now"]) .mil-shell {
+    max-width: 100%;
+    overflow-x: clip;
+    padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body:not([data-page="now"]) .mil-topbar .mil-nav {
+    display: none;
+  }
+
+  .ms-mob-dock:not([hidden]) {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 48;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    gap: 2px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    background: var(--mil-glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid var(--mil-line);
+  }
+
+  :root[data-ui-style="millennium"] .ms-mob-dock:not([hidden]) {
+    background: var(--mil-panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-top: 2px solid var(--mil-line);
+    box-shadow: inset 0 2px 0 var(--mil-hi);
+  }
+
+  .ms-mob-dock-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 44px;
+    min-height: 46px;
+    padding: 5px 4px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--mil-muted);
+    font-family: var(--mil-font-body);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.1;
+    cursor: pointer;
+    transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+  }
+
+  .ms-mob-dock-btn[aria-current="page"] {
+    color: var(--mil-accent);
+    background: var(--mil-accent-soft);
+    font-weight: 600;
+  }
+
+  :root[data-ui-style="millennium"] .ms-mob-dock-btn {
+    border-radius: 0;
+  }
+
+  :root[data-ui-style="millennium"] .ms-mob-dock-btn[aria-current="page"] {
+    color: var(--mil-ink);
+    background: var(--mil-key);
+    border-color: var(--mil-line);
+    box-shadow: inset 1px 1px 0 var(--mil-hi), inset -1px -1px 0 var(--mil-lo);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mil-led--run,
   .mil-fish.is-new svg {
@@ -1815,7 +2240,10 @@ pre, code, .mono, .num {
   .mil-switch-track::after,
   .mil-meter > i,
   .fish-opt,
-  .fish-swatch {
+  .fish-swatch,
+  .m-rail-item,
+  .mob-role-avatar,
+  .ms-mob-dock-btn {
     transition: none;
   }
 }
