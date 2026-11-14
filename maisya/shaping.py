@@ -141,6 +141,72 @@ def _clean_str_list(value, *, label: str = "列表") -> list[str]:
     return out
 
 
+def _unwrap_item_wrappers(value, _seen: set[int] | None = None):
+    """递归解包 LLM 工具调用中误套的 `{"item": ...}` 单键包裹，并防循环嵌套。"""
+    seen = set() if _seen is None else _seen
+    cur = value
+    local_ids: list[int] = []
+    try:
+        while isinstance(cur, dict) and set(cur.keys()) == {"item"}:
+            oid = id(cur)
+            if oid in seen:
+                return cur
+            seen.add(oid)
+            local_ids.append(oid)
+            cur = cur["item"]
+        if isinstance(cur, dict):
+            oid = id(cur)
+            if oid in seen:
+                return cur
+            seen.add(oid)
+            local_ids.append(oid)
+            return {k: _unwrap_item_wrappers(v, seen) for k, v in cur.items()}
+        if isinstance(cur, list):
+            oid = id(cur)
+            if oid in seen:
+                return cur
+            seen.add(oid)
+            local_ids.append(oid)
+            return [_unwrap_item_wrappers(item, seen) for item in cur]
+        if isinstance(cur, tuple):
+            oid = id(cur)
+            if oid in seen:
+                return cur
+            seen.add(oid)
+            local_ids.append(oid)
+            return tuple(_unwrap_item_wrappers(item, seen) for item in cur)
+        return cur
+    finally:
+        for oid in local_ids:
+            seen.discard(oid)
+
+
+def _coerce_bool(val, field_name: str) -> bool:
+    """接受布尔值或去空白/忽略大小写的 \"true\"/\"false\"，其余值抛错。"""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        norm = val.strip().lower()
+        if norm == "true":
+            return True
+        if norm == "false":
+            return False
+    raise ValueError(f"{field_name} 必须是布尔值")
+
+
+def _coerce_int(val, field_name: str) -> int:
+    """接受整数或十进制整数字符串（如 \"480\"），拒绝布尔值。"""
+    if type(val) is bool:
+        raise ValueError(f"{field_name} 必须是整数")
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        text = val.strip()
+        if re.fullmatch(r"[+-]?\d+", text):
+            return int(text, 10)
+    raise ValueError(f"{field_name} 必须是整数")
+
+
 def _normalize_colon_token(raw: str) -> str:
     if ":" not in raw:
         return raw
@@ -786,9 +852,33 @@ async def settings_history(plugin) -> dict:
         }
 
 
+_SETTINGS_INT_FIELDS = frozenset(
+    {
+        "agent_max_steps",
+        "agent_timeout",
+        "agent_max_active",
+        "thread_idle_seconds",
+        "thread_context_chars",
+        "daily_proactive_limit",
+        "heartbeat_interval_minutes",
+        "longing_quiet_hours",
+    }
+)
+
+
+def _is_falsy_lockout_value(val: object) -> bool:
+    if val is False:
+        return True
+    if isinstance(val, (int, float)) and val == 0:
+        return True
+    if isinstance(val, str) and val.strip().lower() in {"false", "0", "no", "off", "n", "f"}:
+        return True
+    return False
+
+
 def _check_no_lockout(candidate: dict) -> None:
     plugin_cfg = candidate.get("plugin")
-    if isinstance(plugin_cfg, dict) and plugin_cfg.get("enabled") is False:
+    if isinstance(plugin_cfg, dict) and _is_falsy_lockout_value(plugin_cfg.get("enabled")):
         raise ValueError(_LOCKOUT_MESSAGE)
 
 
@@ -840,6 +930,8 @@ async def patch_settings(
     author: str = "maisya_shape",
     reason: str = "",
 ) -> dict:
+    if patch is not None:
+        patch = _unwrap_item_wrappers(patch)
     if not isinstance(patch, dict) or not patch:
         raise ValueError("patch 必须为非空对象")
     _assert_no_secret(plugin, patch, "设置修改内容")
@@ -847,6 +939,9 @@ async def patch_settings(
     working_patch = copy.deepcopy(patch)
     if "sleep_window" in working_patch:
         working_patch["sleep_window"] = normalize_sleep_window(working_patch["sleep_window"])
+    for int_key in _SETTINGS_INT_FIELDS:
+        if int_key in working_patch and working_patch[int_key] is not None:
+            working_patch[int_key] = _coerce_int(working_patch[int_key], int_key)
     add_chats = (
         _clean_str_list(working_patch.pop("add_chats"), label="add_chats")
         if "add_chats" in working_patch
@@ -1132,6 +1227,8 @@ async def patch_profile(
     target = str(target or "").strip()
     if not target:
         raise ValueError("修改角色必须指定 target")
+    if patch is not None:
+        patch = _unwrap_item_wrappers(patch)
     if not isinstance(patch, dict) or not patch:
         raise ValueError("patch 必须为非空对象")
     _assert_no_secret(plugin, patch, "角色配置")
@@ -1263,6 +1360,10 @@ async def patch_profile(
         for key, value in working.items():
             if value is None:
                 cfg.pop(key, None)
+            elif key in {"enabled", "bound"}:
+                cfg[key] = _coerce_bool(value, key)
+            elif key in {"max_tokens", "max_steps"}:
+                cfg[key] = _coerce_int(value, key)
             else:
                 cfg[key] = value
 
@@ -1775,7 +1876,8 @@ async def handle_digest_sources(
 ) -> dict:
     if action not in {"read", "patch", "write"}:
         raise ValueError(f"digest_sources 仅支持 read / patch / write，不支持 {action}")
-    opts = dict(patch or {}) if isinstance(patch, dict) else {}
+    unwrapped_patch = _unwrap_item_wrappers(patch) if patch is not None else None
+    opts = dict(unwrapped_patch or {}) if isinstance(unwrapped_patch, dict) else {}
     raw_ws = str(target or opts.get("workspace") or "digest").strip() or "digest"
     ws_name = normalize_profile_workspace("digest", raw_ws)
     if not re.fullmatch(r"[\w-]{1,64}", ws_name):
@@ -1859,7 +1961,8 @@ async def handle_digest_sources(
     ) or not isinstance(unsub_raw, (list, tuple)):
         raise ValueError("add_urls / discover_urls / unsubscribe_ids 必须是列表")
 
-    auto_default = bool(opts.get("auto", False))
+    raw_auto = opts.get("auto")
+    auto_default = _coerce_bool(raw_auto, "auto") if raw_auto is not None else False
 
     async def _mutate(dw: DigestWorkspace) -> dict:
         added: list[dict] = []
@@ -1869,7 +1972,12 @@ async def handle_digest_sources(
             if isinstance(item, dict):
                 url = str(item.get("url") or "").strip()
                 title = str(item.get("title") or "").strip()
-                auto_flag = bool(item.get("auto", auto_default))
+                item_auto = item.get("auto")
+                auto_flag = (
+                    _coerce_bool(item_auto, "auto")
+                    if item_auto is not None
+                    else auto_default
+                )
             else:
                 url = str(item or "").strip()
                 title = ""
@@ -2102,8 +2210,12 @@ def _coerce_setup_opts(plugin, patch: dict | None, content: str) -> dict:
         opts = copy.deepcopy(parsed)
     else:
         opts = {}
-    if opts.get("enabled") is False or (
-        isinstance(opts.get("plugin"), dict) and opts["plugin"].get("enabled") is False
+    opts = _unwrap_item_wrappers(opts)
+    if not isinstance(opts, dict):
+        raise ValueError("setup 参数必须是 JSON 对象")
+    if _is_falsy_lockout_value(opts.get("enabled")) or (
+        isinstance(opts.get("plugin"), dict)
+        and _is_falsy_lockout_value(opts["plugin"].get("enabled"))
     ):
         raise ValueError(_LOCKOUT_MESSAGE)
     _assert_no_secret(plugin, opts, "一键配置")
@@ -2159,9 +2271,12 @@ async def _apply_setup_settings(
     stream_spec: str,
     author: str,
 ) -> dict | None:
-    enable_chat = opts.get("enable_chat")
-    if enable_chat is not None and type(enable_chat) is not bool:
-        raise ValueError("enable_chat 必须是布尔值")
+    raw_enable_chat = opts.get("enable_chat")
+    enable_chat = (
+        _coerce_bool(raw_enable_chat, "enable_chat")
+        if raw_enable_chat is not None
+        else None
+    )
     should_enable = (enable_chat is True) or (
         enable_chat is None
         and (has_explicit_target or any(key in opts for key in _SETUP_CHAT_FIELDS))
@@ -2176,7 +2291,9 @@ async def _apply_setup_settings(
     if "proactive_level" in opts and opts["proactive_level"] is not None:
         settings_patch["proactive_level"] = str(opts["proactive_level"]).strip()
     if "daily_proactive_limit" in opts and opts["daily_proactive_limit"] is not None:
-        settings_patch["daily_proactive_limit"] = int(opts["daily_proactive_limit"])
+        settings_patch["daily_proactive_limit"] = _coerce_int(
+            opts["daily_proactive_limit"], "daily_proactive_limit"
+        )
     if isinstance(opts.get("chat_proactive_levels"), dict):
         settings_patch["chat_proactive_levels"] = dict(opts["chat_proactive_levels"])
     if "chat_proactive_level" in opts:
@@ -2209,6 +2326,12 @@ async def _apply_setup_settings(
 def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
     if "digest" in profile_patches:
         return profile_patches["digest"].get("enabled") is not False
+    raw_auto_seed = opts.get("auto_seed_sources")
+    auto_seed_flag = (
+        _coerce_bool(raw_auto_seed, "auto_seed_sources")
+        if raw_auto_seed is not None
+        else False
+    )
     if any(
         opts.get(key)
         for key in (
@@ -2218,7 +2341,7 @@ def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
             "unsubscribe_ids",
             "topics",
         )
-    ) or opts.get("auto_seed_sources") is True:
+    ) or auto_seed_flag:
         return True
     for item in opts.get("schedules") or ():
         if isinstance(item, dict) and str(item.get("profile") or "").strip() == "digest":
@@ -2226,7 +2349,13 @@ def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
     single_prof = str(opts.get("profile") or opts.get("trial_profile") or "").strip()
     if opts.get("daily_at") and single_prof in {"", "digest"}:
         return True
-    if opts.get("run_now") and single_prof in {"", "digest"}:
+    raw_run_now = opts.get("run_now")
+    run_now_flag = (
+        _coerce_bool(raw_run_now, "run_now")
+        if raw_run_now is not None
+        else False
+    )
+    if run_now_flag and single_prof in {"", "digest"}:
         return True
     return False
 
@@ -2261,10 +2390,20 @@ async def _apply_setup_profiles(
                 continue
             if isinstance(cfg, bool):
                 profile_patches.setdefault(pid, {})["enabled"] = cfg
+            elif isinstance(cfg, str) and cfg.strip().lower() in {"true", "false"}:
+                profile_patches.setdefault(pid, {})["enabled"] = _coerce_bool(
+                    cfg, f"profiles[{pid}]"
+                )
             elif isinstance(cfg, dict):
                 target_dict = profile_patches.setdefault(pid, {})
                 target_dict.update(copy.deepcopy(cfg))
-                target_dict.setdefault("enabled", True)
+                if "enabled" in target_dict:
+                    if target_dict["enabled"] is not None:
+                        target_dict["enabled"] = _coerce_bool(
+                            target_dict["enabled"], f"profiles[{pid}].enabled"
+                        )
+                else:
+                    target_dict["enabled"] = True
             else:
                 raise ValueError(f"profiles[{pid}] 必须是配置对象或布尔值")
 
@@ -2348,12 +2487,18 @@ async def _apply_setup_memory(
     author: str,
 ) -> dict | None:
     replace_raw = opts.get("replace_memory")
-    replace_flag = replace_raw is True
+    replace_flag = False
     parts: list[str] = []
-    if isinstance(replace_raw, str):
-        replace_flag = True
-        if replace_raw.strip():
-            parts.append(replace_raw.strip())
+    if replace_raw is not None:
+        if isinstance(replace_raw, str):
+            try:
+                replace_flag = _coerce_bool(replace_raw, "replace_memory")
+            except ValueError:
+                replace_flag = True
+                if replace_raw.strip():
+                    parts.append(replace_raw.strip())
+        else:
+            replace_flag = _coerce_bool(replace_raw, "replace_memory")
     for key in ("preferences", "memory", "append_memory"):
         if key in opts and opts[key] is not None:
             formatted = _format_memory_text(opts[key])
@@ -2407,9 +2552,14 @@ async def _apply_setup_digest_sources(
         for t in _clean_setup_items(opts.get("topics"), "topics")
         if str(t).strip()
     ]
-    auto_seed = opts.get("auto_seed_sources")
-    if auto_seed is not None and type(auto_seed) is not bool:
-        raise ValueError("auto_seed_sources 必须是布尔值")
+    raw_auto_seed = opts.get("auto_seed_sources")
+    auto_seed = (
+        _coerce_bool(raw_auto_seed, "auto_seed_sources")
+        if raw_auto_seed is not None
+        else None
+    )
+    raw_broad = opts.get("broad")
+    broad_flag = _coerce_bool(raw_broad, "broad") if raw_broad is not None else None
 
     ws_name = normalize_profile_workspace("digest", str(opts.get("workspace") or "digest"))
     has_explicit_ops = bool(rss_raw or discover_raw or unsub_raw)
@@ -2437,7 +2587,12 @@ async def _apply_setup_digest_sources(
             if isinstance(item, dict):
                 url = str(item.get("url") or "").strip()
                 title = str(item.get("title") or "").strip()
-                auto_flag = bool(item.get("auto", False))
+                raw_item_auto = item.get("auto")
+                auto_flag = (
+                    _coerce_bool(raw_item_auto, "rss_urls[].auto")
+                    if raw_item_auto is not None
+                    else False
+                )
             else:
                 url = str(item or "").strip()
                 title = ""
@@ -2504,8 +2659,8 @@ async def _apply_setup_digest_sources(
                     seed_kwargs["topics"] = topics_raw
                 elif "topics_or_text" in sig.parameters:
                     seed_kwargs["topics_or_text"] = " ".join(topics_raw)
-                if "broad" in sig.parameters and "broad" in opts:
-                    seed_kwargs["broad"] = bool(opts["broad"])
+                if broad_flag is not None and "broad" in sig.parameters:
+                    seed_kwargs["broad"] = broad_flag
                 if seed_kwargs:
                     seed_res = seed_fn(**seed_kwargs)
                 elif topics_raw and any(
@@ -2590,12 +2745,14 @@ async def _apply_setup_schedules(
     if plugin.intents is None:
         raise PermissionError("Maisya 调度组件尚未就绪")
 
-    default_tz = opts.get("tz_offset_minutes", 480)
-    if type(default_tz) is not int:
-        raise ValueError("tz_offset_minutes 必须是整数")
-    replace_sched = opts.get("replace_schedules", True)
-    if type(replace_sched) is not bool:
-        raise ValueError("replace_schedules 必须是布尔值")
+    raw_tz = opts.get("tz_offset_minutes")
+    default_tz = _coerce_int(raw_tz, "tz_offset_minutes") if raw_tz is not None else 480
+    raw_replace_sched = opts.get("replace_schedules")
+    replace_sched = (
+        _coerce_bool(raw_replace_sched, "replace_schedules")
+        if raw_replace_sched is not None
+        else True
+    )
 
     requests: list[dict] = []
     if raw_daily is not None:
@@ -2627,9 +2784,12 @@ async def _apply_setup_schedules(
                 item_slots = []
             else:
                 raise ValueError("schedules[].daily_at 必须是字符串或列表")
-            tz_val = item.get("tz_offset_minutes", default_tz)
-            if type(tz_val) is not int:
-                raise ValueError("schedules[].tz_offset_minutes 必须是整数")
+            raw_item_tz = item.get("tz_offset_minutes")
+            tz_val = (
+                _coerce_int(raw_item_tz, "schedules[].tz_offset_minutes")
+                if raw_item_tz is not None
+                else default_tz
+            )
             requests.append(
                 {
                     "daily_at": item_slots,
@@ -2745,7 +2905,9 @@ async def _apply_setup_trial(
     source_msg_id: str,
     default_profile: str,
 ) -> dict | None:
-    if not opts.get("run_now"):
+    raw_run_now = opts.get("run_now")
+    run_now = _coerce_bool(raw_run_now, "run_now") if raw_run_now is not None else False
+    if not run_now:
         return None
     if plugin.engine is None:
         raise PermissionError("Maisya Agent 引擎尚未就绪")
@@ -2790,7 +2952,7 @@ async def _apply_setup_trial(
 
     wait_seconds = 0
     if opts.get("wait_seconds") is not None:
-        wait_seconds = int(opts["wait_seconds"])
+        wait_seconds = _coerce_int(opts["wait_seconds"], "wait_seconds")
     route = (
         await plugin.bridge.route(current_chat_id, source_msg_id, wait_seconds)
         if delivery_mode == "current" and current_chat_id and hasattr(plugin, "bridge")
@@ -2926,7 +3088,10 @@ async def handle_setup(
     default_profile = str(opts.get("profile") or "").strip()
     if not default_profile:
         default_profile = next(iter(profiles_res), "digest")
-    digest_involved = (
+    digest_explicitly_disabled = (
+        "digest" in profiles_res and profiles_res["digest"].get("enabled") is False
+    )
+    digest_involved = not digest_explicitly_disabled and (
         "digest" in profiles_res
         or default_profile == "digest"
         or any(
@@ -3095,7 +3260,8 @@ async def execute_shape(
                 ),
             )
         if action == "create":
-            opts = dict(patch or {})
+            raw_opts = _unwrap_item_wrappers(patch) if isinstance(patch, dict) else None
+            opts = dict(raw_opts or {}) if isinstance(raw_opts, dict) else {}
             base_id = str(opts.pop("base", base or "scout") or "scout")
             await completed_thread(plugin.profiles.clone, base_id, target)
             if opts:
