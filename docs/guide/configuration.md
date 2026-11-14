@@ -14,10 +14,16 @@
 |:-----|:-----|:-----|
 | QQ 群 | `qq:group:<群号>` | `qq:group:100246809` |
 | QQ 私聊 | `qq:private:<QQ号>` | `qq:private:10001` |
+| QQ 官方群 / 私聊 | `qq_official:<group\|private>:<OpenID>` | `qq_official:group:AbCdEf123456` |
 | Telegram 群 | `telegram:group:<群ID>` | `telegram:group:-100123456` |
+| Telegram 论坛话题 | `telegram:group:<群ID>::tg-topic::mt=<话题ID>` | `telegram:group:-100123456::tg-topic::mt=12` |
 | Telegram 私聊 | `telegram:private:<用户ID>` | `telegram:private:804200` |
 
-**向后兼容**：你在管理台里通过三段式下拉选单添加时会自动生成这种格式；如果你之前手写过 `100246809`、`qq:100246809` 或宿主内部的 32 位哈希 `session_id`，甚至对话里直接喊群名，后台的双向别名解析（`session_routes` + `chat_aliases`）都能互相识别对齐。
+**格式注意点与向后兼容**：
+
+- **Telegram 论坛话题（Forum Topic）**：第三段 ID 完整保留 `::tg-topic::mt=<话题ID>` 后缀（三段式解析允许第三段内含冒号），同一个话题群里的不同话题可作为独立会话分别开关与编排。
+- **QQ 官方等大小写敏感 OpenID**：`platform` 与 `group`/`private` 会自动小写规范化，但第三段会话/用户 ID **严格区分并保留原始大小写**（如 QQ 官方的 `OpenID`），手动填写 `allow_chats`、`allow_users` 或 `admins` 时请直接粘贴宿主实际显示的原始大小写。
+- **向后兼容**：你在管理台里通过三段式下拉选单添加时会自动生成这种格式；如果你之前手写过 `100246809`、`qq:100246809` 或宿主内部的 32 位哈希 `session_id`，甚至对话里直接喊群名，后台的双向别名解析（`session_routes` + `chat_aliases`）都能互相识别对齐。
 
 ---
 
@@ -111,7 +117,7 @@
 | `task` / `model_name` / `fallback_models` | 默认宿主模型槽位，以及有顺序的多模型主备列表 |
 | `environment` / `network` | `"readonly"` 或 `"sandbox"`；容器网络策略（`"public"` / `"restricted"` / `"none"`） |
 | `tools` / `skills` | 授权内置工具清单，以及绑定的技能编号列表 |
-| `access` / `allow_chats` / `allow_users` | 可用范围：`everyone`、`admins` 或 `listed`（白名单，同时配会话和账号时取交集） |
+| `access` / `allow_chats` / `allow_users` | 可用范围：`everyone`、`admins` 或 `listed`（白名单，同时配会话和账号时取交集；`allow_users` 同时支持 `<platform>:<id>` 与 `<platform>:private:<id>`，并保留 OpenID 大小写） |
 | `mcp` / `apis` / `secrets` / `sandbox_targets` | 绑定的 MCP 服务、跨插件 API、保险箱句柄和仅 `admins` 可用的受控出站白名单 |
 | `web_provider` / `max_steps` / `max_tokens` / `temperature` | 按角色单独覆盖联网来源与采样/预算参数 |
 | `fish_seed` | 可选：绑定该角色小鱼头像样式种子 |

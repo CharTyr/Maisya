@@ -5,12 +5,74 @@
   "name": "Maisya",
   "description": "为 MaiBot 提供可调度的 Agent 能力。",
   "plugin_type": "extension",
-  "author": {"name": "CharTyr", "url": "https://github.com/CharTyr"},
-  "license": "GPL-v3.0-or-later",
-  "urls": {"repository": "https://github.com/CharTyr/Maisya"},
-  "host_application": {"min_version": "1.0.0", "max_version": "1.4.99"},
-  "sdk": {"min_version": "2.8.1", "max_version": "2.21.0"},
-  "dependencies": [{"type": "python_package", "name": "cryptography", "version_spec": ">=46,<51"}, {"type": "python_package", "name": "jsonschema", "version_spec": ">=4.23,<5"}],
-  "capabilities": ["config.get", "config.get_plugin", "chat.open_session", "chat.get_all_streams", "llm.generate_with_tools", "llm.generate_for_image", "llm.get_available_models", "statistics.local.models", "web.search", "web.fetch", "message.get_recent", "message.get_by_id", "knowledge.search", "person.get_id", "person.get_id_by_name", "person.get_value", "render.html2png", "component.list_loaded_plugins", "maisaka.proactive.trigger", "maisaka.reply.generate", "send.hybrid", "api.list", "api.get", "api.call"],
-  "i18n": {"default_locale": "zh-CN", "supported_locales": ["zh-CN"]}
+  "author": {
+    "name": "CharTyr",
+    "url": "https://github.com/CharTyr"
+  },
+  "license": "GPL-3.0-or-later",
+  "display": {
+    "icon": {
+      "type": "local",
+      "value": "logo.svg",
+      "fallback": "layers"
+    }
+  },
+  "urls": {
+    "repository": "https://github.com/CharTyr/Maisya",
+    "homepage": "https://github.com/CharTyr/Maisya",
+    "documentation": "https://github.com/CharTyr/Maisya/blob/main/README.md",
+    "issues": "https://github.com/CharTyr/Maisya/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.4.99"
+  },
+  "sdk": {
+    "min_version": "2.8.1",
+    "max_version": "2.21.0"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "cryptography",
+      "version_spec": ">=46,<51"
+    },
+    {
+      "type": "python_package",
+      "name": "jsonschema",
+      "version_spec": ">=4.23,<5"
+    }
+  ],
+  "capabilities": [
+    "config.get",
+    "config.get_plugin",
+    "chat.open_session",
+    "chat.get_all_streams",
+    "llm.generate_with_tools",
+    "llm.generate_for_image",
+    "llm.get_available_models",
+    "statistics.local.models",
+    "web.search",
+    "web.fetch",
+    "message.get_recent",
+    "message.get_by_id",
+    "knowledge.search",
+    "person.get_id",
+    "person.get_id_by_name",
+    "person.get_value",
+    "render.html2png",
+    "component.list_loaded_plugins",
+    "maisaka.proactive.trigger",
+    "maisaka.reply.generate",
+    "send.hybrid",
+    "api.list",
+    "api.get",
+    "api.call"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  }
 }

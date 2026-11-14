@@ -8,9 +8,10 @@
 
 ```
 Maisya/
+├── .github/workflows/tests.yml   # 3-OS（Ubuntu / macOS / Windows）Python 3.13 CI 工作流
 ├── __init__.py                   # 插件包导出
-├── _manifest.json                # 宿主 manifest v1：chartyr.maisya、24 项 capabilities、依赖 jsonschema/cryptography
-├── plugin.py                     # 宿主装配根（3293 行）：生命周期、4 个 Tool、5 个 Hook、1 个 Command、7 个 API
+├── _manifest.json                # 宿主 manifest v2：chartyr.maisya、display.icon、urls、24 项 capabilities
+├── plugin.py                     # 宿主装配根：生命周期、4 个 Tool、5 个 Hook、1 个 Command、7 个 API
 ├── webui.json                    # 宿主 WebUI v2 声明：5 个工作区自定义页面（now/outputs/abilities/memory/settings）
 ├── config.example.toml           # 默认配置模板（enabled=false、enabled_chats=[]、sandbox.enabled=false）
 ├── LICENSE                       # GNU GPL v3 开源协议
@@ -19,13 +20,13 @@ Maisya/
 ├── AGENTS.md                     # 工程红线与 10 条架构不变式
 ├── HANDOFF.md                    # 当前交付快照、验收基线与接手核查项
 ├── codemap.md                    # 本代码地图
-├── maisya/                       # 24 个核心运行时模块
+├── maisya/                       # 25 个核心运行时模块
 ├── presets/                      # 预置灵魂、角色、技能与心跳模板
 ├── sandbox/                      # 容器镜像定义（Dockerfile、build_image.sh）
 ├── webui/                        # 双主题五页 WebUI 源码模板与编译产物
 ├── docs/                         # 工程文档（00~06）、用户手册（guide/）与脱敏演示截图（images/）
-├── tests/                        # 35 个本地单元与 Playwright Chromium UI 测试套件（236 项用例）
-├── tests_host/                   # 独立隔离目录宿主 SDK 契约（22 项）与真实工具冒烟脚本
+├── tests/                        # 本地单元与 Playwright Chromium UI 测试套件
+├── tests_host/                   # 独立隔离目录宿主 SDK 契约与真实工具冒烟脚本（打包含 logo.svg）
 └── tests_sandbox/                # Docker + gVisor (runsc) 运行时体检与隔离验收脚本
 ```
 
@@ -56,25 +57,26 @@ Maisya/
 
 ---
 
-## 3. `maisya/` 模块职责表（24 个文件）
+## 3. `maisya/` 模块职责表（25 个文件）
 
 | 模块 | 职责与核心类/函数 |
 |---|---|
 | [config.py](maisya/config.py) | `PluginSettings`、`Settings`（默认 `ui_style="millennium"`、`proactive_level="care"`）、三路合并（默认 < 文件 < 管理台已保存覆盖）与抗自锁死校验 |
-| [trust.py](maisya/trust.py) | 可信来源消息 `Message` 校验、`session_routes` 双向映射、`<platform>:<group\|private>:<id>` <-> MD5 `session_id` 解析、群/私聊白名单与管理员鉴权 |
-| [abilities.py](maisya/abilities.py) | `Profile` / `Profiles`（支持 `model_name` + `fallback_models` 顺序回退链、`allowed_chats`、技能与工具挂载边界）与 `Skills` 校验管理 |
+| [trust.py](maisya/trust.py) | 可信来源消息 `Message` 校验、`session_routes` 双向映射、`<platform>:<group\|private>:<id>`（兼容 TG `::tg-topic::mt=` 话题与大小写敏感 OpenID）<-> MD5 `session_id` 解析、白名单与管理员鉴权 |
+| [abilities.py](maisya/abilities.py) | `Profile` / `Profiles`（支持 `model_name` + `fallback_models` 顺序回退链、`allowed_chats`、兼容 `<platform>:private:<id>` 与大小写敏感 `allow_users`、技能与工具挂载边界）与 `Skills` 校验管理 |
 | [memory.py](maisya/memory.py) | `MemoryLayers`：全局技能、别名感知的会话 `MEMORY.md`、自视角 `JOURNAL.md`、`HEARTBEAT.md`、`memory_versions` 版本历史/回滚，以及 `learning_receipts`/`experience_receipts` |
 | [threads.py](maisya/threads.py) | `ThreadStore`、`agent_threads` / `thread_events` / `agent_workspaces` / `thread_context`；支持 `chat_aliases` 与预策划冷流工作区无缝接管 |
 | [workspaces.py](maisya/workspaces.py) | `Workspaces` / `WorkingCopy`：隔离临时拷贝 -> 验证后原子提交至 `in/`、`project/`、`out/`，附件清单（`attachments`）与防穿越文件打开 |
+| [pathsafe.py](maisya/pathsafe.py) | 跨平台文件系统安全原语：根目录逃逸/UNC/符号链接校验、大小写一致路径规范化、跨平台文件锁，以及隔离最小子进程环境变量构造 |
 | [scout.py](maisya/scout.py) | `Scout` 只读侦察与规划循环、`model_list` 多模型异常顺次 fallback、`web.search` / `google-search-plugin` 自适应与阶段限步 |
-| [maker.py](maisya/maker.py) | `Maker` 创作与多工具步进（整合文件编辑、HTML 出图、附件声明、自定义 `services`、`sandbox_exec` 与 `digest_feed`） |
+| [maker.py](maisya/maker.py) | `Maker` 创作与多工具步进（整合文件编辑、HTML 出图及缺浏览器诊断提示、附件声明、自定义 `services`、`sandbox_exec` 与 `digest_feed`） |
 | [digest.py](maisya/digest.py) | `DigestWorkspace`、`parse_feed_xml`、`run_digest_tool`：RSS/Atom 自动探测与 14 天试订/转正/退订、五维打分与近重复过滤 |
 | [sandbox.py](maisya/sandbox.py) | Docker + `runsc` (gVisor) 容器执行、`executions`/`execution_resources`、`secrets` 单次只读挂载，无容器自动降级 `light_workspace` |
-| [services.py](maisya/services.py) | 联网源绑定校验（`validate_web_bindings`）、公网目标校验（`validate_endpoint_targets`、防 SSRF）与跨插件/动态模板调用 |
+| [services.py](maisya/services.py) | 联网源绑定校验（`validate_web_bindings`）、公网目标校验（`validate_endpoint_targets`、防 SSRF）、跨平台 MCP 绝对路径校验与动态模板调用 |
 | [vault.py](maisya/vault.py) | 宿主加密保险箱，生成与管理不落明文的凭据句柄，全链路输出脱敏 `redact()` |
 | [incoming.py](maisya/incoming.py) | `Incoming`：Webhook 验签、幂等去重（`incoming_events`）与 `<platform>:<group\|private>:<id>` 路由投递 |
 | [bridge.py](maisya/bridge.py) | `Bridge`：`return_groups` / `return_members` / `return_intents` / `result_deliveries`；支持 `return_chat_id` 与同轮超时后自动转后台交付 |
-| [share.py](maisya/share.py) | `Share`：使用宿主 `maisaka.reply.generate` 与 `send.hybrid` 将准确链接、文件、图片或管理员私聊预览一次精准发出 |
+| [share.py](maisya/share.py) | `Share`：使用宿主 `maisaka.reply.generate` 与 `send.hybrid` 精准发出链接/文件/图片/私聊预览，并在跨容器场景支持 `adapter.napcat.file.upload_group_file` `base64://` 兜底 |
 | [intents.py](maisya/intents.py) | `Intent` 队列与 `social_state`：克制唤醒（睡眠免打扰、未回不连戳、熟人、每日额度）、`daily_at` 不漂移周期排班与 `scheduled_admin` 保护 |
 | [pulse.py](maisya/pulse.py) | `Pulse`：后台到期扫描、`Bridge` 回接认领（含 `inspect.signature` 兼容与 `admin_direct`）、`<maisya_workflow>` 唤醒目标会话 `planner` |
 | [learning.py](maisya/learning.py) | `Learning._learn()`：对复杂成功轨迹做异步经验提炼并回执，不阻断对话 |
@@ -83,7 +85,7 @@ Maisya/
 | [management.py](maisya/management.py) | `Management`：五页控制台统一读写门面，驱动 `产物` 资料空间分类、角色名册模型与回退配置、手账读写、一般/高级设置、`ui_style` 切换、发现与健康检查 |
 | [console.py](maisya/console.py) | `snapshot()` / `read_event()`：`现场` 单路游标快照、`01→04 FLOW` 拓扑、上下文分布、`TREND` 示波器读数及事件原文分页 |
 | [web.py](maisya/web.py) | 多源联网搜索与抓取抽象，兼容宿主内置能力及第三方搜索插件（如 `google-search-plugin` EXA） |
-| [mcp_worker.py](maisya/mcp_worker.py) | 独立子进程封装与超时受控调用高风险/外部 MCP 工具 |
+| [mcp_worker.py](maisya/mcp_worker.py) | 独立子进程封装与超时受控调用高风险/外部 stdio MCP 工具（跨平台绝对路径校验、最小环境变量隔离、Linux 可选降权） |
 
 ---
 
@@ -98,8 +100,8 @@ Maisya/
   - 编译器：`python3 webui/build.py` 生成最终单页包 `webui/{now,outputs,abilities,memory,settings}.html`（零 `<img>`、零 `<iframe>`、零 `transition: all`、零 `localStorage`）。
   - 主题：`millennium`（默认，协调宿主千禧机械风）、`maiwork`（清朗手账风）与 `auto`（随 `ui_style` 持久化）。
 - **测试目录**：
-  - `tests/`：35 个模块共 **236 项**本地与 Chromium Playwright 端到端测试。
-  - `tests_host/`：`run_contract.py`（**22 项**隔离实例宿主 SDK 契约）与 `run_live_smoke.py`（真模型+联网冒烟）。
+  - `tests/`：本地单元测试与 Chromium Playwright 端到端界面测试套件。
+  - `tests_host/`：`run_contract.py`（隔离实例宿主 SDK 契约，打包同步包含 `logo.svg`）与 `run_live_smoke.py`（真模型+联网冒烟）。
   - `tests_sandbox/`：`check_runtime.py` 与 `run_isolated.py`（`runsc` 沙箱实测）。
 
 ---
