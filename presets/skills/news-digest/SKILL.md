@@ -19,7 +19,7 @@ description: 资讯简报标准与验真技能：一站式 collect 采编、发�
 
 ## 2. 逐字核验与硬过滤规则
 - 先核对 `collect` 抓回的原文或 `web_fetch` 补抓内容，不靠搜索摘要拍脑袋；每个候选都给出真实 `source_text` 片段和可逐字命中的 `quote`。
-- **图解严格防幻觉**：只有当原文确有两组以上清晰可对比数值、排行或阶段节点（`has_numbers == true`）时才附带 `viz`（如 `stats` / `bars` / `compare` / `timeline` / `steps` / `ratio` / `table`），图解中出现的所有数值必须能在 `source_text` 找到依据。`score_select` 校验图解失败时只会丢弃该条图解，不会误杀新闻本体。
+- **图解严格防幻觉**：只有当原文确有两组以上清晰可对比数值、排行或阶段节点（`has_numbers == true`）时才附带 `viz`（仅用标准 `viz_spec` 组件：`stat` / `stats` / `compare` / `bars` / `line` / `share` / `timeline` / `table` / `list` / `takeaway`；注意：`bars`/`share`/`stats`/`timeline` 均使用 `items` 数组，其中 `timeline` 每项含 `time`+`title`、`share` 每项含 `label`+非负 `value`），图解中出现的所有数值必须能在 `source_text` 找到依据。`score_select` 校验图解失败时只会丢弃该条图解，不会误杀新闻本体。
 - **时效红线**：新闻类超过 7 天直接淘汰；教程/指南类缺明确发布时间或超过 60 天直接淘汰。
 - **拒绝水货与硬广**：付费墙、纯转发二手水文、首页或 `/2026/` 索引页、百科词条、未命中高相关兴趣的政务/司法宣传、近 14 天已出现过或近 3 天同话题已达 3 条上限的内容一律过滤。
 - 每轮教程/指南类最多保留 1 篇；若同件事有多家报道，只保留信息量与一手度最高的一篇。

@@ -20,7 +20,7 @@
   - 严禁把「现场」做成工单/派单视角（底部「唤醒能力」为折叠抽屉，主操作为线程实时流 +「引导」/`steer`）。
   - `webui/` 与 `presets/` 下禁止出现「她」指代 MaiBot；遵守宿主严格 CSP（零 `<img>`、零 `<iframe>`、零 `localStorage`/`sessionStorage`、零 `transition: all`、峰值并发 RPC `<= 2`）。
   - 修改界面必须编辑 [webui/now.html.in](webui/now.html.in)、[webui/management.html.in](webui/management.html.in)、[webui/fragments/*.html](webui/fragments/) 与 [webui/millennium.css](webui/millennium.css)，再用 `python3 webui/build.py` 生成单文件 HTML，勿直接手改生成的 `webui/*.html`。
-  - **预设文件注意**：不要往 `presets/profiles/scout/profile.toml` 或 `maker/profile.toml` 添加 `skills = []`（`tests/test_memory.py` 会直接向 `scout/profile.toml` 追加 `skills = ["fonts"]`）。
+  - **预设文件注意**：不要往 `presets/profiles/scout/profile.toml` 添加 `skills = []`（`tests/test_memory.py` 会直接向 `scout/profile.toml` 追加 `skills = ["fonts"]`）。`presets/profiles/maker/profile.toml` 已内置 `render_report` 工具与 `skills = ["research-report"]`，`Profiles.export()` 在本地工作区未铺开 `skills/` 时会自动回退到 `presets/skills/`；`presets/profiles/digest/profile.toml` 默认 `max_steps = 20`。
   - **角色 `enabled` 规则**：`Incoming.load()` 使用 `strict_enabled=False` 校验既有 `webhooks.json`，确保后续停用某角色不会卡死插件加载；实际执行入口（`AgentRuntime.available()`、`Incoming.receive()`、`Pulse`、`console_send`、`schedule_intent`）强制要求 `enabled = True`。
 
 ## 2. 当前里程碑与验证状态
@@ -34,7 +34,7 @@
 | M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | 双主题体系（`millennium` 默认协调 MaiBot 宿主的 0px 质感千禧机械主题 + `maiwork` 可选清朗手账主题，顶栏 `#ui-style-toggle` 即时切换与 `ui_style` 持久化）；全页零口号并用 `?` 帮助弹窗收纳说明文字；`现场`（顶部 `01→04 FLOW` 拓扑、状态与读数条、上下文窗口+示波器趋势、近期活动+活动现场引导、底部折叠唤醒抽屉）、`产物`（交付物/图片预览/持续工作区与角色小鱼）、`能力`（Skill 画廊/工作台 + 角色名册与默认折叠高级覆盖字段 + 配方分享导入面板）、`手账`（分册徽章与 `?` 指引 + 直达意图队列与自动笔记回执 + `A_Memorix` 边界）、`设置`（一般设置 vs 高级设置分级、预设快捷调度、动态自定义联网展开） |
 | 真实模型 + 第三方搜索插件 / EXA 冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开宿主 `web_search`）：`scout` 自动兼容 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | Wave 1 跨平台、市场元数据与 3-OS CI | **各切片并行合流中** | `_manifest.json` 规范 `GPL-3.0-or-later` / `display.icon` / `urls` 并在宿主测试包纳入 `logo.svg`；新增 `.github/workflows/tests.yml`（Ubuntu/macOS/Windows Python 3.13）；`README.md` 补充市场安装与 MaiWork 对比；新增 `maisya/pathsafe.py`，打通 TG `::tg-topic::mt=` 话题流、QQ 官方大小写 OpenID、Docker+NapCat `base64://` 群文件兜底与 `render.html2png` 缺浏览器提示 |
-| **部署到线上 `plugins/` 与热重载验证** | **已部署上线并验证激活** | 最新部署备份 `maisya-deploy-20261114-162806` 至 `/root/backups/`（SQLite 在线只读 `.backup()` 校验通过），原子同步 **62** 个运行时文件并完整保留线上 `config.toml`；实机热重载日志 `chartyr.maisya 注册完成` / `on_load` 耗时 `0.296s`（`loaded=15 failed=0`，`core loaded=3 failed=0`，`A_Memorix` 与适配器正常，宿主代码与兄弟插件源码/配置零改动）；实机 `host_models.json` 启动即同步全量 **106** 个宿主 `[[models]]`（含 9 个已分配与 97 个未分配备用模型，排除 `tavily`、零密钥/URL 留存），4 处投递/简报修复已随本版上线 |
+| **部署到线上 `plugins/` 与热重载验证** | **已部署上线（待合入新切片）** | 上次部署备份 `maisya-deploy-20261114-162806`；最新本地合流切片（Intelligent UI `viz_spec`/`render_report`/`research-report` + `digest` 多引擎广搜/`collect`/`STARTER_FEEDS`/`page_date` + `maisya_shape` 一站式 `setup` 优化）仍在本地仓收口验收中，尚未推仓或再上线 |
 
 ## 3. 本地与隔离验证命令
 
@@ -42,7 +42,7 @@
 # 1. WebUI 构建一致性检查
 python3 webui/build.py --check
 
-# 2. 全量本地与 Chromium UI 测试（当前 249 passed）
+# 2. 全量本地与 Chromium UI 测试（当前 270 passed）
 PYTHONPATH=.:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider
 
 # 3. 真实宿主 venv 隔离契约（22 tests，自动校验 host_unchanged）

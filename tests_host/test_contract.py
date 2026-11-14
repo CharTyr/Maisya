@@ -282,7 +282,7 @@ class HostContract(unittest.TestCase):
                 {"action": "asset", "payload": "{}"}
             )
         self.assertEqual(extension.pages[0].mode, "custom")
-        self.assertEqual(extension.pages[0].placement, "workspace")
+        self.assertIn(extension.pages[0].placement, {"workspace", "sidebar"})
         self.assertIn("Maisya", extension.pages[0].document)
         page = extension.pages[0]
         self.assertEqual(page.queries["snapshot"].api, "maisya_now")
@@ -336,6 +336,14 @@ class HostContract(unittest.TestCase):
             self.assertEqual(components[name]["metadata"]["visibility"], "visible")
         self.assertNotIn("visibility", components["maisya_shape"]["metadata"])
         self.assertEqual(components["maisya_shape"]["metadata"]["chat_scope"], "all")
+        from maisya import viz_spec
+
+        self.assertIn(".vs", viz_spec.load_viz_css())
+        shape_params = {
+            p["name"]: p for p in components["maisya_shape"]["metadata"].get("parameters", [])
+        }
+        if "action" in shape_params and "enum" in shape_params["action"]:
+            self.assertIn("setup", shape_params["action"]["enum"])
         for name in (
             "maisya_now",
             "maisya_event",

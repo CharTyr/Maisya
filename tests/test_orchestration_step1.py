@@ -17,11 +17,14 @@ PNG_1X1 = base64.b64decode(
 
 def test_presets_complete_builtin_tools_and_silent_out_of_box_heartbeat(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    for role in ("scout", "maker"):
-        raw = (root / f"presets/profiles/{role}/profile.toml").read_text("utf-8")
-        assert not re.search(r"(?m)^\s*skills\s*=", raw), (
-            f"{role}/profile.toml must not predefine skills = []"
-        )
+    scout_raw = (root / "presets/profiles/scout/profile.toml").read_text("utf-8")
+    assert not re.search(r"(?m)^\s*skills\s*=", scout_raw), (
+        "scout/profile.toml must not predefine skills = []"
+    )
+    maker_raw = (root / "presets/profiles/maker/profile.toml").read_text("utf-8")
+    assert 'skills = ["research-report"]' in maker_raw
+    digest_raw = (root / "presets/profiles/digest/profile.toml").read_text("utf-8")
+    assert 'skills = ["news-digest"]' in digest_raw
 
     from maisya.abilities import Profiles
     from maisya.memory import MemoryLayers
@@ -37,6 +40,7 @@ def test_presets_complete_builtin_tools_and_silent_out_of_box_heartbeat(tmp_path
     assert "html_render" in maker.tools
     assert "workspace_file" in maker.tools
     assert "result_attach" in maker.tools
+    assert "render_report" in maker.tools
     assert not maker.requires_container
 
     memory = MemoryLayers(

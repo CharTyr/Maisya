@@ -76,6 +76,7 @@ def main():
         )
     ]
     paths += list((ROOT / "maisya").glob("*.py"))
+    paths += list((ROOT / "maisya").glob("*.css"))
     paths += [path for path in (ROOT / "presets").rglob("*") if path.is_file()]
     paths += [
         ROOT / "tests_host/test_contract.py",

@@ -21,11 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .page_date import published_from_text
-
-try:
-    from . import viz_spec
-except ImportError:
-    viz_spec = None
+from . import viz_spec
 
 DAYS_TO_SECS = 86400.0
 UTC8_OFFSET = 8 * 3600.0
@@ -948,7 +944,7 @@ def _strip_script_tags(fragment: str) -> str:
     return re.sub(r"<script\b[^>]*>.*?</script>", "", fragment, flags=re.I | re.S)
 
 
-def _render_viz_fragment(viz_raw: Any) -> tuple[str, int]:
+def _render_viz_fragment(viz_raw: Any, *, uid: str = "vs") -> tuple[str, int]:
     if not isinstance(viz_raw, dict):
         return "", 0
     spec = (
@@ -962,6 +958,8 @@ def _render_viz_fragment(viz_raw: Any) -> tuple[str, int]:
             render_fn = viz_spec.render
             sig = inspect.signature(render_fn)
             kwargs: dict[str, Any] = {}
+            if "uid" in sig.parameters:
+                kwargs["uid"] = uid
             if "static" in sig.parameters:
                 kwargs["static"] = True
             rendered = render_fn(validated, **kwargs)
@@ -2274,13 +2272,13 @@ class DigestWorkspace:
         line_col = "rgba(148, 163, 184, 0.24)" if is_dark else "rgba(15, 23, 42, 0.12)"
         fill_col = "rgba(255, 255, 255, 0.06)" if is_dark else "rgba(15, 23, 42, 0.045)"
         fill2_col = "rgba(255, 255, 255, 0.10)" if is_dark else "rgba(15, 23, 42, 0.08)"
-        viz_css = _load_viz_css_text()
         label_text = html.escape(slot_label or now_dt.strftime("%m月%d日 · %H:%M"))
         title_text = html.escape(group_title or "今日高信噪比资讯精选")
 
         cards_html: list[str] = []
         total_viz_h = 0
         total_viz_chars = 0
+        any_viz = False
         for idx, it in enumerate(items[:8], 1):
             is_explore = it.get("slot") == "explore"
             badge = "跨界视角" if is_explore else (html.escape(str(it.get("topic") or "精选")))
@@ -2297,13 +2295,14 @@ class DigestWorkspace:
             score_tag = f" · 评分 {avg_score:.1f}" if isinstance(avg_score, (int, float)) else ""
             viz_html = ""
             if isinstance(it.get("viz"), dict):
-                frag, est_h = _render_viz_fragment(it["viz"])
+                frag, est_h = _render_viz_fragment(it["viz"], uid=f"vs-{idx}")
                 if (
                     frag
                     and (total_viz_h + est_h) <= _VIZ_STATIC_MAX_H
                     and (total_viz_chars + len(frag)) <= 40000
                 ):
                     viz_html = f'<div class="card-viz">{frag}</div>'
+                    any_viz = True
                     total_viz_h += est_h
                     total_viz_chars += len(frag)
             cards_html.append(
@@ -2320,6 +2319,7 @@ class DigestWorkspace:
 </article>"""
             )
 
+        viz_css = _load_viz_css_text() if any_viz else ""
         body_theme = ' data-theme="dark"' if is_dark else ""
         doc = f"""<!doctype html>
 <html lang="zh-CN">

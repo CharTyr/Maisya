@@ -563,3 +563,50 @@ def test_score_select_drops_hallucinated_viz_without_dropping_news(monkeypatch):
     assert ".vs-spec-mock" in html_out2
     assert "MockStaticViz" in html_out2
     assert "<script" not in html_out2.lower()
+
+
+def test_digest_uses_real_viz_spec_and_renders_static_card():
+    assert digest.viz_spec is not None
+    dw = digest.DigestWorkspace(_MemoryWork(), clock=lambda: NOW_TS)
+    candidates = [
+        {
+            "title": "Real Viz Card Grounded Item",
+            "url": "https://realviz.example.org/a1",
+            "published_at": "2026-10-22T10:00:00Z",
+            "source_text": "吞吐从 120 tokens/s 提升到 240 tokens/s，支持 64 卡集群。",
+            "quote": "吞吐从 120 tokens/s 提升到 240 tokens/s",
+            "summary": "Real viz summary",
+            "why": "Speedup",
+            "scores": {"info": 5, "source": 5, "relevance": 4, "timeliness": 5, "chat": 4, "novelty": 5},
+            "viz": {
+                "type": "bars",
+                "title": "实测吞吐",
+                "items": [{"label": "Before", "value": 120}, {"label": "After", "value": 240}],
+            },
+        },
+        {
+            "title": "Report-Only Block Rejected For News",
+            "url": "https://realviz.example.org/a2",
+            "published_at": "2026-10-22T10:30:00Z",
+            "source_text": "发布说明含 24 页评测白皮书。",
+            "quote": "发布说明含 24 页评测白皮书",
+            "summary": "News should remain even when report-only viz is stripped",
+            "why": "Graceful fallback",
+            "scores": {"info": 4, "source": 5, "relevance": 4, "timeliness": 5, "chat": 4, "novelty": 5},
+            "viz": {"type": "heading", "text": "Allowed in report only"},
+        },
+    ]
+    sel = dw.score_select(candidates, max_items=5)
+    assert len(sel["selected"]) == 2
+    by_url = {it["url"]: it for it in sel["selected"]}
+    assert "viz" in by_url["https://realviz.example.org/a1"]
+    assert "viz" not in by_url["https://realviz.example.org/a2"]
+    assert "viz_dropped_reason" in by_url["https://realviz.example.org/a2"]
+
+    card_res = dw.render_card_html(sel["selected"], slot_label="暮色 · 18:30", group_title="真实图解检验")
+    html_out = dw.work.files[card_res["path"]]
+    assert 'id="vs-1"' in html_out
+    assert "vs-static" in html_out
+    assert "vs-bars" in html_out
+    assert ".vs-bar-t" in html_out
+    assert "<script" not in html_out.lower()

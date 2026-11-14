@@ -660,4 +660,3 @@ def test_profiles_export_falls_back_to_presets_skills(tmp_path):
     cloned = profiles.clone("digest", "digest-copy")
     assert "news-digest" in cloned.skills
     profiles.delete("digest-copy")
-

@@ -724,7 +724,15 @@ async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_pat
             ctx,
         )
         assert card_res["path"] == "out/digest-card.html"
-        html_doc = work.read("out/digest-card.html")["text"]
+        chunks = []
+        offset = 0
+        while True:
+            page = work.read("out/digest-card.html", offset=offset)
+            chunks.append(page["text"])
+            if not page.get("truncated"):
+                break
+            offset = page["next_offset"]
+        html_doc = "".join(chunks)
         assert "11月13日 · 下午" in html_doc
         assert "SQLite 3.51" in html_doc
         assert "<script" not in html_doc.lower()
@@ -821,7 +829,15 @@ async def test_score_select_top_level_source_and_render_card_default_candidates(
             ctx,
         )
         assert card_res["count"] == 2
-        html_doc = work.read("out/digest-card.html")["text"]
+        chunks = []
+        offset = 0
+        while True:
+            page = work.read("out/digest-card.html", offset=offset)
+            chunks.append(page["text"])
+            if not page.get("truncated"):
+                break
+            offset = page["next_offset"]
+        html_doc = "".join(chunks)
         assert "AI 编程代理的工作流架构复盘" in html_doc
         assert "simonwillison.net" in html_doc
         assert "看点：对当前调试多步编排与工具返回格式很有参考价值。" in html_doc

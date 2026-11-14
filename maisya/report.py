@@ -55,12 +55,14 @@ html, body {
 }
 
 .report-page {
+  box-sizing: border-box;
   max-width: 920px;
   margin: 0 auto;
   padding: 28px 20px 48px;
 }
 
 .report-card {
+  box-sizing: border-box;
   width: 780px;
   max-width: 100%;
   margin: 0 auto;
