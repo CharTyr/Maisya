@@ -2,12 +2,14 @@
 
 import asyncio
 import importlib.metadata
+import importlib.util
 import json
 import logging
 import shutil
 import socket
 import sys
 import tempfile
+import types
 import unittest
 import warnings
 from pathlib import Path
@@ -45,7 +47,7 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from maisya.abilities import Profile
 from maisya.scout import TOOL_DEFINITIONS, Scout
 from maisya.threads import ThreadEngine, ThreadStore
-from maisya.trust import Message, MessageStore, allowed, normalize_admins
+from maisya.trust import Message, MessageStore, alias as trust_alias, allowed, normalize_admins
 from plugin import PLUGIN_ID, create_plugin
 
 
@@ -370,6 +372,74 @@ class HostContract(unittest.TestCase):
                 private, "another.plugin"
             )
         )
+
+        # Verify package-mode import (__package__ set like MaiBot PluginLoader) resolves message_alias
+        pkg_name = "_maibot_plugin_chartyr_maisya_contract"
+        pkg_mod = types.ModuleType(pkg_name)
+        pkg_mod.__path__ = [str(PLUGIN_DIR)]
+        spec = importlib.util.spec_from_file_location(
+            f"{pkg_name}.plugin", str(PLUGIN_DIR / "plugin.py")
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        loaded_mod = importlib.util.module_from_spec(spec)
+        saved_mods = {
+            k: sys.modules.get(k)
+            for k in (pkg_name, f"{pkg_name}.plugin")
+            if k in sys.modules
+        }
+        try:
+            sys.modules[pkg_name] = pkg_mod
+            sys.modules[f"{pkg_name}.plugin"] = loaded_mod
+            spec.loader.exec_module(loaded_mod)
+
+            async def check_pkg_admin_lookup():
+                with tempfile.TemporaryDirectory() as directory:
+                    async def rpc(method, plugin_id, payload, **kwargs):
+                        if payload.get("capability") == "config.get":
+                            return {"success": True, "value": ["qq:Alice"]}
+                        return {"success": True}
+
+                    pkg_plugin = loaded_mod.create_plugin()
+                    pkg_plugin._set_context(
+                        PluginContext(
+                            PLUGIN_ID,
+                            rpc_call=rpc,
+                            paths=build_plugin_paths(PLUGIN_ID, Path(directory)),
+                        )
+                    )
+                    pkg_plugin.set_plugin_config(
+                        {
+                            "plugin": {"enabled": True, "config_version": "0.1.0"},
+                            "enabled_chats": [],
+                        }
+                    )
+                    await pkg_plugin.on_load()
+                    raw = event()
+                    raw["session_id"] = "unenabled-admin-private"
+                    raw["message_id"] = "contract-msg-unenabled-alpha"
+                    res = await pkg_plugin.after_receive(
+                        message=serialize_session_message(
+                            deserialize_session_message(raw)
+                        )
+                    )
+                    self.assertEqual(res, {"action": "continue"})
+                    short = trust_alias("contract-msg-unenabled-alpha")
+                    resolved = pkg_plugin._lookup_message(
+                        short, "unenabled-admin-private", "qq"
+                    )
+                    self.assertIsNotNone(resolved)
+                    self.assertEqual(
+                        resolved.message_id, "contract-msg-unenabled-alpha"
+                    )
+                    await pkg_plugin.on_unload()
+
+            asyncio.run(check_pkg_admin_lookup())
+        finally:
+            for key in list(sys.modules):
+                if key == pkg_name or key.startswith(pkg_name + "."):
+                    sys.modules.pop(key, None)
+            sys.modules.update(saved_mods)
 
     def test_share_native_sdk_segments_and_outbound_identity(self):
         async def run():

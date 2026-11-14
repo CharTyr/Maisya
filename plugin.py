@@ -39,6 +39,7 @@ if __package__:
         VAULT_COMMAND,
         Message,
         MessageStore,
+        alias as message_alias,
         allowed,
         filter_tools,
         format_stream_spec,
