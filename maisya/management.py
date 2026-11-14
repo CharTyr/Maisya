@@ -1773,7 +1773,9 @@ class Management:
                 or not all(
                     isinstance(part, str) and "\x00" not in part for part in command
                 )
-                or not command[0].startswith("/")
+                or not re.match(
+                    r"^(?:/(?!/)[^\x00]+|[A-Za-z]:[\\/][^\x00]+)$", command[0]
+                )
             ):
                 raise ValueError("MCP 程序使用绝对路径与固定参数")
             for handle in server.get("credentials", {}).values():

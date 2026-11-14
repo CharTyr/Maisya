@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import os
 import re
 import sqlite3
 import time
@@ -18,7 +19,7 @@ MENTION_ALL_TEXT = re.compile(
 )
 MENTION_ALL_TARGETS = frozenset({"all", "全体成员", "所有人"})
 STREAM_SPEC_RE = re.compile(
-    r"^([a-z][a-z0-9_-]{0,31}):(group|private):([^\s:]{1,200})$"
+    r"^([a-z][a-z0-9_-]{0,31}):(group|private):([^\s:][^\s]{0,199})$"
 )
 
 
@@ -218,7 +219,8 @@ class MessageStore:
                 db.execute(
                     "ALTER TABLE session_routes ADD COLUMN last_human_at REAL NOT NULL DEFAULT 0"
                 )
-        path.chmod(0o600)
+        if os.name != "nt":
+            path.chmod(0o600)
 
     def record(self, message: Message) -> None:
         if not all(
@@ -503,10 +505,21 @@ def normalize_admins(permissions) -> set[str]:
         return set()
     result = set()
     for value in permissions:
-        if isinstance(value, str) and ":" in value:
-            platform, user = value.split(":", 1)
-            if platform.strip() and user.strip():
-                result.add(f"{platform.strip().lower()}:{user.strip()}")
+        if not isinstance(value, str) or ":" not in value:
+            continue
+        parsed = parse_stream_spec(value)
+        if parsed is not None:
+            plat, kind, tid = parsed
+            if kind == "private" and tid:
+                result.add(f"{plat}:{tid}")
+            continue
+        platform, user = value.split(":", 1)
+        plat = platform.strip().lower()
+        uid = user.strip()
+        if uid.lower().startswith("private:"):
+            uid = uid[8:].strip()
+        if plat and uid:
+            result.add(f"{plat}:{uid}")
     return result
 
 
@@ -521,7 +534,7 @@ def allowed(
     return bool(
         msg
         and not msg.is_plugin_relayed
-        and (msg.is_local_operator or f"{msg.platform}:{msg.user_id}" in admins)
+        and (msg.is_local_operator or f"{msg.platform.lower()}:{msg.user_id}" in admins)
     )
 
 

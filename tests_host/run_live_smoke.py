@@ -318,7 +318,13 @@ def main():
     archive = io.BytesIO()
     paths = [
         ROOT / name
-        for name in ("plugin.py", "__init__.py", "_manifest.json", "webui.json")
+        for name in (
+            "plugin.py",
+            "__init__.py",
+            "_manifest.json",
+            "webui.json",
+            "logo.svg",
+        )
     ]
     paths += list((ROOT / "maisya").glob("*.py"))
     paths += [path for path in (ROOT / "presets").rglob("*") if path.is_file()]

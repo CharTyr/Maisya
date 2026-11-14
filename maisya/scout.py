@@ -287,9 +287,50 @@ def validate_arguments(name, arguments):
             raise ValueError("工具选项无效")
 
 
-def checked(result, field=None):
+_MODEL_COOLDOWN_SECONDS = 300.0
+_MODEL_COOLDOWN_MAX = 64
+_MODEL_UNAVAILABLE_MARKERS = (
+    "does not exist",
+    "model_not_found",
+    "unknown model",
+    "not found",
+    "unavailable",
+    "不存在",
+    "已下线",
+    "不可用",
+    "未找到模型",
+)
+
+
+def _error_detail(result, redact=None, *, limit: int = 200) -> str:
+    if not isinstance(result, dict):
+        return ""
+    raw = ""
+    for key in ("error", "message"):
+        candidate = result.get(key)
+        if candidate not in (None, "") and str(candidate).strip():
+            raw = str(candidate)
+            break
+    if not raw:
+        return ""
+    text = str(redact(raw)) if callable(redact) else raw
+    compact = " ".join(text.split())
+    return compact[:limit] if compact else ""
+
+
+def _is_model_unavailable_error(exc: Exception) -> bool:
+    lower = str(exc or "").lower()
+    return any(marker in lower for marker in _MODEL_UNAVAILABLE_MARKERS)
+
+
+def checked(result, field=None, *, redact=None):
     if result is None or (isinstance(result, dict) and result.get("success") is False):
-        raise RuntimeError("宿主只读能力调用失败，请检查该能力配置")
+        detail = _error_detail(result, redact=redact)
+        raise RuntimeError(
+            f"宿主只读能力调用失败，请检查该能力配置：{detail}"
+            if detail
+            else "宿主只读能力调用失败，请检查该能力配置"
+        )
     return result.get(field, result) if field and isinstance(result, dict) else result
 
 
@@ -351,6 +392,22 @@ class Scout:
             web = WebRouter(host, redact=redact)
         self.web = web
         self.recall = recall
+        self._model_cooldown: dict[str, float] = {}
+
+    def _prune_model_cooldown(self, now: float) -> None:
+        for name, until in list(self._model_cooldown.items()):
+            if until <= now:
+                self._model_cooldown.pop(name, None)
+
+    def _mark_model_cooldown(self, model: str, now: float) -> None:
+        if not model:
+            return
+        self._prune_model_cooldown(now)
+        self._model_cooldown.pop(model, None)
+        while len(self._model_cooldown) >= _MODEL_COOLDOWN_MAX:
+            oldest = min(self._model_cooldown, key=self._model_cooldown.__getitem__)
+            self._model_cooldown.pop(oldest, None)
+        self._model_cooldown[model] = now + _MODEL_COOLDOWN_SECONDS
 
     async def step(self, profile: Profile, history, *, max_steps=None):
         instructions = (
@@ -359,6 +416,14 @@ class Scout:
         )
         prompt = [{"role": "system", "content": instructions}] + history
         candidates = list(profile.model_list) or [""]
+        now = time.monotonic()
+        self._prune_model_cooldown(now)
+        if len(candidates) > 1:
+            candidates = [
+                m for m in candidates if self._model_cooldown.get(m, 0.0) <= now
+            ] + [
+                m for m in candidates if self._model_cooldown.get(m, 0.0) > now
+            ]
         max_tokens = profile.max_tokens if profile.max_tokens is not None else 4096
         extra = (
             {"temperature": profile.temperature}
@@ -387,7 +452,7 @@ class Scout:
                     max_tokens=max_tokens,
                     **extra,
                 )
-                checked(result)
+                checked(result, redact=self.redact)
                 if not isinstance(result, dict):
                     raise TypeError("模型响应格式无效")
                 if not result.get("response") and not result.get("tool_calls"):
@@ -395,13 +460,18 @@ class Scout:
                 redacted = self.redact(result)
                 if isinstance(redacted, dict) and model and "used_model" not in redacted:
                     redacted = {**redacted, "used_model": model}
+                if model:
+                    self._model_cooldown.pop(model, None)
                 return redacted
             except (RuntimeError, ValueError, OSError, TimeoutError) as exc:
                 last_error = exc
+                if model and _is_model_unavailable_error(exc):
+                    self._mark_model_cooldown(model, time.monotonic())
                 continue
+        detail = str(self.redact(str(last_error))) if last_error is not None else ""
         raise RuntimeError(
-            f"当前角色的模型均未返回可用结果：{last_error}"
-            if last_error
+            f"当前角色的模型均未返回可用结果：{detail}"
+            if detail
             else "当前角色的模型均未返回可用结果"
         )
 
@@ -436,6 +506,7 @@ class Scout:
                     include_binary_data=False,
                 ),
                 "messages",
+                redact=self.redact,
             )
             hours = arguments.get("hours")
             cutoff = time.time() - hours * 3600 if hours is not None else None
@@ -474,6 +545,7 @@ class Scout:
                     include_binary_data=name == "image_read",
                 ),
                 "message",
+                redact=self.redact,
             )
             if not raw or raw.get("session_id") != chat_id:
                 raise PermissionError("引用消息不属于当前会话或已不可用")
@@ -505,7 +577,8 @@ class Scout:
                         image_base64=binary,
                         image_format=image_format,
                         task_name="vlm",
-                    )
+                    ),
+                    redact=self.redact,
                 ).get("response", "")
             else:
                 result = self._message_text(raw)
@@ -525,6 +598,7 @@ class Scout:
                     **search_kwargs,
                 ),
                 "content",
+                redact=self.redact,
             )
         elif name == "person_read":
             if arguments.get("user_id"):
@@ -537,6 +611,7 @@ class Scout:
                         user_id=arguments["user_id"],
                     ),
                     "person_id",
+                    redact=self.redact,
                 )
             elif arguments.get("person_name"):
                 person_id = checked(
@@ -547,6 +622,7 @@ class Scout:
                         person_name=arguments["person_name"],
                     ),
                     "person_id",
+                    redact=self.redact,
                 )
             else:
                 raise ValueError("person_read 需要提供 user_id 或 person_name")
@@ -560,6 +636,7 @@ class Scout:
                     field_name=field_name,
                 ),
                 "value",
+                redact=self.redact,
             )
             result = {"person_id": person_id, "field_name": field_name, "value": value}
         elif name == "recall_read":

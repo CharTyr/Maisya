@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0-orange.svg)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/CharTyr/Maisya)](https://github.com/CharTyr/Maisya/stargazers)
 
-[项目特色](#项目特色) • [使用范例](#使用范例) • [快速开始](#快速开始) • [管理工作台](#管理工作台) • [详细文档](#详细文档)
+[项目特色](#项目特色) • [使用范例](#使用范例) • [与 MaiWork 怎么选](#与-maiwork-怎么选) • [快速开始](#快速开始) • [管理工作台](#管理工作台) • [详细文档](#详细文档)
 
 </div>
 
@@ -51,26 +51,59 @@
 
 ---
 
+## 与 MaiWork 怎么选？
+
+作者同时维护了 [MaiWork](https://github.com/CharTyr/MaiWork) 与 Maisya 两个插件，定位侧重不同，按自己的使用习惯选即可：
+
+- **[MaiWork](https://github.com/CharTyr/MaiWork)**：偏向**预先定制好的群生产力栏目（资讯 / 构想 / 长期目标）+ 偏重型、工单式的任务审批与验收交付**，自带独立管理端口网页与一次性云端/本机重型执行环境。
+- **Maisya**：**更类似 Grok Bot 的灵活、可编排多 Agent 在 MaiBot 框架下的原生实现**，以 **MaiBot 自身的决策模型（Planner）作为唯一调度者与发言人**，既能在闲聊中十秒顺手查证，也能挂工作区多轮改图改稿、同轮并行派出通用（`scout` / `maker`）与专用角色（`digest` / 自定义角色）接力成片，还可由管理员私聊一句话动态配模型、技能与定时。
+
+| 对比维度 | Maisya | [MaiWork](https://github.com/CharTyr/MaiWork) |
+|:-----|:-----|:-----|
+| **定位与模式** | 类似 Grok Bot 的灵活、可编排多 Agent 原生实现 | 预先定制好的群生产力栏目 + 工单式审批交付 |
+| **调度与发言主体** | **MaiBot Planner 本身**唯一调度并按原人设开口 | 独立主模型调度、审单、验收并对外交付 |
+| **任务与交互形态** | 10 秒快查、工作区原位续改、同轮并行与接力成片、私聊配齐 | 资讯 / 构想 / 长期目标栏目、审批放行、群内连续追改 |
+| **扩展与复用方式** | 通用底座衍生专用角色，按群按人动态配 `SKILL.md` / MCP / 配方 | 围绕既定群栏目沉淀群理解、个人画像与任务流 |
+| **界面与执行环境** | 零新端口直嵌 MaiBot WebUI；免容器开箱即用，按需配沙箱 | 独立管理端口网页；一次性云端机或本机隔离环境 |
+
+- **选 Maisya**：希望完全保留 MaiBot 原生说话节奏与人设，把多 Agent 当成可自由编排、轻重皆宜的「手脚与分身」，随时用技能和配方扩展角色能力。
+- **选 MaiWork**：希望直接拥有成套群生产力栏目（资讯、构想、长期目标）以及明确的工单审批、验收交付与重型执行环境。
+
+---
+
 ## 快速开始
 
-直接复用 MaiBot 已配好的模型和联网来源；不装 Docker 也能使用工作区创作和 HTML 渲染出图，按需再选配 `Docker + gVisor (runsc)` 沙箱跑陌生代码。
+### 第一步：安装插件（三种方式任选）
 
-1. **安装插件**
-   在 MaiBot WebUI 插件管理页填入本仓库地址 `https://github.com/CharTyr/Maisya.git` 安装，或在 `plugins/` 目录执行：
+1. **从 MaiBot 插件市场直接安装（推荐）**
+   打开 **MaiBot WebUI → 插件市场**，搜索 **「Maisya」** 点击安装。
+
+2. **填入仓库地址安装**
+   在 **MaiBot WebUI → 插件管理** 页面填入仓库地址 `https://github.com/CharTyr/Maisya.git` 安装。
+
+3. **命令行克隆**
+   在 MaiBot 的 `plugins/` 目录下执行：
    ```bash
    git clone https://github.com/CharTyr/Maisya.git CharTyr_Maisya
    ```
-2. **开启总开关**
-   把 [`config.example.toml`](config.example.toml) 复制为 `config.toml`，确认 `enabled = true`（默认 `enabled_chats = []`，未放行会话零读取、零打扰）：
-   ```toml
-   [plugin]
-   enabled = true
-   config_version = "0.1.0"
-   enabled_chats = []   # 可留空先用私聊或管理台配置
-   ```
-3. **放行目标会话即可开用**
-   - **网页点选**：登录 MaiBot WebUI，点顶栏 **Maisya → 设置**，按 `平台:类型:id`（如 `qq:group:12345678`）添加启用会话并保存。
-   - **私聊交代**：直接用管理员账号私聊 MaiBot，发一段大白话让它开通指定群、调出每日资讯或安排定时。
+
+### 第二步：开启插件总开关
+
+直接在 **MaiBot WebUI → 插件配置** 中打开 Maisya 的启用开关并保存（或手动将插件目录的 [`config.example.toml`](config.example.toml) 复制为 `config.toml`，确认 `enabled = true`）。
+
+默认 `enabled_chats = []`，未放行会话零读取、零调用、零打扰。
+
+### 第三步：放行目标会话即可开用
+
+- **网页点选**：登录 MaiBot WebUI，点顶栏 **Maisya → 设置**，按 `平台:类型:id` 添加启用会话并保存（兼容 QQ 群/私聊 `qq:group:12345678`、QQ 官方区分大小写 OpenID，以及 Telegram 话题群 `telegram:group:-100...::tg-topic::mt=...`）。
+- **管理员私聊一句话交代**：直接用管理员账号私聊 MaiBot，发一段大白话让它开通指定群、调整角色或安排定时任务。
+
+#### 跨平台运行说明（Windows / macOS / Linux / Docker）
+
+- **全平台免容器开箱即用**：直接复用 MaiBot 已配好的模型和联网来源，默认启用无容器轻量工作区与 HTML 渲染出图。
+- **缺浏览器内核时补装一次**：若精简镜像或新系统首次做图提示缺少 Chromium，在**运行 MaiBot 的宿主**执行 `playwright install chromium` 即可（Linux 环境按需补充 `playwright install-deps chromium`）。
+- **Docker + NapCat 跨容器传群文件**：若 MaiBot 与 NapCat 不共享磁盘目录，群文件发送会自动触发 `base64://` 兜底上传。
+- **Docker 沙箱按需选配**：仅当需要运行不受信任代码或挂载 `secrets` / 受控网络白名单时，再按[运行环境与沙箱指南](docs/guide/sandbox-and-services.md)启用 `Docker + gVisor`。
 
 ---
 
@@ -110,7 +143,8 @@
 
 ## 详细文档
 
-- **用户与配置指南**：[核心功能与交互详解](docs/guide/features.md) · [配置、定时与私聊管理说明](docs/guide/configuration.md) · [运行环境、沙箱与外部接入](docs/guide/sandbox-and-services.md)
+- **用户与配置指南**：[核心功能与交互详解](docs/guide/features.md) · [配置、定时与私聊管理说明](docs/guide/configuration.md)
+- **环境与跨平台指南**：[运行环境、沙箱、Docker 与外部接入](docs/guide/sandbox-and-services.md)
 - **开发与架构参考**：[开发入门与防跑偏红线](docs/00-开发入门.md) · [架构蓝图](docs/01-架构蓝图.md) · [宿主接口事实](docs/06-宿主接口事实.md) · [代码地图](codemap.md) · [开发规则](AGENTS.md)
 
 ---

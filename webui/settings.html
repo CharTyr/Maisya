@@ -3874,7 +3874,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     function normalizeScopeChat(raw) {
       const s = String(raw || "").trim();
       if (!s) return "";
-      const m = s.match(/^(?:chat:)?([a-z][a-z0-9_-]*):(group|private):([^\s:]+)$/i);
+      const m = s.match(/^(?:chat:)?([a-z][a-z0-9_-]*):(group|private):([^\s:][^\s]*)$/i);
       if (m) return `${m[1].toLowerCase()}:${m[2].toLowerCase()}:${m[3].trim()}`;
       const known = Array.isArray(catalog.known_chats) ? catalog.known_chats : [];
       const hit = known.find((k) => k.chat_id === s || k.stream_spec === s);
@@ -4644,7 +4644,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const ctype = ($("#cfg-chat-type")?.value || "group").trim().toLowerCase();
         const raw = ($("#cfg-chat-id")?.value || "").trim();
         if (!raw) return say("请输入群号或用户 ID", true);
-        const spec = /^(?:chat:)?[a-z][a-z0-9_-]*:(group|private):[^\s:]+$/i.test(raw)
+        const spec = /^(?:chat:)?[a-z][a-z0-9_-]*:(group|private):[^\s:][^\s]*$/i.test(raw)
           ? normalizeScopeChat(raw)
           : `${plat}:${ctype}:${raw}`;
         const p = parseSimpleToml($("#content").value);
@@ -4672,7 +4672,18 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const plat = ($("#cfg-user-plat")?.value || "qq").trim().toLowerCase();
         const raw = ($("#cfg-user-id")?.value || "").trim();
         if (!raw) return say("请输入成员账号", true);
-        const entry = raw.includes(":") ? raw.toLowerCase() : `${plat}:${raw}`;
+        let entry = `${plat}:${raw}`;
+        if (raw.includes(":")) {
+          const idx = raw.indexOf(":");
+          const pPart = raw.slice(0, idx).trim().toLowerCase();
+          const rest = raw.slice(idx + 1).trim();
+          const mPriv = rest.match(/^(private):(.+)$/i);
+          if (mPriv) {
+            entry = `${pPart || plat}:${mPriv[1].toLowerCase()}:${mPriv[2].trim()}`;
+          } else {
+            entry = `${pPart || plat}:${rest}`;
+          }
+        }
         const p = parseSimpleToml($("#content").value);
         const list = Array.isArray(p.allow_users) ? [...p.allow_users] : [];
         if (!list.includes(entry)) {
@@ -6347,7 +6358,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const val = String(raw || "").trim();
       if (!val) return "";
       if (val === "self") return "self";
-      const m = val.match(/^(?:chat:)?([a-z][a-z0-9_-]*):(group|private):([^\s:]+)$/i);
+      const m = val.match(/^(?:chat:)?([a-z][a-z0-9_-]*):(group|private):([^\s:][^\s]*)$/i);
       if (m) return `${m[1].toLowerCase()}:${m[2].toLowerCase()}:${m[3].trim()}`;
       const matched = findKnownChat(val);
       return matched?.stream_spec || val;
@@ -6747,10 +6758,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const rawId = ($("#wl-add-id")?.value || "").trim();
         if (!rawId) return say("请输入群号或用户 ID", true);
         let spec = "";
-        if (/^(?:chat:)?[a-z][a-z0-9_-]*:(group|private):[^\s:]+$/i.test(rawId) || rawId === "self") {
+        if (/^(?:chat:)?[a-z][a-z0-9_-]*:(group|private):[^\s:][^\s]*$/i.test(rawId) || rawId === "self") {
           spec = normalizeStreamInput(rawId);
-        } else if (/\s|:/.test(rawId)) {
-          return say("账号中不要包含空格或多余冒号，或直接使用 平台:类型:id 格式", true);
+        } else if (/\s/.test(rawId)) {
+          return say("账号中不要包含空格，或直接使用 平台:类型:id 格式", true);
         } else {
           spec = `${plat}:${ctype}:${rawId}`;
         }

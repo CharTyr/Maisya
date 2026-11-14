@@ -8,13 +8,18 @@
 
 ## 一、不用装容器先用起来：无容器轻量工作区模式
 
-在很多部署环境里（例如 macOS 开发机、普通桌面 Linux，或者跑在容器里不想套娃挂载 Docker socket 的 MaiBot 实例），你并不一定要折腾 Docker 才能用工作区和做图。
+在 Windows、macOS、普通桌面 Linux，或跑在 Docker 里不想套娃挂载 Docker socket 的 MaiBot 实例中，你都不必先部署 Docker + gVisor 才能使用工作区、联网查证与做图能力。
 
 当 `[sandbox] enabled = false`（默认值）时：
 
 - **`scout` 与 `digest`**（`environment = "readonly"`）：联网检索、网页正文提取、人物与记忆只读查阅、`digest_feed` RSS 管理、以及调用宿主 `render.html2png` 离线把 HTML 渲染成高质量 PNG 海报图卡，全部直接可用。
-- **`maker` 等不依赖私密凭据与受控网段的工作区角色**：自动降级为 **无容器轻量工作区模式（`light_workspace`）**——持久工作区目录 `in / project / out`、文件读写、上游接力 `from_threads`、HTML 渲染和 `result_attach` 交付完全正常，只是对模型隐藏并拦截 `sandbox_exec` 任意命令执行。
+- **`maker` 等不依赖私密凭据与受控网段的工作区角色**：自动降级为 **无容器轻量工作区模式（`light_workspace`）**——通过跨平台文件锁与安全路径校验（兼容 Windows 盘符与大小写规范、拒绝 UNC 网络路径），持久工作区目录 `in / project / out`、文件读写、上游接力 `from_threads`、HTML 渲染和 `result_attach` 交付完全正常，只是对模型隐藏并拦截 `sandbox_exec` 任意命令执行。
 - **哪些角色仍要求容器沙箱就绪**：凡是在 `profile.toml` 中明确配置了 `secrets`（私有凭据单次挂载）、`sandbox_targets`（受控公网 `host:port` 白名单）或 `network = "restricted"` 的高权角色，在容器未开启前仍保持禁用锁定，防止边界降级。
+
+### Windows / macOS / Docker 环境实操注意点
+
+- **HTML 渲染出图缺少浏览器内核时**：`render.html2png` 复用宿主环境提供的 Chromium。在 Windows、macOS 或精简 Docker 镜像里首次出图如果报错缺少 Playwright 浏览器可执行文件，请在**运行 MaiBot 的宿主环境**（宿主机或 MaiBot 所在容器）执行 `playwright install chromium`（Linux 环境按需补充 `playwright install-deps chromium`），无需启用容器沙箱。
+- **Docker + NapCat 跨容器传群文件**：如果 MaiBot 与 NapCat 跑在不同容器中、各自看不到对方磁盘路径，工作区导出的文件无法直接按路径投递；插件检测到 QQ 群文件路径投递失败时，会自动降级通过 `adapter.napcat.file.upload_group_file` 以 `base64://` 数据流兜底上传（受文件大小与名称校验保护），无需额外共享宿主机目录。
 
 ---
 
@@ -63,8 +68,9 @@
 
 ### 1. stdio MCP 服务（`servers`）
 
-由管理员固定好可执行程序路径、白名单工具名与环境变量绑定的保险箱句柄，按需以隔离进程启动并在 Linux 上降权执行：
+由管理员固定好可执行程序路径、白名单工具名与环境变量绑定的保险箱句柄，按需以隔离进程启动（在 Linux 上额外支持降权执行）：
 
+- **跨平台安全环境**：`command` 必须填写本机绝对路径（Windows 拒绝 `\\host\share` 形式的 UNC 路径）；启动子进程时默认只透传最小必要系统环境变量（如 Windows 下仅保留 `SystemRoot`、`COMSPEC`、`PATHEXT`、`TEMP`/`TMP`、`USERPROFILE` 等基础运行变量，POSIX 下保留最小基础环境）并单独注入配置的保险箱绑定变量，防止把宿主过程其余环境变量或密钥带入外部 MCP 进程。
 - 群友共享的带 Key 查询工具可设 `readonly = true, access = "everyone"`，模型与群友只能看到查回的结果，拿不到环境变量里的 Key。
 - 管理员私有可写 MCP（`readonly = false, access = "admins"`）仅允许同时设为 `access = "admins"` 的角色在当前已核验管理员授权下调用。
 
