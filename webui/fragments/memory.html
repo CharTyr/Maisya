@@ -1,117 +1,126 @@
-<div class="mil-split">
-  <!-- 左栏：记忆层与会话切换 -->
-  <aside class="mil-panel mil-panel--soft">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">LAYERS · </span>手账与备忘</span></div>
-      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-    </div>
-    <div class="mil-field" style="margin-bottom:10px">
-      <label class="mil-label" for="chat">选择会话</label>
-      <select id="chat" class="mil-select mono"></select>
-    </div>
-    <div id="chat-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
-
-    <div class="mil-field" style="margin-bottom:14px">
-      <label class="mil-label" for="kind">手账分册</label>
-      <select id="kind" class="mil-select sr-only">
-        <option value="memory">会话备忘</option>
-        <option value="journal">近期手账</option>
-        <option value="heartbeat">探索节奏</option>
-      </select>
-      <div style="display:flex;flex-direction:column;gap:6px">
-        <button type="button" class="mil-key" data-kind-tab="memory" aria-pressed="true" style="justify-content:flex-start">会话备忘</button>
-        <button type="button" class="mil-key" data-kind-tab="journal" aria-pressed="false" style="justify-content:flex-start">近期手账</button>
-        <button type="button" class="mil-key" data-kind-tab="heartbeat" aria-pressed="false" style="justify-content:flex-start">探索节奏</button>
+  <div class="m-mem-shell" id="mem-shell">
+    <!-- 左栏：会话选择、三册切换与容量标尺 -->
+    <aside class="mil-panel m-mem-aside" aria-label="手账分册与会话选择">
+      <div class="m-rail-group">
+        <div class="m-rail-kicker">选择会话</div>
+        <select id="chat" class="mil-select" aria-label="选择会话手账">
+          <option value="">请先选择会话…</option>
+        </select>
+        <div id="chat-chips" class="out-filter-row" aria-label="快捷切换会话"></div>
       </div>
-    </div>
 
-    <div class="mil-screen">
-      <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
-        <span class="mil-label">当前文档字数</span>
-        <span class="num" style="font-size:12.5px" id="mem-char-count">0 / 16000</span>
+      <div class="m-rail-group">
+        <div class="m-rail-kicker">三册档案</div>
+        <div class="m-rail-nav" role="tablist" aria-label="手账三册">
+          <button type="button" class="m-rail-btn is-active" data-kind-tab="memory" aria-pressed="true">
+            <span class="m-rail-ic" data-m-mod="memory" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">会话备忘</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-kind-tab="journal" aria-pressed="false">
+            <span class="m-rail-ic" data-m-mod="journal" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">自身经历手账</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-kind-tab="heartbeat" aria-pressed="false">
+            <span class="m-rail-ic" data-m-mod="heartbeat" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">主动探索节奏</span>
+          </button>
+        </div>
+        <select id="kind" hidden aria-hidden="true">
+          <option value="memory">会话备忘</option>
+          <option value="journal">自身经历手账</option>
+          <option value="heartbeat">主动探索节奏</option>
+        </select>
       </div>
-      <div class="mil-meter"><i id="mem-meter-bar"></i></div>
-      <div class="mil-row" style="justify-content:space-between;margin-top:10px">
-        <span class="mil-tag">宿主记忆：A_Memorix</span>
-        <button type="button" class="mil-help" data-help="群友印象与长期聊天记忆由宿主 A_Memorix 自动沉淀；此处仅存放本会话长期置顶的办事约定、近七天后台经历手账与主动探索节奏" aria-label="查看手账与宿主记忆边界说明" aria-expanded="false">?</button>
-      </div>
-    </div>
-  </aside>
 
-  <!-- 右栏：正文编辑 + 检索经历 + 意图队列与笔记回执 -->
-  <div style="display:flex;flex-direction:column;gap:20px;min-width:0">
-    <section class="mil-panel mil-panel--flat">
+      <div class="m-rail-group">
+        <div class="m-rail-kicker">本册边界说明</div>
+        <div class="mil-screen m-mem-guide-card">
+          <div class="m-mem-guide-title">本会话长期置顶的办事约定</div>
+          <p class="m-mem-guide-desc">按会话独立记录称呼、偏好、群规与重要约定；普通对话记忆由宿主系统自动检索关联，不混入当前手账分册。</p>
+          <div class="m-meter-wrap">
+            <div class="m-meter-head">
+              <span>篇幅估算</span>
+              <span class="num" id="mem-char-count">0 字</span>
+            </div>
+            <div class="mil-meter"><i id="mem-meter-bar" style="width:0%"></i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-rail-group" id="mem-quota-card">
+        <div class="m-rail-kicker">今日主动额度</div>
+        <div class="mil-screen m-quota-box" id="mem-quota-box">
+          <span class="m-quota-main num">加载中…</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 中栏：手账正文编辑器 -->
+    <section class="mil-panel m-mem-editor" aria-label="手账分册编辑器">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">DOCUMENT · </span>手账正文</span>
-          <span class="mil-tag" id="version">v0</span>
-          <span class="mil-tag" id="mem-layer-guide">本会话办事约定</span>
-          <button type="button" class="mil-help" id="mem-layer-help" data-help="会话备忘（MEMORY.md）按会话严格隔离，仅记录本会话长期置顶的办事约定；群友印象由宿主 A_Memorix 维护。" aria-label="查看当前分册说明" aria-expanded="false">?</button>
+          <span class="m-head-ic" data-m-mod="memory" data-m-size="22" aria-hidden="true"></span>
+          <span class="mil-silk" id="mem-layer-guide">会话备忘 · MEMORY.md</span>
+          <button type="button" class="mil-help" id="mem-layer-help" data-help="按每个会话独立记录称呼、偏好、规则与重要约定；支持版本查看、恢复与实时保存。" aria-label="查看当前分册说明" aria-expanded="false">?</button>
+          <span class="mil-tag num" id="version">v0</span>
           <span class="mil-tag mil-tag--warn" id="dirty-tag" hidden>未保存</span>
         </div>
-        <div class="mil-head-r">
-          <button type="button" class="mil-key mil-key--sm" id="insert-heartbeat-example" hidden>+ 插入公开探索示例</button>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <div class="mil-head-r m-mem-actions">
+          <button type="button" class="mil-key mil-key--sm" id="insert-heartbeat-example" hidden>填入示例模板</button>
+          <button type="button" class="mil-key mil-key--sm" id="reload">重新读取</button>
+          <select id="history" class="mil-select m-ver-select" aria-label="历史版本"></select>
+          <button type="button" class="mil-key mil-key--sm" id="restore">恢复此版本</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="save">保存手账</button>
         </div>
       </div>
-      <div class="mil-field" style="margin-bottom:14px">
-        <label class="mil-label" for="content">内容</label>
-        <textarea id="content" class="mil-textarea" rows="12" maxlength="16000" spellcheck="false" style="line-height:1.75;font-size:14.5px"></textarea>
+
+      <div id="draft-panel" class="ms-draft-panel" hidden>
+        <div class="ms-draft-banner">检测到远端版本已更新，当前编辑草稿已暂存于下方，请对照后合并保存：</div>
+        <textarea id="local-draft" class="mil-input mono" rows="4" readonly aria-label="本地未合并草稿"></textarea>
       </div>
-      <div class="mil-row" style="justify-content:space-between">
-        <div class="mil-row">
-          <button class="mil-key mil-key--hot" id="save" type="button">保存修改</button>
-          <button class="mil-key" id="reload" type="button">读取最新</button>
-        </div>
-        <div class="mil-row">
-          <select id="history" class="mil-select" style="width:auto;min-width:150px" aria-label="历史版本"></select>
-          <button class="mil-key" id="restore" type="button">回滚到所选版本</button>
-        </div>
-      </div>
-      <details id="draft-panel" style="margin-top:12px" hidden>
-        <summary class="mil-label" style="cursor:pointer">读取最新版本前保留的本地草稿</summary>
-        <textarea id="local-draft" class="mil-textarea" style="margin-top:8px" rows="4" readonly aria-label="保留的本地草稿"></textarea>
-      </details>
+
+      <textarea id="content" class="mil-input m-mem-textarea" rows="18" placeholder="选择会话或分册后在此编辑内容…"></textarea>
     </section>
 
-    <section class="mil-panel">
-      <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">RECALL · </span>活动与手账检索</span></div>
-        <div class="mil-head-r">
-          <div class="mil-row" style="gap:8px">
-            <input id="search" class="mil-input" style="width:210px" aria-label="检索关键词" placeholder="地点、关键词或线程号">
-            <button id="search-button" class="mil-key mil-key--sm mil-key--hot" type="button">检索</button>
+    <!-- 右栏：经历检索、计划队列与自动学习回执 -->
+    <div class="m-mem-side">
+      <section class="mil-panel" aria-label="历史经历搜索">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span class="m-head-ic" data-m-mod="journal" data-m-size="20" aria-hidden="true"></span>
+            <span class="mil-silk">搜索记忆与经历</span>
           </div>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <div class="mil-head-r">
+            <button type="button" class="mil-key mil-key--sm" id="mem-goto-outputs">查看产物空间</button>
+          </div>
         </div>
-      </div>
-      <div class="mil-grid-2">
-        <div style="min-width:0">
-          <div class="mil-label" style="margin-bottom:8px">手账与备忘命中</div>
-          <div id="search-results" class="mil-screen" style="min-height:108px;max-height:260px;overflow-y:auto"></div>
+        <div class="m-search-box m-mem-search">
+          <input id="search" class="mil-input" placeholder="搜索会话备忘或自身经历关键词…" aria-label="搜索记忆关键词" />
+          <button type="button" class="mil-key mil-key--sm" id="search-button">搜索</button>
         </div>
-        <div style="min-width:0">
-          <div class="mil-label" style="margin-bottom:8px">自身活动经历</div>
-          <div id="experiences" class="mil-screen" style="min-height:108px;max-height:260px;overflow-y:auto"></div>
-        </div>
-      </div>
-    </section>
+        <div id="search-results" class="m-card-stack"></div>
+        <div class="m-sub-kicker">近期自身经历摘要</div>
+        <div id="experiences" class="m-card-stack"></div>
+      </section>
 
-    <section class="mil-panel">
-      <div class="mil-head">
-        <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">INTENTS · </span>待唤醒意图与自动笔记回执</span>
-          <button type="button" class="mil-help" data-help="展示当前排队中的定时/异步唤醒意图，以及后台线程自动沉淀手账与方法笔记的最近执行回执" aria-label="查看意图与笔记回执说明" aria-expanded="false">?</button>
+      <section class="mil-panel" aria-label="后续唤醒与定时意图">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span class="m-head-ic" data-m-mod="routines" data-m-size="20" aria-hidden="true"></span>
+            <span class="mil-silk">待唤醒计划</span>
+          </div>
         </div>
-        <div class="mil-head-r">
-          <button type="button" class="mil-key mil-key--sm" data-nav="outputs">查看持续工作区 →</button>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <div id="intent-list" class="m-card-stack"></div>
+      </section>
+
+      <section class="mil-panel" aria-label="自动经验沉淀笔记">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span class="m-head-ic" data-m-mod="skills" data-m-size="20" aria-hidden="true"></span>
+            <span class="mil-silk">经验沉淀笔记</span>
+          </div>
         </div>
-      </div>
-      <div class="mil-grid-2">
-        <div id="intent-list" class="mil-screen" style="max-height:220px;overflow-y:auto"></div>
-        <div id="learning" class="ms-receipt-list" style="max-height:220px"></div>
-      </div>
-    </section>
+        <div id="learning" class="m-card-stack"></div>
+      </section>
+    </div>
   </div>
-</div>

@@ -947,6 +947,973 @@ html.dark .out-ico--ws { color: #fde047; }
     transition: none;
   }
 }
+  /* ── v2.6 管理四页双主题与移动端自适应样式（仅作用域于 #ms-mgmt-view） ── */
+#ms-mgmt-view,
+#ms-mgmt-view *,
+#ms-mgmt-view *::before,
+#ms-mgmt-view *::after {
+  box-sizing: border-box;
+}
+#ms-mgmt-view {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#ms-mgmt-view .m-mob-only,
+#ms-mgmt-view .m-ab-mob-head {
+  display: none;
+}
+#ms-mgmt-view .m-rail-kicker,
+#ms-mgmt-view .m-sub-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--mil-muted);
+  margin-bottom: 6px;
+}
+#ms-mgmt-view .m-sub-kicker {
+  margin-top: 10px;
+}
+#ms-mgmt-view .m-rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#ms-mgmt-view .m-rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--mil-ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+#ms-mgmt-view .m-rail-btn:hover {
+  background: var(--mil-well);
+}
+#ms-mgmt-view .m-rail-btn.is-active,
+#ms-mgmt-view .m-rail-btn[aria-pressed="true"] {
+  background: var(--mil-accent-soft);
+  border-color: var(--mil-accent-border);
+  font-weight: 700;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-rail-btn {
+  border-radius: 0;
+  border: 2px solid transparent;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-rail-btn.is-active,
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-rail-btn[aria-pressed="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  border-color: var(--mil-line);
+}
+#ms-mgmt-view .m-rail-ic,
+#ms-mgmt-view .m-head-ic,
+#ms-mgmt-view .m-tab-ic,
+#ms-mgmt-view .m-mob-row-ic,
+#ms-mgmt-view .m-mob-row-arr {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+#ms-mgmt-view .m-rail-lbl {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ms-mgmt-view .m-rail-cnt {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--mil-well);
+  color: var(--mil-muted);
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-rail-cnt {
+  border-radius: 0;
+}
+#ms-mgmt-view .m-seg-group,
+#ms-mgmt-view .m-inline-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+#ms-mgmt-view .m-inline-row > .mil-input,
+#ms-mgmt-view .m-inline-row > .mil-select {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+#ms-mgmt-view .m-search-box .mil-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+#ms-mgmt-view .m-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+#ms-mgmt-view .ms-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mil-ink-2);
+}
+#ms-mgmt-view .m-cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-check-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#ms-mgmt-view .m-check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-screen);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-check-pill {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .m-card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-empty {
+  padding: 24px 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--mil-muted);
+}
+#ms-mgmt-view .m-copy-drawer {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-screen);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-copy-drawer {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .m-copy-drawer-h {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mil-muted);
+}
+#ms-mgmt-view .m-adv-details {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#ms-mgmt-view .m-details-sum {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--mil-ink);
+}
+#ms-mgmt-view .m-ver-select {
+  width: auto;
+  min-width: 112px;
+}
+
+/* ── 产物页：三栏工作空间 ── */
+#ms-mgmt-view .m-out-shell {
+  display: grid;
+  grid-template-columns: 230px minmax(300px, 0.92fr) minmax(350px, 1.08fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+#ms-mgmt-view .m-out-shell.is-ws-mode {
+  grid-template-columns: 230px minmax(0, 1fr);
+}
+#ms-mgmt-view .m-out-aside,
+#ms-mgmt-view .m-out-main,
+#ms-mgmt-view .m-out-catalog,
+#ms-mgmt-view .m-out-inspector,
+#ms-mgmt-view .m-out-ws-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#ms-mgmt-view .m-out-toolbar {
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .out-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#ms-mgmt-view .m-out-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-out-stage {
+  min-height: 240px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-out-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mil-line);
+}
+#ms-mgmt-view .m-ws-split {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.44fr) minmax(0, 0.56fr);
+  gap: 12px;
+}
+#ms-mgmt-view .m-ws-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-ws-col-h {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mil-muted);
+}
+#ms-mgmt-view .m-ws-pre {
+  padding: 12px;
+  max-height: 420px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── 手账页：三栏分册工作室 ── */
+#ms-mgmt-view .m-mem-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(340px, 1.15fr) minmax(290px, 0.85fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+#ms-mgmt-view .m-mem-aside,
+#ms-mgmt-view .m-mem-editor,
+#ms-mgmt-view .m-mem-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#ms-mgmt-view .m-mem-guide-card {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-mem-guide-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--mil-ink);
+}
+#ms-mgmt-view .m-mem-guide-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--mil-muted);
+}
+#ms-mgmt-view .m-meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  margin-bottom: 4px;
+}
+#ms-mgmt-view .m-quota-box {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#ms-mgmt-view .m-quota-main {
+  font-size: 13px;
+  font-weight: 700;
+}
+#ms-mgmt-view .m-mem-textarea {
+  min-height: 420px;
+  width: 100%;
+  resize: vertical;
+  line-height: 1.6;
+}
+#ms-mgmt-view .m-mem-search {
+  margin-bottom: 8px;
+}
+
+/* ── 能力页：顶部切换、技能库、有序模型链与移动端裸鱼轮播 ── */
+#ms-mgmt-view .m-ab-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-ab-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-ab-tabs .mil-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#ms-mgmt-view .m-ab-skills,
+#ms-mgmt-view .m-ab-discovery,
+#ms-mgmt-view .m-ab-package {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#ms-mgmt-view .m-add-drawer {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#ms-mgmt-view .m-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#ms-mgmt-view .m-drawer-grid,
+#ms-mgmt-view .m-rcp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+#ms-mgmt-view .m-drawer-card,
+#ms-mgmt-view .m-rcp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+}
+#ms-mgmt-view .m-ab-studio {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+#ms-mgmt-view .m-ab-roster,
+#ms-mgmt-view .m-ab-editor {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#ms-mgmt-view .m-ab-stage {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#ms-mgmt-view .m-ab-roster[hidden],
+#ms-mgmt-view .m-ab-editor[hidden],
+#ms-mgmt-view .m-ab-skills[hidden],
+#ms-mgmt-view .m-ab-package[hidden],
+#ms-mgmt-view .m-ab-discovery[hidden] {
+  display: none;
+}
+#ms-mgmt-view .m-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-roster-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mil-line);
+}
+#ms-mgmt-view .m-roster-btn-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+#ms-mgmt-view .m-doc-tabs {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-visual-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#ms-mgmt-view .m-companions-split {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.36fr) minmax(0, 0.64fr);
+  gap: 10px;
+}
+#ms-mgmt-view .m-companion-pre {
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#ms-mgmt-view .m-model-box {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#ms-mgmt-view .m-model-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-model-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#ms-mgmt-view .m-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-panel);
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-model-row {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .m-model-grip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--mil-muted);
+  flex: 0 0 auto;
+}
+#ms-mgmt-view .m-model-rank {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--mil-well);
+  color: var(--mil-ink-2);
+  flex: 0 0 auto;
+}
+#ms-mgmt-view .m-model-row.is-primary .m-model-rank {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-model-rank {
+  border-radius: 0;
+}
+#ms-mgmt-view .m-model-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+#ms-mgmt-view .m-model-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+#ms-mgmt-view .m-model-add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+#ms-mgmt-view .m-ab-textarea {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+}
+
+/* ── 移动端裸鱼轮播（两套主题下均无方框/圆框背景，选中居大彩鱼，两侧缩小去色） ── */
+#ms-mgmt-view .m-mob-carousel-wrap {
+  position: relative;
+  padding: 4px 0 8px;
+}
+#ms-mgmt-view .m-mob-carousel {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding: 6px 42px 8px;
+}
+#ms-mgmt-view .m-mob-carousel::-webkit-scrollbar {
+  display: none;
+}
+#ms-mgmt-view .mob-role-item {
+  scroll-snap-align: center;
+  flex: 0 0 auto;
+  min-width: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--mil-ink);
+  cursor: pointer;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+#ms-mgmt-view .mob-role-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease;
+}
+#ms-mgmt-view .mob-role-item:not(.is-active) .mob-role-avatar {
+  transform: scale(0.84);
+  filter: grayscale(0.8);
+  opacity: 0.58;
+}
+#ms-mgmt-view .mob-role-item.is-active .mob-role-avatar {
+  transform: scale(1.06);
+  filter: none;
+  opacity: 1;
+}
+#ms-mgmt-view .mob-role-name {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+#ms-mgmt-view .mob-role-sub {
+  font-size: 10px;
+  color: var(--mil-muted);
+}
+#ms-mgmt-view .mob-role-step {
+  position: absolute;
+  top: 28px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--mil-line);
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .mob-role-step {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .mob-role-step.prev { left: 4px; }
+#ms-mgmt-view .mob-role-step.next { right: 4px; }
+#ms-mgmt-view .mob-role-dots {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+#ms-mgmt-view .mob-role-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  border: 0;
+  padding: 0;
+  background: var(--mil-lo);
+  cursor: pointer;
+}
+#ms-mgmt-view .mob-role-dot.is-active {
+  width: 16px;
+  background: var(--mil-ink);
+}
+#ms-mgmt-view .m-mob-role-card1 {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-mob-role-card1-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#ms-mgmt-view .m-mob-role-card1-title {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+/* ── 设置页：左导航轨 + 中配置栈 + 右上下文抽屉 + 移动端中心与底部弹层 ── */
+#ms-mgmt-view .m-set-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-set-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-set-top-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+#ms-mgmt-view .m-set-body {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr) 310px;
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+#ms-mgmt-view .m-set-rail,
+#ms-mgmt-view .m-set-drawer {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#ms-mgmt-view .m-set-main,
+#ms-mgmt-view .m-set-stack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#ms-mgmt-view .m-set-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-general-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#ms-mgmt-view .m-svc-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+#ms-mgmt-view .m-svc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-svc-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .m-svc-card.is-selected {
+  border-color: var(--mil-accent);
+}
+#ms-mgmt-view .m-svc-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+#ms-mgmt-view .m-svc-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#ms-mgmt-view .m-drawer-actions {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+#ms-mgmt-view .m-handle-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#ms-mgmt-view .m-json-area {
+  width: 100%;
+  resize: vertical;
+}
+#ms-mgmt-view .m-mob-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--mil-line);
+  background: transparent;
+  color: var(--mil-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+#ms-mgmt-view .m-mob-row:last-child {
+  border-bottom: 0;
+}
+#ms-mgmt-view .m-mob-row-l,
+#ms-mgmt-view .m-mob-row-r {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+#ms-mgmt-view .m-mob-row-val {
+  font-size: 12px;
+  color: var(--mil-muted);
+}
+#ms-mgmt-view .mob-circle-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--mil-line);
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .mob-circle-btn {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .m-mob-scrim,
+#ms-mgmt-view .m-mob-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 17, 20, 0.45);
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+#ms-mgmt-view .m-mob-scrim[hidden],
+#ms-mgmt-view .m-mob-sheet-scrim[hidden] {
+  display: none;
+}
+#ms-mgmt-view .m-mob-sheet {
+  width: 100%;
+  max-width: 520px;
+  max-height: 84vh;
+  overflow-y: auto;
+  background: var(--mil-panel);
+  border-top: 1px solid var(--mil-line);
+  border-radius: 18px 18px 0 0;
+  padding: 10px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-mob-sheet {
+  border-radius: 0;
+  border-top: 2px solid var(--mil-line);
+}
+#ms-mgmt-view .m-mob-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--mil-lo);
+  margin: 0 auto 4px;
+}
+#ms-mgmt-view .m-mob-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@media (max-width: 900px) {
+  #ms-mgmt-view .m-out-shell,
+  #ms-mgmt-view .m-mem-shell,
+  #ms-mgmt-view .m-set-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #ms-mgmt-view .m-ab-studio {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  #ms-mgmt-view .m-mob-only {
+    display: flex;
+  }
+  #ms-mgmt-view .m-ab-mob-head {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #ms-mgmt-view .m-ab-mob-head[hidden],
+  #ms-mgmt-view .m-out-ws-panel[hidden] {
+    display: none;
+  }
+  #ms-mgmt-view .m-ab-roster {
+    display: none;
+  }
+  #ms-mgmt-view .m-drawer-grid,
+  #ms-mgmt-view .m-rcp-grid,
+  #ms-mgmt-view .m-companions-split,
+  #ms-mgmt-view .m-ws-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #ms-mgmt-view .m-out-shell:not(.is-mob-inspect) .m-out-inspector {
+    display: none;
+  }
+  #ms-mgmt-view .m-out-shell.is-mob-inspect .m-out-aside,
+  #ms-mgmt-view .m-out-shell.is-mob-inspect .m-out-main {
+    display: none;
+  }
+  #ms-mgmt-view .m-set-rail,
+  #ms-mgmt-view .m-set-drawer {
+    display: none;
+  }
+  #ms-mgmt-view .m-mob-hub {
+    flex-direction: column;
+    gap: 6px;
+  }
+  #ms-mgmt-view .m-mob-group {
+    padding: 0;
+    overflow: hidden;
+  }
+  #ms-mgmt-view .m-mob-sub {
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  #ms-mgmt-view .m-mob-sub[hidden],
+  #ms-mgmt-view .m-mob-hub[hidden] {
+    display: none;
+  }
+  #ms-mgmt-view .m-mob-sub-title {
+    font-size: 15px;
+    font-weight: 800;
+    text-align: center;
+    flex: 1 1 auto;
+  }
+  #ms-mgmt-view .m-mob-sub-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #ms-mgmt-view .m-set-shell[data-mob-sub="hub"] .m-set-body {
+    display: none;
+  }
+  #ms-mgmt-view .m-set-shell:not([data-mob-sub="hub"]) #settings-mob-hub {
+    display: none;
+  }
+  #ms-mgmt-view .m-set-shell:not([data-mob-sub="hub"]) .m-set-sec {
+    display: none;
+  }
+  #ms-mgmt-view .m-set-shell[data-mob-sub="general"] .m-set-sec[data-set-sec="general"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="streams"] .m-set-sec[data-set-sec="streams"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="routines"] .m-set-sec[data-set-sec="routines"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="routines"] .m-set-sec[data-set-sec="health"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="services"] .m-set-sec[data-set-sec="services"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="vault"] .m-set-sec[data-set-sec="vault"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="webhooks"] .m-set-sec[data-set-sec="webhooks"] {
+    display: flex;
+  }
+}
+
+#ms-mgmt-view [hidden] {
+  display: none !important;
+}
+
 /* ==MGMT_CSS_END== */
 </style>
 </head>
@@ -969,7 +1936,7 @@ html.dark .out-ico--ws { color: #fde047; }
       </nav>
     </div>
     <div class="mil-top-right">
-      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 清朗手账）">千禧机械</button>
+      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 默认主题）">千禧机械</button>
       <div class="mil-led-pill">
         <span class="mil-led" id="mgmt-led"></span>
         <span>管理台</span>
@@ -1016,7 +1983,7 @@ html.dark .out-ico--ws { color: #fde047; }
     const btn = $("#ui-style-toggle");
     if (!btn) return;
     const isMil = style === "millennium";
-    btn.textContent = isMil ? "千禧机械" : "清朗手账";
+    btn.textContent = isMil ? "千禧机械" : "默认主题";
     btn.setAttribute("aria-pressed", String(isMil));
   }
   function applyTheme(ctx) {
@@ -1036,15 +2003,15 @@ html.dark .out-ico--ws { color: #fde047; }
     applyTheme();
   });
 
-  // 严格限制最多 2 路并发请求，避免触及宿主 inflight 上限
-  let inflight = 0;
+  // 严格限制最多 2 路并发请求，确保排队稳定执行
+  let activeSlotCount = 0;
   const waiters = [];
   async function acquire() {
-    if (inflight >= 2) await new Promise((res) => waiters.push(res));
-    inflight++;
+    if (activeSlotCount >= 2) await new Promise((res) => waiters.push(res));
+    activeSlotCount++;
   }
   function release() {
-    inflight--;
+    activeSlotCount--;
     if (waiters.length) waiters.shift()();
   }
   async function rpc(op, key, body) {
@@ -1174,6 +2141,98 @@ html.dark .out-ico--ws { color: #fde047; }
     const say = (text, isErr = false) => {
       if (!sig?.aborted) hostSay(text, isErr);
     };
+
+    const mStyle = () => document.documentElement.getAttribute("data-ui-style") || "millennium";
+    const mIsMil = () => mStyle() === "millennium";
+    const mIsDark = () => document.documentElement.classList.contains("dark");
+
+    function mFallbackCtrl(key, size) {
+      const s = Number(size) || 16;
+      const paths = {
+        back: '<polyline points="15 18 9 12 15 6"></polyline>',
+        chevron_r: '<polyline points="9 6 15 12 9 18"></polyline>',
+        chevron_u: '<polyline points="18 15 12 9 6 15"></polyline>',
+        chevron_d: '<polyline points="6 9 12 15 18 9"></polyline>',
+        plus: '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>',
+        close: '<line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line>',
+        check: '<polyline points="20 6 9 17 4 12"></polyline>',
+        grip: '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"></circle>',
+        trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6M14 11v6"></path>',
+        sliders: '<line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line>',
+        search: '<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>',
+        folder: '<path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"></path>',
+        copy: '<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>',
+        ext: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>',
+        refresh: '<polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>',
+        lock: '<rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>',
+        key: '<circle cx="7.5" cy="15.5" r="4.5"></circle><path d="m21 2-9.6 9.6M15.5 7.5 19 11"></path>',
+        globe: '<circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line>',
+        grid: '<rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect>',
+        list: '<line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line>',
+        sun: '<circle cx="12" cy="12" r="5"></circle>',
+        moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>',
+        help: '<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>',
+        clock: '<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>',
+        book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>',
+      };
+      const inner = paths[key] || '<rect x="5" y="5" width="14" height="14" rx="2"></rect>';
+      return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+    }
+
+    function mIconMod(key, size = 22) {
+      const IC = window.MaisyaIcons;
+      if (IC) {
+        if (typeof IC.mod === "function") return IC.mod(key, size);
+        if (mIsMil() && typeof IC.mil === "function") return IC.mil(key, size, mIsDark());
+        if (!mIsMil() && typeof IC.soft3d === "function") return IC.soft3d(key, size);
+      }
+      const cls = mIsMil() ? "m-ic-mil" : "m-ic-fb";
+      const r = mIsMil() ? 0 : 5;
+      return `<svg class="${cls}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="${r}" fill="var(--mil-well)"></rect><circle cx="12" cy="12" r="4"></circle></svg>`;
+    }
+
+    function mIconCtrl(key, size = 16) {
+      const IC = window.MaisyaIcons;
+      if (IC) {
+        if (typeof IC.ctrl === "function") return IC.ctrl(key, size);
+        if (mIsMil() && typeof IC.milUi === "function") return IC.milUi(key, size);
+        if (!mIsMil() && typeof IC.ui === "function") return IC.ui(key, size);
+      }
+      return mFallbackCtrl(key, size);
+    }
+
+    function mIconBrand(key, size = 20) {
+      const IC = window.MaisyaIcons;
+      if (IC && typeof IC.brand === "function") return IC.brand(key, size, mIsDark());
+      return `<svg class="m-ic-brand-fb" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="${mIsMil() ? 0 : 4}"></rect><path d="M8 12h8"></path></svg>`;
+    }
+
+    const themeListeners = [];
+    function refreshThemeIcons() {
+      window.MaisyaIcons?.ensureDefs?.();
+      const root = $("#ms-mgmt-view") || document;
+      root.querySelectorAll("[data-m-mod]").forEach((el) => {
+        el.innerHTML = mIconMod(el.dataset.mMod, Number(el.dataset.mSize || 22));
+      });
+      root.querySelectorAll("[data-m-ctrl]").forEach((el) => {
+        el.innerHTML = mIconCtrl(el.dataset.mCtrl, Number(el.dataset.mSize || 16));
+      });
+      root.querySelectorAll("[data-m-brand]").forEach((el) => {
+        el.innerHTML = mIconBrand(el.dataset.mBrand, Number(el.dataset.mSize || 20));
+      });
+      themeListeners.forEach((fn) => {
+        try { fn(); } catch (_) {}
+      });
+    }
+
+    window.addEventListener("maisya:themechange", refreshThemeIcons, { signal: sig });
+    window.addEventListener("maibot:context", refreshThemeIcons, { signal: sig });
+    if (typeof MutationObserver === "function") {
+      const mo = new MutationObserver(() => refreshThemeIcons());
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-ui-style", "class"] });
+      sig?.addEventListener?.("abort", () => mo.disconnect(), { once: true });
+    }
+    refreshThemeIcons();
 
   /* ════════════════════════════════════════════════════════════════
      1. 能力页 (abilities)
@@ -1414,55 +2473,49 @@ html.dark .out-ico--ws { color: #fde047; }
       const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
       const host = $("#cfg-model-chain");
       const picker = $("#cfg-model-picker");
-      const chipsHost = $("#cfg-host-models-list");
       const clearBtn = $("#cfg-model-clear");
       if (!host) return;
 
       if (clearBtn) clearBtn.disabled = chain.length === 0;
 
       if (chain.length) {
-        host.innerHTML = chain.map((name, idx) => {
+        host.innerHTML = `<div class="m-model-list">${chain.map((name, idx) => {
           const info = byName[name];
           const detail = [info?.provider, info?.identifier].filter(Boolean).join(" · ");
-          const roleLabel = idx === 0 ? "#1 主选" : `#${idx + 1} 备选`;
-          return `<div class="cfg-model-item${idx === 0 ? " cfg-model-item--primary" : ""}">
-            <div class="cfg-model-main">
-              <span class="cfg-model-rank">${roleLabel}</span>
-              <strong class="mono" style="font-size:13px;overflow-wrap:anywhere">${esc(name)}</strong>
+          const roleLabel = idx === 0 ? "主选" : "备选";
+          return `<div class="m-model-row${idx === 0 ? " is-primary" : ""}">
+            <span class="m-model-grip" aria-hidden="true">${mIconCtrl("grip", 14)}</span>
+            <span class="m-model-num num">${idx + 1}</span>
+            <div class="m-model-main">
+              <div class="mil-row" style="gap:6px;flex-wrap:wrap;align-items:center">
+                <span class="mil-tag ${idx === 0 ? "mil-tag--ok" : ""}">${roleLabel}</span>
+                <strong class="mono" style="font-size:13px;overflow-wrap:anywhere">${esc(name)}</strong>
+              </div>
               ${detail ? `<span class="mil-hint mono">${esc(detail)}</span>` : ""}
             </div>
-            <div class="mil-row" style="gap:4px;flex-wrap:nowrap">
-              <button type="button" class="mil-key mil-key--sm" data-model-move="up" data-model-idx="${idx}" ${idx === 0 ? "disabled" : ""} aria-label="上移优先级">↑</button>
-              <button type="button" class="mil-key mil-key--sm" data-model-move="down" data-model-idx="${idx}" ${idx === chain.length - 1 ? "disabled" : ""} aria-label="下移优先级">↓</button>
-              <button type="button" class="mil-key mil-key--sm" data-model-rm="${idx}" aria-label="移除此模型">×</button>
+            <div class="m-model-ctl">
+              <button type="button" class="mil-key mil-key--sm" data-model-move="up" data-model-idx="${idx}" ${idx === 0 ? "disabled" : ""} aria-label="上移优先级">${mIconCtrl("chevron_u", 13)}</button>
+              <button type="button" class="mil-key mil-key--sm" data-model-move="down" data-model-idx="${idx}" ${idx === chain.length - 1 ? "disabled" : ""} aria-label="下移优先级">${mIconCtrl("chevron_d", 13)}</button>
+              <button type="button" class="mil-key mil-key--sm" data-model-rm="${idx}" aria-label="移除此模型">${mIconCtrl("close", 13)}</button>
             </div>
           </div>`;
-        }).join("");
+        }).join("")}</div>`;
       } else {
-        const taskName = $("#cfg-task")?.value || "utils";
-        host.innerHTML = `<div class="mil-hint" style="padding:4px 2px">当前未固定具体模型 · 运行时默认使用宿主槽位 <span class="mono">${esc(taskName)}</span></div>`;
+        const taskSelect = $("#cfg-task");
+        const taskLabel = taskSelect?.selectedOptions?.[0]?.textContent || "通用辅助模型";
+        host.innerHTML = `<div class="mil-hint" style="padding:4px 2px">尚未指定独立模型 · 未指定时默认使用「${esc(taskLabel)}」</div>`;
       }
 
       if (picker) {
         const unused = entries.filter((e) => !chain.includes(e.name));
-        picker.innerHTML = `<option value="">${entries.length ? (unused.length ? "从宿主已配置模型中追加..." : "宿主可选模型均已加入队列") : "尚未发现宿主模型清单（可在右侧手动输入）"}</option>` +
+        picker.innerHTML = `<option value="">${entries.length ? (unused.length ? "从宿主已配置模型中添加…" : "可选模型均已加入顺延列表") : "暂未发现宿主模型（可在右侧手动输入）"}</option>` +
           entries.map((e) => {
             const label = [e.provider, e.identifier].filter(Boolean).join(" · ");
             const inChain = chain.indexOf(e.name);
-            const suffix = inChain >= 0 ? ` [已选 #${inChain + 1}]` : (label ? ` (${label})` : "");
+            const suffix = inChain >= 0 ? ` [顺位 #${inChain + 1}]` : (label ? ` (${label})` : "");
             return `<option value="${esc(e.name)}">${esc(e.name + suffix)}</option>`;
           }).join("");
         picker.value = "";
-      }
-
-      if (chipsHost) {
-        chipsHost.innerHTML = entries.length
-          ? `<span class="mil-hint" style="margin-right:2px">宿主已配模型：</span>` + entries.map((e) => {
-              const rank = chain.indexOf(e.name);
-              const active = rank >= 0;
-              return `<button type="button" class="mil-key mil-key--sm" data-add-host-model="${esc(e.name)}" aria-pressed="${active ? "true" : "false"}" title="${esc([e.provider, e.identifier].filter(Boolean).join(" / ") || e.name)}">${active ? `#${rank + 1} ` : "+ "}<span class="mono">${esc(e.name)}</span></button>`;
-            }).join("")
-          : `<span class="mil-hint">提示：尚未在宿主模型列表中发现已添加的模型，可点击右上角「同步模型列表」或在上方手动输入模型名</span>`;
       }
     }
 
@@ -1587,7 +2640,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $("#cfg-title").value = p.title || "";
       $("#cfg-env").value = p.environment === "sandbox" ? "sandbox" : "readonly";
       $("#cfg-access").value = ["everyone", "admins", "listed"].includes(p.access) ? p.access : "everyone";
-      $("#cfg-task").value = ["utils", "planner", "replyer", "fast_model", "vlm"].includes(p.task) ? p.task : "utils";
+      $("#cfg-task").value = ["utils", "planner", "replyer", "fast_model", "vlm"].includes(p.task) ? p.task : (p.task === "" ? "" : "utils");
       if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
       $("#cfg-web").value = p.web_provider || "";
       $("#cfg-steps").value = p.max_steps ?? "";
@@ -1740,16 +2793,20 @@ html.dark .out-ico--ws { color: #fde047; }
       const inDiscovery = viewMode === "discovery";
 
       $("#skills-gallery-panel").hidden = !inGallery;
+      if ($("#ab-mob-head")) $("#ab-mob-head").hidden = !inRoles;
       $("#editor-panel").hidden = !(inSkillEditor || inRoles);
       $("#role-package-panel").hidden = !inRoles;
       $("#discovery-panel").hidden = !inDiscovery;
 
       $("#nav-skills").setAttribute("aria-current", String(inGallery || inSkillEditor));
+      $("#nav-skills").setAttribute("aria-pressed", String(inGallery || inSkillEditor));
       $("#nav-roles").setAttribute("aria-current", String(inRoles));
+      $("#nav-roles").setAttribute("aria-pressed", String(inRoles));
       $("#nav-discovery").setAttribute("aria-current", String(inDiscovery));
+      $("#nav-discovery").setAttribute("aria-pressed", String(inDiscovery));
 
       if (inSkillEditor && $("#document").value !== "skill") $("#document").value = "skill";
-      if (inRoles && $("#document").value === "skill") $("#document").value = "profile";
+      if (inRoles && (!$("#document").value || $("#document").value === "skill" || $("#document").value === "PROFILE.md")) $("#document").value = "profile";
 
       const doc = $("#document").value;
       const isSkill = inSkillEditor || doc === "skill";
@@ -1941,6 +2998,44 @@ html.dark .out-ico--ws { color: #fde047; }
         renderSkillRoleBindings();
         renderSkillCompanions();
       }
+      renderMobRoleCarousel(profiles);
+    }
+
+    function renderMobRoleCarousel(profiles) {
+      const track = $("#mob-role-carousel");
+      const dots = $("#mob-role-dots");
+      if (track) {
+        track.innerHTML = (profiles || []).map((p) => {
+          const on = p.id === selectedProfile;
+          const isEnabled = p.enabled !== false;
+          const fishCls = [!isEnabled ? "mil-fish--off" : "", freshFishProfile === p.id ? "is-new" : ""].filter(Boolean).join(" ");
+          return `<button type="button" class="mob-role-item${on ? " is-active" : ""}" data-mob-role="${esc(p.id)}" role="option" aria-selected="${on}">
+            <span class="mob-role-avatar">${roleFishHtml(p.id, p.fish_seed || "", on ? 66 : 44, on && isEnabled ? {} : { still: true }, fishCls)}</span>
+            <span class="mob-role-name">${esc(p.title || p.id)}</span>
+            <span class="mob-role-sub mono">${esc(p.id)}</span>
+          </button>`;
+        }).join("");
+      }
+      if (dots) {
+        dots.innerHTML = (profiles || []).map((p) =>
+          `<button type="button" class="mob-role-dot${p.id === selectedProfile ? " is-active" : ""}" data-mob-role="${esc(p.id)}" aria-label="切换到 ${esc(p.title || p.id)}"></button>`
+        ).join("");
+      }
+      const cur = (profiles || []).find((p) => p.id === selectedProfile) || (profiles || [])[0];
+      if (!cur) return;
+      const chain = Array.isArray(cur.model_list) && cur.model_list.length ? cur.model_list : (cur.model_name ? [cur.model_name] : []);
+      const titleEl = $("#ab-mob-role-title");
+      const envEl = $("#ab-mob-role-env");
+      const modEl = $("#ab-mob-val-models");
+      const skEl = $("#ab-mob-val-skills");
+      const noteEl = $("#ab-mob-val-notes");
+      const fishEl = $("#ab-mob-val-fish");
+      if (titleEl) titleEl.textContent = `${cur.title || cur.id} · ${cur.id}`;
+      if (envEl) envEl.textContent = `${cur.environment === "sandbox" ? "隔离沙箱" : "轻量只读"} · ${cur.enabled !== false ? "已启用" : "已停用"}`;
+      if (modEl) modEl.textContent = chain.length ? (chain.length > 1 ? `${chain[0]} (+${chain.length - 1})` : chain[0]) : "默认设置";
+      if (skEl) skEl.textContent = `${(cur.skills || []).length} 技能 · ${(cur.tools || []).length} 工具`;
+      if (noteEl) noteEl.textContent = $("#document")?.value === "notes" ? "正在查看" : "查看详情";
+      if (fishEl) fishEl.textContent = fishDrawerOpen ? "定制中" : "外观定制";
     }
 
     async function refreshDiscovery() {
@@ -2065,6 +3160,66 @@ html.dark .out-ico--ws { color: #fde047; }
         renderCatalog();
         say("");
         await loadAsset(false);
+        return;
+      }
+      const mobRoleBtn = ev.target.closest("[data-mob-role]");
+      if (mobRoleBtn) {
+        selectedProfile = mobRoleBtn.dataset.mobRole;
+        viewMode = "roles";
+        fishDrawerOpen = false;
+        fishDraft = null;
+        if ($("#document").value === "skill") $("#document").value = "profile";
+        renderCatalog();
+        say("");
+        await loadAsset(false);
+        try { mobRoleBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }); } catch (_) {}
+        return;
+      }
+      const mobStepBtn = ev.target.closest("[data-mob-step]");
+      if (mobStepBtn) {
+        const profiles = catalog.profiles || [];
+        if (profiles.length) {
+          const curIdx = Math.max(0, profiles.findIndex((p) => p.id === selectedProfile));
+          const delta = Number(mobStepBtn.dataset.mobStep || 0);
+          const nextIdx = (curIdx + delta + profiles.length) % profiles.length;
+          selectedProfile = profiles[nextIdx].id;
+          viewMode = "roles";
+          fishDrawerOpen = false;
+          fishDraft = null;
+          renderCatalog();
+          say("");
+          await loadAsset(false);
+          const activeEl = $(`#mob-role-carousel [data-mob-role="${CSS.escape(selectedProfile)}"]`);
+          try { activeEl?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }); } catch (_) {}
+        }
+        return;
+      }
+      const mobJumpBtn = ev.target.closest("[data-mob-role-jump]");
+      if (mobJumpBtn) {
+        const kind = mobJumpBtn.dataset.mobRoleJump;
+        viewMode = "roles";
+        if (kind === "notes") {
+          $("#document").value = "notes";
+          renderCatalog();
+          await loadAsset(false);
+          $("#editor-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else if (kind === "fish") {
+          fishDrawerOpen = true;
+          if (!fishDraft && selectedProfile) fishDraft = fishDraftForProfile(selectedProfile);
+          renderDocModeUI();
+          $("#role-fish-bar")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else {
+          $("#document").value = "config";
+          renderCatalog();
+          await loadAsset(false);
+          if (kind === "skills") {
+            const det = $("#cfg-advanced-fields");
+            if (det) det.open = true;
+            $("#cfg-tools")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          } else {
+            $("#cfg-model-chain")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }
         return;
       }
       const docTab = ev.target.closest("[data-doc-tab]");
@@ -2239,6 +3394,45 @@ html.dark .out-ico--ws { color: #fde047; }
         applyModelChainToToml([]);
       };
     }
+    if ($("#cfg-model-apply")) {
+      $("#cfg-model-apply").onclick = async () => {
+        if (!selectedProfile) return;
+        const pending = $("#cfg-model-name")?.value.trim();
+        if (pending) {
+          addModelToChain(pending);
+          if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
+        }
+        const btn = $("#cfg-model-apply");
+        btn.disabled = true;
+        say("");
+        try {
+          const r = await rpc("write", "set_profile_models", {
+            profile_id: selectedProfile,
+            models: getTomlModelChain(),
+            fallback_slot: $("#cfg-task")?.value || "",
+            expected_version: expectedVersion,
+          });
+          if (!r?.success) {
+            if (String(r?.error || "").includes("未知管理操作")) {
+              $("#save")?.click();
+              return;
+            }
+            return say(r?.error || "应用模型顺序失败", true);
+          }
+          expectedVersion = Number(r.version ?? expectedVersion);
+          $("#version").textContent = `v${expectedVersion}`;
+          $("#draft-panel").hidden = true;
+          await loadCatalog();
+          if (viewMode === "roles" && $("#document")?.value === "config") await loadAsset(false);
+          say("已应用角色模型顺序");
+        } finally {
+          btn.disabled = false;
+        }
+      };
+    }
+    themeListeners.push(() => {
+      if (viewMode === "roles" && $("#document")?.value === "config") renderModelChainEditor();
+    });
     ["cfg-steps", "cfg-temp"].forEach((id) => {
       const key = id === "cfg-steps" ? "max_steps" : "temperature";
       $(`#${id}`).addEventListener("input", () => {
@@ -2264,16 +3458,6 @@ html.dark .out-ico--ws { color: #fde047; }
         const idx = Number(rmBtn.dataset.modelRm);
         const chain = getTomlModelChain();
         chain.splice(idx, 1);
-        applyModelChainToToml(chain);
-        return;
-      }
-      const chipBtn = ev.target.closest("[data-add-host-model]");
-      if (chipBtn) {
-        const mName = chipBtn.dataset.addHostModel;
-        const chain = getTomlModelChain();
-        const at = chain.indexOf(mName);
-        if (at >= 0) chain.splice(at, 1);
-        else chain.push(mName);
         applyModelChainToToml(chain);
         return;
       }
@@ -2835,6 +4019,7 @@ html.dark .out-ico--ws { color: #fde047; }
         $("#rcp-mode-update").disabled = true;
         if (!$("#import-id").value.trim()) $("#import-id").value = pv.suggested_target || pv.source_id;
       }
+      if ($("#rcp-confirm-import")) $("#rcp-confirm-import").hidden = false;
       syncRecipeImportModeUI();
     }
 
@@ -3163,16 +4348,11 @@ html.dark .out-ico--ws { color: #fde047; }
     };
 
     function fileTypeIcon(mediaKind) {
-      if (mediaKind === "html") {
-        return `<svg class="out-ico out-ico--page" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 6h12" stroke="currentColor" stroke-width="1.4"/></svg>`;
-      }
-      if (mediaKind === "image") {
-        return `<svg class="out-ico out-ico--img" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.5" cy="6" r="1.1" fill="currentColor"/><path d="M3 12l3.4-3.4 2.3 2.2 2-2 2.3 3.2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>`;
-      }
-      if (mediaKind === "conclusion") {
-        return `<svg class="out-ico out-ico--con" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7.5H7.2l-3 2.5V11H2.5z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 6.5h6M5 8.8h4" stroke="currentColor" stroke-width="1.3"/></svg>`;
-      }
-      return `<svg class="out-ico out-ico--doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5.5L13 5.5V13.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 8h5M5.5 10.8h4" stroke="currentColor" stroke-width="1.3"/></svg>`;
+      if (mediaKind === "html") return `<span class="m-out-file-ic" aria-hidden="true">${mIconBrand("html", 18)}</span>`;
+      if (mediaKind === "image") return `<span class="m-out-file-ic" aria-hidden="true">${mIconBrand("image", 18)}</span>`;
+      if (mediaKind === "markdown") return `<span class="m-out-file-ic" aria-hidden="true">${mIconBrand("markdown", 18)}</span>`;
+      if (mediaKind === "conclusion") return `<span class="m-out-file-ic" aria-hidden="true">${mIconMod("journal", 18)}</span>`;
+      return `<span class="m-out-file-ic" aria-hidden="true">${mIconBrand("file", 18)}</span>`;
     }
 
     const SAFE_HTML_TAGS = new Set([
@@ -3552,7 +4732,10 @@ html.dark .out-ico--ws { color: #fde047; }
 
       const inWorkspaces = activeSpace === "workspaces";
       if ($("#out-catalog-panel")) $("#out-catalog-panel").hidden = inWorkspaces;
-      if ($("#out-ws-panel")) $("#out-ws-panel").style.order = inWorkspaces ? "-1" : "";
+      if ($("#out-ws-panel")) {
+        $("#out-ws-panel").hidden = !(inWorkspaces || activeSpace === "all");
+        $("#out-ws-panel").style.order = inWorkspaces ? "-1" : "";
+      }
       if ($("#out-space-heading")) $("#out-space-heading").textContent = SPACE_HEADINGS[activeSpace] || "全部资料";
 
       visibleItems = allItems.filter((item) => spaceMatchesItem(item) && (!filterRole || item.profile === filterRole));
@@ -3826,9 +5009,12 @@ html.dark .out-ico--ws { color: #fde047; }
       renderArtifactStage();
     }
 
-    function openItem(item) {
+    function openItem(item, fromUser = false) {
       if (!item) return;
       selectedItem = item;
+      const openWsBtn = $("#out-open-ws-btn");
+      if (openWsBtn) openWsBtn.hidden = !item.workspace_id;
+      if (fromUser && $("#out-shell")) $("#out-shell").classList.add("is-mob-inspect");
       renderCatalog();
       if (item.kind === "attachment") {
         return loadArtifact({ kind: "attachment", handle: item.handle, offset: 0 });
@@ -3878,8 +5064,9 @@ html.dark .out-ico--ws { color: #fde047; }
       if (spaceBtn) {
         activeSpace = spaceBtn.dataset.outSpace;
         selectedItem = null;
+        if ($("#out-shell")) $("#out-shell").classList.remove("is-mob-inspect");
         renderCatalog();
-        if (visibleItems.length) await openItem(visibleItems[0]);
+        if (visibleItems.length && activeSpace !== "workspaces") await openItem(visibleItems[0]);
         return;
       }
       const layoutBtn = ev.target.closest("[data-out-layout]");
@@ -3900,7 +5087,7 @@ html.dark .out-ico--ws { color: #fde047; }
       if (recentBtn) {
         const rid = recentBtn.dataset.recentId;
         const hit = (outData.recent || []).concat(outData.items || []).find((x) => x.id === rid);
-        if (hit) await openItem(hit);
+        if (hit) await openItem(hit, true);
         return;
       }
       const chatBtn = ev.target.closest("[data-out-chat]");
@@ -3933,20 +5120,20 @@ html.dark .out-ico--ws { color: #fde047; }
       const openItemBtn = ev.target.closest("[data-open-item-id]");
       if (openItemBtn) {
         const hit = (outData.items || []).find((x) => x.id === openItemBtn.dataset.openItemId);
-        if (hit) await openItem(hit);
+        if (hit) await openItem(hit, true);
         return;
       }
       const cardBtn = ev.target.closest("[data-out-idx]");
       if (cardBtn) {
         const idx = Number(cardBtn.dataset.outIdx);
-        await openItem(visibleItems[idx] || (outData.items || [])[idx]);
+        await openItem(visibleItems[idx] || (outData.items || [])[idx], true);
         return;
       }
       const attBtn = ev.target.closest("[data-open-att]");
       if (attBtn) {
         const handle = attBtn.dataset.openAtt;
         const hit = (outData.items || []).find((x) => x.handle === handle);
-        if (hit) await openItem(hit);
+        if (hit) await openItem(hit, true);
         else await loadArtifact({ kind: "attachment", handle, offset: 0 });
         return;
       }
@@ -3997,6 +5184,22 @@ html.dark .out-ico--ws { color: #fde047; }
     $("#out-goto-now").onclick = () => {
       switchWorkspaceTab("now");
     };
+    if ($("#out-mob-back")) {
+      $("#out-mob-back").onclick = () => {
+        $("#out-shell")?.classList.remove("is-mob-inspect");
+      };
+    }
+    if ($("#out-open-ws-btn")) {
+      $("#out-open-ws-btn").onclick = () => {
+        const wsid = selectedItem?.workspace_id;
+        if (!wsid) return;
+        activeSpace = "workspaces";
+        $("#out-shell")?.classList.remove("is-mob-inspect");
+        renderCatalog();
+        $(`[data-ws="${CSS.escape(wsid)}"]`)?.click();
+      };
+    }
+    themeListeners.push(() => { if (outData?.items) renderCatalog(); });
     $("#out-copy-btn").onclick = async () => {
       if (!copyBuffer) return say("当前无可复制的文本内容。", true);
       let copied = false;
@@ -4040,14 +5243,18 @@ html.dark .out-ico--ws { color: #fde047; }
     };
 
     const LAYER_GUIDES = {
-      memory: "会话备忘（MEMORY.md）按会话严格隔离，仅记录本会话长期置顶的办事约定；群友印象由宿主 A_Memorix 维护。",
+      memory: "会话备忘（MEMORY.md）按会话严格隔离，仅记录本会话长期置顶的办事约定；普通历史对话由系统自动检索关联。",
       journal: "近期手账（JOURNAL.md）由系统在公开探索线程完成后自动沉淀近 7 天经历摘要（新装或尚未触发探索时为空属正常现象）；请勿在此写入单会话私密信息。",
-      heartbeat: "探索节奏（HEARTBEAT.md）配置闲暇分寸与「## 自主探索方向」。预设示例默认处于注释静默态；取消注释或点击右上角「+ 插入公开探索示例」保存后即按心跳间隔巡检公开主题。",
+      heartbeat: "探索节奏（HEARTBEAT.md）配置闲暇分寸与「## 自主探索方向」。预设示例默认处于注释静默态；取消注释或点击右上角「填入示例模板」保存后即按心跳间隔巡检公开主题。",
     };
 
     function renderLayerBtns() {
       const k = $("#kind").value;
-      $$("[data-kind-tab]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kindTab === k)));
+      $$("[data-kind-tab]").forEach((b) => {
+        const active = b.dataset.kindTab === k;
+        b.setAttribute("aria-pressed", String(active));
+        b.classList.toggle("is-active", active);
+      });
       const cid = $("#chat").value;
       $$("[data-chat-chip]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.chatChip === cid)));
       const guide = $("#mem-layer-guide");
@@ -4173,6 +5380,11 @@ html.dark .out-ico--ws { color: #fde047; }
         </button>`;
       }).join("") || `<span class="mil-hint">暂无已启用会话</span>`;
       renderLayerBtns();
+      const quotaBox = $("#mem-quota-box");
+      if (quotaBox && r.proactive_quota) {
+        const q = r.proactive_quota;
+        quotaBox.innerHTML = `<span class="m-quota-main num">已用 ${Number(q.used || 0)} / ${Number(q.limit || 0)}</span><span class="m-quota-sub">剩余 ${Number(q.remaining || 0)} 次</span>`;
+      }
       renderCards($("#search-results"), r.results, "search");
       renderCards($("#experiences"), r.experiences, "exp");
     }
@@ -4188,13 +5400,16 @@ html.dark .out-ico--ws { color: #fde047; }
         return s?.name && s.name !== spec ? `${s.name} · ${spec}` : (spec || "自身活动");
       };
       $("#intent-list").innerHTML = (r.intents || []).map((i) => {
-        const kindTxt = MEM_INTENT_KINDS[i.kind] || i.kind || "计划";
+        const kindTxt = i.kind_label || MEM_INTENT_KINDS[i.kind] || i.kind || "计划";
         const statusTxt = MEM_INTENT_STATES[i.status] || i.status || "等待中";
         const srcTxt = MEM_INTENT_KINDS[i.source] || i.source || "系统";
+        const ctlHtml = i.status === "pending"
+          ? (i.protected ? `<span class="mil-tag">受保护</span>` : `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>`)
+          : `<span class="mil-tag">${esc(statusTxt)}</span>`;
         return `<div class="exp-card">
           <div class="mil-row" style="justify-content:space-between">
             <span><span class="mil-tag">${esc(kindTxt)}</span> <strong>${esc(i.reason || "定时执行")}</strong></span>
-            ${i.status === "pending" ? `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>` : `<span class="mil-tag">${esc(statusTxt)}</span>`}
+            ${ctlHtml}
           </div>
           <span class="mil-hint">${esc(targetName(i.target))} · ${esc(srcTxt)}</span>
         </div>`;
@@ -4207,8 +5422,11 @@ html.dark .out-ico--ws { color: #fde047; }
             const title = entry.topic || entry.title || entry.summary || entry.note || entry.content || entry.kind || "笔记回执";
             const status = MEM_INTENT_STATES[entry.status] || entry.status || "已记录";
             const metaParts = [entry.chat_id ? targetName(entry.chat_id) : "", entry.profile || "", entry.at || ""].filter(Boolean);
+            const undoBtn = entry.profile
+              ? `<button type="button" class="mil-key mil-key--sm" data-undo-learning="${esc(entry.profile)}" data-history-id="${esc(entry.version ?? entry.thread_id ?? "")}">撤回</button>`
+              : "";
             return `<div class="ms-receipt-card">
-              <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><span class="mil-tag">${esc(String(status))}</span></div>
+              <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><div class="mil-row" style="gap:6px"><span class="mil-tag">${esc(String(status))}</span>${undoBtn}</div></div>
               ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
             </div>`;
           }).join("")
@@ -4237,8 +5455,23 @@ html.dark .out-ico--ws { color: #fde047; }
         if (!r?.success) return say(r?.error || "取消失败", true);
         say("意图已取消");
         await loadIntents();
+        return;
+      }
+      const undoBtn = ev.target.closest("[data-undo-learning]");
+      if (undoBtn) {
+        const profileId = undoBtn.dataset.undoLearning;
+        const histId = undoBtn.dataset.historyId || "";
+        const payload = { profile_id: profileId };
+        if (histId) payload.history_id = histId;
+        const r = await rpc("write", "undo_learning_note", payload);
+        if (!r?.success) return say(r?.error || "撤回笔记失败", true);
+        say(`已撤回 ${profileId} 的自动笔记修订`);
+        await loadIntents();
       }
     }, { signal: sig });
+    if ($("#mem-goto-outputs")) {
+      $("#mem-goto-outputs").onclick = () => switchWorkspaceTab("outputs");
+    }
 
     $("#chat").addEventListener("change", () => { say(""); loadAsset(false); });
     $("#kind").addEventListener("change", () => { say(""); loadAsset(false); });
@@ -4498,6 +5731,11 @@ html.dark .out-ico--ws { color: #fde047; }
       if ($("#wh-b-profile")) $("#wh-b-profile").innerHTML = profileOptions("scout");
     }
 
+    let curServicesCfg = {};
+    let editingService = { kind: "mcp", origName: "" };
+    let mobSheetHolder = null;
+    let mobSheetParent = null;
+
     function setSettingsMode(mode) {
       settingsMode = mode === "advanced" ? "advanced" : "general";
       $$("[data-settings-mode]").forEach((b) => {
@@ -4505,6 +5743,103 @@ html.dark .out-ico--ws { color: #fde047; }
       });
       $("#settings-general-view").hidden = settingsMode !== "general";
       $("#settings-advanced-view").hidden = settingsMode !== "advanced";
+      $$("[data-set-rail]").forEach((b) => {
+        const key = b.dataset.setRail;
+        const match = (settingsMode === "general" && ["general", "streams", "routines"].includes(key))
+          || (settingsMode === "advanced" && ["services", "vault", "webhooks"].includes(key));
+        if (!match) b.classList.remove("is-active");
+      });
+    }
+
+    function openMobRoute(route) {
+      const shell = $("#settings-shell");
+      const hub = $("#settings-mob-hub");
+      const sub = $("#settings-mob-sub");
+      const titleEl = $("#mob-sub-title");
+      const addBtn = $("#mob-sub-act-add");
+      const refBtn = $("#mob-sub-act-refresh");
+      const next = route || "hub";
+      if (shell) shell.dataset.mobSub = next;
+      const inHub = next === "hub";
+      if (hub) hub.hidden = !inHub;
+      if (sub) sub.hidden = inHub;
+      if (inHub) return;
+      const titles = {
+        general: "外观、主动与联网",
+        streams: "对话流白名单",
+        routines: "定时安排与状态",
+        services: "外部服务与工具",
+        vault: "凭据保险箱",
+        webhooks: "外部事件触发",
+      };
+      if (titleEl) titleEl.textContent = titles[next] || "设置详情";
+      const isAdv = ["services", "vault", "webhooks"].includes(next);
+      setSettingsMode(isAdv ? "advanced" : "general");
+      if (addBtn) {
+        addBtn.hidden = !["services", "webhooks"].includes(next);
+        addBtn.dataset.mobSheet = next === "webhooks" ? "wh" : "svc";
+      }
+      if (refBtn) refBtn.hidden = next !== "routines";
+    }
+
+    function closeMobileSheet() {
+      const scrim = $("#settings-mob-scrim");
+      if (mobSheetHolder && mobSheetParent) {
+        mobSheetParent.appendChild(mobSheetHolder);
+      }
+      mobSheetHolder = null;
+      mobSheetParent = null;
+      if (scrim) scrim.hidden = true;
+    }
+
+    function openMobileSheet(el, titleText) {
+      const scrim = $("#settings-mob-scrim");
+      const body = $("#mob-sheet-body");
+      const ttl = $("#mob-sheet-title");
+      if (!scrim || !body || !el) return;
+      closeMobileSheet();
+      mobSheetHolder = el;
+      mobSheetParent = el.parentElement;
+      body.appendChild(el);
+      if (ttl) ttl.textContent = titleText || "编辑配置";
+      scrim.hidden = false;
+    }
+
+    function syncSvcDrawerFields() {
+      const isTpl = $("#svc-d-kind")?.value === "template";
+      if ($("#svc-d-tools-wrap")) $("#svc-d-tools-wrap").hidden = isTpl;
+      if ($("#svc-d-targets-wrap")) $("#svc-d-targets-wrap").hidden = !isTpl;
+    }
+
+    function openServiceDrawer(kind, name) {
+      const isTpl = kind === "template";
+      const pool = isTpl ? (curServicesCfg.templates || {}) : (curServicesCfg.servers || {});
+      const spec = (name && pool[name]) || {};
+      editingService = { kind: isTpl ? "template" : "mcp", origName: name || "" };
+      if ($("#svc-d-kind")) $("#svc-d-kind").value = editingService.kind;
+      if ($("#svc-d-name")) $("#svc-d-name").value = name || "";
+      if ($("#svc-d-desc")) $("#svc-d-desc").value = spec.description || "";
+      const cmdList = isTpl ? (spec.argv || []) : (spec.command || []);
+      if ($("#svc-d-cmd")) $("#svc-d-cmd").value = Array.isArray(cmdList) ? cmdList.join(" ") : String(cmdList || "");
+      if ($("#svc-d-tools")) $("#svc-d-tools").value = Array.isArray(spec.tools) ? spec.tools.join(", ") : "";
+      if ($("#svc-d-targets")) $("#svc-d-targets").value = Array.isArray(spec.targets) ? spec.targets.join(", ") : "";
+      const credsObj = spec.credentials && typeof spec.credentials === "object" ? spec.credentials : {};
+      const credsLines = isTpl
+        ? (Array.isArray(spec.secrets) ? spec.secrets.map((s) => `${s}=${s}`) : [])
+        : Object.entries(credsObj).map(([k, v]) => `${k}=${v}`);
+      if ($("#svc-d-creds")) $("#svc-d-creds").value = credsLines.join("\n");
+      if ($("#svc-d-access")) $("#svc-d-access").value = spec.access === "admins" ? "admins" : "everyone";
+      if ($("#svc-d-mem")) $("#svc-d-mem").value = String(Number(spec.memory_mib || 256));
+      if ($("#svc-d-readonly")) $("#svc-d-readonly").checked = spec.readonly !== false;
+      if ($("#svc-d-del")) $("#svc-d-del").hidden = !name;
+      if ($("#set-drawer-title")) $("#set-drawer-title").textContent = name ? `编辑：${name}` : "新增外部服务";
+      if ($("#set-drawer-badge")) $("#set-drawer-badge").textContent = isTpl ? "固定模板" : "MCP 服务";
+      syncSvcDrawerFields();
+      if (window.innerWidth <= 760) {
+        openMobileSheet($("#svc-drawer-form"), name ? `编辑服务：${name}` : "新增外部服务");
+      } else {
+        $("#settings-ctx-drawer")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     }
 
     function syncWebCustomVis() {
@@ -4561,15 +5896,25 @@ html.dark .out-ico--ws { color: #fde047; }
       const hbChoices = hbList.some((p) => p.id === curHb) ? hbList : [...hbList, { id: curHb, title: curHb }];
       const hbOpts = hbChoices.map((p) => `<option value="${esc(p.id)}" ${p.id === curHb ? "selected" : ""}>${esc(p.title && p.title !== p.id ? `${p.title} · ${p.id}` : p.id)}</option>`).join("");
 
-      $("#general-fields").innerHTML = [
-        row("界面设计风格", "默认千禧机械风（协调宿主主题）；也可切换为清朗手账风，或改为自动跟随宿主主题。", `<select id="ui_style" class="mil-select"><option value="millennium" ${uiStyle === "millennium" ? "selected" : ""}>千禧机械风（默认 · 协调宿主）</option><option value="maiwork" ${uiStyle === "maiwork" ? "selected" : ""}>清朗手账风</option><option value="auto" ${uiStyle === "auto" ? "selected" : ""}>自动跟随宿主主题</option></select>`),
+      const wlRowHtml = row("启用会话白名单", "以条目方式管理允许服务的会话（统一格式 平台:类型:id，如 qq:group:12345678）。也可针对单条会话单独设定主动分寸；未加入白名单的会话零读取、零打扰。", `<div id="chat-whitelist-box" class="ms-entry-box"></div><input id="set-chats" type="hidden" value="${esc(whitelistEntries.map((e) => e.spec).join(", "))}">`, true);
+      const genRows = [
+        row("界面设计风格", "默认千禧机械（协调宿主主题）；也可切换为默认主题，或改为自动跟随宿主主题。", `<select id="ui_style" class="mil-select"><option value="millennium" ${uiStyle === "millennium" ? "selected" : ""}>千禧机械（默认 · 协调宿主）</option><option value="maiwork" ${uiStyle === "maiwork" ? "selected" : ""}>默认主题</option><option value="auto" ${uiStyle === "auto" ? "selected" : ""}>自动跟随宿主主题</option></select>`),
         row("启用 Maisya 插件", "开启后在以下启用会话挂载技能、手账备忘与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
-        row("启用会话白名单", "以条目方式管理允许服务的会话（统一格式 平台:类型:id，如 qq:group:12345678）。也可针对单条会话单独设定主动分寸；未加入白名单的会话零读取、零打扰。", `<div id="chat-whitelist-box" class="ms-entry-box"></div><input id="set-chats" type="hidden" value="${esc(whitelistEntries.map((e) => e.spec).join(", "))}">`, true),
+      ];
+      if ($("#streams-fields")) {
+        $("#streams-fields").innerHTML = wlRowHtml;
+      } else {
+        genRows.push(wlRowHtml);
+      }
+      genRows.push(
         row("主动分寸与每日上限", "空闲后是否主动惦记，以及普通闲聊每日最多搭话次数 (0-50)。", `<select id="proactive_level" class="mil-select" style="width:auto;flex:1 1 180px"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静（只回应触发）</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>平衡（适度主动关心）</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃（空闲时会主动搭话）</option></select><input id="daily_proactive_limit" class="mil-input mono" style="width:76px;flex:0 0 auto" type="number" min="0" max="50" value="${Number(s.daily_proactive_limit ?? 1)}" aria-label="每日主动搭话上限"><span class="ms-inline-unit">次/天</span>`),
         row("免打扰时段", "开启后在指定整点时段内保持安静，不发主动问候（如凌晨 01:00 至 08:00）。", `<label class="mil-switch"><input id="sleep-enabled" type="checkbox" ${sleepOn ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${sleepOn ? "已开启" : "未限制"}</span></label><div id="sleep-range-wrap" class="mil-row" style="gap:6px;flex-wrap:nowrap" ${sleepOn ? "" : "hidden"}><select id="sleep-start" class="mil-select" aria-label="免打扰开始时间">${hourOpts(sleepStart)}</select><span class="ms-inline-unit">至</span><select id="sleep-end" class="mil-select" aria-label="免打扰结束时间">${hourOpts(sleepEnd)}</select></div><input id="set-sleep" type="hidden" value="${esc(s.sleep_window || "")}">`),
         row("联网搜索方式", "默认自动探测宿主或插件联网；选高级自定义可填写专有来源标识。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>自动识别（优先随宿主，其次联网插件）</option><option value="host" ${web === "host" ? "selected" : ""}>仅使用宿主自带联网</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>使用第三方搜索插件</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>使用已配置的 MCP 搜索工具</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>调用其他插件接口</option><option value="custom" ${!isPreset ? "selected" : ""}>高级自定义来源…</option></select><div id="web-custom-wrap" style="width:100%" ${isPreset ? "hidden" : ""}><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:..."></div>`),
         row("自我探索心跳", "定期自主巡检手账与感兴趣主题的间隔分钟数，以及默认出动角色。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:76px;flex:0 0 auto" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}" aria-label="心跳间隔分钟数"><span class="ms-inline-unit">分钟/次 · 角色</span><select id="heartbeat_profile" class="mil-select" style="width:auto;flex:1 1 160px" aria-label="心跳默认角色">${hbOpts}</select>`),
-      ].join("");
+      );
+      $("#general-fields").innerHTML = genRows.join("");
+      if ($("#mob-sum-general")) $("#mob-sum-general").textContent = `${s.plugin?.enabled ? "已开启" : "已停用"} · ${s.proactive_level === "quiet" ? "安静" : (s.proactive_level === "lively" ? "活跃" : "平衡")}`;
+      if ($("#mob-sum-streams")) $("#mob-sum-streams").textContent = `${whitelistEntries.length} 条`;
 
       $("#advanced-runtime-fields").innerHTML = [
         row("久违问候安静阈值 (小时)", "熟人会话安静超过设定小时数后才可能温柔打招呼 (12-720)。", `<input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="12" max="720" value="${Number(s.longing_quiet_hours ?? 72)}">`),
@@ -4609,10 +5954,28 @@ html.dark .out-ico--ws { color: #fde047; }
       syncWebCustomVis();
     }
 
+    function updateQuotaBadges(q) {
+      const qb = $("#set-quota-badge");
+      const dq = $("#set-drawer-quota-text");
+      if (!q || typeof q !== "object") return;
+      const used = Number(q.used || 0);
+      const limit = Number(q.limit || 0);
+      const rem = Number(q.remaining || 0);
+      if (qb) {
+        qb.hidden = false;
+        qb.textContent = `今日主动额度 ${used} / ${limit} · 剩余 ${rem}`;
+      }
+      if (dq) {
+        dq.textContent = `已用 ${used} / ${limit} · 剩余 ${rem} 次`;
+      }
+    }
+
     function renderHandles(handles) {
-      $("#handles").innerHTML = (handles || []).length
-        ? handles.map((h) => `<button type="button" class="mil-key mil-key--sm mono" data-pick-handle="${esc(h)}">${esc(h)}</button>`).join("")
+      const list = handles || [];
+      $("#handles").innerHTML = list.length
+        ? list.map((h) => `<button type="button" class="mil-key mil-key--sm mono" data-pick-handle="${esc(h)}">${esc(h)}</button>`).join("")
         : `<span class="mil-hint">暂无已登记句柄</span>`;
+      if ($("#mob-sum-vault")) $("#mob-sum-vault").textContent = `${list.length} 项`;
     }
 
     async function loadSettings() {
@@ -4628,6 +5991,7 @@ html.dark .out-ico--ws { color: #fde047; }
       populateChatAndProfilePickers();
       renderGeneral();
       renderHandles(r.handles);
+      updateQuotaBadges(r.proactive_quota);
       updateSchedSummary();
     }
 
@@ -4636,26 +6000,60 @@ html.dark .out-ico--ws { color: #fde047; }
       if (!r?.success) return;
       svcVersion = r.version;
       const cfg = r.configuration || {};
+      curServicesCfg = cfg;
       $("#service-config").value = JSON.stringify(cfg, null, 2);
       const apis = Object.keys(cfg.apis || {});
       const webs = Object.keys((cfg.web || {}).providers || {});
-      const mcps = Object.keys(cfg.servers || {});
-      $("#service-cards").innerHTML = `<div class="mil-row">
+      const mcps = Object.entries(cfg.servers || {});
+      const tpls = Object.entries(cfg.templates || {});
+      const cards = [
+        ...mcps.map(([k, spec]) => `<div class="m-svc-card">
+          <div class="m-svc-card-head">
+            <div class="mil-row" style="gap:6px"><span class="mil-tag">MCP 服务</span><strong class="mono">${esc(k)}</strong></div>
+            <div class="mil-row" style="gap:4px">
+              <button type="button" class="mil-key mil-key--sm" data-svc-edit="${esc(k)}" data-svc-kind="mcp">编辑</button>
+              <button type="button" class="mil-key mil-key--sm mil-key--danger" data-svc-del="${esc(k)}" data-svc-kind="mcp">删除</button>
+            </div>
+          </div>
+          <span class="mil-hint">${esc(spec?.description || (Array.isArray(spec?.command) ? spec.command.join(" ") : "外部命令行服务"))}</span>
+        </div>`),
+        ...tpls.map(([k, spec]) => `<div class="m-svc-card">
+          <div class="m-svc-card-head">
+            <div class="mil-row" style="gap:6px"><span class="mil-tag mil-tag--ok">执行模板</span><strong class="mono">${esc(k)}</strong></div>
+            <div class="mil-row" style="gap:4px">
+              <button type="button" class="mil-key mil-key--sm" data-svc-edit="${esc(k)}" data-svc-kind="template">编辑</button>
+              <button type="button" class="mil-key mil-key--sm mil-key--danger" data-svc-del="${esc(k)}" data-svc-kind="template">删除</button>
+            </div>
+          </div>
+          <span class="mil-hint">${esc(spec?.description || (Array.isArray(spec?.argv) ? spec.argv.join(" ") : "固定动作模板"))}</span>
+        </div>`),
+      ];
+      const summaryRow = `<div class="mil-row" style="grid-column:1/-1">
         <span class="mil-tag">MCP 服务 ${mcps.length}</span>
-        <span class="mil-tag">跨插件 API ${apis.length}</span>
+        <span class="mil-tag">执行模板 ${tpls.length}</span>
+        <span class="mil-tag">跨插件接口 ${apis.length}</span>
         <span class="mil-tag mil-tag--ok">联网别名 ${webs.length}</span>
       </div>`;
+      $("#service-cards").innerHTML = summaryRow + (cards.join("") || `<span class="mil-hint" style="grid-column:1/-1">暂未配置 MCP 服务或执行模板，点击右上角「新增服务」或下方编辑。</span>`);
+      if ($("#mob-sum-services")) $("#mob-sum-services").textContent = `${mcps.length + tpls.length} 项`;
     }
 
     function renderWebhookCards(cfg) {
       const keys = Object.keys(cfg || {});
       $("#webhook-cards").innerHTML = keys.length
-        ? `<div class="mil-row">${keys.map((k) => {
+        ? keys.map((k) => {
             const rawTarget = String(cfg[k]?.target || "");
             const cleanTarget = rawTarget.replace(/^chat:/, "");
-            return `<span class="mil-tag mil-tag--warn">${esc(k)} → ${esc(friendlyStreamName(cleanTarget))}${cleanTarget ? ` (${esc(cleanTarget)})` : ""}</span>`;
-          }).join("")}</div>`
+            return `<div class="m-svc-card">
+              <div class="m-svc-card-head">
+                <strong class="mono">${esc(k)}</strong>
+                <button type="button" class="mil-key mil-key--sm mil-key--danger" data-wh-del="${esc(k)}">移除</button>
+              </div>
+              <span class="mil-hint">${esc(friendlyStreamName(cleanTarget))}${cleanTarget ? ` (${esc(cleanTarget)})` : ""}</span>
+            </div>`;
+          }).join("")
         : `<span class="mil-hint">暂无外部事件通道</span>`;
+      if ($("#mob-sum-webhooks")) $("#mob-sum-webhooks").textContent = `${keys.length} 条`;
     }
 
     async function loadWebhooks() {
@@ -4688,14 +6086,19 @@ html.dark .out-ico--ws { color: #fde047; }
         ].join("");
       }
       if (ir?.success) {
+        const pendingCnt = (ir.intents || []).filter((i) => i.status === "pending").length;
+        if ($("#mob-sum-routines")) $("#mob-sum-routines").textContent = pendingCnt ? `${pendingCnt} 项待执行` : "状态正常";
         $("#intent-list").innerHTML = (ir.intents || []).map((i) => {
-          const kindTxt = INTENT_KIND_LABELS[i.kind] || i.kind || "计划";
+          const kindTxt = i.kind_label || INTENT_KIND_LABELS[i.kind] || i.kind || "计划";
           const statusTxt = INTENT_STATUS_LABELS[i.status] || i.status || "等待中";
           const rawTarget = String(i.target || "").replace(/^chat:/, "");
+          const ctlHtml = i.status === "pending"
+            ? (i.protected ? `<span class="mil-tag">受保护</span>` : `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>`)
+            : `<span class="mil-tag">${esc(statusTxt)}</span>`;
           return `<div class="exp-card">
             <div class="mil-row" style="justify-content:space-between">
               <span><span class="mil-tag">${esc(kindTxt)}</span> <strong>${esc(i.reason || "定时执行")}</strong></span>
-              <span class="mil-tag">${esc(statusTxt)}</span>
+              ${ctlHtml}
             </div>
             <span class="mil-hint">${esc(friendlyStreamName(rawTarget))}${rawTarget ? ` · <span class="mono">${esc(rawTarget)}</span>` : ""} · ${esc(INTENT_KIND_LABELS[i.source] || i.source || "系统")}</span>
           </div>`;
@@ -4709,8 +6112,11 @@ html.dark .out-ico--ws { color: #fde047; }
               const status = INTENT_STATUS_LABELS[entry.status] || entry.status || "已记录";
               const chatRaw = String(entry.chat_id || entry.target || "").replace(/^chat:/, "");
               const metaParts = [chatRaw ? friendlyStreamName(chatRaw) : "", entry.profile || "", entry.at || ""].filter(Boolean);
+              const undoBtn = entry.profile
+                ? `<button type="button" class="mil-key mil-key--sm" data-undo-learning="${esc(entry.profile)}" data-history-id="${esc(entry.version ?? entry.thread_id ?? "")}">撤回</button>`
+                : "";
               return `<div class="ms-receipt-card">
-                <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><span class="mil-tag">${esc(String(status))}</span></div>
+                <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><div class="mil-row" style="gap:6px"><span class="mil-tag">${esc(String(status))}</span>${undoBtn}</div></div>
                 ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
               </div>`;
             }).join("")
@@ -4745,10 +6151,91 @@ html.dark .out-ico--ws { color: #fde047; }
       }
     }, { signal: sig });
 
-    document.addEventListener("click", (ev) => {
+    document.addEventListener("click", async (ev) => {
       const modeBtn = ev.target.closest("[data-settings-mode]");
       if (modeBtn) {
         setSettingsMode(modeBtn.dataset.settingsMode);
+        return;
+      }
+      const railBtn = ev.target.closest("[data-set-rail]");
+      if (railBtn) {
+        const sec = railBtn.dataset.setRail;
+        const isAdv = ["services", "vault", "webhooks", "runtime"].includes(sec);
+        setSettingsMode(isAdv ? "advanced" : "general");
+        $$("[data-set-rail]").forEach((b) => b.classList.toggle("is-active", b === railBtn));
+        $(`[data-set-sec="${CSS.escape(sec)}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      const mobRouteBtn = ev.target.closest("[data-mob-route]");
+      if (mobRouteBtn) {
+        openMobRoute(mobRouteBtn.dataset.mobRoute);
+        return;
+      }
+      if (ev.target.closest("[data-mob-back]")) {
+        openMobRoute("hub");
+        return;
+      }
+      if (ev.target.closest("#mob-sub-act-refresh")) {
+        await loadHealth();
+        say("运行状态已刷新");
+        return;
+      }
+      const mobSheetBtn = ev.target.closest("[data-mob-sheet]");
+      if (mobSheetBtn) {
+        const sheetKind = mobSheetBtn.dataset.mobSheet || "svc";
+        if (sheetKind === "wh") {
+          openMobileSheet($("#wh-quick-builder"), "添加触发通道");
+        } else {
+          openServiceDrawer("mcp", "");
+        }
+        return;
+      }
+      if (ev.target.closest("#mob-sheet-close") || ev.target.id === "settings-mob-scrim" || ev.target.classList?.contains("m-mob-sheet-scrim")) {
+        closeMobileSheet();
+        return;
+      }
+      const svcEditBtn = ev.target.closest("[data-svc-edit]");
+      if (svcEditBtn) {
+        openServiceDrawer(svcEditBtn.dataset.svcKind || "mcp", svcEditBtn.dataset.svcEdit || "");
+        return;
+      }
+      const svcDelBtn = ev.target.closest("[data-svc-del]");
+      if (svcDelBtn) {
+        const kind = svcDelBtn.dataset.svcKind === "template" ? "template" : "mcp";
+        const name = svcDelBtn.dataset.svcDel;
+        const r = await rpc("write", "delete_service_item", { kind, name, expected_version: svcVersion });
+        if (!r?.success) return say(r?.error || "删除服务条目失败", true);
+        say(`已删除服务 ${name}`);
+        await loadServices();
+        return;
+      }
+      const whDelBtn = ev.target.closest("[data-wh-del]");
+      if (whDelBtn) {
+        const name = whDelBtn.dataset.whDel;
+        const r = await rpc("write", "delete_webhook_item", { name, expected_version: whVersion });
+        if (!r?.success) return say(r?.error || "移除触发通道失败", true);
+        say(`已移除通道 ${name}`);
+        await loadWebhooks();
+        return;
+      }
+      const cancelBtn = ev.target.closest("[data-cancel-intent]");
+      if (cancelBtn) {
+        const r = await rpc("write", "cancel_intent", { intent_id: cancelBtn.dataset.cancelIntent });
+        if (!r?.success) return say(r?.error || "取消意图失败", true);
+        say("意图已取消");
+        await loadHealth();
+        return;
+      }
+      const undoBtn = ev.target.closest("[data-undo-learning]");
+      if (undoBtn) {
+        const profileId = undoBtn.dataset.undoLearning;
+        const histId = undoBtn.dataset.historyId || "";
+        const payload = { profile_id: profileId };
+        if (histId) payload.history_id = histId;
+        const r = await rpc("write", "undo_learning_note", payload);
+        if (!r?.success) return say(r?.error || "撤回笔记失败", true);
+        say(`已撤回 ${profileId} 的自动笔记修订`);
+        await loadHealth();
         return;
       }
       if (ev.target?.id === "wl-add-known") {
@@ -4864,11 +6351,74 @@ html.dark .out-ico--ws { color: #fde047; }
       applyTheme();
       populateChatAndProfilePickers();
       renderGeneral();
+      updateQuotaBadges(r.proactive_quota);
       say("已保存设置。");
       await loadHealth();
     }
     $("#save-settings").onclick = saveAllSettings;
+    if ($("#save-settings-streams")) $("#save-settings-streams").onclick = saveAllSettings;
     if ($("#save-settings-adv")) $("#save-settings-adv").onclick = saveAllSettings;
+    if ($("#svc-new-btn")) $("#svc-new-btn").onclick = () => openServiceDrawer("mcp", "");
+    if ($("#svc-d-kind")) $("#svc-d-kind").addEventListener("change", syncSvcDrawerFields);
+    if ($("#svc-d-save")) {
+      $("#svc-d-save").onclick = async () => {
+        const kind = $("#svc-d-kind")?.value === "template" ? "template" : "mcp";
+        const name = ($("#svc-d-name")?.value || "").trim();
+        if (!name) return say("请先填写服务代号", true);
+        const cmdParts = ($("#svc-d-cmd")?.value || "").trim().split(/\s+/).filter(Boolean);
+        if (!cmdParts.length) return say("请填写程序路径与参数", true);
+        const creds = {};
+        const secretNames = [];
+        ($("#svc-d-creds")?.value || "").split(/\r?\n/).forEach((line) => {
+          const clean = line.trim();
+          if (!clean) return;
+          const eq = clean.indexOf("=");
+          if (eq > 0) {
+            const k = clean.slice(0, eq).trim();
+            const v = clean.slice(eq + 1).trim();
+            if (k && v) { creds[k] = v; secretNames.push(v); }
+          } else {
+            secretNames.push(clean);
+          }
+        });
+        const item = kind === "template"
+          ? {
+              argv: cmdParts,
+              description: ($("#svc-d-desc")?.value || "").trim(),
+              secrets: [...new Set(secretNames)],
+              targets: ($("#svc-d-targets")?.value || "").split(",").map((x) => x.trim()).filter(Boolean),
+              access: $("#svc-d-access")?.value === "admins" ? "admins" : "everyone",
+            }
+          : {
+              command: cmdParts,
+              description: ($("#svc-d-desc")?.value || "").trim(),
+              credentials: creds,
+              tools: ($("#svc-d-tools")?.value || "").split(",").map((x) => x.trim()).filter(Boolean),
+              readonly: $("#svc-d-readonly")?.checked !== false,
+              access: $("#svc-d-access")?.value === "admins" ? "admins" : "everyone",
+              memory_mib: Number($("#svc-d-mem")?.value || 256),
+            };
+        const r = await rpc("write", "upsert_service_item", { kind, name, item, expected_version: svcVersion });
+        if (!r?.success) return say(r?.error || "保存服务条目失败", true);
+        svcVersion = r.version;
+        closeMobileSheet();
+        say(`已保存服务 ${name}`);
+        await loadServices();
+      };
+    }
+    if ($("#svc-d-del")) {
+      $("#svc-d-del").onclick = async () => {
+        const kind = editingService.kind || "mcp";
+        const name = editingService.origName || ($("#svc-d-name")?.value || "").trim();
+        if (!name) return;
+        const r = await rpc("write", "delete_service_item", { kind, name, expected_version: svcVersion });
+        if (!r?.success) return say(r?.error || "移除服务条目失败", true);
+        svcVersion = r.version;
+        closeMobileSheet();
+        say(`已移除服务 ${name}`);
+        await loadServices();
+      };
+    }
     if ($("#wh-b-add")) {
       $("#wh-b-add").onclick = () => {
         const name = ($("#wh-b-name")?.value || "").trim();
