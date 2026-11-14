@@ -1,4 +1,4 @@
-"""将 Maisya 双主题单页 5 标签工作台样式（清朗手账 + MaiBot 千禧机械主题）与管理片段打包为宿主所需的自包含 HTML。"""
+"""将 Maisya 双主题单页 5 标签工作台样式（默认主题 + MaiBot 千禧机械主题）与管理片段打包为宿主所需的自包含 HTML。"""
 
 import json
 import sys
@@ -36,6 +36,7 @@ def _render_unified(
     *,
     css: str,
     mgmt_css: str,
+    icons_js: str,
     fish_js: str,
     fragments_json: str,
     mgmt_boot_js: str,
@@ -48,6 +49,7 @@ def _render_unified(
     replacements = {
         "{{MILLENNIUM_CSS}}": css,
         "{{MGMT_CSS}}": mgmt_css,
+        "{{ICONS_JS}}": icons_js,
         "{{FISH_JS}}": fish_js,
         "{{MGMT_FRAGMENTS_JSON}}": fragments_json,
         "{{MGMT_BOOT_JS}}": mgmt_boot_js,
@@ -72,9 +74,13 @@ def _render_unified(
 def main():
     root = Path(__file__).resolve().parent
     css = (root / "millennium.css").read_text(encoding="utf-8").rstrip("\n")
+    icons_js = (root / "icons.js").read_text(encoding="utf-8").rstrip("\n")
     fish_js = (root / "fish.js").read_text(encoding="utf-8").rstrip("\n")
     shell_tpl = (root / "now.html.in").read_text(encoding="utf-8")
     mgmt_tpl = (root / "management.html.in").read_text(encoding="utf-8")
+
+    if "{{ICONS_JS}}" not in shell_tpl:
+        raise ValueError("missing placeholder: {{ICONS_JS}}")
 
     shell_tpl, now_body = _replace_marked(
         shell_tpl, "<!-- ==NOW_BODY_START== -->", "<!-- ==NOW_BODY_END== -->", "{{NOW_BODY}}", "NOW_BODY"
@@ -98,6 +104,7 @@ def main():
                 shell_tpl,
                 css=css,
                 mgmt_css=mgmt_css,
+                icons_js=icons_js,
                 fish_js=fish_js,
                 fragments_json=fragments_json,
                 mgmt_boot_js=mgmt_boot_js,
@@ -110,6 +117,10 @@ def main():
     ]
     check = "--check" in sys.argv
     for target, rendered in targets:
+        if "{{ICONS_JS}}" in rendered:
+            raise SystemExit(f"{target.name} 未能正确内联 icons.js")
+        if len(rendered.encode("utf-8")) >= 2 * 1024 * 1024:
+            raise SystemExit(f"{target.name} 超出 2 MiB 体积上限")
         if check:
             if not target.exists() or target.read_text(encoding="utf-8") != rendered:
                 raise SystemExit(f"{target.name} 需要重新构建")
