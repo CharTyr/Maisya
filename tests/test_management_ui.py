@@ -727,3 +727,237 @@ model_list = ["tavily"]
                 await browser.close()
     finally:
         await plugin.on_unload()
+
+
+def _make_multichunk_png(width: int = 780, height: int = 1200) -> bytes:
+    """Build a valid uncompressed-noise RGB PNG larger than 450 KB (> 3 x 196608 B chunks)."""
+    import hashlib
+    import struct
+    import zlib
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", crc)
+
+    row_bytes = 1 + width * 3
+    noise = hashlib.shake_256(b"maisya-multichunk-card").digest(520_000)
+    raw = bytearray(row_bytes * height)
+    # Fill upper 220 rows with incompressible noise so compressed IDAT exceeds 480 KB
+    for y in range(min(height, len(noise) // (width * 3))):
+        off = y * row_bytes
+        raw[off] = 0
+        start = y * width * 3
+        raw[off + 1 : off + 1 + width * 3] = noise[start : start + width * 3]
+    ihdr = struct.pack("!IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    idat = zlib.compress(bytes(raw), level=1)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", idat)
+        + _chunk(b"IEND", b"")
+    )
+
+
+@pytest.mark.asyncio
+async def test_outputs_preview_multichunk_card_and_styled_svg_html_under_concurrency(
+    tmp_path,
+):
+    png_bytes = _make_multichunk_png(780, 1200)
+    assert len(png_bytes) > 450_000
+
+    plugin = await loaded(tmp_path)
+    profile = plugin.profiles.get("digest")
+    row = plugin.threads.create(
+        profile,
+        "生成今日开源工程图解简报",
+        chat_id="chat",
+        platform="qq",
+        user_id="qq:Alice",
+        workspace="digest",
+    )
+    with plugin.runtime.files.activity(row) as work:
+        work.write(
+            "out/digest-card.html",
+            """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+            :root { --bg: #0f172a; --card-bg: #1e293b; --ink: #f8fafc; --accent: #60a5fa; }
+            body { margin: 0; padding: 24px; background: var(--bg); color: var(--ink); }
+            .digest-card { background: var(--card-bg); color: var(--ink); padding: 20px; border-radius: 12px; }
+            [data-theme="dark"] .vs-bar-fill { background: var(--accent); height: 12px; }
+            </style></head><body data-theme="dark">
+            <div class="digest-card"><h1>天光简报</h1><div class="vs"><svg viewBox="0 0 200 40"><rect width="140" height="20" fill="#60a5fa"></rect></svg><div class="vs-bar-fill" style="width:70%"></div></div><p>精选开源工程条目</p></div>
+            <script>window.pwned_card = true;</script>
+            </body></html>""",
+        )
+        (work.path / "out/digest-card.png").write_bytes(png_bytes)
+        work.commit()
+        attached = plugin.runtime.files.attach(
+            row, work, ["out/digest-card.html", "out/digest-card.png"]
+        )
+
+    png_att = next(a for a in attached if a["name"] == "digest-card.png")
+    with plugin.threads.connect() as db, db:
+        db.execute(
+            "UPDATE agent_threads SET state='waiting', result=?, completed_revision=1 WHERE thread_id=?",
+            (
+                json.dumps(
+                    {
+                        "text": "**天光简报｜工程与开源**",
+                        "links": ["https://example.org/post"],
+                        "attachments": attached,
+                    },
+                    ensure_ascii=False,
+                ),
+                row["thread_id"],
+            ),
+        )
+
+    active, peak = 0, 0
+    first_outputs_rejected = False
+
+    async def rpc_bridge(kind, name, arguments):
+        nonlocal active, peak, first_outputs_rejected
+        active += 1
+        peak = max(peak, active)
+        try:
+            args = arguments or {}
+            if kind == "query":
+                if name == "read":
+                    if args.get("section") == "outputs" and not first_outputs_rejected:
+                        first_outputs_rejected = True
+                        return {
+                            "__reject__": "HTTP 429: 该插件已有两个进行中的 WebUI 请求"
+                        }
+                    return await plugin.manage_read(**args)
+                if name == "event":
+                    return await plugin.console_event(**args)
+                return await plugin.console_query(**args)
+            if name == "write":
+                return await plugin.manage_write(**args)
+            if name == "stop":
+                return await plugin.console_stop(**args)
+            return await plugin.console_send(**args)
+        finally:
+            active -= 1
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            errors = []
+            try:
+                page = await browser.new_page(viewport={"width": 1180, "height": 900})
+                page.on("pageerror", lambda err: errors.append(str(err)))
+                await page.expose_function("hostBackend", rpc_bridge)
+                await page.set_content(
+                    '<!doctype html><html><body style="margin:0;padding:0">'
+                    '<iframe id="host-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" '
+                    'style="width:100%;height:880px;border:0"></iframe></body></html>'
+                )
+                csp_and_bridge = """<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:; font-src data:; media-src data: blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"><script>
+                (() => {
+                  let seq = 0;
+                  const pending = new Map();
+                  window.addEventListener("message", (ev) => {
+                    const msg = ev.data || {};
+                    if (msg.type !== "maibot-rpc-res") return;
+                    const slot = pending.get(msg.id);
+                    if (!slot) return;
+                    pending.delete(msg.id);
+                    if (msg.reject) slot.reject(new Error(msg.reject));
+                    else slot.resolve(msg.res);
+                  });
+                  const call = (kind, name, args) => new Promise((resolve, reject) => {
+                    const id = ++seq;
+                    pending.set(id, { resolve, reject });
+                    window.parent.postMessage({ type: "maibot-rpc-req", id, kind, name, args }, "*");
+                  });
+                  window.maibot = {
+                    ready: Promise.resolve(),
+                    context: { theme: "light" },
+                    query: (name, args) => call("query", name, args),
+                    action: (name, args) => call("action", name, args),
+                    navigate: () => Promise.resolve(),
+                  };
+                })();
+                </script>"""
+                raw_doc = Path("webui/now.html").read_text(encoding="utf-8")
+                srcdoc = raw_doc.replace("<head>", "<head>" + csp_and_bridge, 1)
+                await page.evaluate(
+                    """(doc) => {
+                      const frame = document.getElementById("host-frame");
+                      window.addEventListener("message", async (ev) => {
+                        const msg = ev.data || {};
+                        if (msg.type !== "maibot-rpc-req") return;
+                        try {
+                          const res = await window.hostBackend(msg.kind, msg.name, msg.args || {});
+                          if (res && res.__reject__) {
+                            frame.contentWindow.postMessage({ type: "maibot-rpc-res", id: msg.id, reject: res.__reject__ }, "*");
+                          } else {
+                            frame.contentWindow.postMessage({ type: "maibot-rpc-res", id: msg.id, res }, "*");
+                          }
+                        } catch (err) {
+                          frame.contentWindow.postMessage({ type: "maibot-rpc-res", id: msg.id, reject: String(err) }, "*");
+                        }
+                      });
+                      frame.srcdoc = doc;
+                    }""",
+                    srcdoc,
+                )
+
+                frame = page.frame_locator("#host-frame")
+                jump_btn = frame.locator(f'[data-jump-att="{png_att["handle"]}"]')
+                await expect(jump_btn).to_be_visible()
+                await expect(jump_btn).to_contain_text("预览 digest-card.png")
+
+                await jump_btn.click()
+                assert first_outputs_rejected is True
+                await expect(frame.locator("#out-st-total")).to_have_text("3")
+
+                img_stage = frame.locator(".out-img-stage")
+                await expect(img_stage).to_be_visible()
+                style_attr = await img_stage.get_attribute("style") or ""
+                assert "data:image/png;base64," in style_attr
+                assert "blob:" not in style_attr
+                await expect(frame.locator("#out-meta")).to_contain_text("780 × 1200")
+                wide_box = await img_stage.bounding_box()
+                assert wide_box is not None and wide_box["height"] > 600
+
+                await frame.locator('[data-img-fit="contain"]').click()
+                contain_box = await img_stage.bounding_box()
+                assert contain_box is not None and contain_box["height"] <= 420
+
+                child_frame = page.frames[1]
+                assert await child_frame.locator("img").count() == 0
+                assert await child_frame.locator("iframe").count() == 0
+
+                await frame.locator('[data-out-space="pages"]').click()
+                sandbox = frame.locator(".out-html-sandbox")
+                await expect(sandbox).to_be_visible()
+                assert await frame.locator("#out-stage svg rect").count() == 1
+                card_bg = await child_frame.evaluate(
+                    "getComputedStyle(document.querySelector('.out-html-sandbox .digest-card')).backgroundColor"
+                )
+                body_bg = await child_frame.evaluate(
+                    "getComputedStyle(document.body).backgroundColor"
+                )
+                assert card_bg == "rgb(30, 41, 59)"
+                assert body_bg != "rgb(15, 23, 42)"
+                assert await child_frame.evaluate("Boolean(window.pwned_card)") is False
+
+                switch_img_btn = frame.locator('[data-open-item-id]')
+                await expect(switch_img_btn).to_be_visible()
+                await switch_img_btn.click()
+                await expect(frame.locator(".out-img-stage")).to_be_visible()
+
+                await frame.locator('[data-out-space="all"]').click()
+                await expect(frame.locator("#out-st-wsout")).to_have_text("2")
+                await frame.locator('[data-out-kind="workspace_out"]').click()
+                await expect(frame.locator("#out-list [data-out-idx]")).to_have_count(2)
+
+                await frame.locator("#out-refresh-btn").click()
+                await expect(frame.locator("#out-st-total")).to_have_text("3")
+                await expect(frame.locator(".out-img-stage")).to_be_visible()
+                assert not errors and peak <= 2
+            finally:
+                await browser.close()
+    finally:
+        await plugin.on_unload()

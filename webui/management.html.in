@@ -793,6 +793,7 @@ html.dark .out-ico--ws { color: #fde047; }
 
 :root[data-ui-style="millennium"] .out-stage,
 :root[data-ui-style="millennium"] .out-img-stage,
+:root[data-ui-style="millennium"] .out-html-sandbox,
 :root[data-ui-style="millennium"] .ab-dropzone {
   border-radius: 0;
   border: 2px solid var(--mil-line);
@@ -810,7 +811,7 @@ html.dark .out-ico--ws { color: #fde047; }
 
 .out-stage {
   min-height: 240px;
-  max-height: 580px;
+  max-height: 74vh;
   overflow: auto;
   padding: 20px 22px;
   background: var(--mil-panel);
@@ -828,6 +829,25 @@ html.dark .out-ico--ws { color: #fde047; }
   border: 1px solid var(--mil-rule);
   border-radius: 12px;
   background-color: var(--mil-screen);
+}
+
+.out-img-stage--wide {
+  max-width: 820px;
+  min-height: 240px;
+  height: auto;
+  margin: 0 auto;
+  background-size: 100% auto;
+  background-position: top center;
+}
+
+.out-html-sandbox {
+  position: relative;
+  isolation: isolate;
+  overflow-x: auto;
+  border: 1px solid var(--mil-rule);
+  border-radius: 10px;
+  max-width: 100%;
+  padding: 16px;
 }
 
 .out-doc {
@@ -3092,10 +3112,10 @@ html.dark .out-ico--ws { color: #fde047; }
     let visibleItems = [];
     let selectedItem = null;
     let curView = "preview";
+    let imgFit = "auto";
     let curArtifact = null;
     let textAccumulator = "";
     let copyBuffer = "";
-    let activeBlobUrl = "";
     let openSeq = 0;
 
     const KIND_LABELS = {
@@ -3155,30 +3175,203 @@ html.dark .out-ico--ws { color: #fde047; }
       return `<svg class="out-ico out-ico--doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5.5L13 5.5V13.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 8h5M5.5 10.8h4" stroke="currentColor" stroke-width="1.3"/></svg>`;
     }
 
-    const revokeBlob = () => {
-      if (activeBlobUrl) {
-        try { URL.revokeObjectURL(activeBlobUrl); } catch {}
-        activeBlobUrl = "";
-      }
-    };
-    sig?.addEventListener("abort", revokeBlob, { once: true });
-
     const SAFE_HTML_TAGS = new Set([
-      "H1", "H2", "H3", "H4", "P", "UL", "OL", "LI", "PRE", "CODE", "BLOCKQUOTE",
-      "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "STRONG", "B", "EM", "I",
-      "HR", "BR", "ARTICLE", "SECTION", "HEADER", "DIV", "SPAN", "A",
+      "H1", "H2", "H3", "H4", "H5", "H6", "P", "UL", "OL", "LI", "DL", "DT", "DD",
+      "PRE", "CODE", "BLOCKQUOTE", "TABLE", "THEAD", "TBODY", "TFOOT", "TR", "TH", "TD",
+      "CAPTION", "COLGROUP", "COL", "STRONG", "B", "EM", "I", "SMALL", "SUB", "SUP",
+      "MARK", "DEL", "HR", "BR", "ARTICLE", "SECTION", "HEADER", "FOOTER", "MAIN",
+      "ASIDE", "NAV", "FIGURE", "FIGCAPTION", "DETAILS", "SUMMARY", "DIV", "SPAN",
+      "TIME", "A", "LABEL", "INPUT",
     ]);
+    const SVG_TAG_CASE = {
+      SVG: "svg", G: "g", PATH: "path", RECT: "rect", CIRCLE: "circle", ELLIPSE: "ellipse",
+      LINE: "line", POLYLINE: "polyline", POLYGON: "polygon", TEXT: "text", TSPAN: "tspan",
+      DEFS: "defs", LINEARGRADIENT: "linearGradient", RADIALGRADIENT: "radialGradient",
+      STOP: "stop", CLIPPATH: "clipPath", PATTERN: "pattern", MARKER: "marker",
+      TITLE: "title", DESC: "desc",
+    };
+    const SVG_ATTR_MAP = {
+      "viewbox": "viewBox", "width": "width", "height": "height",
+      "x": "x", "y": "y", "x1": "x1", "y1": "y1", "x2": "x2", "y2": "y2",
+      "cx": "cx", "cy": "cy", "r": "r", "rx": "rx", "ry": "ry",
+      "d": "d", "points": "points", "fill": "fill", "fill-opacity": "fill-opacity",
+      "fill-rule": "fill-rule", "stroke": "stroke", "stroke-width": "stroke-width",
+      "stroke-dasharray": "stroke-dasharray", "stroke-dashoffset": "stroke-dashoffset",
+      "stroke-linecap": "stroke-linecap", "stroke-linejoin": "stroke-linejoin",
+      "stroke-opacity": "stroke-opacity", "opacity": "opacity", "transform": "transform",
+      "text-anchor": "text-anchor", "dominant-baseline": "dominant-baseline",
+      "dy": "dy", "dx": "dx", "font-size": "font-size", "font-weight": "font-weight",
+      "font-family": "font-family", "offset": "offset", "stop-color": "stop-color",
+      "stop-opacity": "stop-opacity", "gradientunits": "gradientUnits",
+      "gradienttransform": "gradientTransform", "preserveaspectratio": "preserveAspectRatio",
+      "clip-path": "clip-path", "marker-end": "marker-end", "marker-start": "marker-start",
+      "aria-hidden": "aria-hidden", "role": "role", "class": "class", "id": "id", "style": "style",
+    };
     const SKIP_HTML_TAGS = new Set([
-      "SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "SVG", "IMG",
+      "SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "IMG", "FORM", "FOREIGNOBJECT",
       "NOSCRIPT", "TEMPLATE", "LINK", "META", "BASE",
     ]);
 
-    function safeHtmlNode(node) {
+    function splitTopLevel(str, delimChar) {
+      const parts = [];
+      let cur = "";
+      let paren = 0;
+      let bracket = 0;
+      let quote = "";
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (quote) {
+          cur += ch;
+          if (ch === "\\" && i + 1 < str.length) {
+            cur += str[++i];
+          } else if (ch === quote) {
+            quote = "";
+          }
+          continue;
+        }
+        if (ch === "'" || ch === '"') {
+          quote = ch;
+          cur += ch;
+          continue;
+        }
+        if (ch === "(") paren++;
+        else if (ch === ")" && paren > 0) paren--;
+        else if (ch === "[") bracket++;
+        else if (ch === "]" && bracket > 0) bracket--;
+        if (ch === delimChar && paren === 0 && bracket === 0) {
+          parts.push(cur);
+          cur = "";
+        } else {
+          cur += ch;
+        }
+      }
+      if (cur) parts.push(cur);
+      return parts;
+    }
+
+    function sanitizeInlineStyle(rawStyle) {
+      const clean = String(rawStyle || "").replace(/</g, "").trim();
+      if (!clean) return "";
+      const kept = [];
+      for (const decl of splitTopLevel(clean, ";")) {
+        const d = decl.trim();
+        if (!d || !d.includes(":")) continue;
+        if (/url\s*\(|expression\s*\(|javascript:|vbscript:|-moz-binding|behavior\s*:/i.test(d)) continue;
+        if (/^position\s*:\s*(?:fixed|sticky)\b/i.test(d)) continue;
+        kept.push(d);
+      }
+      return kept.join("; ");
+    }
+
+    function scopeSandboxCss(rawCss) {
+      const cleaned = String(rawCss || "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/</g, "")
+        .replace(/@(?:import|charset|namespace)\b[^;]*;/gi, "");
+      const out = [];
+      let pos = 0;
+      const n = cleaned.length;
+      while (pos < n) {
+        const openIdx = cleaned.indexOf("{", pos);
+        if (openIdx < 0) break;
+        const rawPrelude = cleaned.slice(pos, openIdx).trim();
+        let depth = 1;
+        let i = openIdx + 1;
+        let quote = "";
+        while (i < n && depth > 0) {
+          const ch = cleaned[i];
+          if (quote) {
+            if (ch === "\\" && i + 1 < n) i++;
+            else if (ch === quote) quote = "";
+          } else {
+            if (ch === "'" || ch === '"') quote = ch;
+            else if (ch === "{") depth++;
+            else if (ch === "}") depth--;
+          }
+          i++;
+        }
+        const body = cleaned.slice(openIdx + 1, depth === 0 ? i - 1 : n);
+        pos = i;
+        if (!rawPrelude) continue;
+        const prelude = rawPrelude.includes(";") ? rawPrelude.slice(rawPrelude.lastIndexOf(";") + 1).trim() : rawPrelude;
+        if (!prelude) continue;
+        if (/^@(?:-webkit-)?(?:keyframes|font-face|page)\b/i.test(prelude)) continue;
+        if (/^@(?:media|supports)\b/i.test(prelude)) {
+          const nested = scopeSandboxCss(body);
+          if (nested) out.push(`${prelude} { ${nested} }`);
+          continue;
+        }
+        if (prelude.startsWith("@")) continue;
+        const safeDecls = sanitizeInlineStyle(body);
+        if (!safeDecls) continue;
+        const scopedSels = [];
+        for (const rawSel of splitTopLevel(prelude, ",")) {
+          const sel = rawSel.trim();
+          if (!sel) continue;
+          const rw = sel.replace(/(^|[\s>+~(])(?:html|body|:root)(?=[\s.#\[:>+~),]|$)/gi, "$1.out-html-sandbox");
+          if (/^\[data-theme\b/i.test(rw)) {
+            scopedSels.push(`.out-html-sandbox${rw}`, `.out-html-sandbox ${rw}`);
+          } else if (/(?:^|[\s>+~(])\.out-html-sandbox(?=$|[\s.#\[:>+~),])/.test(rw)) {
+            scopedSels.push(rw);
+          } else {
+            scopedSels.push(`.out-html-sandbox ${rw}`);
+          }
+        }
+        if (scopedSels.length) out.push(`${scopedSels.join(", ")} { ${safeDecls} }`);
+      }
+      return out.join("\n");
+    }
+
+    function safeClassTokens(val) {
+      return String(val || "")
+        .split(/\s+/)
+        .filter((t) => /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(t))
+        .join(" ");
+    }
+
+    function safeHtmlNode(node, inSvg = false) {
       if (node.nodeType === 3) return esc(node.nodeValue || "");
       if (node.nodeType !== 1) return "";
       const tag = node.tagName.toUpperCase();
       if (SKIP_HTML_TAGS.has(tag)) return "";
-      const inner = [...node.childNodes].map(safeHtmlNode).join("");
+      const nowSvg = inSvg || tag === "SVG";
+      const inner = [...node.childNodes].map((ch) => safeHtmlNode(ch, nowSvg)).join("");
+
+      if (nowSvg && Object.prototype.hasOwnProperty.call(SVG_TAG_CASE, tag)) {
+        const outTag = SVG_TAG_CASE[tag];
+        const attrs = [];
+        for (const attr of [...node.attributes]) {
+          const al = attr.name.toLowerCase();
+          if (al.startsWith("on")) continue;
+          const canon = SVG_ATTR_MAP[al];
+          if (!canon) continue;
+          let v = String(attr.value || "").trim();
+          if (canon === "style") {
+            v = sanitizeInlineStyle(v);
+            if (!v) continue;
+          } else if (canon === "class") {
+            v = safeClassTokens(v);
+            if (!v) continue;
+          } else if (canon === "id") {
+            if (!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(v)) continue;
+            v = `ms-sbx-${v}`;
+          } else {
+            if (/javascript:|vbscript:/i.test(v)) continue;
+            if (/url\s*\(/i.test(v)) {
+              const loc = v.match(/^url\(\s*#([A-Za-z_][A-Za-z0-9_-]{0,63})\s*\)$/i);
+              if (!loc) continue;
+              v = `url(#ms-sbx-${loc[1]})`;
+            }
+          }
+          attrs.push(`${canon}="${esc(v)}"`);
+        }
+        if (outTag === "svg" && !attrs.some((a) => a.startsWith("xmlns="))) {
+          attrs.unshift('xmlns="http://www.w3.org/2000/svg"');
+        }
+        return `<${outTag}${attrs.length ? " " + attrs.join(" ") : ""}>${inner}</${outTag}>`;
+      }
+      if (inSvg) return "";
+
       if (!SAFE_HTML_TAGS.has(tag)) return inner;
       if (tag === "BR" || tag === "HR") return `<${tag.toLowerCase()}>`;
       if (tag === "A") {
@@ -3188,14 +3381,57 @@ html.dark .out-ico--ws { color: #fde047; }
         }
         return `<span>${inner}</span>`;
       }
+      if (tag === "INPUT") {
+        const itype = String(node.getAttribute("type") || "").toLowerCase();
+        if (itype !== "radio" && itype !== "checkbox") return "";
+        const attrs = [`type="${itype}"`];
+        const cls = safeClassTokens(node.getAttribute("class"));
+        if (cls) attrs.push(`class="${esc(cls)}"`);
+        const nid = String(node.getAttribute("id") || "").trim();
+        if (/^[A-Za-z0-9_-]{1,64}$/.test(nid)) attrs.push(`id="ms-sbx-${esc(nid)}"`);
+        const nname = String(node.getAttribute("name") || "").trim();
+        if (/^[A-Za-z0-9_-]{1,64}$/.test(nname)) attrs.push(`name="ms-sbx-${esc(nname)}"`);
+        if (node.hasAttribute("checked")) attrs.push("checked");
+        return `<input ${attrs.join(" ")}>`;
+      }
       const lower = tag.toLowerCase();
-      return `<${lower}>${inner}</${lower}>`;
+      const attrs = [];
+      const cls = safeClassTokens(node.getAttribute("class"));
+      if (cls) attrs.push(`class="${esc(cls)}"`);
+      const sty = sanitizeInlineStyle(node.getAttribute("style"));
+      if (sty) attrs.push(`style="${esc(sty)}"`);
+      const theme = String(node.getAttribute("data-theme") || "").trim().toLowerCase();
+      if (theme === "dark" || theme === "light") attrs.push(`data-theme="${theme}"`);
+      if (tag === "LABEL") {
+        const lfor = String(node.getAttribute("for") || "").trim();
+        if (/^[A-Za-z0-9_-]{1,64}$/.test(lfor)) attrs.push(`for="ms-sbx-${esc(lfor)}"`);
+      }
+      if (tag === "DETAILS" && node.hasAttribute("open")) attrs.push("open");
+      if (tag === "TD" || tag === "TH") {
+        for (const spanAttr of ["colspan", "rowspan"]) {
+          const sv = Number(node.getAttribute(spanAttr));
+          if (Number.isInteger(sv) && sv >= 1 && sv <= 24) attrs.push(`${spanAttr}="${sv}"`);
+        }
+      }
+      const ariaLbl = String(node.getAttribute("aria-label") || "").trim();
+      if (ariaLbl) attrs.push(`aria-label="${esc(ariaLbl.slice(0, 120))}"`);
+      if (node.getAttribute("aria-hidden") === "true") attrs.push('aria-hidden="true"');
+      const roleVal = String(node.getAttribute("role") || "").trim();
+      if (/^[a-z]{1,24}$/.test(roleVal)) attrs.push(`role="${roleVal}"`);
+      return `<${lower}${attrs.length ? " " + attrs.join(" ") : ""}>${inner}</${lower}>`;
     }
 
     function renderSafeHtml(src) {
       try {
         const doc = new DOMParser().parseFromString(String(src || ""), "text/html");
-        return `<div class="out-doc">${safeHtmlNode(doc.body) || `<p class="mil-hint">空白文档</p>`}</div>`;
+        const cssBlocks = [...doc.querySelectorAll("style")].map((el) => scopeSandboxCss(el.textContent || "")).filter(Boolean);
+        const bodyCls = safeClassTokens(`${doc.documentElement?.getAttribute("class") || ""} ${doc.body?.getAttribute("class") || ""}`);
+        const rawTheme = String(doc.body?.getAttribute("data-theme") || doc.documentElement?.getAttribute("data-theme") || "").trim().toLowerCase();
+        const themeAttr = (rawTheme === "dark" || rawTheme === "light") ? ` data-theme="${rawTheme}"` : "";
+        const sandboxClass = bodyCls ? `out-html-sandbox ${bodyCls}` : "out-html-sandbox";
+        const bodyHtml = [...(doc.body?.childNodes || [])].map((ch) => safeHtmlNode(ch, false)).join("");
+        const styleTag = cssBlocks.length ? `<style>${cssBlocks.join("\n")}</style>` : "";
+        return `${styleTag}<div class="${esc(sandboxClass)}"${themeAttr}>${bodyHtml || `<p class="mil-hint">空白文档</p>`}</div>`;
       } catch {
         return `<pre class="mil-pre">${esc(src || "")}</pre>`;
       }
@@ -3274,7 +3510,7 @@ html.dark .out-ico--ws { color: #fde047; }
           const name = s.name || c;
           const spec = s.stream_spec || "";
           const rawAv = String(s.avatar || "");
-          const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
+          const safeAv = /^data:image\//i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
           const mono = (name || c || "?").trim().slice(0, 1).toUpperCase();
           return `<button type="button" class="mil-key mil-key--sm ms-chat-chip" data-out-chat="${esc(c)}" title="${esc(spec || c)}">
             <span class="ms-chat-chip-top">
@@ -3376,10 +3612,66 @@ html.dark .out-ico--ws { color: #fde047; }
       renderFilterButtons();
     }
 
+    function bytesToBase64(bytes) {
+      const step = 16384;
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += step) {
+        const sub = bytes.subarray(i, Math.min(bytes.length, i + step));
+        bin += String.fromCharCode.apply(null, sub);
+      }
+      return btoa(bin);
+    }
+
+    function probeImageDimensions(bytes) {
+      if (!bytes || bytes.length < 16) return null;
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+        const w = dv.getUint32(16, false), h = dv.getUint32(20, false);
+        return w > 0 && h > 0 ? { w, h } : null;
+      }
+      if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+        const w = dv.getUint16(6, true), h = dv.getUint16(8, true);
+        return w > 0 && h > 0 ? { w, h } : null;
+      }
+      if (bytes.length >= 30 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+        const tag = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+        if (tag === "VP8 ") return { w: dv.getUint16(26, true) & 0x3FFF, h: dv.getUint16(28, true) & 0x3FFF };
+        if (tag === "VP8L") {
+          const bits = dv.getUint32(21, true);
+          return { w: (bits & 0x3FFF) + 1, h: ((bits >> 14) & 0x3FFF) + 1 };
+        }
+        if (tag === "VP8X") {
+          return {
+            w: 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)),
+            h: 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16)),
+          };
+        }
+      }
+      if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
+        let i = 2;
+        while (i + 9 < bytes.length) {
+          if (bytes[i] !== 0xFF) { i++; continue; }
+          while (i < bytes.length && bytes[i] === 0xFF) i++;
+          if (i >= bytes.length) break;
+          const m = bytes[i++];
+          if (m === 0xD8 || m === 0xD9 || m === 0x00) continue;
+          if (i + 1 >= bytes.length) break;
+          const segLen = dv.getUint16(i, false);
+          if (m >= 0xC0 && m <= 0xC3 && i + 7 < bytes.length) {
+            const h = dv.getUint16(i + 3, false), w = dv.getUint16(i + 5, false);
+            return w > 0 && h > 0 ? { w, h } : null;
+          }
+          i += Math.max(2, segLen);
+        }
+      }
+      return null;
+    }
+
     function renderArtifactStage() {
       if (!curArtifact) return;
       const a = curArtifact;
       const stage = $("#out-stage");
+      const fitSeg = $("#out-img-fit-seg");
       $("#out-cur-badge").textContent = `${KIND_LABELS[a.kind] || a.kind || "文件"} · ${MEDIA_LABELS[a.media_kind] || a.media_kind || "文本"}`;
       $("#out-cur-size").textContent = fmtBytes(a.bytes || a.total || 0);
       $("#out-more-btn").hidden = a.next_offset === null || a.next_offset === undefined;
@@ -3388,6 +3680,7 @@ html.dark .out-ico--ws { color: #fde047; }
       const metaParts = [
         a.chat_id ? `会话：${chatLabel(a.chat_id)}` : "",
         roleId ? `角色：${roleId}` : "",
+        a._dims ? `尺寸：${a._dims.w} × ${a._dims.h} px` : "",
         a.path ? `路径：${a.path}` : "",
         a.handle ? `句柄：${a.handle}` : "",
         a.thread_id ? `线程：${a.thread_id}` : "",
@@ -3402,13 +3695,26 @@ html.dark .out-ico--ws { color: #fde047; }
 
       if (a.media_kind === "image" && a._imageUrl) {
         copyBuffer = a._imageUrl;
+        if (fitSeg) fitSeg.hidden = curView === "raw";
         if (curView === "raw") {
           stage.innerHTML = `<pre class="mil-pre mono">图片 MIME：${esc(a.mime)} · 体积：${a.bytes} B\n${esc((a._base64Head || "").slice(0, 2000))}</pre>`;
         } else {
-          stage.innerHTML = `<div class="out-img-stage" role="img" aria-label="${esc(a.name || "产物图片")}" style="background-image:url('${esc(a._imageUrl)}')"></div>`;
+          const effFit = imgFit === "auto"
+            ? ((a._dims && (a._dims.h > a._dims.w || a._dims.w >= 640)) ? "wide" : "contain")
+            : imgFit;
+          $$("[data-img-fit]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.imgFit === effFit)));
+          if (effFit === "wide") {
+            const boxW = Math.min(820, Math.max(320, (stage.clientWidth || 780) - 44));
+            const boxH = a._dims ? Math.max(320, Math.round(boxW * (a._dims.h / a._dims.w))) : 680;
+            stage.innerHTML = `<div class="out-img-stage out-img-stage--wide" role="img" aria-label="${esc(a.name || "产物图片")}" style="height:${boxH}px;aspect-ratio:${a._dims ? `${a._dims.w} / ${a._dims.h}` : "auto"};background-image:url('${esc(a._imageUrl)}')"></div>`;
+          } else {
+            stage.innerHTML = `<div class="out-img-stage" role="img" aria-label="${esc(a.name || "产物图片")}" style="background-image:url('${esc(a._imageUrl)}')"></div>`;
+          }
         }
         return;
       }
+
+      if (fitSeg) fitSeg.hidden = true;
 
       if (a.media_kind === "binary") {
         copyBuffer = a._base64Head || "";
@@ -3421,20 +3727,27 @@ html.dark .out-ico--ws { color: #fde047; }
         if (curView === "raw") {
           stage.innerHTML = `<pre class="mil-pre">${esc(copyBuffer)}</pre>`;
         } else {
+          const attsHtml = (a.attachments || []).length
+            ? `<div style="margin-bottom:12px;border-bottom:1px solid var(--mil-rule);padding-bottom:10px"><div class="mil-label" style="margin-bottom:6px">关联附件 (${a.attachments.length})</div><div class="mil-row">${a.attachments.map((att) => `<button type="button" class="mil-key mil-key--sm mil-key--hot" data-open-att="${esc(att.handle)}">预览 ${esc(att.name)} (${fmtBytes(att.bytes || 0)})</button>`).join("")}</div></div>`
+            : "";
           const linksHtml = (a.links || []).length
             ? `<div style="margin-top:12px;border-top:1px solid var(--mil-rule);padding-top:10px"><div class="mil-label" style="margin-bottom:6px">提取的出处链接 (${a.links.length})</div>${a.links.map((u) => `<div class="out-link-item"><span class="mono" style="overflow-wrap:anywhere">${esc(u)}</span></div>`).join("")}</div>`
             : "";
-          const attsHtml = (a.attachments || []).length
-            ? `<div style="margin-top:12px;border-top:1px solid var(--mil-rule);padding-top:10px"><div class="mil-label" style="margin-bottom:6px">关联附件 (${a.attachments.length})</div><div class="mil-row">${a.attachments.map((att) => `<button type="button" class="mil-key mil-key--sm" data-open-att="${esc(att.handle)}">${esc(att.name)} (${fmtBytes(att.bytes || 0)})</button>`).join("")}</div></div>`
-            : "";
-          stage.innerHTML = `${renderMarkdown(textAccumulator)}${linksHtml}${attsHtml}`;
+          stage.innerHTML = `${attsHtml}${renderMarkdown(textAccumulator)}${linksHtml}`;
         }
         return;
       }
 
       copyBuffer = textAccumulator;
       if (curView === "preview" && a.media_kind === "html") {
-        stage.innerHTML = renderSafeHtml(textAccumulator);
+        const tid = a.thread_id || selectedItem?.thread_id || "";
+        const sibImg = tid
+          ? (outData.items || []).find((it) => it.media_kind === "image" && it.thread_id === tid)
+          : null;
+        const sibBar = sibImg
+          ? `<div class="mil-row" style="justify-content:space-between;margin-bottom:10px"><span class="mil-hint">当前为安全排版预览</span><button type="button" class="mil-key mil-key--sm mil-key--hot" data-open-item-id="${esc(sibImg.id)}">查看成图 ${esc(sibImg.name || sibImg.title)}</button></div>`
+          : "";
+        stage.innerHTML = `${sibBar}${renderSafeHtml(textAccumulator)}`;
       } else if (curView === "preview" && a.media_kind === "markdown") {
         stage.innerHTML = renderMarkdown(textAccumulator);
       } else {
@@ -3452,33 +3765,45 @@ html.dark .out-ico--ws { color: #fde047; }
     async function loadArtifact(req, append = false) {
       const seq = ++openSeq;
       if (!append) {
-        revokeBlob();
+        imgFit = "auto";
         textAccumulator = "";
         $("#out-copy-drawer").hidden = true;
+        $("#out-stage").innerHTML = `<p class="mil-hint">正在加载产物内容…</p>`;
       }
       const r = await rpc("read", "artifact", req);
       if (sig?.aborted || seq !== openSeq) return;
-      if (!r?.success) return say(r?.error || "读取产物内容失败", true);
+      if (!r?.success) {
+        $("#out-stage").innerHTML = `<p class="mil-hint">${esc(r?.error || "读取产物内容失败")}</p>`;
+        return say(r?.error || "读取产物内容失败", true);
+      }
       say("");
 
       if (r.media_kind === "image") {
         const chunks = [r.base64 || ""];
         let nextOff = r.next_offset;
         while (nextOff !== null && nextOff !== undefined && chunks.length < 48) {
+          $("#out-stage").innerHTML = `<p class="mil-hint">正在加载大图分块（第 ${chunks.length + 1} 块）…</p>`;
           const nxt = await rpc("read", "artifact", { ...req, offset: nextOff });
           if (sig?.aborted || seq !== openSeq) return;
-          if (!nxt?.success) return say(nxt?.error || "图片分块读取失败", true);
+          if (!nxt?.success) {
+            $("#out-stage").innerHTML = `<p class="mil-hint">${esc(nxt?.error || "图片分块读取失败")}</p>`;
+            return say(nxt?.error || "图片分块读取失败", true);
+          }
           chunks.push(nxt.base64 || "");
           nextOff = nxt.next_offset;
         }
-        if (chunks.length === 1) {
-          r._imageUrl = `data:${r.mime || "image/png"};base64,${chunks[0]}`;
-        } else {
-          const arrays = chunks.map(b64ToBytes);
-          const blob = new Blob(arrays, { type: r.mime || "image/png" });
-          activeBlobUrl = URL.createObjectURL(blob);
-          r._imageUrl = activeBlobUrl;
+        const arrays = chunks.map(b64ToBytes);
+        const totalLen = arrays.reduce((acc, a) => acc + a.length, 0);
+        const merged = new Uint8Array(totalLen);
+        let writeOff = 0;
+        for (const arr of arrays) {
+          merged.set(arr, writeOff);
+          writeOff += arr.length;
         }
+        r._dims = probeImageDimensions(merged);
+        r._imageUrl = chunks.length === 1
+          ? `data:${r.mime || "image/png"};base64,${chunks[0]}`
+          : `data:${r.mime || "image/png"};base64,${bytesToBase64(merged)}`;
         r._base64Head = chunks[0];
         r.next_offset = null;
         r._req = req;
@@ -3519,11 +3844,31 @@ html.dark .out-ico--ws { color: #fde047; }
     async function loadOutputs(autoOpen = true) {
       const query = $("#out-search").value.trim();
       const r = await rpc("read", "outputs", { chat_id: filterChat, kind: filterKind, query });
-      if (!r?.success) return say(r?.error || "读取产物目录失败", true);
+      if (sig?.aborted) return;
+      if (!r?.success) {
+        const msg = r?.error || "读取产物目录失败";
+        $("#out-stage").innerHTML = `<p class="mil-hint">${esc(msg)}</p>`;
+        return say(msg, true);
+      }
+      say("");
       outData = r;
       renderChatFilter();
       renderCatalog();
-      if (autoOpen && visibleItems.length && !selectedItem) {
+      let targetItem = null;
+      if (typeof pendingOutputTarget !== "undefined" && pendingOutputTarget) {
+        const want = pendingOutputTarget;
+        pendingOutputTarget = null;
+        const pool = outData.items || [];
+        if (want.handle) targetItem = pool.find((x) => x.handle === want.handle) || null;
+        if (!targetItem && want.threadId) {
+          targetItem = pool.find((x) => x.thread_id === want.threadId && x.media_kind === "image")
+            || pool.find((x) => x.thread_id === want.threadId)
+            || null;
+        }
+      }
+      if (targetItem) {
+        await openItem(targetItem);
+      } else if (autoOpen && visibleItems.length && !selectedItem) {
         await openItem(visibleItems[0]);
       }
     }
@@ -3579,6 +3924,18 @@ html.dark .out-ico--ws { color: #fde047; }
         renderArtifactStage();
         return;
       }
+      const fitBtn = ev.target.closest("[data-img-fit]");
+      if (fitBtn) {
+        imgFit = fitBtn.dataset.imgFit === "contain" ? "contain" : "wide";
+        renderArtifactStage();
+        return;
+      }
+      const openItemBtn = ev.target.closest("[data-open-item-id]");
+      if (openItemBtn) {
+        const hit = (outData.items || []).find((x) => x.id === openItemBtn.dataset.openItemId);
+        if (hit) await openItem(hit);
+        return;
+      }
       const cardBtn = ev.target.closest("[data-out-idx]");
       if (cardBtn) {
         const idx = Number(cardBtn.dataset.outIdx);
@@ -3587,7 +3944,10 @@ html.dark .out-ico--ws { color: #fde047; }
       }
       const attBtn = ev.target.closest("[data-open-att]");
       if (attBtn) {
-        await loadArtifact({ kind: "attachment", handle: attBtn.dataset.openAtt, offset: 0 });
+        const handle = attBtn.dataset.openAtt;
+        const hit = (outData.items || []).find((x) => x.handle === handle);
+        if (hit) await openItem(hit);
+        else await loadArtifact({ kind: "attachment", handle, offset: 0 });
         return;
       }
       const wsBtn = ev.target.closest("[data-ws]");
@@ -3600,7 +3960,7 @@ html.dark .out-ico--ws { color: #fde047; }
           const area = String(f.path || "").split("/")[0] || "file";
           return `<button type="button" class="mil-key mil-key--sm" data-ws-id="${esc(wsid)}" data-ws-path="${esc(f.path)}" style="justify-content:space-between;gap:6px"><span class="mil-tag">${esc(area)}</span><span class="mono" style="flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis">${esc(f.path)}</span><span class="num">${f.bytes}B</span></button>`;
         }).join("") || `<p class="mil-hint">空工作区</p>`;
-        $("#workspace-content").textContent = r.text || "点击左侧文件查看内容并同步到上方检视器";
+        $("#workspace-content").textContent = r.text || "点击左侧文件查看内容并同步到下方内容检视器";
         return;
       }
       const fileBtn = ev.target.closest("[data-ws-path]");
@@ -3611,7 +3971,10 @@ html.dark .out-ico--ws { color: #fde047; }
         await loadArtifact({ kind: "workspace_file", workspace_id: wsid, path: fpath, offset: 0 });
         if (sig?.aborted) return;
         if (curArtifact && curArtifact.workspace_id === wsid && curArtifact.path === fpath) {
-          $("#workspace-content").textContent = curArtifact.text || `[${curArtifact.media_kind}] ${curArtifact.name} (${curArtifact.bytes} B · 已在上方检视器打开)`;
+          $("#workspace-content").textContent = curArtifact.text || `[${curArtifact.media_kind}] ${curArtifact.name} (${curArtifact.bytes} B · 已在下方内容检视器打开)`;
+          if (!curArtifact.text) {
+            $("#out-inspector")?.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "nearest" });
+          }
         }
       }
     }, { signal: sig });
@@ -3621,6 +3984,7 @@ html.dark .out-ico--ws { color: #fde047; }
       selectedItem = null;
       await loadOutputs(true);
     });
+    if ($("#out-refresh-btn")) $("#out-refresh-btn").onclick = () => { selectedItem = null; loadOutputs(true); };
     $("#out-search-btn").onclick = () => { selectedItem = null; loadOutputs(true); };
     $("#out-search").addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") { ev.preventDefault(); selectedItem = null; loadOutputs(true); }
@@ -3798,7 +4162,7 @@ html.dark .out-ico--ws { color: #fde047; }
         const name = s.name || c;
         const spec = s.stream_spec || "";
         const rawAv = String(s.avatar || "");
-        const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
+        const safeAv = /^data:image\//i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
         const mono = (name || c || "?").trim().slice(0, 1).toUpperCase();
         return `<button type="button" class="mil-key mil-key--sm ms-chat-chip" data-chat-chip="${esc(c)}" title="${esc(spec || c)}">
           <span class="ms-chat-chip-top">

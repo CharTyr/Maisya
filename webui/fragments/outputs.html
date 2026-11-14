@@ -84,6 +84,7 @@
             <button type="button" class="mil-key mil-key--sm" data-out-layout="table" aria-pressed="true">列表</button>
             <button type="button" class="mil-key mil-key--sm" data-out-layout="grid" aria-pressed="false">网格</button>
           </div>
+          <button id="out-refresh-btn" class="mil-key mil-key--sm" type="button">刷新</button>
         </div>
       </div>
 
@@ -117,6 +118,10 @@
           <button type="button" class="mil-help" data-help="支持图片预览、HTML/Markdown 安全排版阅读及超长文本分段加载" aria-label="查看产物检视说明" aria-expanded="false">?</button>
         </div>
         <div class="mil-head-r">
+          <div class="mil-seg" id="out-img-fit-seg" role="group" aria-label="图片显示比例" hidden>
+            <button type="button" class="mil-key mil-key--sm" data-img-fit="wide" aria-pressed="true">宽幅精读</button>
+            <button type="button" class="mil-key mil-key--sm" data-img-fit="contain" aria-pressed="false">适应全图</button>
+          </div>
           <div class="mil-seg" role="group" aria-label="视图切换">
             <button type="button" class="mil-key mil-key--sm" data-out-view="preview" aria-pressed="true">阅读预览</button>
             <button type="button" class="mil-key mil-key--sm" data-out-view="raw" aria-pressed="false">源码原文</button>

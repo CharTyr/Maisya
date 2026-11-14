@@ -1145,12 +1145,13 @@
   let timer = null;
   let lastTriggerTarget = null;
   let lastSnapshotAt = 0;
+  let pendingOutputTarget = null;
 
-  // 全局严格保证 query <= 1 并发、总请求 <= 2 并发（避免触及宿主 inflight 上限）
+  // 全局严格保证读请求 <= 1 串行、读写合计 <= 2 并发（避免触及宿主 inflight 上限）
   let inflight = 0;
   const waiters = [];
   async function acquire() {
-    if (inflight >= 2) await new Promise((res) => waiters.push(res));
+    while (inflight >= 2) await new Promise((res) => waiters.push(res));
     inflight++;
   }
   function release() {
@@ -1161,6 +1162,29 @@
     await acquire();
     try { return await fn(); }
     finally { release(); }
+  }
+  const RETRYABLE_RPC_RE = /429|进行中的\s*WebUI\s*请求|Two requests|Concurrency limit/i;
+  async function callMaibotRaw(kind, name, arg) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = kind === "query"
+          ? await window.maibot.query(name, arg)
+          : await window.maibot.action(name, arg);
+        if (res && res.success === false && attempt < 2 && RETRYABLE_RPC_RE.test(String(res.error || ""))) {
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 350 : 700));
+          continue;
+        }
+        return res || { success: false, error: "空响应" };
+      } catch (err) {
+        const msg = String(err?.message || err || "请求失败");
+        if (attempt < 2 && RETRYABLE_RPC_RE.test(msg)) {
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 350 : 700));
+          continue;
+        }
+        return { success: false, error: msg };
+      }
+    }
+    return { success: false, error: "请求繁忙，请稍后重试" };
   }
   const enqueueQuery = (fn) => {
     const p = queryQueue.then(() => withSlot(fn), () => withSlot(fn));
@@ -1173,17 +1197,18 @@
     return p;
   };
   async function hostRpc(op, key, body) {
-    return withSlot(async () => {
+    const run = async () => {
       const arg = op === "read"
         ? { section: key, payload: JSON.stringify(body || {}) }
         : { action: key, payload: JSON.stringify(body || {}) };
-      const res = op === "read" ? await window.maibot.query("read", arg) : await window.maibot.action("write", arg);
+      const res = op === "read" ? await callMaibotRaw("query", "read", arg) : await callMaibotRaw("action", "write", arg);
       if (res?.ui_style) {
         savedUiStyle = res.ui_style;
         applyTheme();
       }
       return res;
-    });
+    };
+    return op === "read" ? enqueueQuery(run) : enqueueAction(run);
   }
   function hostSay(text, isErr = false) {
     const fb = $('[data-feedback-slot="mgmt"]');
@@ -1416,7 +1441,7 @@
     const plat = src.platform || (cid === "self" ? "self" : "");
     const typeLabel = src.chat_type === "group" ? "群" : src.chat_type === "private" ? "私" : "";
     const rawAv = String(src.avatar || "");
-    const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
+    const safeAv = /^data:image\//i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
     const mono = (name || cid || "?").trim().slice(0, 1).toUpperCase();
     return { name, spec, plat, typeLabel, safeAv, mono };
   }
@@ -1985,6 +2010,15 @@
     }
 
     const tags = [];
+    const atts = Array.isArray(sel.attachments) ? sel.attachments : [];
+    atts.forEach((att) => {
+      if (att && att.handle) {
+        tags.push(`<button type="button" class="mil-key mil-key--sm mil-key--hot" data-jump-att="${esc(att.handle)}">预览 ${esc(att.name || att.handle)}</button>`);
+      }
+    });
+    if (resText || atts.length) {
+      tags.push(`<button type="button" class="mil-key mil-key--sm" data-jump-out-thread="${esc(sel.thread_id)}">在产物页查看</button>`);
+    }
     (snap.deliveries || []).forEach((d) => {
       tags.push(`<span class="mil-tag mil-tag--ok">交付 [${esc(d.route)}] ${esc(d.status)}</span>`);
     });
@@ -2022,7 +2056,7 @@
         let fullText = "";
         let nextOffset = 0;
         const loadMore = () => enqueueQuery(async () => {
-          const r = await window.maibot.query("event", {
+          const r = await callMaibotRaw("query", "event", {
             thread_id: state.threadId,
             event_seq: ev.seq,
             offset: nextOffset,
@@ -2082,7 +2116,7 @@
     const reqThread = state.threadId;
     const reqChat = state.chatFilter;
     const reqCursor = reset ? 0 : state.cursor;
-    const snap = await enqueueQuery(() => window.maibot.query("snapshot", {
+    const snap = await enqueueQuery(() => callMaibotRaw("query", "snapshot", {
       thread_id: reqThread,
       chat_id: reqChat,
       cursor: reqCursor,
@@ -2219,6 +2253,18 @@
       $("#launch-chat").value = pickChat.dataset.pickChat;
       return;
     }
+    const jumpAtt = ev.target.closest("[data-jump-att]");
+    if (jumpAtt) {
+      pendingOutputTarget = { handle: jumpAtt.dataset.jumpAtt, threadId: state.threadId || "" };
+      switchWorkspaceTab("outputs");
+      return;
+    }
+    const jumpOut = ev.target.closest("[data-jump-out-thread]");
+    if (jumpOut) {
+      pendingOutputTarget = { threadId: jumpOut.dataset.jumpOutThread || state.threadId || "" };
+      switchWorkspaceTab("outputs");
+      return;
+    }
   });
 
   function bootNowTab() {
@@ -2286,7 +2332,7 @@
         fb.className = "mil-feedback mil-feedback--err";
         return;
       }
-      const r = await window.maibot.action("note", {
+      const r = await callMaibotRaw("action", "note", {
         thread_id: state.threadId,
         message: text,
         steer: Boolean($("#steer")?.checked),
@@ -2312,7 +2358,7 @@
     const stopBtn = $("#stop");
     if (stopBtn) stopBtn.onclick = () => enqueueAction(async () => {
       if (!state.threadId) return;
-      const r = await window.maibot.action("stop", { thread_id: state.threadId });
+      const r = await callMaibotRaw("action", "stop", { thread_id: state.threadId });
       if (activePage !== "now") return;
       const fb = $('[data-feedback-slot="now"]');
       if (!r?.success) {
@@ -2342,7 +2388,7 @@
         fb.className = "mil-feedback mil-feedback--err";
         return;
       }
-      const r = await window.maibot.action("note", {
+      const r = await callMaibotRaw("action", "note", {
         thread_id: "",
         message,
         profile,

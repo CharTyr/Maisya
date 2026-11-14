@@ -145,6 +145,17 @@ def snapshot(
             selected["result"] = {
                 key: str(redact(value))[:16000] for key, value in row["result"].items()
             }
+            raw_atts = row["result"].get("attachments") if isinstance(row["result"], dict) else None
+            selected["attachments"] = [
+                {
+                    "handle": str(a.get("handle") or "")[:80],
+                    "name": str(redact(str(a.get("name") or "")))[:160],
+                    "kind": str(a.get("kind") or "file")[:32],
+                    "bytes": int(a.get("bytes") or a.get("size") or 0),
+                }
+                for a in (raw_atts if isinstance(raw_atts, list) else [])
+                if isinstance(a, dict) and str(a.get("handle") or "").startswith("att_")
+            ][:16]
             profile_text = str(profile.get("instructions", ""))
             notes_text = ""
             mem_ctx = {}

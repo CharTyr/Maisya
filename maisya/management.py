@@ -1087,7 +1087,7 @@ class Management:
         files_api = self.plugin.runtime.files
         items = []
         chats = set(self.plugin.settings.enabled_chats)
-        attached_keys = set()
+        att_by_key: dict[tuple[str, str, int], dict] = {}
         ws_entries = {}
         workspaces = []
 
@@ -1126,27 +1126,26 @@ class Management:
             if fpath.is_symlink() or not fpath.is_file():
                 continue
             chats.add(row["chat_id"])
-            attached_keys.add((row["thread_id"], row["name"], row["size"]))
             t_info = thread_rows.get(row["thread_id"], {})
             media_kind, mime = _media_kind(row["name"])
-            items.append(
-                {
-                    "id": f"att:{row['handle']}",
-                    "kind": "attachment",
-                    "media_kind": media_kind,
-                    "mime": mime,
-                    "handle": row["handle"],
-                    "name": row["name"],
-                    "title": row["name"],
-                    "chat_id": row["chat_id"],
-                    "thread_id": row["thread_id"],
-                    "profile": t_info.get("profile", ""),
-                    "bytes": row["size"],
-                    "at": float(row["created"] or 0.0),
-                    "delivered": row["thread_id"] in delivered,
-                    "excerpt": f"已声明附件 · {row['size']} 字节",
-                }
-            )
+            entry = {
+                "id": f"att:{row['handle']}",
+                "kind": "attachment",
+                "media_kind": media_kind,
+                "mime": mime,
+                "handle": row["handle"],
+                "name": row["name"],
+                "title": row["name"],
+                "chat_id": row["chat_id"],
+                "thread_id": row["thread_id"],
+                "profile": t_info.get("profile", ""),
+                "bytes": row["size"],
+                "at": float(row["created"] or 0.0),
+                "delivered": row["thread_id"] in delivered,
+                "excerpt": f"已声明附件 · {row['size']} 字节",
+            }
+            att_by_key[(row["thread_id"], row["name"], row["size"])] = entry
+            items.append(entry)
 
         for row in named_ws:
             ws_entries[row["workspace_id"]] = dict(row)
@@ -1186,7 +1185,14 @@ class Management:
                                 continue
                             out_count += 1
                             base_name = PurePosixPath(rel).name
-                            if (meta["thread_id"], base_name, size) in attached_keys:
+                            existing_att = att_by_key.get(
+                                (meta["thread_id"], base_name, size)
+                            )
+                            if existing_att is not None:
+                                existing_att["in_workspace_out"] = True
+                                existing_att.setdefault("workspace_id", ws_id)
+                                existing_att.setdefault("workspace_name", meta["name"])
+                                existing_att.setdefault("path", rel)
                                 continue
                             media_kind, mime = _media_kind(base_name)
                             mtime = 0.0
@@ -1269,7 +1275,11 @@ class Management:
         stats = {
             "total": len(chat_items),
             "attachments": sum(1 for i in chat_items if i["kind"] == "attachment"),
-            "workspace_out": sum(1 for i in chat_items if i["kind"] == "workspace_out"),
+            "workspace_out": sum(
+                1
+                for i in chat_items
+                if i["kind"] == "workspace_out" or i.get("in_workspace_out")
+            ),
             "conclusions": sum(1 for i in chat_items if i["kind"] == "conclusion"),
             "pages": sum(1 for i in chat_items if i.get("media_kind") == "html"),
             "images": sum(1 for i in chat_items if i.get("media_kind") == "image"),
@@ -1282,7 +1292,13 @@ class Management:
         }
 
         filtered = chat_items
-        if kind_filter != "all":
+        if kind_filter == "workspace_out":
+            filtered = [
+                i
+                for i in filtered
+                if i["kind"] == "workspace_out" or i.get("in_workspace_out")
+            ]
+        elif kind_filter != "all":
             filtered = [i for i in filtered if i["kind"] == kind_filter]
         needle = query.strip().lower()
         if needle:
@@ -1305,7 +1321,15 @@ class Management:
                     )
                 ).lower()
             ]
-        filtered.sort(key=lambda item: item.get("at", 0.0), reverse=True)
+        if kind_filter == "workspace_out":
+            filtered.sort(
+                key=lambda item: (
+                    0 if item.get("kind") == "workspace_out" else 1,
+                    -float(item.get("at") or 0.0),
+                )
+            )
+        else:
+            filtered.sort(key=lambda item: item.get("at", 0.0), reverse=True)
         recent = sorted(
             chat_items, key=lambda item: item.get("at", 0.0), reverse=True
         )[:5]

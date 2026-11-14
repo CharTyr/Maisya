@@ -3165,9 +3165,15 @@ class MaisyaPlugin(MaiBotPlugin):
             return text
         return ""
 
+    def _try_ctx(self):
+        try:
+            return self.ctx
+        except RuntimeError:
+            return None
+
     async def _ensure_stream_cache(self, *, force: bool = False) -> dict[str, dict]:
         now = time.monotonic()
-        ctx = getattr(self, "ctx", None)
+        ctx = self._try_ctx()
         if ctx is not None and (force or now >= self._stream_cache.get("expires", 0.0)):
             raw_streams = None
             try:
@@ -3255,7 +3261,7 @@ class MaisyaPlugin(MaiBotPlugin):
         if not ordered:
             return {}
         now = time.monotonic()
-        ctx = getattr(self, "ctx", None)
+        ctx = self._try_ctx()
         stream_map = await self._ensure_stream_cache()
         sources = {}
         pending_avatars = {}
@@ -3391,7 +3397,11 @@ class MaisyaPlugin(MaiBotPlugin):
                             if av.get("status") == "available":
                                 url = self._safe_avatar_url(av.get("url"))
                             if av.get("expires_at"):
-                                expires = min(now + 300.0, float(av["expires_at"]))
+                                try:
+                                    ttl = float(av["expires_at"]) - time.time()
+                                    expires = now + max(5.0, min(300.0, ttl))
+                                except (TypeError, ValueError):
+                                    expires = now + 300.0
                             else:
                                 expires = now + 300.0
                     except Exception:
