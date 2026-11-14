@@ -1,195 +1,430 @@
-<!-- 设置层级切换：默认先看「一般设置」，开发与运维参数收入「高级设置」 -->
-<div class="mil-row" style="justify-content:space-between;align-items:center;gap:12px">
-  <div class="mil-seg" id="settings-mode-bar" role="tablist" aria-label="设置层级切换">
-    <button type="button" class="mil-key" data-settings-mode="general" aria-pressed="true">一般设置</button>
-    <button type="button" class="mil-key" data-settings-mode="advanced" aria-pressed="false">高级设置</button>
+  <div class="m-set-shell" id="settings-shell" data-mob-sub="hub">
+    <!-- 顶部模式切换栏与管理员标识（桌面与移动端均可用） -->
+    <div class="m-set-topbar" id="settings-mode-bar">
+      <div class="m-seg-group" role="group" aria-label="配置模式切换">
+        <button type="button" class="mil-key mil-key--sm" data-settings-mode="general" aria-pressed="true">常规配置</button>
+        <button type="button" class="mil-key mil-key--sm" data-settings-mode="advanced" aria-pressed="false">高级与服务</button>
+      </div>
+      <div class="m-set-top-meta">
+        <span class="mil-tag" id="set-quota-badge" hidden>今日主动额度 —</span>
+        <span class="mil-tag mono" id="admins">管理员列表加载中…</span>
+      </div>
+    </div>
+
+    <!-- 移动端设置中心 Hub（<= 760px 且处于 hub 路由时显示） -->
+    <section class="m-mob-hub m-mob-only" id="settings-mob-hub" aria-label="移动端设置分类入口">
+      <div class="m-mob-hub-kicker">一般配置</div>
+      <div class="mil-panel m-mob-group">
+        <button type="button" class="m-mob-row" data-mob-route="general">
+          <span class="m-mob-row-l">
+            <span class="m-mob-row-ic" data-m-mod="gear" data-m-size="24" aria-hidden="true"></span>
+            <span>外观、主动与联网</span>
+          </span>
+          <span class="m-mob-row-r">
+            <span class="m-mob-row-val" id="mob-sum-general">—</span>
+            <span class="m-mob-row-arr" data-m-ctrl="chevron_r" data-m-size="14" aria-hidden="true"></span>
+          </span>
+        </button>
+        <button type="button" class="m-mob-row" data-mob-route="streams">
+          <span class="m-mob-row-l">
+            <span class="m-mob-row-ic" data-m-mod="roles" data-m-size="24" aria-hidden="true"></span>
+            <span>对话流白名单</span>
+          </span>
+          <span class="m-mob-row-r">
+            <span class="m-mob-row-val" id="mob-sum-streams">0 条</span>
+            <span class="m-mob-row-arr" data-m-ctrl="chevron_r" data-m-size="14" aria-hidden="true"></span>
+          </span>
+        </button>
+        <button type="button" class="m-mob-row" data-mob-route="routines">
+          <span class="m-mob-row-l">
+            <span class="m-mob-row-ic" data-m-mod="routines" data-m-size="24" aria-hidden="true"></span>
+            <span>定时安排与健康检查</span>
+          </span>
+          <span class="m-mob-row-r">
+            <span class="m-mob-row-val" id="mob-sum-routines">状态正常</span>
+            <span class="m-mob-row-arr" data-m-ctrl="chevron_r" data-m-size="14" aria-hidden="true"></span>
+          </span>
+        </button>
+      </div>
+
+      <div class="m-mob-hub-kicker">高级与服务配置</div>
+      <div class="mil-panel m-mob-group">
+        <button type="button" class="m-mob-row" data-mob-route="services">
+          <span class="m-mob-row-l">
+            <span class="m-mob-row-ic" data-m-mod="mcp" data-m-size="24" aria-hidden="true"></span>
+            <span>外部服务与 MCP</span>
+          </span>
+          <span class="m-mob-row-r">
+            <span class="m-mob-row-val" id="mob-sum-services">0 项</span>
+            <span class="m-mob-row-arr" data-m-ctrl="chevron_r" data-m-size="14" aria-hidden="true"></span>
+          </span>
+        </button>
+        <button type="button" class="m-mob-row" data-mob-route="vault">
+          <span class="m-mob-row-l">
+            <span class="m-mob-row-ic" data-m-mod="vault" data-m-size="24" aria-hidden="true"></span>
+            <span>凭据保险箱</span>
+          </span>
+          <span class="m-mob-row-r">
+            <span class="m-mob-row-val" id="mob-sum-vault">0 项</span>
+            <span class="m-mob-row-arr" data-m-ctrl="chevron_r" data-m-size="14" aria-hidden="true"></span>
+          </span>
+        </button>
+        <button type="button" class="m-mob-row" data-mob-route="webhooks">
+          <span class="m-mob-row-l">
+            <span class="m-mob-row-ic" data-m-mod="webhook" data-m-size="24" aria-hidden="true"></span>
+            <span>外部事件触发</span>
+          </span>
+          <span class="m-mob-row-r">
+            <span class="m-mob-row-val" id="mob-sum-webhooks">0 条</span>
+            <span class="m-mob-row-arr" data-m-ctrl="chevron_r" data-m-size="14" aria-hidden="true"></span>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 移动端二级子页面顶栏（圆形返回键 + 居中标题 + 最多 2 个单功能圆形键） -->
+    <div class="m-mob-sub m-mob-only" id="settings-mob-sub" hidden>
+      <button type="button" class="mob-circle-btn" data-mob-back aria-label="返回设置列表"><span data-m-ctrl="back" data-m-size="16" aria-hidden="true"></span></button>
+      <span class="m-mob-sub-title" id="mob-sub-title">设置详情</span>
+      <div class="m-mob-sub-actions">
+        <button type="button" class="mob-circle-btn" id="mob-sub-act-add" data-mob-sheet="" hidden aria-label="新增配置项"><span data-m-ctrl="plus" data-m-size="16" aria-hidden="true"></span></button>
+        <button type="button" class="mob-circle-btn" id="mob-sub-act-refresh" hidden aria-label="刷新状态"><span data-m-ctrl="refresh" data-m-size="16" aria-hidden="true"></span></button>
+      </div>
+    </div>
+
+    <!-- 桌面三栏布局：左模块轨 + 中配置区 + 右上下文编辑抽屉 -->
+    <div class="m-set-body">
+      <aside class="mil-panel m-set-rail" id="settings-rail" aria-label="设置模块导航">
+        <div class="m-rail-kicker">常规模块</div>
+        <div class="m-rail-nav">
+          <button type="button" class="m-rail-btn is-active" data-set-rail="general">
+            <span class="m-rail-ic" data-m-mod="gear" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">常规配置</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-set-rail="streams">
+            <span class="m-rail-ic" data-m-mod="roles" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">对话流管理</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-set-rail="routines">
+            <span class="m-rail-ic" data-m-mod="routines" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">定时安排</span>
+          </button>
+        </div>
+
+        <div class="m-rail-kicker">高级与服务</div>
+        <div class="m-rail-nav">
+          <button type="button" class="m-rail-btn" data-set-rail="services">
+            <span class="m-rail-ic" data-m-mod="mcp" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">外部服务</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-set-rail="vault">
+            <span class="m-rail-ic" data-m-mod="vault" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">凭据保险箱</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-set-rail="webhooks">
+            <span class="m-rail-ic" data-m-mod="webhook" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">外部触发</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="m-set-main">
+        <!-- 常规设置视图 -->
+        <div id="settings-general-view" class="m-set-stack">
+          <section class="mil-panel m-set-sec" data-set-sec="general" aria-label="常规参数设置">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="gear" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">常规与主动配置</span>
+              </div>
+              <div class="mil-head-r">
+                <button type="button" class="mil-key mil-key--sm mil-key--hot" id="save-settings">保存设置</button>
+              </div>
+            </div>
+            <div id="general-fields" class="m-general-fields"></div>
+          </section>
+
+          <section class="mil-panel m-set-sec" data-set-sec="streams" aria-label="对话流白名单管理">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="roles" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">已启用对话流与权限</span>
+                <button type="button" class="mil-help" data-help="仅白名单内的群聊与私聊会注入工具与主动探索；每个会话可单独设置主动分寸。" aria-label="查看对话流白名单说明" aria-expanded="false">?</button>
+              </div>
+              <div class="mil-head-r">
+                <button type="button" class="mil-key mil-key--sm mil-key--hot" id="save-settings-streams">保存白名单</button>
+              </div>
+            </div>
+            <div id="streams-fields" class="m-general-fields"></div>
+          </section>
+
+          <section class="mil-panel m-set-sec" data-set-sec="routines" aria-label="定时工作流排班">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="routines" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">定时与探索计划</span>
+                <button type="button" class="mil-help" data-help="选择一个周期预设后写下需求即可加入计划队列；点选资讯简报会自动填入巡检周期模板" aria-label="查看定时计划说明" aria-expanded="false">?</button>
+              </div>
+              <div class="mil-head-r">
+                <span class="mil-tag" id="sched-summary-pill">待填写参数</span>
+              </div>
+            </div>
+
+            <div class="m-preset-row" role="group" aria-label="计划周期预设">
+              <button type="button" class="mil-key mil-key--sm" data-sched-preset="once">单次提醒</button>
+              <button type="button" class="mil-key mil-key--sm" data-sched-preset="hourly">每小时巡检</button>
+              <button type="button" class="mil-key mil-key--sm" data-sched-preset="daily">每日汇总</button>
+              <button type="button" class="mil-key mil-key--sm" data-sched-preset="digest">资讯简报</button>
+            </div>
+
+            <div class="m-form-row">
+              <label class="ms-field-label" for="intent-chat">目标会话标识</label>
+              <div class="m-inline-row">
+                <select id="intent-chat-select" class="mil-select" aria-label="快速选择已发现会话">
+                  <option value="">选择已有会话…</option>
+                </select>
+                <input id="intent-chat" class="mil-input mono" list="intent-chat-list" placeholder="如 qq:group:100246809 或 self" />
+                <datalist id="intent-chat-list"></datalist>
+              </div>
+            </div>
+
+            <div class="m-form-row">
+              <label class="ms-field-label" for="intent-prompt">唤醒任务指令</label>
+              <textarea id="intent-prompt" class="mil-input" rows="3" placeholder="写下届时希望执行的探索或整理需求…"></textarea>
+            </div>
+
+            <details id="sched-advanced-details" class="mil-screen m-adv-details">
+              <summary class="m-details-sum">展开执行角色、工作区与周期参数</summary>
+              <div class="m-cfg-grid">
+                <div class="m-form-row">
+                  <label class="ms-field-label" for="intent-profile">调用角色</label>
+                  <div class="m-inline-row">
+                    <select id="intent-profile-select" class="mil-select" aria-label="从角色选择">
+                      <option value="">默认角色</option>
+                    </select>
+                    <input id="intent-profile" class="mil-input mono" placeholder="scout" />
+                  </div>
+                </div>
+                <div class="m-form-row">
+                  <label class="ms-field-label" for="intent-workspace">持久工作区</label>
+                  <input id="intent-workspace" class="mil-input mono" placeholder="可选，留空按单次执行" />
+                </div>
+                <div class="m-form-row">
+                  <label class="ms-field-label" for="intent-in">首次延迟（秒）</label>
+                  <input id="intent-in" class="mil-input mono" type="number" min="1" value="60" />
+                </div>
+                <div class="m-form-row">
+                  <label class="ms-field-label" for="intent-every">重复周期（秒，0 为单次）</label>
+                  <input id="intent-every" class="mil-input mono" type="number" min="0" value="0" />
+                </div>
+              </div>
+            </details>
+
+            <div class="m-inline-row m-sched-foot">
+              <button type="button" class="mil-key mil-key--hot" id="schedule-intent">加入计划队列</button>
+            </div>
+          </section>
+
+          <section class="mil-panel m-set-sec" data-set-sec="health" aria-label="运行状态体检">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="heartbeat" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">运行状态与体检</span>
+              </div>
+              <div class="mil-head-r">
+                <button type="button" class="mil-key mil-key--sm" id="check">立即体检</button>
+              </div>
+            </div>
+            <div id="health" class="ms-health-grid"></div>
+          </section>
+        </div>
+
+        <!-- 高级与服务视图 -->
+        <div id="settings-advanced-view" class="m-set-stack" hidden>
+          <section class="mil-panel m-set-sec" data-set-sec="services" aria-label="外部服务与工具登记">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="mcp" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">外部服务与工具</span>
+                <button type="button" class="mil-help" data-help="登记可信 MCP 服务、固定执行模板、只读跨插件接口与联网别名；凭据处只填写保险箱句柄" aria-label="查看外部服务说明" aria-expanded="false">?</button>
+              </div>
+              <div class="mil-head-r">
+                <button type="button" class="mil-key mil-key--sm mil-key--on" id="svc-new-btn">新增服务</button>
+              </div>
+            </div>
+            <div id="service-cards" class="m-svc-cards"></div>
+            <details id="svc-raw-details" class="mil-screen m-adv-details" open>
+              <summary class="m-details-sum">展开结构化 JSON 配置编辑</summary>
+              <textarea id="service-config" class="mil-input mono m-json-area" rows="8" aria-label="服务登记 JSON"></textarea>
+              <div class="m-inline-row m-json-foot">
+                <button type="button" class="mil-key mil-key--sm" id="format-services">美化格式</button>
+                <button type="button" class="mil-key mil-key--sm mil-key--hot" id="save-services">保存服务登记</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="mil-panel m-set-sec" data-set-sec="vault" aria-label="凭据保险箱">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="vault" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">凭据保险箱</span>
+                <span class="mil-tag">保存后隐藏原文</span>
+                <button type="button" class="mil-help" data-help="密钥保存后加密落盘且永不回显；服务与模板仅引用句柄名，不直接暴露明文" aria-label="查看凭据安全说明" aria-expanded="false">?</button>
+              </div>
+            </div>
+            <div class="m-sub-kicker">已登记凭据句柄</div>
+            <div id="handles" class="m-handle-chips"></div>
+            <div class="m-cfg-grid">
+              <div class="m-form-row">
+                <label class="ms-field-label" for="vault-handle">句柄标识</label>
+                <input id="vault-handle" class="mil-input mono" placeholder="如 tavily_key 或 github_pat" />
+              </div>
+              <div class="m-form-row">
+                <label class="ms-field-label" for="vault-value">新密钥值</label>
+                <input id="vault-value" class="mil-input mono" type="password" placeholder="粘贴需要加密存入的密钥…" />
+              </div>
+            </div>
+            <div class="m-inline-row">
+              <button type="button" class="mil-key mil-key--hot" id="save-vault">保存凭据</button>
+              <button type="button" class="mil-key mil-key--danger" id="delete-vault">删除句柄</button>
+            </div>
+          </section>
+
+          <section class="mil-panel m-set-sec" data-set-sec="webhooks" aria-label="外部事件触发通道">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="webhook" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">外部触发通道</span>
+                <button type="button" class="mil-help" data-help="填好通道代号与目标会话后点击添加，配置将同步写入下方并可校验保存" aria-label="查看触发通道说明" aria-expanded="false">?</button>
+              </div>
+            </div>
+            <div id="webhook-cards" class="m-svc-cards"></div>
+            <div id="wh-quick-builder" class="ms-builder-box">
+              <div class="m-sub-kicker">快捷添加触发通道</div>
+              <div class="m-cfg-grid">
+                <input id="wh-b-name" class="mil-input mono" placeholder="通道代号（如 repo_push）" aria-label="通道代号" />
+                <input id="wh-b-target" class="mil-input mono" placeholder="目标会话（如 qq:group:100246809）" aria-label="目标会话" />
+                <input id="wh-b-profile" class="mil-input mono" placeholder="执行角色（如 scout）" value="scout" aria-label="执行角色" />
+                <select id="wh-b-kind" class="mil-select" aria-label="唤醒类型">
+                  <option value="proactive">主动通知</option>
+                  <option value="digest">简报任务</option>
+                  <option value="later">定时延续</option>
+                </select>
+                <input id="wh-b-secret" class="mil-input mono" placeholder="签名凭据句柄（可选）" aria-label="签名凭据句柄" />
+                <button type="button" class="mil-key mil-key--on" id="wh-b-add">写入通道配置</button>
+              </div>
+            </div>
+            <textarea id="webhook-config" class="mil-input mono m-json-area" rows="6" aria-label="事件通道 JSON"></textarea>
+            <div class="m-inline-row m-json-foot">
+              <button type="button" class="mil-key mil-key--sm" id="format-webhooks">美化格式</button>
+              <button type="button" class="mil-key mil-key--sm mil-key--hot" id="save-webhooks">保存事件通道</button>
+            </div>
+          </section>
+
+          <section class="mil-panel m-set-sec" data-set-sec="runtime" aria-label="运行时与容器边界">
+            <div class="mil-head">
+              <div class="mil-head-l">
+                <span class="m-head-ic" data-m-mod="gear" data-m-size="22" aria-hidden="true"></span>
+                <span class="mil-silk">高级运行参数与沙箱</span>
+                <button type="button" class="mil-help" data-help="只读探索与图文排版无需开启 Docker；仅运行代码或二进制工具时需启用沙箱" aria-label="查看沙箱说明" aria-expanded="false">?</button>
+              </div>
+              <div class="mil-head-r">
+                <button type="button" class="mil-key mil-key--sm mil-key--hot" id="save-settings-adv">保存高级参数</button>
+              </div>
+            </div>
+            <div id="advanced-runtime-fields" class="m-cfg-grid"></div>
+            <div id="sandbox-fields" class="m-cfg-grid m-sub-sandbox"></div>
+            <div class="m-sub-kicker">当前计划队列</div>
+            <div id="intent-list" class="m-card-stack"></div>
+            <div class="m-sub-kicker">近期经验沉淀回执</div>
+            <div id="learning" class="m-card-stack"></div>
+          </section>
+        </div>
+      </main>
+
+      <!-- 桌面右栏：上下文编辑与状态抽屉 -->
+      <aside class="mil-panel m-set-drawer" id="settings-ctx-drawer" aria-label="上下文细节与服务编辑抽屉">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span class="m-head-ic" data-m-mod="mcp" data-m-size="22" aria-hidden="true"></span>
+            <span class="mil-silk" id="set-drawer-title">实时概况与服务编辑</span>
+          </div>
+          <span class="mil-tag" id="set-drawer-badge">已就绪</span>
+        </div>
+
+        <div class="mil-screen m-drawer-quota" id="set-drawer-quota">
+          <div class="m-sub-kicker">今日主动额度</div>
+          <div class="m-quota-val num" id="set-drawer-quota-text">—</div>
+        </div>
+
+        <!-- 服务结构化表单（支持 MCP 服务与动作模板） -->
+        <div class="m-svc-drawer" id="svc-drawer-form">
+          <div class="m-sub-kicker">编辑选中服务条目</div>
+          <div class="m-form-row">
+            <label class="ms-field-label" for="svc-d-kind">服务类型</label>
+            <select id="svc-d-kind" class="mil-select">
+              <option value="mcp">MCP 外部服务</option>
+              <option value="template">固定执行模板</option>
+            </select>
+          </div>
+          <div class="m-form-row">
+            <label class="ms-field-label" for="svc-d-name">服务代号</label>
+            <input id="svc-d-name" class="mil-input mono" placeholder="如 github_mcp 或 fetch_api" />
+          </div>
+          <div class="m-form-row">
+            <label class="ms-field-label" for="svc-d-desc">说明描述</label>
+            <input id="svc-d-desc" class="mil-input" placeholder="简述该服务的用途" />
+          </div>
+          <div class="m-form-row">
+            <label class="ms-field-label" for="svc-d-cmd">程序与参数（空格或换行分隔）</label>
+            <textarea id="svc-d-cmd" class="mil-input mono" rows="2" placeholder="/usr/bin/npx -y @modelcontextprotocol/server-github"></textarea>
+          </div>
+          <div class="m-form-row" id="svc-d-tools-wrap">
+            <label class="ms-field-label" for="svc-d-tools">开放工具名（逗号分隔）</label>
+            <input id="svc-d-tools" class="mil-input mono" placeholder="search_issues, read_file" />
+          </div>
+          <div class="m-form-row" id="svc-d-targets-wrap" hidden>
+            <label class="ms-field-label" for="svc-d-targets">允许目标主机（host:port，逗号分隔）</label>
+            <input id="svc-d-targets" class="mil-input mono" placeholder="api.github.com:443" />
+          </div>
+          <div class="m-form-row">
+            <label class="ms-field-label" for="svc-d-creds">凭据绑定（环境变量=句柄，每行一项）</label>
+            <textarea id="svc-d-creds" class="mil-input mono" rows="2" placeholder="GITHUB_TOKEN=github_pat"></textarea>
+          </div>
+          <div class="m-cfg-grid">
+            <div class="m-form-row">
+              <label class="ms-field-label" for="svc-d-access">调用权限</label>
+              <select id="svc-d-access" class="mil-select">
+                <option value="everyone">普通只读</option>
+                <option value="admins">仅核验管理员</option>
+              </select>
+            </div>
+            <div class="m-form-row">
+              <label class="ms-field-label" for="svc-d-mem">内存限制（MiB）</label>
+              <input id="svc-d-mem" class="mil-input mono" type="number" min="64" max="2048" value="256" />
+            </div>
+          </div>
+          <label class="m-check-pill">
+            <input type="checkbox" id="svc-d-readonly" checked />
+            <span>限定为只读工具</span>
+          </label>
+          <div class="m-drawer-actions">
+            <button type="button" class="mil-key mil-key--danger" id="svc-d-del">移除</button>
+            <button type="button" class="mil-key mil-key--hot" id="svc-d-save">保存服务条目</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 移动端底部弹层 -->
+    <div class="m-mob-scrim m-mob-sheet-scrim" id="settings-mob-scrim" hidden>
+      <div class="m-mob-sheet" id="settings-mob-sheet" role="dialog" aria-modal="true" aria-labelledby="mob-sheet-title">
+        <div class="m-mob-handle"></div>
+        <div class="m-mob-sheet-head">
+          <strong id="mob-sheet-title">编辑配置</strong>
+          <button type="button" class="mob-circle-btn" id="mob-sheet-close" aria-label="关闭弹层"><span data-m-ctrl="close" data-m-size="16" aria-hidden="true"></span></button>
+        </div>
+        <div id="mob-sheet-body" class="m-mob-sheet-body"></div>
+      </div>
+    </div>
   </div>
-  <span class="mil-hint">宿主管控管理员：<strong id="admins" class="mono">读取中…</strong></span>
-</div>
-
-<!-- 一、一般设置（默认直达：外观、开关、群聊、主动分寸与常用定时） -->
-<div id="settings-general-view" style="display:flex;flex-direction:column;gap:24px">
-  <section class="mil-panel mil-panel--flat">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">TALK &amp; PULSE · </span>外观、启用与日常陪伴</span></div>
-      <div class="mil-head-r">
-        <button class="mil-key mil-key--hot" id="save-settings" type="button">保存设置</button>
-        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-    <div id="general-fields" class="set-list"></div>
-  </section>
-
-  <section class="mil-panel">
-    <div class="mil-head">
-      <div class="mil-head-l">
-        <span class="mil-silk"><span class="mil-silk-en">SCHEDULER · </span>常用定时安排</span>
-        <span class="mil-tag" id="sched-summary-pill">单次 · 60 秒后由 scout 执行</span>
-        <button type="button" class="mil-help" data-help="选择一个周期预设后写下需求即可加入计划队列；点选「资讯简报」会自动填入 digest 周期模板（需先在能力页启用 digest）" aria-label="查看定时安排说明" aria-expanded="false">?</button>
-      </div>
-      <div class="mil-head-r">
-        <div class="mil-row">
-          <button type="button" class="mil-key mil-key--sm" data-sched-preset="once">单次 60s</button>
-          <button type="button" class="mil-key mil-key--sm" data-sched-preset="hourly">每小时巡检</button>
-          <button type="button" class="mil-key mil-key--sm" data-sched-preset="daily">每日简报</button>
-          <button type="button" class="mil-key mil-key--sm" data-sched-preset="digest">资讯简报（预设）</button>
-        </div>
-        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-    <div class="mil-grid-2" style="margin-bottom:12px">
-      <div class="mil-field">
-        <label class="mil-label" for="intent-chat-select">发往哪段会话</label>
-        <div class="mil-row" style="gap:6px;flex-wrap:wrap">
-          <select id="intent-chat-select" class="mil-select" style="flex:1 1 170px;min-width:0" aria-label="从常用会话选择"></select>
-          <input id="intent-chat" class="mil-input mono" style="flex:1 1 180px;min-width:0" list="intent-chat-list" placeholder="如 qq:group:12345678 / self">
-        </div>
-        <datalist id="intent-chat-list"></datalist>
-      </div>
-      <div class="mil-field">
-        <label class="mil-label" for="intent-profile-select">交给哪个角色执行</label>
-        <select id="intent-profile-select" class="mil-select" aria-label="选择执行角色"></select>
-      </div>
-    </div>
-    <div class="mil-field" style="margin-bottom:12px">
-      <label class="mil-label" for="intent-prompt">让它定时做什么</label>
-      <textarea id="intent-prompt" class="mil-textarea" rows="2" style="min-height:74px" placeholder="例如：每天早上汇总 AI 与设计领域最值得关注的 3 件事"></textarea>
-    </div>
-    <details id="sched-advanced-details" style="margin-bottom:14px">
-      <summary class="mil-label" style="cursor:pointer">更多执行与间隔选项（可选）</summary>
-      <div class="mil-grid-2" style="margin-top:12px">
-        <div class="mil-field">
-          <label class="mil-label" for="intent-profile">自定义角色标识</label>
-          <input id="intent-profile" class="mil-input mono" value="scout" placeholder="scout">
-        </div>
-        <div class="mil-field">
-          <label class="mil-label" for="intent-workspace">持久工作区</label>
-          <input id="intent-workspace" class="mil-input mono" placeholder="例如 digest">
-        </div>
-        <div class="mil-field"><label class="mil-label" for="intent-in">首次延迟 (秒)</label><input id="intent-in" class="mil-input mono" type="number" min="1" value="60"></div>
-        <div class="mil-field"><label class="mil-label" for="intent-every">重复间隔 (秒，0 为仅执行一次)</label><input id="intent-every" class="mil-input mono" type="number" min="0" value="0"></div>
-      </div>
-    </details>
-    <div class="mil-row" style="justify-content:flex-end">
-      <button id="schedule-intent" class="mil-key mil-key--hot" type="button">加入计划队列</button>
-    </div>
-  </section>
-
-  <section class="mil-panel">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">HEALTH · </span>运行状态速览</span></div>
-      <div class="mil-head-r">
-        <button id="check" class="mil-key mil-key--sm" type="button">刷新检查</button>
-        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-    <div id="health" class="ms-health-grid" role="region" aria-label="运行状态速览">正在检查…</div>
-  </section>
-</div>
-
-<!-- 二、高级设置（开发、运维与容器配额：线程上限、Docker 沙箱、凭据保险箱、MCP/Webhook JSON） -->
-<div id="settings-advanced-view" style="display:flex;flex-direction:column;gap:24px" hidden>
-  <section class="mil-panel mil-panel--flat">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">RUNTIME · </span>高级运行参数与 Docker 沙箱</span></div>
-      <div class="mil-head-r">
-        <button class="mil-key mil-key--hot" id="save-settings-adv" type="button">保存以上设置</button>
-        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-    <div id="advanced-runtime-fields" class="set-list" style="margin-bottom:14px"></div>
-    <details class="mil-screen" open>
-      <summary class="mil-label" style="cursor:pointer">
-        Docker 沙箱隔离环境与资源配额
-        <button type="button" class="mil-help" style="margin-left:6px" data-help="只读探索与 HTML 渲染出图无需开启 Docker；仅运行代码或二进制脚本工具才需启用沙箱" aria-label="查看 Docker 沙箱说明" aria-expanded="false">?</button>
-      </summary>
-      <div id="sandbox-fields" class="set-list" style="margin-top:10px"></div>
-    </details>
-  </section>
-
-  <div class="mil-grid-2">
-    <section class="mil-panel">
-      <div class="mil-head">
-        <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">VAULT · </span>凭据保险箱</span>
-          <span class="mil-tag">只进不出</span>
-          <button type="button" class="mil-help" data-help="密码保存后加密落盘且永不回显；各服务与模板只引用句柄名，不直接暴露明文密钥" aria-label="查看保险箱说明" aria-expanded="false">?</button>
-        </div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-      </div>
-      <div class="mil-screen" style="margin-bottom:14px">
-        <div class="mil-label" style="margin-bottom:8px">已登记句柄</div>
-        <div id="handles" class="mil-row"></div>
-      </div>
-      <div class="mil-grid-2" style="margin-bottom:14px">
-        <div class="mil-field"><label class="mil-label" for="vault-handle">句柄名</label><input id="vault-handle" class="mil-input mono" autocomplete="off" placeholder="例如 drawing"></div>
-        <div class="mil-field"><label class="mil-label" for="vault-value">新凭据值</label><input id="vault-value" class="mil-input mono" type="password" autocomplete="new-password" placeholder="保存后永不回显"></div>
-      </div>
-      <div class="mil-row">
-        <button id="save-vault" class="mil-key mil-key--hot" type="button">保存或替换凭据</button>
-        <button id="delete-vault" class="mil-key mil-key--danger" type="button">删除该句柄</button>
-      </div>
-    </section>
-
-    <section class="mil-panel">
-      <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">INTENTS · </span>待唤醒意图与自动笔记学习</span></div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:12px">
-        <div id="intent-list" class="mil-screen" style="max-height:190px;overflow-y:auto"></div>
-        <div id="learning" class="ms-receipt-list"></div>
-      </div>
-    </section>
-  </div>
-
-  <div class="mil-grid-2">
-    <section class="mil-panel">
-      <div class="mil-head">
-        <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">SERVICES · </span>MCP 与接口登记 (JSON)</span>
-          <button type="button" class="mil-help" data-help="登记可信 MCP 服务、固定执行模板、只读跨插件 API 白名单及 web_provider 别名映射；凭据处只填保险箱句柄" aria-label="查看服务登记说明" aria-expanded="false">?</button>
-        </div>
-        <div class="mil-head-r">
-          <button id="format-services" class="mil-key mil-key--sm" type="button">格式化</button>
-          <button id="save-services" class="mil-key mil-key--sm mil-key--hot" type="button">保存服务登记</button>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-        </div>
-      </div>
-      <div id="service-cards" class="mil-screen" style="margin-bottom:12px"></div>
-      <textarea id="service-config" class="mil-textarea mil-textarea--code" rows="12" aria-label="MCP、模板与接口登记" spellcheck="false"></textarea>
-    </section>
-
-    <section class="mil-panel">
-      <div class="mil-head">
-        <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">WEBHOOKS · </span>外部 Webhook 事件通道 (JSON)</span>
-          <button type="button" class="mil-help" data-help='示例：{"news":{"target":"chat:qq:group:12345678","kind":"proactive","profile":"scout","workspace":"digest","secret_handle":"event_key"}}' aria-label="查看事件通道示例" aria-expanded="false">?</button>
-        </div>
-        <div class="mil-head-r">
-          <button id="format-webhooks" class="mil-key mil-key--sm" type="button">格式化</button>
-          <button id="save-webhooks" class="mil-key mil-key--sm mil-key--hot" type="button">保存事件通道</button>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-        </div>
-      </div>
-      <div id="webhook-cards" class="mil-screen" style="margin-bottom:12px"></div>
-      <div id="wh-quick-builder" class="ms-builder-box">
-        <div class="mil-row" style="justify-content:space-between;gap:6px">
-          <span class="mil-label" style="margin:0">快捷添加或更新事件通道</span>
-          <button type="button" class="mil-help" data-help="填好通道名与目标会话后点击填入，系统会自动写入下方 JSON 并可在校验后保存生效" aria-label="查看快捷添加说明" aria-expanded="false">?</button>
-        </div>
-        <div class="mil-grid-2">
-          <div class="mil-field"><label class="mil-label" for="wh-b-name">通道代号</label><input id="wh-b-name" class="mil-input mono" placeholder="如 news"></div>
-          <div class="mil-field"><label class="mil-label" for="wh-b-target">目标会话 (平台:类型:id)</label><input id="wh-b-target" class="mil-input mono" list="intent-chat-list" placeholder="如 qq:group:12345678"></div>
-          <div class="mil-field"><label class="mil-label" for="wh-b-profile">触发角色</label><select id="wh-b-profile" class="mil-select"></select></div>
-          <div class="mil-field"><label class="mil-label" for="wh-b-kind">动作模式</label><select id="wh-b-kind" class="mil-select"><option value="proactive">主动通知 / 简报</option><option value="task">后台任务执行</option></select></div>
-        </div>
-        <div class="mil-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap">
-          <input id="wh-b-secret" class="mil-input mono" style="flex:1 1 160px;min-width:0" placeholder="可选凭据句柄，如 event_key">
-          <button id="wh-b-add" type="button" class="mil-key mil-key--sm">填入下方配置</button>
-        </div>
-      </div>
-      <textarea id="webhook-config" class="mil-textarea mil-textarea--code" rows="10" aria-label="外部事件通道" spellcheck="false"></textarea>
-    </section>
-  </div>
-</div>

@@ -1,163 +1,164 @@
-<!-- 统一资料与产物空间（左栏：空间分类 + 最近 + 来源会话；右栏：检索列表/网格 + 检视器 + 工作区） -->
-<div class="out-space">
-  <!-- 左侧导航栏 -->
-  <aside class="mil-panel mil-panel--soft out-rail" aria-label="资料空间导航">
-    <div class="mil-head">
-      <div class="mil-head-l">
-        <span class="mil-silk"><span class="mil-silk-en">SPACE · </span>资料空间</span>
-        <button type="button" class="mil-help" data-help="统一存放各角色生成的页面、图像、文档、结论出处及持久工作区；按来源或形态筛选，点击条目即在右侧预览" aria-label="查看资料空间说明" aria-expanded="false">?</button>
-      </div>
-      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-    </div>
-
-    <nav class="out-nav" aria-label="产物形态分类">
-      <button type="button" class="out-nav-btn" data-out-space="all" aria-current="page">
-        <span class="out-nav-l">
-          <svg class="out-ico out-ico--all" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2.5" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="2" y="9" width="5" height="4.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5" height="4.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
-          <span>全部</span>
-        </span>
-        <span class="out-nav-cnt num" id="out-st-total">0</span>
-      </button>
-      <button type="button" class="out-nav-btn" data-out-space="pages">
-        <span class="out-nav-l">
-          <svg class="out-ico out-ico--page" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 6h12" stroke="currentColor" stroke-width="1.4"/><circle cx="4.3" cy="4.2" r="0.6" fill="currentColor"/><circle cx="6.3" cy="4.2" r="0.6" fill="currentColor"/></svg>
-          <span>页面与卡片</span>
-        </span>
-        <span class="out-nav-cnt num" id="out-st-pages">0</span>
-      </button>
-      <button type="button" class="out-nav-btn" data-out-space="images">
-        <span class="out-nav-l">
-          <svg class="out-ico out-ico--img" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.5" cy="6" r="1.1" fill="currentColor"/><path d="M3 12l3.4-3.4 2.3 2.2 2-2 2.3 3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-          <span>图像与海报</span>
-        </span>
-        <span class="out-nav-cnt num" id="out-st-images">0</span>
-      </button>
-      <button type="button" class="out-nav-btn" data-out-space="docs">
-        <span class="out-nav-l">
-          <svg class="out-ico out-ico--doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5.5L13 5.5V13.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 8h5M5.5 10.8h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-          <span>文档与代码</span>
-        </span>
-        <span class="out-nav-cnt num" id="out-st-docs">0</span>
-      </button>
-      <button type="button" class="out-nav-btn" data-out-space="conclusions">
-        <span class="out-nav-l">
-          <svg class="out-ico out-ico--con" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7.5H7.2l-3 2.5V11H2.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5 6.5h6M5 8.8h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-          <span>结论与出处</span>
-        </span>
-        <span class="out-nav-cnt num" id="out-st-conclusions">0</span>
-      </button>
-      <button type="button" class="out-nav-btn" data-out-space="workspaces">
-        <span class="out-nav-l">
-          <svg class="out-ico out-ico--ws" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h4.5l1.3 1.5H14v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-          <span>持续工作区</span>
-        </span>
-        <span class="out-nav-cnt num" id="out-st-ws">0</span>
-      </button>
-    </nav>
-
-    <div class="out-rail-sec">
-      <div class="out-rail-cap">最近</div>
-      <div id="out-recent-list" class="out-recent-list"></div>
-    </div>
-
-    <div class="out-rail-sec">
-      <label class="mil-label" for="out-chat" style="margin-bottom:6px">来源会话</label>
-      <select id="out-chat" class="mil-select mono" style="margin-bottom:8px"></select>
-      <div id="out-chat-chips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-    </div>
-  </aside>
-
-  <!-- 右侧主工作台 -->
-  <div class="out-main">
-    <section class="mil-panel mil-panel--flat" id="out-catalog-panel" aria-label="产物索引列表">
-      <div class="out-top">
-        <div class="out-top-l">
-          <h2 class="out-space-title" id="out-space-heading">全部资料</h2>
-          <span class="mil-tag num" id="out-visible-count">0 项</span>
-        </div>
-        <div class="out-top-r">
-          <div class="out-search-wrap">
-            <input id="out-search" class="mil-input" aria-label="检索产物" placeholder="搜索文件名、标题或线程号">
-            <button id="out-search-btn" class="mil-key mil-key--sm mil-key--hot" type="button">搜索</button>
-          </div>
-          <div class="mil-seg" role="group" aria-label="列表或网格视图">
-            <button type="button" class="mil-key mil-key--sm" data-out-layout="table" aria-pressed="true">列表</button>
-            <button type="button" class="mil-key mil-key--sm" data-out-layout="grid" aria-pressed="false">网格</button>
-          </div>
-          <button id="out-refresh-btn" class="mil-key mil-key--sm" type="button">刷新</button>
+  <div class="m-out-shell" id="out-shell">
+    <!-- 左栏：资料空间与来源筛选 -->
+    <aside class="mil-panel m-out-aside" aria-label="资料空间目录">
+      <div class="m-rail-group">
+        <div class="m-rail-kicker">资料空间</div>
+        <div class="m-rail-nav" role="tablist" aria-label="产物空间分类">
+          <button type="button" class="m-rail-btn is-active" data-out-space="all" aria-pressed="true">
+            <span class="m-rail-ic" data-m-mod="artifacts" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">全部产物</span>
+            <span class="m-rail-cnt num" id="out-st-total">0</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-out-space="pages" aria-pressed="false">
+            <span class="m-rail-ic" data-m-brand="html" data-m-size="20" aria-hidden="true"></span>
+            <span class="m-rail-lbl">网页与简报</span>
+            <span class="m-rail-cnt num" id="out-st-pages">0</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-out-space="images" aria-pressed="false">
+            <span class="m-rail-ic" data-m-brand="image" data-m-size="20" aria-hidden="true"></span>
+            <span class="m-rail-lbl">图片与图表</span>
+            <span class="m-rail-cnt num" id="out-st-images">0</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-out-space="docs" aria-pressed="false">
+            <span class="m-rail-ic" data-m-brand="markdown" data-m-size="20" aria-hidden="true"></span>
+            <span class="m-rail-lbl">文档与代码</span>
+            <span class="m-rail-cnt num" id="out-st-docs">0</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-out-space="conclusions" aria-pressed="false">
+            <span class="m-rail-ic" data-m-mod="journal" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">结论摘要</span>
+            <span class="m-rail-cnt num" id="out-st-conclusions">0</span>
+          </button>
+          <button type="button" class="m-rail-btn" data-out-space="workspaces" aria-pressed="false">
+            <span class="m-rail-ic" data-m-mod="workspace" data-m-size="22" aria-hidden="true"></span>
+            <span class="m-rail-lbl">持久工作区</span>
+            <span class="m-rail-cnt num" id="out-st-ws">0</span>
+          </button>
         </div>
       </div>
 
-      <div class="out-filter-bar">
-        <div class="mil-row" style="gap:6px" role="group" aria-label="按产出方式筛选">
-          <button type="button" class="mil-key mil-key--sm" data-out-kind="all" aria-pressed="true">全部来源</button>
-          <button type="button" class="mil-key mil-key--sm" data-out-kind="attachment" aria-pressed="false">群附件 <span class="num" id="out-st-att">0</span></button>
-          <button type="button" class="mil-key mil-key--sm" data-out-kind="workspace_out" aria-pressed="false">工作区成品 <span class="num" id="out-st-wsout">0</span></button>
-          <button type="button" class="mil-key mil-key--sm" data-out-kind="conclusion" aria-pressed="false">结论与出处</button>
-        </div>
-        <div id="out-role-pills" class="mil-row" style="gap:6px"></div>
+      <div class="m-rail-group">
+        <div class="m-rail-kicker">来源会话</div>
+        <select id="out-chat" class="mil-select" aria-label="按来源会话筛选产物">
+          <option value="">全部来源会话</option>
+        </select>
+        <div id="out-chat-chips" class="out-filter-row" aria-label="常用会话快捷筛选"></div>
       </div>
 
-      <div class="out-table-wrap">
-        <div class="out-table-head" id="out-table-head">
-          <span>名称</span>
-          <span>角色与来源</span>
-          <span style="text-align:right">大小</span>
-          <span style="text-align:right">上次活动时间</span>
-        </div>
-        <div id="out-list" class="out-table"></div>
+      <div class="m-rail-group">
+        <div class="m-rail-kicker">最近产出</div>
+        <div id="out-recent-list" class="out-recent-list"></div>
       </div>
-    </section>
+    </aside>
 
-    <section class="mil-panel mil-panel--flat" id="out-inspector" aria-label="产物检视器">
+    <!-- 中栏：目录筛选列表 + 持久工作区 -->
+    <div class="m-out-main">
+    <section class="mil-panel m-out-catalog" id="out-catalog-panel" aria-label="产物索引列表">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">PREVIEW · </span>内容检视</span>
-          <span class="mil-tag" id="out-cur-badge">未选择</span>
-          <span class="mil-tag num" id="out-cur-size">--</span>
-          <button type="button" class="mil-help" data-help="支持图片预览、HTML/Markdown 安全排版阅读及超长文本分段加载" aria-label="查看产物检视说明" aria-expanded="false">?</button>
+          <span class="mil-silk" id="out-space-heading">全部产物</span>
+          <button type="button" class="mil-help" data-help="可按资料空间、来源会话或产出角色筛选，右侧实时阅读、复制或回到现场" aria-label="查看产物列表说明" aria-expanded="false">?</button>
+          <span class="mil-tag num" id="out-visible-count">0 项</span>
         </div>
-        <div class="mil-head-r">
-          <div class="mil-seg" id="out-img-fit-seg" role="group" aria-label="图片显示比例" hidden>
-            <button type="button" class="mil-key mil-key--sm" data-img-fit="wide" aria-pressed="true">宽幅精读</button>
-            <button type="button" class="mil-key mil-key--sm" data-img-fit="contain" aria-pressed="false">适应全图</button>
+        <div class="mil-head-r m-out-toolbar">
+          <div class="m-search-box">
+            <input id="out-search" class="mil-input" placeholder="搜索文件名、内容或会话…" aria-label="搜索产物" />
+            <button type="button" class="mil-key mil-key--sm" id="out-search-btn" title="筛选产物">搜索</button>
           </div>
-          <div class="mil-seg" role="group" aria-label="视图切换">
+          <div class="m-seg-group" role="group" aria-label="列表布局">
+            <button type="button" class="mil-key mil-key--sm" data-out-layout="table" aria-pressed="true">列表</button>
+            <button type="button" class="mil-key mil-key--sm" data-out-layout="grid" aria-pressed="false">卡片</button>
+          </div>
+          <button type="button" class="mil-key mil-key--sm" id="out-refresh-btn" title="重新加载产物列表">刷新</button>
+        </div>
+      </div>
+
+      <div class="m-filter-bar">
+        <div class="out-filter-row" role="group" aria-label="产物类型筛选">
+          <button type="button" class="mil-key mil-key--sm" data-out-kind="all" aria-pressed="true">全部来源</button>
+          <button type="button" class="mil-key mil-key--sm" data-out-kind="attachment" aria-pressed="false">
+            <span>发送附件</span>
+            <span class="num" id="out-st-att">0</span>
+          </button>
+          <button type="button" class="mil-key mil-key--sm" data-out-kind="workspace_out" aria-pressed="false">
+            <span>工作区成品</span>
+            <span class="num" id="out-st-wsout">0</span>
+          </button>
+          <button type="button" class="mil-key mil-key--sm" data-out-kind="conclusion" aria-pressed="false">文字结论</button>
+        </div>
+        <div id="out-role-pills" class="out-filter-row" aria-label="按产出角色筛选"></div>
+      </div>
+
+      <div class="out-table-head" id="out-table-head">
+        <span>名称与摘要</span>
+        <span>来源角色</span>
+        <span>大小</span>
+        <span>更新</span>
+      </div>
+      <div id="out-list" class="out-list"></div>
+    </section>
+
+    <!-- 工作区目录浏览（全部空间或切换至持久工作区空间时展示） -->
+    <section class="mil-panel m-out-ws-panel" id="out-ws-panel" aria-label="持久工作区文件浏览">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="m-head-ic" data-m-mod="workspace" data-m-size="22" aria-hidden="true"></span>
+          <span class="mil-silk">持久工作区</span>
+          <button type="button" class="mil-help" data-help="持久工作区保留长期活动的文件树；点击左侧工作区可检视输入、工程源码与产出文件" aria-label="查看工作区说明" aria-expanded="false">?</button>
+        </div>
+      </div>
+      <div class="m-ws-split">
+        <div class="m-ws-col">
+          <div class="m-ws-col-h">工作区列表</div>
+          <div id="workspaces" class="out-ws-list"></div>
+        </div>
+        <div class="m-ws-col">
+          <div class="m-ws-col-h">目录文件</div>
+          <div id="workspace-files" class="out-ws-files"></div>
+        </div>
+      </div>
+      <div class="m-ws-preview-wrap">
+        <div class="m-ws-col-h">文件内容预览</div>
+        <pre id="workspace-content" class="mil-screen m-ws-pre">请先选择工作区及文件。</pre>
+      </div>
+    </section>
+    </div>
+
+    <!-- 右栏：产物阅读与检视器 -->
+    <aside class="mil-panel m-out-inspector" id="out-inspector" aria-label="产物详情检视">
+      <div class="mil-head m-out-ins-head">
+        <div class="mil-head-l">
+          <button type="button" class="mob-circle-btn m-mob-only" id="out-mob-back" aria-label="返回产物列表"><span data-m-ctrl="back" data-m-size="16" aria-hidden="true"></span></button>
+          <span class="mil-tag" id="out-cur-badge">未选择</span>
+          <span class="mil-tag num" id="out-cur-size">—</span>
+        </div>
+        <div class="mil-head-r m-out-ins-actions">
+          <div class="m-seg-group" id="out-img-fit-seg" hidden role="group" aria-label="图片适配方式">
+            <button type="button" class="mil-key mil-key--sm" data-img-fit="wide" aria-pressed="true">适宽阅读</button>
+            <button type="button" class="mil-key mil-key--sm" data-img-fit="contain" aria-pressed="false">整张缩览</button>
+          </div>
+          <div class="m-seg-group" role="group" aria-label="内容展示模式">
             <button type="button" class="mil-key mil-key--sm" data-out-view="preview" aria-pressed="true">阅读预览</button>
             <button type="button" class="mil-key mil-key--sm" data-out-view="raw" aria-pressed="false">源码原文</button>
           </div>
-          <button type="button" class="mil-key mil-key--sm" id="out-copy-btn">复制内容</button>
-          <button type="button" class="mil-key mil-key--sm" id="out-goto-now">前往现场</button>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         </div>
       </div>
 
-      <div id="out-meta" class="mil-screen out-meta">点击上方任意资料查看内容</div>
-      <div id="out-stage" class="out-stage">
-        <p class="mil-hint">暂无选中产物。</p>
+      <div id="out-meta" class="m-out-meta"></div>
+      <div id="out-stage" class="m-out-stage">
+        <div class="m-empty">请从中间列表选择一项产物以阅读预览或查验细节。</div>
       </div>
-      <div class="mil-row" style="justify-content:flex-end;margin-top:10px">
-        <button type="button" class="mil-key mil-key--sm" id="out-more-btn" hidden>加载后续内容</button>
-      </div>
-      <details id="out-copy-drawer" style="margin-top:10px" hidden>
-        <summary class="mil-label" style="cursor:pointer">手动复制区</summary>
-        <textarea id="out-copy-box" class="mil-textarea mono" style="margin-top:8px" rows="4" readonly aria-label="产物复制框"></textarea>
-      </details>
-    </section>
 
-    <section class="mil-panel" id="out-ws-panel" aria-label="持续工作区浏览">
-      <div class="mil-head">
-        <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">WORKSPACES · </span>持续工作区</span>
-          <button type="button" class="mil-help" data-help="按角色与工作区标识浏览跨线程保留的输入、草稿和成品目录" aria-label="查看持续工作区说明" aria-expanded="false">?</button>
-        </div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
+      <div class="m-out-foot">
+        <button type="button" class="mil-key mil-key--sm" id="out-copy-btn">复制内容</button>
+        <button type="button" class="mil-key mil-key--sm" id="out-open-ws-btn" hidden>打开工作区</button>
+        <button type="button" class="mil-key mil-key--sm" id="out-more-btn" hidden>完整详情</button>
+        <button type="button" class="mil-key mil-key--sm mil-key--on" id="out-goto-now">前往现场</button>
       </div>
-      <div id="workspaces" class="mil-row" style="margin-bottom:12px"></div>
-      <div class="ws-split">
-        <div id="workspace-files" class="mil-screen" style="display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto"></div>
-        <pre id="workspace-content" class="mil-pre" style="min-height:140px;max-height:280px"></pre>
+
+      <div id="out-copy-drawer" class="m-copy-drawer" hidden>
+        <div class="m-copy-drawer-h">当前环境受限，请直接复制下方内容：</div>
+        <textarea id="out-copy-box" class="mil-input mono" rows="4" readonly aria-label="待复制文本"></textarea>
       </div>
-    </section>
+    </aside>
   </div>
-</div>
