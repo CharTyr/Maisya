@@ -442,10 +442,6 @@ async def test_webui_v26_theme_toggle_icons_and_flow_isolation(tmp_path):
                     for page_name in COMPILED_PAGES:
                         await page.evaluate(
                             """() => {
-                              window.__themeEvents = [];
-                              window.addEventListener("maisya:themechange", (ev) => {
-                                window.__themeEvents.push(ev.detail || {});
-                              });
                               window.maibot = {
                                 ready: Promise.resolve(),
                                 context: { theme: "light" },
@@ -458,6 +454,14 @@ async def test_webui_v26_theme_toggle_icons_and_flow_isolation(tmp_path):
                         )
                         doc = _wrap_csp((WEBUI_DIR / f"{page_name}.html").read_text(encoding="utf-8"))
                         await page.set_content(doc)
+                        await page.evaluate(
+                            """() => {
+                              window.__themeEvents = [];
+                              window.addEventListener("maisya:themechange", (ev) => {
+                                window.__themeEvents.push(ev.detail || {});
+                              });
+                            }"""
+                        )
                         await expect(page.locator("#ui-style-toggle")).to_be_visible()
 
                         if viewport_name == "mobile" and page_name in MGMT_PAGES:
@@ -770,7 +774,9 @@ api_provider = "DemoProvider"
                     assert await page.evaluate(
                         "document.documentElement.scrollWidth <= window.innerWidth"
                     )
-                    close_sheet = page.locator(".m-mob-sheet [data-mob-sheet-close], .m-mob-scrim").first
+                    close_sheet = page.locator(
+                        ".m-mob-sheet [data-mob-sheet-close], .m-mob-sheet-scrim, .m-mob-scrim"
+                    ).first
                     if await close_sheet.count() > 0 and await close_sheet.is_visible():
                         await close_sheet.click()
                     await page.locator("button[data-mob-back]").first.click()
