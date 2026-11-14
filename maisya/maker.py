@@ -12,7 +12,30 @@ from dataclasses import replace
 from .abilities import Profile
 from .sandbox import Sandbox
 from .scout import Scout, call_capability, checked, safe_url, validate_arguments
-from .workspaces import Workspaces, completed_thread, parent_fd, regular_open
+from .workspaces import (
+    Workspaces,
+    completed_thread,
+    regular_open,
+    write_workspace_bytes,
+)
+
+_PLAYWRIGHT_ERROR_MARKERS = (
+    "playwright",
+    "chromium",
+    "browser",
+    "executable doesn't exist",
+)
+
+
+def _playwright_render_hint(message: str) -> str:
+    """若 html2png 报错涉及缺失 Playwright/Chromium 内核，附加安装与降级交付提示。"""
+    lowered = message.lower()
+    if any(marker in lowered for marker in _PLAYWRIGHT_ERROR_MARKERS):
+        return (
+            f"{message}（若宿主未安装浏览器内核，可在宿主 Python 环境执行 "
+            "playwright install chromium，或先改用纯文字/网页文件交付）"
+        )
+    return ""
 
 
 class AgentRuntime(Scout):
@@ -203,25 +226,7 @@ class AgentRuntime(Scout):
                 continue
             for rel_sub, raw_data in companions:
                 rel = f"in/skills/{skill_id}/{rel_sub}"
-                with parent_fd(work.path, rel, create=True) as (directory, name):
-                    temp = ".skill-" + os.urandom(6).hex()
-                    fd = os.open(
-                        temp,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                        0o600,
-                        dir_fd=directory,
-                    )
-                    try:
-                        with os.fdopen(fd, "wb") as output:
-                            output.write(raw_data)
-                            output.flush()
-                            os.fsync(output.fileno())
-                        os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
-                    finally:
-                        try:
-                            os.unlink(temp, dir_fd=directory)
-                        except FileNotFoundError:
-                            pass
+                write_workspace_bytes(work.path, rel, raw_data, overwrite=True)
 
     async def _work(self, row):
         thread_id = row["thread_id"]
@@ -277,9 +282,12 @@ class AgentRuntime(Scout):
                 if part.get("type") not in {"image", "emoji", "voice", "file"}:
                     continue
                 data = part.get("data") if isinstance(part.get("data"), dict) else {}
-                filename = re.sub(
-                    r"[^\w.-]", "_", str(data.get("name") or f"input-{index}.bin")
-                )[:80]
+                filename = (
+                    re.sub(
+                        r"[^\w.-]", "_", str(data.get("name") or f"input-{index}.bin")
+                    )[:80].rstrip(". ")
+                    or f"input-{index}.bin"
+                )
                 reference_key = hashlib.sha256(message_id.encode()).hexdigest()[:12]
                 relative = f"in/ref-{reference_key}-{index}-{filename}"
                 binary = part.get("binary_data_base64") or data.get("base64")
@@ -399,10 +407,11 @@ class AgentRuntime(Scout):
                         hashlib.sha256(content).hexdigest(),
                     )
                 )
-                relative = (
-                    f"in/previous-{previous_id}-{index}-"
-                    + re.sub(r"[^\w.-]", "_", attachment["name"])[:80]
+                safe_att_name = (
+                    re.sub(r"[^\w.-]", "_", attachment["name"])[:80].rstrip(". ")
+                    or f"attachment-{index}.bin"
                 )
+                relative = f"in/previous-{previous_id}-{index}-{safe_att_name}"
                 await completed_thread(
                     self._import_bytes, work, relative, content, overwrite=True
                 )
@@ -468,35 +477,7 @@ class AgentRuntime(Scout):
             or (not existed and len(files) >= self.files.max_files)
         ):
             raise ValueError("引用文件为空或超过配额")
-        with parent_fd(work.path, relative, create=True) as (directory, name):
-            if overwrite and existed:
-                temp = ".import-" + os.urandom(6).hex()
-                descriptor = os.open(
-                    temp,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                    0o600,
-                    dir_fd=directory,
-                )
-                try:
-                    with os.fdopen(descriptor, "wb") as output:
-                        output.write(content)
-                        output.flush()
-                        os.fsync(output.fileno())
-                    os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
-                finally:
-                    try:
-                        os.unlink(temp, dir_fd=directory)
-                    except FileNotFoundError:
-                        pass
-                return
-            descriptor = os.open(
-                name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=directory,
-            )
-            with os.fdopen(descriptor, "wb") as output:
-                output.write(content)
+        write_workspace_bytes(work.path, relative, content, overwrite=overwrite)
 
     async def call(self, name, arguments, context):
         validate_arguments(name, arguments)
@@ -556,8 +537,8 @@ class AgentRuntime(Scout):
                     "width": int(arguments.get("width", 960)),
                     "height": int(arguments.get("height", 640)),
                 }
-                rendered = checked(
-                    await call_capability(
+                try:
+                    raw_rendered = await call_capability(
                         self.host,
                         "render.html2png",
                         timeout_ms=30000,
@@ -569,9 +550,21 @@ class AgentRuntime(Scout):
                         ),
                         full_page=bool(arguments.get("full_page", True)),
                         allow_network=False,
-                    ),
-                    "result",
-                )
+                    )
+                    if (
+                        isinstance(raw_rendered, dict)
+                        and raw_rendered.get("success") is False
+                        and _playwright_render_hint(
+                            str(raw_rendered.get("error") or "")
+                        )
+                    ):
+                        raise RuntimeError(str(raw_rendered.get("error") or ""))
+                    rendered = checked(raw_rendered, "result")
+                except RuntimeError as error:
+                    hinted = _playwright_render_hint(str(error))
+                    if hinted:
+                        raise RuntimeError(hinted) from error
+                    raise
                 image_b64 = rendered.get("image_base64")
                 if not isinstance(image_b64, str) or len(image_b64) > 12 * 1024**2:
                     raise RuntimeError("宿主渲染未返回有效图片数据")

@@ -10,6 +10,8 @@ from urllib.parse import quote
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from .pathsafe import create_exclusive, path_is_link_like, safe_chmod
+
 
 class VaultError(RuntimeError):
     pass
@@ -48,15 +50,15 @@ def redact_values(value, secrets):
 
 
 def private_directory(path: Path) -> Path:
-    if any(parent.is_symlink() for parent in (path, *path.parents)):
+    if any(path_is_link_like(parent) for parent in (path, *path.parents)):
         raise VaultError("保险箱路径不能经过符号链接")
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
-    path.chmod(0o700)
+    safe_chmod(path, 0o700)
     return path
 
 
 def atomic_private_write(path: Path, content: bytes) -> None:
-    if path.is_symlink():
+    if path_is_link_like(path):
         raise VaultError("保险箱文件不能是符号链接")
     descriptor, temporary = tempfile.mkstemp(dir=path.parent)
     try:
@@ -64,6 +66,7 @@ def atomic_private_write(path: Path, content: bytes) -> None:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
+        safe_chmod(temporary, 0o600)
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
@@ -74,23 +77,23 @@ class Vault:
         self.path = private_directory(path)
         self._redactions: set[str] = set()
         key_path = path / "master.key"
-        if key_path.is_symlink():
+        if path_is_link_like(key_path):
             raise VaultError("保险箱密钥不能是符号链接")
         if not key_path.exists():
             if list(path.glob("*.enc")):
                 raise VaultError("保险箱密钥缺失，已停止读取")
-            descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            descriptor = create_exclusive(key_path, 0o600)
             with os.fdopen(descriptor, "wb") as output:
                 output.write(Fernet.generate_key())
                 output.flush()
                 os.fsync(output.fileno())
-        key_path.chmod(0o600)
+        safe_chmod(key_path, 0o600)
         try:
             self._cipher = Fernet(key_path.read_bytes())
             for encrypted in path.glob("*.enc"):
-                if encrypted.is_symlink():
+                if path_is_link_like(encrypted):
                     raise VaultError("保险箱文件不能是符号链接")
-                encrypted.chmod(0o600)
+                safe_chmod(encrypted, 0o600)
                 record = json.loads(self._cipher.decrypt(encrypted.read_bytes()))
                 if record["handle"] != encrypted.stem or not isinstance(
                     record["value"], str
@@ -125,7 +128,7 @@ class Vault:
     def for_execution(self, handle):
         self._validate_handle(handle)
         path = self.path / (handle + ".enc")
-        if path.is_symlink():
+        if path_is_link_like(path):
             raise VaultError("凭据文件不能是符号链接")
         try:
             record = json.loads(self._cipher.decrypt(path.read_bytes()))

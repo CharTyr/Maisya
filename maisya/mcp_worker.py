@@ -2,7 +2,6 @@
 
 import json
 import os
-import resource
 import sys
 from pathlib import Path
 
@@ -16,6 +15,8 @@ def main():
     ):
         raise ValueError("MCP 启动参数无效")
     if sys.platform.startswith("linux"):
+        import resource
+
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
         resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024**2, 16 * 1024**2))
@@ -23,9 +24,11 @@ def main():
             base = Path("/sys/fs/cgroup") / group_name
             leaf = base / str(uid)
             leaf.mkdir()
-            (leaf / "memory.max").write_text(str(memory_mib * 1024**2))
-            (leaf / "pids.max").write_text("64")
-            (leaf / "cgroup.procs").write_text(str(os.getpid()))
+            (leaf / "memory.max").write_text(
+                str(memory_mib * 1024**2), encoding="utf-8"
+            )
+            (leaf / "pids.max").write_text("64", encoding="utf-8")
+            (leaf / "cgroup.procs").write_text(str(os.getpid()), encoding="utf-8")
             os.setgroups([])
             os.setgid(uid)
             os.setuid(uid)

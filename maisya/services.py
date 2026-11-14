@@ -8,7 +8,6 @@ import ipaddress
 import json
 import os
 import re
-import shutil
 import signal
 import socket
 import sys
@@ -18,7 +17,13 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from .sandbox import MINIMAL_ENV
+from .pathsafe import (
+    is_absolute_program_path,
+    minimal_subprocess_env,
+    path_is_link_like,
+    rmtree_safe,
+    safe_chmod,
+)
 from .scout import call_capability
 from .workspaces import completed_thread
 
@@ -274,21 +279,30 @@ class StdioSession:
 
     async def close(self):
         if self.cgroup and self.cgroup.exists():
-            await completed_thread((self.cgroup / "cgroup.kill").write_text, "1")
+            await completed_thread(
+                (self.cgroup / "cgroup.kill").write_text, "1", encoding="utf-8"
+            )
         if self.child.returncode is None:
+            use_killpg = os.name != "nt" and hasattr(os, "killpg")
             try:
-                os.killpg(self.child.pid, signal.SIGTERM)
+                if use_killpg:
+                    os.killpg(self.child.pid, signal.SIGTERM)
+                else:
+                    self.child.terminate()
             except ProcessLookupError:
                 pass
             try:
                 await asyncio.wait_for(self.child.wait(), 2)
             except TimeoutError:
                 try:
-                    os.killpg(self.child.pid, signal.SIGKILL)
+                    if use_killpg:
+                        os.killpg(self.child.pid, signal.SIGKILL)
+                    else:
+                        self.child.kill()
                 except ProcessLookupError:
                     pass
                 await self.child.wait()
-        await completed_thread(shutil.rmtree, self.home)
+        await completed_thread(rmtree_safe, self.home)
         if self.cgroup and self.cgroup.exists():
             await completed_thread(self.cgroup.rmdir)
 
@@ -309,7 +323,7 @@ class Services:
         if not self.path.exists():
             raw = b'{"servers":{},"templates":{}}'
         else:
-            if self.path.is_symlink() or self.path.stat().st_size > 262144:
+            if path_is_link_like(self.path) or self.path.stat().st_size > 262144:
                 raise ValueError("能力服务登记文件无效")
             raw = self.path.read_bytes()
         configuration = json.loads(raw)
@@ -486,7 +500,7 @@ class Services:
             or not all(
                 isinstance(value, str) and "\x00" not in value for value in command
             )
-            or not Path(command[0]).is_absolute()
+            or not is_absolute_program_path(command[0])
         ):
             raise ValueError("MCP 需要管理员登记的绝对程序路径与固定参数")
         credentials = config.get("credentials", {})
@@ -500,36 +514,65 @@ class Services:
             "PYTHONPATH",
             "LD_PRELOAD",
             "LD_LIBRARY_PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+            "COMSPEC",
+            "PATHEXT",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "TEMP",
+            "TMP",
+            "PYTHONUTF8",
+            "PYTHONIOENCODING",
         }:
             raise ValueError("MCP 凭据不能覆盖启动环境")
-        environment = dict(MINIMAL_ENV)
+        cred_values = {}
         for name, handle in credentials.items():
-            environment[name] = await completed_thread(self.vault.for_execution, handle)
+            cred_values[name] = await completed_thread(
+                self.vault.for_execution, handle
+            )
         home = Path(tempfile.mkdtemp(prefix="maisya-mcp-"))
-        home.chmod(0o700)
-        uid = 2000000 + int.from_bytes(os.urandom(3), "big") % 1000000
-        if sys.platform.startswith("linux") and os.geteuid() == 0:
-            os.chown(home, uid, uid)
-        environment["HOME"] = str(home)
-        memory = config.get("memory_mib", 256)
-        if type(memory) is not int or not 128 <= memory <= 4096:
-            raise ValueError("MCP 资源配置无效")
-        if sys.platform.startswith("linux") and os.geteuid() == 0:
-            async with self.group_lock:
-                await completed_thread(self._prepare_group)
-        child = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            str(Path(__file__).with_name("mcp_worker.py")),
-            json.dumps([command, memory, uid, self.cgroup_name]),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=environment,
-            cwd=home,
-            start_new_session=True,
-            limit=12 * 1024**2,
-        )
+        try:
+            safe_chmod(home, 0o700)
+            uid = 2000000 + int.from_bytes(os.urandom(3), "big") % 1000000
+            if sys.platform.startswith("linux") and os.geteuid() == 0:
+                os.chown(home, uid, uid)
+            environment = minimal_subprocess_env(home=home)
+            environment.update(cred_values)
+            memory = config.get("memory_mib", 256)
+            if type(memory) is not int or not 128 <= memory <= 4096:
+                raise ValueError("MCP 资源配置无效")
+            if sys.platform.startswith("linux") and os.geteuid() == 0:
+                async with self.group_lock:
+                    await completed_thread(self._prepare_group)
+            if os.name == "nt":
+                child = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=environment,
+                    cwd=home,
+                    limit=12 * 1024**2,
+                )
+            else:
+                child = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    str(Path(__file__).with_name("mcp_worker.py")),
+                    json.dumps([command, memory, uid, self.cgroup_name]),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=environment,
+                    cwd=home,
+                    start_new_session=True,
+                    limit=12 * 1024**2,
+                )
+        except BaseException:
+            await completed_thread(rmtree_safe, home, ignore_errors=True)
+            raise
         cgroup = (
             Path("/sys/fs/cgroup") / self.cgroup_name / str(uid)
             if sys.platform.startswith("linux") and os.geteuid() == 0
@@ -575,10 +618,12 @@ class Services:
         if base.exists():
             return
         base.mkdir()
-        (base / "memory.max").write_text(str(512 * 1024**2))
-        (base / "pids.max").write_text("128")
-        (base / "cpu.max").write_text("100000 100000")
-        (base / "cgroup.subtree_control").write_text("+memory +pids +cpu")
+        (base / "memory.max").write_text(str(512 * 1024**2), encoding="utf-8")
+        (base / "pids.max").write_text("128", encoding="utf-8")
+        (base / "cpu.max").write_text("100000 100000", encoding="utf-8")
+        (base / "cgroup.subtree_control").write_text(
+            "+memory +pids +cpu", encoding="utf-8"
+        )
 
     async def call(self, profile, arguments, context, runtime):
         if self.closed:
@@ -757,10 +802,10 @@ class Services:
             for handle in handles:
                 value = await completed_thread(self.vault.for_execution, handle)
                 path = secret_directory / handle
-                await completed_thread(path.write_text, value)
+                await completed_thread(path.write_text, value, encoding="utf-8")
                 if sys.platform.startswith("linux") and os.geteuid() == 0:
                     await completed_thread(os.chown, path, 10000, 10000)
-                await completed_thread(path.chmod, 0o400)
+                await completed_thread(safe_chmod, path, 0o400)
                 secrets[handle] = path
             yield secrets
         finally:
@@ -768,9 +813,9 @@ class Services:
                 self.quarantines.append((secret_volume, secret_directory))
             elif mounted:
                 await completed_thread(secret_volume.__exit__, None, None, None)
-                await completed_thread(shutil.rmtree, secret_directory)
+                await completed_thread(rmtree_safe, secret_directory)
             else:
-                await completed_thread(shutil.rmtree, secret_directory)
+                await completed_thread(rmtree_safe, secret_directory)
 
     async def credential(self, profile, arguments, context, runtime):
         config = self.load().get("templates", {}).get(profile.template)
@@ -787,7 +832,7 @@ class Services:
             not isinstance(program, list)
             or not program
             or not all(isinstance(value, str) and "\x00" not in value for value in program)
-            or not Path(program[0]).is_absolute()
+            or not is_absolute_program_path(program[0])
         ):
             raise ValueError("凭据模板程序必须是有效的绝对路径")
         if set(profile.secrets) != set(config.get("secrets", [])):
@@ -816,7 +861,7 @@ class Services:
     async def release_quarantines(self):
         for volume, path in list(self.quarantines):
             await completed_thread(volume.__exit__, None, None, None)
-            await completed_thread(shutil.rmtree, path)
+            await completed_thread(rmtree_safe, path)
             self.quarantines.remove((volume, path))
 
     async def close_thread(self, thread_id):

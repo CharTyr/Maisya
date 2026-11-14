@@ -1,7 +1,6 @@
 """固定运行时、受控出站与单次容器执行边界。"""
 
 import asyncio
-import fcntl
 import hashlib
 import ipaddress
 import json
@@ -17,6 +16,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .pathsafe import (
+    acquire_lock_handle,
+    minimal_subprocess_env,
+    path_is_link_like,
+    release_lock_handle,
+    rmtree_safe,
+    safe_chmod,
+)
 from .workspaces import completed_thread
 
 DENIED_V4 = (
@@ -176,7 +183,7 @@ async def process(arguments, *, timeout=20, output_bytes=2097152, stdin=None):
         else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        env=MINIMAL_ENV,
+        env=minimal_subprocess_env(),
     )
     chunks, size = [], 0
 
@@ -257,20 +264,13 @@ class Sandbox:
     def _lock_instance(self):
         if self.instance_lock is not None:
             return
-        descriptor = os.open(
-            self.store.path.parent / ".sandbox.lock",
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.instance_lock = acquire_lock_handle(
+                self.store.path.parent / ".sandbox.lock",
+                nonblocking=True,
+            )
         except BlockingIOError:
-            os.close(descriptor)
             raise RuntimeError("同一数据目录已有沙箱执行器运行") from None
-        except BaseException:
-            os.close(descriptor)
-            raise
-        self.instance_lock = descriptor
 
     async def _recover_resources(self):
         resources = await completed_thread(self._resources)
@@ -296,7 +296,7 @@ class Sandbox:
             elif resource["kind"] == "mount":
                 path = Path(resource["name"])
                 runtime = self.store.path.parent / "workspaces/runtime"
-                if path.parent != runtime or path.is_symlink():
+                if path.parent != runtime or path_is_link_like(path):
                     raise RuntimeError("旧工作副本路径无效，已拒绝自动清理")
                 observed = await self.runner(
                     [
@@ -316,7 +316,7 @@ class Sandbox:
                 elif observed.code != 1:
                     raise RuntimeError("无法确认旧工作副本挂载状态")
                 if path.exists():
-                    await completed_thread(shutil.rmtree, path)
+                    await completed_thread(rmtree_safe, path)
                 await completed_thread(self._forget, resource["name"])
             elif resource["kind"] == "network":
                 if not re.fullmatch(r"maisya-[a-f0-9]{8}-[0-7]", data.get("name", "")):
@@ -393,7 +393,7 @@ class Sandbox:
             check=True,
             capture_output=True,
             timeout=10,
-            env=MINIMAL_ENV,
+            env=minimal_subprocess_env(),
         )
         try:
             yield
@@ -403,7 +403,7 @@ class Sandbox:
                 check=True,
                 capture_output=True,
                 timeout=10,
-                env=MINIMAL_ENV,
+                env=minimal_subprocess_env(),
             )
             self._forget(str(path))
 
@@ -412,7 +412,7 @@ class Sandbox:
             return
         memory = dict(
             line.split(":", 1)
-            for line in Path("/proc/meminfo").read_text().splitlines()
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines()
         )
         available = int(memory["MemAvailable"].split()[0]) * 1024
         reserve = (self.settings.memory_mib + self.settings.work_mib + 1024) * 1024**2
@@ -729,9 +729,10 @@ class Sandbox:
                     "".join(
                         f"nameserver {resolver}\n"
                         for resolver in self.settings.dns
-                    )
+                    ),
+                    encoding="utf-8",
                 )
-                resolv.chmod(0o644)
+                safe_chmod(resolv, 0o644)
                 arguments += [
                     "--mount",
                     f"type=bind,src={resolv},dst=/etc/resolv.conf,readonly",
@@ -901,5 +902,5 @@ class Sandbox:
             await self._remove_network(entry)
         self.networks.clear()
         if self.instance_lock is not None:
-            os.close(self.instance_lock)
+            release_lock_handle(self.instance_lock)
             self.instance_lock = None

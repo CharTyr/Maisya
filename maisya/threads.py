@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .abilities import Profile
 from .bridge import record_return
+from .pathsafe import safe_chmod
 from .scout import validate_arguments
 from .workspaces import completed_thread
 
@@ -99,7 +100,7 @@ class ThreadStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS thread_context (thread_id TEXT PRIMARY KEY, workspace_id TEXT, grant TEXT)"
             )
-        path.chmod(0o600)
+        safe_chmod(path, 0o600)
 
     def connect(self):
         connection = sqlite3.connect(self.path, timeout=3)

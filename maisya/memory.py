@@ -1,12 +1,10 @@
 """分层文件、版本历史与按会话隔离的检索。"""
 
-import fcntl
 import hashlib
 import io
 import json
 import os
 import re
-import shutil
 import stat
 import tarfile
 import tempfile
@@ -16,6 +14,15 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
+from .pathsafe import (
+    check_part,
+    ensure_dirs,
+    file_lock,
+    has_dir_fd,
+    open_read_fd,
+    path_is_link_like,
+    rmtree_safe,
+)
 from .vault import atomic_private_write, private_directory
 
 PRESETS_DIR = Path(__file__).resolve().parents[1] / "presets"
@@ -225,7 +232,7 @@ def _unquote_yaml(raw: str) -> str:
 
 def parse_skill_meta(skill_id: str, content: str) -> dict:
     """提取 SKILL.md 的 frontmatter 元信息与摘要。"""
-    text = str(content or "")
+    text = str(content or "").replace("\r\n", "\n")
     fm_match = re.match(r"^\s*---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)", text)
     fields: dict[str, str] = {}
     if fm_match:
@@ -292,7 +299,7 @@ class MemoryLayers:
         heartbeat_preset = PRESETS_DIR / "memory/HEARTBEAT.md"
         for kind in ("journal", "heartbeat"):
             path = self._locate(kind)[1]
-            if not path.exists() and not path.is_symlink():
+            if not path.exists() and not path_is_link_like(path):
                 initial = (
                     heartbeat_preset.read_bytes()
                     if kind == "heartbeat" and heartbeat_preset.is_file()
@@ -302,19 +309,23 @@ class MemoryLayers:
         skills_presets = PRESETS_DIR / "skills"
         if skills_presets.is_dir():
             for source_dir in sorted(skills_presets.iterdir()):
-                if not source_dir.is_dir() or source_dir.is_symlink():
+                if not source_dir.is_dir() or path_is_link_like(source_dir):
                     continue
                 skill_file = source_dir / "SKILL.md"
-                if not skill_file.is_file() or skill_file.is_symlink():
+                if not skill_file.is_file() or path_is_link_like(skill_file):
                     continue
                 destination_dir = private_directory(root / "abilities/skills" / source_dir.name)
                 destination = destination_dir / "SKILL.md"
-                if not destination.exists() and not destination.is_symlink():
+                if not destination.exists() and not path_is_link_like(destination):
                     atomic_private_write(destination, skill_file.read_bytes())
 
     @staticmethod
     def heartbeat_parts(content: str) -> tuple[str, str]:
-        cleaned = re.sub(r"<!--[\s\S]*?-->", "", str(content or ""))
+        cleaned = re.sub(
+            r"<!--[\s\S]*?-->",
+            "",
+            str(content or "").replace("\r\n", "\n"),
+        )
         match = re.search(r"^##\s*自主探索方向\s*$", cleaned, flags=re.MULTILINE)
         if match is None:
             return "", cleaned.strip()
@@ -329,22 +340,15 @@ class MemoryLayers:
 
     @contextmanager
     def _lock(self):
-        descriptor = os.open(
-            self.root / ".memory.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
-        )
-        with os.fdopen(descriptor, "r+b") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with file_lock(self.root / ".memory.lock"):
+            yield
 
     def _has_memory_data(self, chat_id: str) -> bool:
         if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
             return False
-        target = hashlib.sha256(chat_id.encode()).hexdigest()[:32]
+        target = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()[:32]
         path = self.root / "memory/chats" / target / "MEMORY.md"
-        if path.is_file() and not path.is_symlink():
+        if path.is_file() and not path_is_link_like(path):
             try:
                 if path.stat().st_size > 0:
                     return True
@@ -416,15 +420,29 @@ class MemoryLayers:
 
     @staticmethod
     def _bytes(path):
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        except FileNotFoundError:
-            return b""
+        if has_dir_fd():
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                )
+            except FileNotFoundError:
+                return b""
+        else:
+            try:
+                descriptor = open_read_fd(path)
+            except FileNotFoundError:
+                return b""
+            except ValueError:
+                raise ValueError("记忆文件无效或过大") from None
         with os.fdopen(descriptor, "rb") as source:
             info = os.fstat(source.fileno())
+            invalid_nlink = info.st_nlink > 1 or (
+                os.name != "nt" and info.st_nlink != 1
+            )
             if (
                 not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != 1
+                or invalid_nlink
                 or info.st_size > 131072
             ):
                 raise ValueError("记忆文件无效或过大")
@@ -582,9 +600,9 @@ class MemoryLayers:
             p.name
             for p in skills_presets.iterdir()
             if p.is_dir()
-            and not p.is_symlink()
+            and not path_is_link_like(p)
             and (p / "SKILL.md").is_file()
-            and not (p / "SKILL.md").is_symlink()
+            and not path_is_link_like(p / "SKILL.md")
         }
 
     def skills(self):
@@ -592,7 +610,7 @@ class MemoryLayers:
         if not root.is_dir():
             return []
         return sorted(
-            p.name for p in root.iterdir() if p.is_dir() and not p.is_symlink()
+            p.name for p in root.iterdir() if p.is_dir() and not path_is_link_like(p)
         )
 
     def skill_briefs(self, skill_ids, *, profile_id: str = "") -> list[dict]:
@@ -634,7 +652,7 @@ class MemoryLayers:
         if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
         skill_path = self.root / "abilities/skills" / target / "SKILL.md"
-        if skill_path.is_symlink():
+        if path_is_link_like(skill_path):
             raise ValueError("技能路径无效")
         if skill_path.exists() and self._bytes(skill_path).strip():
             raise ValueError("同名技能已存在")
@@ -644,7 +662,7 @@ class MemoryLayers:
             if not isinstance(base, str) or not SKILL_ID_RE.fullmatch(base):
                 raise ValueError("源技能编号无效")
             src_path = self.root / "abilities/skills" / base / "SKILL.md"
-            if src_path.is_symlink() or not src_path.is_file():
+            if path_is_link_like(src_path) or not src_path.is_file():
                 raise ValueError("源技能不存在")
             src = self.read("skill", target=base)["content"]
             fm_match = re.match(r"^(\s*---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))", src)
@@ -709,21 +727,23 @@ class MemoryLayers:
             )
         ):
             raise ValueError(f"技能附属文件路径不合法: {rel_path}")
+        for part in parts:
+            check_part(part)
         return "/".join(parts)
 
     def _clear_skill_companions(self, skill_dir: Path):
-        if not skill_dir.is_dir() or skill_dir.is_symlink():
+        if not skill_dir.is_dir() or path_is_link_like(skill_dir):
             return
         for child in list(skill_dir.iterdir()):
             if child.name == "SKILL.md":
                 continue
-            if child.is_symlink() or child.is_file():
+            if path_is_link_like(child) or child.is_file():
                 child.unlink()
             elif child.is_dir():
-                shutil.rmtree(child)
+                rmtree_safe(child)
 
     def _collect_skill_companions(self, directory: Path) -> list[tuple[str, bytes]]:
-        if not directory.is_dir() or directory.is_symlink():
+        if not directory.is_dir() or path_is_link_like(directory):
             return []
         collected: list[tuple[str, bytes]] = []
         total = 0
@@ -733,7 +753,7 @@ class MemoryLayers:
                 for d in dirs
                 if not d.startswith(".")
                 and d not in _ARCHIVE_JUNK_PARTS
-                and not (Path(root_dir) / d).is_symlink()
+                and not path_is_link_like(Path(root_dir) / d)
             )
             for name in sorted(files):
                 if name.startswith(".") or name in _ARCHIVE_JUNK_FILES:
@@ -742,16 +762,28 @@ class MemoryLayers:
                 rel = full.relative_to(directory).as_posix()
                 if rel == "SKILL.md":
                     continue
-                if full.is_symlink():
+                if path_is_link_like(full):
                     continue
                 try:
                     rel_clean = self._validate_companion_rel(rel)
                 except ValueError:
                     continue
-                fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                if has_dir_fd():
+                    fd = os.open(
+                        full,
+                        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                    )
+                else:
+                    try:
+                        fd = open_read_fd(full)
+                    except (ValueError, OSError):
+                        continue
                 with os.fdopen(fd, "rb") as src:
                     info = os.fstat(src.fileno())
-                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    invalid_nlink = info.st_nlink > 1 or (
+                        os.name != "nt" and info.st_nlink != 1
+                    )
+                    if not stat.S_ISREG(info.st_mode) or invalid_nlink:
                         continue
                     if info.st_size > _SKILL_FILE_MAX_BYTES:
                         continue
@@ -777,7 +809,7 @@ class MemoryLayers:
         ):
             preset_dir = self.profiles.path / profile_id / "preset/skills" / target
             if (preset_dir / "SKILL.md").is_file() and not any(
-                p.is_symlink() for p in preset_dir.parents
+                path_is_link_like(p) for p in preset_dir.parents
             ):
                 skill_dir = preset_dir
         return self._collect_skill_companions(skill_dir)
@@ -793,29 +825,50 @@ class MemoryLayers:
             raise ValueError("技能编号无效")
         rel = self._validate_companion_rel(rel_path)
         skill_dir = self.root / "abilities/skills" / target
-        if skill_dir.is_symlink() or not skill_dir.is_dir():
+        if path_is_link_like(skill_dir) or not skill_dir.is_dir():
             raise ValueError("技能不存在")
-        cur_fd = os.open(skill_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         parts = rel.split("/")
-        try:
-            for seg in parts[:-1]:
-                next_fd = os.open(
-                    seg, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur_fd
+        if has_dir_fd():
+            cur_fd = os.open(skill_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                for seg in parts[:-1]:
+                    next_fd = os.open(
+                        seg, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur_fd
+                    )
+                    os.close(cur_fd)
+                    cur_fd = next_fd
+                file_fd = os.open(
+                    parts[-1],
+                    os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=cur_fd,
                 )
+            except FileNotFoundError:
+                raise ValueError("技能附属文件不存在") from None
+            except OSError:
+                raise ValueError("无法读取技能附属文件") from None
+            finally:
                 os.close(cur_fd)
-                cur_fd = next_fd
-            file_fd = os.open(
-                parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=cur_fd
-            )
-        except FileNotFoundError:
-            raise ValueError("技能附属文件不存在") from None
-        except OSError:
-            raise ValueError("无法读取技能附属文件") from None
-        finally:
-            os.close(cur_fd)
+        else:
+            try:
+                parent = ensure_dirs(skill_dir, parts[:-1], create=False)
+                file_fd = open_read_fd(parent / parts[-1], rel)
+                try:
+                    ensure_dirs(skill_dir, parts[:-1], create=False)
+                except BaseException:
+                    os.close(file_fd)
+                    raise
+            except FileNotFoundError:
+                raise ValueError("技能附属文件不存在") from None
+            except ValueError:
+                raise ValueError("无法读取技能附属文件") from None
+            except OSError:
+                raise ValueError("无法读取技能附属文件") from None
         with os.fdopen(file_fd, "rb") as src:
             info = os.fstat(src.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            invalid_nlink = info.st_nlink > 1 or (
+                os.name != "nt" and info.st_nlink != 1
+            )
+            if not stat.S_ISREG(info.st_mode) or invalid_nlink:
                 raise ValueError("技能附属文件无效")
             sample = src.read(32768)
             size = info.st_size
@@ -965,7 +1018,7 @@ class MemoryLayers:
             skills_root = private_directory(self.root / "abilities/skills")
             for skill_id, md_text, companions in bundles:
                 dest_dir = skills_root / skill_id
-                if dest_dir.is_symlink():
+                if path_is_link_like(dest_dir):
                     raise ValueError("技能路径无效")
                 if not overwrite and dest_dir.exists() and self._bytes(dest_dir / "SKILL.md"):
                     raise ValueError(f"同名技能已存在: {skill_id}")
@@ -983,7 +1036,7 @@ class MemoryLayers:
                         atomic_private_write(target_file, comp_bytes)
                 finally:
                     if stage.exists():
-                        shutil.rmtree(stage)
+                        rmtree_safe(stage)
                 saved = self._write(
                     "skill",
                     md_text,
@@ -1009,7 +1062,11 @@ class MemoryLayers:
             raise ValueError("技能编号无效")
         skill_dir = self.root / "abilities/skills" / target
         skill_file = skill_dir / "SKILL.md"
-        if skill_dir.is_symlink() or skill_file.is_symlink() or not skill_file.is_file():
+        if (
+            path_is_link_like(skill_dir)
+            or path_is_link_like(skill_file)
+            or not skill_file.is_file()
+        ):
             raise ValueError("技能不存在")
         main_bytes = self._bytes(skill_file)
         if self.vault.contains_secret(main_bytes) or _SECRET_RE.search(
@@ -1031,7 +1088,7 @@ class MemoryLayers:
         if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
         preset_file = PRESETS_DIR / "skills" / target / "SKILL.md"
-        if preset_file.is_symlink() or not preset_file.is_file():
+        if path_is_link_like(preset_file) or not preset_file.is_file():
             raise ValueError("仅内置预设技能支持重置")
         with self._lock():
             self._clear_skill_companions(self.root / "abilities/skills" / target)
@@ -1051,10 +1108,10 @@ class MemoryLayers:
         if target in self.preset_skills():
             raise ValueError("预设技能不可删除，可点击「重置预设」恢复默认内容")
         directory = self.root / "abilities/skills" / target
-        if directory.is_symlink() or not directory.exists():
+        if path_is_link_like(directory) or not directory.exists():
             raise ValueError("技能不存在")
         with self._lock(), self.store.connect() as db, db:
-            shutil.rmtree(directory)
+            rmtree_safe(directory)
             asset = f"skill:{target}:SKILL.md"
             db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
             db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
@@ -1070,7 +1127,7 @@ class MemoryLayers:
             )["version"],
         }
         notes_path = self.profiles.path / target / "NOTES.md"
-        if notes_path.is_file() and not notes_path.is_symlink():
+        if notes_path.is_file() and not path_is_link_like(notes_path):
             versions["NOTES.md"] = self.read(
                 "notes", target=target, allow_custom=True
             )["version"]
@@ -1153,8 +1210,8 @@ class MemoryLayers:
                     or expected_version != current["version"]
                 ):
                     raise ValueError("版本已变化，请重新读取再修改")
-                previous = current["content"].encode()
-                atomic_private_write(path, content.encode())
+                previous = current["content"].encode("utf-8")
+                atomic_private_write(path, content.encode("utf-8"))
                 if kind == "profile":
                     self.profiles.get(target)
                 version = current["version"] + 1
@@ -1248,7 +1305,7 @@ class MemoryLayers:
                     / skill
                     / "SKILL.md"
                 )
-                if any(parent.is_symlink() for parent in path.parents):
+                if any(path_is_link_like(parent) for parent in path.parents):
                     raise ValueError("技能路径不能经过链接")
                 content = self._bytes(path).decode("utf-8")
                 self._guard("skill", content, "", allow_custom=True)
