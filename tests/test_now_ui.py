@@ -294,7 +294,13 @@ async def test_now_unified_single_page_in_place_tabs_and_state_boot(tmp_path):
                 await expect(page.locator("h1")).to_have_text("手账")
                 await expect(page.locator("#intent-list")).to_be_visible()
                 await expect(page.locator("#learning")).to_be_visible()
-                await expect(page.locator("#ms-mgmt-view")).to_contain_text("A_Memorix")
+                await expect(page.locator("#ms-mgmt-view")).not_to_contain_text(
+                    "A_Memorix"
+                )
+                await expect(page.locator("#ms-mgmt-view")).to_contain_text("会话备忘")
+                await expect(page.locator("#ms-mgmt-view")).to_contain_text(
+                    "本会话长期置顶的办事约定"
+                )
                 assert await page.locator("#content").count() == 1
                 assert await page.locator("#feedback").count() == 1
                 assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
