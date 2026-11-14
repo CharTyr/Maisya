@@ -34,7 +34,7 @@
 | M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | 双主题体系（`millennium` 默认协调 MaiBot 宿主的 0px 质感千禧机械主题 + `maiwork` 可选清朗手账主题，顶栏 `#ui-style-toggle` 即时切换与 `ui_style` 持久化）；全页零口号并用 `?` 帮助弹窗收纳说明文字；`现场`（顶部 `01→04 FLOW` 拓扑、状态与读数条、上下文窗口+示波器趋势、近期活动+活动现场引导、底部折叠唤醒抽屉）、`产物`（交付物/图片预览/持续工作区与角色小鱼）、`能力`（Skill 画廊/工作台 + 角色名册与默认折叠高级覆盖字段 + 配方分享导入面板）、`手账`（分册徽章与 `?` 指引 + 直达意图队列与自动笔记回执 + `A_Memorix` 边界）、`设置`（一般设置 vs 高级设置分级、预设快捷调度、动态自定义联网展开） |
 | 真实模型 + 第三方搜索插件 / EXA 冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开宿主 `web_search`）：`scout` 自动兼容 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | Wave 1 跨平台、市场元数据与 3-OS CI | **各切片并行合流中** | `_manifest.json` 规范 `GPL-3.0-or-later` / `display.icon` / `urls` 并在宿主测试包纳入 `logo.svg`；新增 `.github/workflows/tests.yml`（Ubuntu/macOS/Windows Python 3.13）；`README.md` 补充市场安装与 MaiWork 对比；新增 `maisya/pathsafe.py`，打通 TG `::tg-topic::mt=` 话题流、QQ 官方大小写 OpenID、Docker+NapCat `base64://` 群文件兜底与 `render.html2png` 缺浏览器提示 |
-| **部署到线上 `plugins/` 与热重载验证** | **已部署并实测通过** | 已备份至服务端备份目录 `maisya-deploy-20261114-194145`（前一轮基线备份 `maisya-deploy-20261114-193336`，含 `maisya.db` 只读 `.backup()` + `PRAGMA integrity_check` 通过）；已原子同步 `69` 个运行时文件并原封保留 `config.toml`（对应本地提交 `f4302bd`，尚未推送远端）。线上宿主 `MaiBot 1.4.4 / SDK 2.22.1` 日志确认 `chartyr.maisya v0.0.1` 导入、注册与 `on_load`（`0.692s`）全部完成，extension Runner `loaded=15, failed=0`，`webui.json` 单入口 `Maisya` 零警告，且 `A_Memorix` 与兄弟插件均正常；包含 Scheme A `before_replyer` 管理/交付分流、`admin_direct` 线程复用 `grant` 刷新与未启用私聊回传、`setup` 解包容错、`Scout` 去 `temperature` 重试及包模式 `message_alias` 导入修复 |
+| **部署到线上 `plugins/` 与热重载验证** | **已部署并实测通过** | 已备份至服务端备份目录 `maisya-deploy-20261114-231749`（前一轮基线备份 `maisya-deploy-20261114-194145`，含 `maisya.db` 只读 `.backup()` + `PRAGMA integrity_check == ok`）；已将本地提交 `c8ede0e`（尚未推送远端）中变更的 `11` 个文件原子同步至线上（非缓存共 `70` 文件，原封保留 `config.toml`，宿主源码、配置与兄弟插件哈希未变）。线上宿主 `MaiBot 1.4.4`（`screen` `mai` 正常）重载日志确认 `chartyr.maisya v0.0.1` 导入（`0.391s`）、注册（`0.180s`）与 `on_load`（`0.296s`）全部完成，extension Runner `loaded=15, failed=0`、core Runner `loaded=2, failed=0`，`maisya` 与 WebUI 零报错零警告，`A_Memorix`（内置记忆模块）与兄弟插件均正常；包含防止 `429` 瞬态限流导致「产物」列表空白、增强带外部样式/`SVG` 的 `HTML` 报告与分块 `outputs_read_text` 图卡预览（优先选用 `full` 版「宽幅精读」）及「现场」直达预览入口 |
 
 ## 3. 本地与隔离验证命令
 
@@ -42,8 +42,8 @@
 # 1. WebUI 构建一致性检查
 python3 webui/build.py --check
 
-# 2. 全量本地与 Chromium UI 测试（`fb433b2` 全量实测 281 passed；`f4302bd` 另复测包模式单测）
-PYTHONPATH=.:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider
+# 2. 全量本地与 Chromium UI 测试（`c8ede0e` 部署前全量实测 283 passed；隔离宿主契约 22/22 OK）
+PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider
 
 # 3. 真实宿主 venv 隔离契约（22 tests，自动校验 host_unchanged）
 python3 tests_host/run_contract.py
