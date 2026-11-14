@@ -21,6 +21,27 @@ from typing import Any
 DAYS_TO_SECS = 86400.0
 UTC8_OFFSET = 8 * 3600.0
 
+
+def _numeric_score(value: object) -> float | None:
+    """将数字或数字字符串解析为有限浮点数；域名等非数字文本返回 None。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        num = float(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            num = float(stripped)
+        except ValueError:
+            return None
+    else:
+        return None
+    if num != num or num in (float("inf"), float("-inf")):
+        return None
+    return num
+
 BIG_PLATFORM_DOMAINS = frozenset(
     {
         "github.com",
@@ -1011,6 +1032,12 @@ class DigestWorkspace:
         rejected: list[dict[str, Any]] = []
         regular_pool: list[dict[str, Any]] = []
         explore_pool: list[dict[str, Any]] = []
+        feed_map = {
+            f["id"]: f
+            for f in sources.get("feeds", [])
+            if isinstance(f, dict) and f.get("id")
+        }
+        prev_last_selected = list(history.get("last_selected") or [])
 
         for raw in candidates:
             if not isinstance(raw, dict):
@@ -1056,13 +1083,21 @@ class DigestWorkspace:
                     continue
 
             scores = item.get("scores") if isinstance(item.get("scores"), dict) else {}
-            info = float(scores.get("info", item.get("info", 0)) or 0)
-            source_s = float(scores.get("source", item.get("source_score", 0)) or 0)
-            rel = float(scores.get("relevance", item.get("relevance", 0)) or 0)
-            timeliness = float(scores.get("timeliness", item.get("timeliness", 0)) or 0)
-            chat = float(scores.get("chat", item.get("chat", 0)) or 0)
-            novelty = float(scores.get("novelty", item.get("novelty", 5)) or 0)
-            surprise = float(scores.get("surprise", item.get("surprise", 0)) or 0)
+
+            def _pick_score(score_key: str, *fallback_keys: str, default: float = 0.0) -> float:
+                for val in (scores.get(score_key), *(item.get(k) for k in fallback_keys)):
+                    parsed = _numeric_score(val)
+                    if parsed is not None:
+                        return parsed
+                return default
+
+            info = _pick_score("info", "info")
+            source_s = _pick_score("source", "source_score", "source")
+            rel = _pick_score("relevance", "relevance")
+            timeliness = _pick_score("timeliness", "timeliness")
+            chat = _pick_score("chat", "chat")
+            novelty = _pick_score("novelty", "novelty", default=5.0)
+            surprise = _pick_score("surprise", "surprise")
             avg = round((info + source_s + rel + timeliness + chat) / 5.0, 2)
             profile_hit = str(item.get("profile_hit") or "").strip()
 
@@ -1090,10 +1125,21 @@ class DigestWorkspace:
                 rejected.append(item)
                 continue
 
+            raw_source = item.get("source")
+            if (
+                isinstance(raw_source, str)
+                and raw_source.strip()
+                and _numeric_score(raw_source) is None
+            ):
+                source_label = raw_source.strip()
+            else:
+                feed_meta = feed_map.get(str(item.get("feed_id") or "")) or {}
+                source_label = str(item.get("source_name") or feed_meta.get("title") or host)
+
             enriched = {
                 **item,
                 "url_key": url_key,
-                "source": str(item.get("source") or host),
+                "source": source_label,
                 "kind": kind,
                 "avg": avg,
                 "_rank_tuple": (avg, info, rel, chat),
@@ -1194,7 +1240,6 @@ class DigestWorkspace:
             selected_urls.add(cand["url_key"])
 
         clean_selected = []
-        feed_map = {f["id"]: f for f in sources.get("feeds", [])}
         for idx, cand in enumerate(selected, 1):
             clean = {
                 k: v for k, v in cand.items() if not k.startswith("_") and k != "source_text"
@@ -1222,9 +1267,11 @@ class DigestWorkspace:
             if fid and fid in feed_map:
                 feed_map[fid]["kept_total"] = int(feed_map[fid].get("kept_total", 0)) + 1
 
-        if clean_selected:
+        history["last_selected"] = clean_selected
+        if clean_selected or prev_last_selected:
             self._save_history(history)
-            self._save_sources(sources)
+            if clean_selected:
+                self._save_sources(sources)
             self.work.commit()
 
         clean_rejected = [
@@ -1275,7 +1322,15 @@ class DigestWorkspace:
             badge = "跨界视角" if is_explore else (html.escape(str(it.get("topic") or "精选")))
             source_host = html.escape(str(it.get("source") or _host_of(it.get("url", ""))))
             summary = html.escape(str(it.get("summary") or it.get("why") or ""))
-            why_line = html.escape(str(it.get("bridge") if is_explore and it.get("bridge") else it.get("why") or ""))
+            why_line = html.escape(
+                str(
+                    (it.get("bridge") if is_explore and it.get("bridge") else "")
+                    or it.get("why")
+                    or it.get("note")
+                    or it.get("bridge")
+                    or ""
+                )
+            )
             avg_score = it.get("avg")
             score_tag = f" · 评分 {avg_score:.1f}" if isinstance(avg_score, (int, float)) else ""
             cards_html.append(
@@ -1396,8 +1451,11 @@ async def run_digest_tool(work, arguments: dict[str, Any]) -> dict[str, Any]:
             max_items=int(arguments.get("max_items", 5) or 5),
         )
     if action == "render_card_html":
+        candidates = arguments.get("candidates")
+        if candidates is None:
+            candidates = dw._load_history().get("last_selected") or []
         return dw.render_card_html(
-            list(arguments.get("candidates") or []),
+            list(candidates or []),
             slot_label=str(arguments.get("slot_label") or ""),
             group_title=str(arguments.get("group_title") or ""),
             output_path=str(arguments.get("output_path") or "out/digest-card.html"),

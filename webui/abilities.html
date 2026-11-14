@@ -3021,7 +3021,10 @@ html.dark .out-ico--ws { color: #fde047; }
               <span class="mil-label" style="margin:0">角色模型分配与回退顺序</span>
               <button type="button" class="mil-help" data-help="可从宿主已添加的模型中按顺序分配一个或多个模型：优先调用 #1 主选，不可用或报错时自动依次回退到 #2、#3…；未分配具体模型时默认沿用上方宿主模型槽位 (task)" aria-label="查看角色模型分配说明" aria-expanded="false">?</button>
             </div>
-            <button type="button" class="mil-key mil-key--sm" id="cfg-model-clear">清空</button>
+            <div class="mil-row" style="gap:6px">
+              <button type="button" class="mil-key mil-key--sm" id="cfg-model-sync" title="重新同步宿主模型列表中的全部已添加模型">同步模型列表</button>
+              <button type="button" class="mil-key mil-key--sm" id="cfg-model-clear">清空</button>
+            </div>
           </div>
           <div id="cfg-model-chain" class="cfg-model-chain" aria-label="已分配模型顺序列表"></div>
           <div class="cfg-model-controls">
@@ -3985,6 +3988,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           provider: typeof entry === "object" ? String(entry.provider || "").trim() : "",
           identifier: typeof entry === "object" ? String(entry.identifier || "").trim() : "",
           source: typeof entry === "object" ? String(entry.source || "") : "",
+          assigned_tasks: typeof entry === "object" && Array.isArray(entry.assigned_tasks) ? entry.assigned_tasks : [],
         });
       };
       (catalog.model_catalog || []).forEach(add);
@@ -4046,7 +4050,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
               const active = rank >= 0;
               return `<button type="button" class="mil-key mil-key--sm" data-add-host-model="${esc(e.name)}" aria-pressed="${active ? "true" : "false"}" title="${esc([e.provider, e.identifier].filter(Boolean).join(" / ") || e.name)}">${active ? `#${rank + 1} ` : "+ "}<span class="mono">${esc(e.name)}</span></button>`;
             }).join("")
-          : `<span class="mil-hint">提示：点击左侧「宿主环境」或保存一次宿主模型设置后，这里会自动列出已配模型</span>`;
+          : `<span class="mil-hint">提示：尚未在宿主模型列表中发现已添加的模型，可点击右上角「同步模型列表」或在上方手动输入模型名</span>`;
       }
     }
 
@@ -4390,7 +4394,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         versionHistory(r.history, expectedVersion);
         if (viewMode === "roles" && $("#document").value === "config") {
           syncVisualFromToml();
-          if (!hostModelsProbed && !(catalog.available_models || []).length) {
+          if (!hostModelsProbed && !(catalog.model_catalog || []).some((m) => m && m.source && m.source !== "profile")) {
             hostModelsProbed = true;
             await refreshDiscovery();
             if (seq === assetLoadSeq && viewMode === "roles" && $("#document").value === "config") {
@@ -4565,7 +4569,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const apiLines = apiList.map((a) => `${a.plugin_id || "插件"}.${a.name}${a.description ? ` — ${a.description}` : ""}`);
       $("#discovery-info").innerHTML = [
         `<div class="ms-kv-card"><span class="ms-kv-k">已发现会话流</span><strong class="ms-kv-v num">${streamList.length} 条</strong><span class="ms-kv-sub">${esc(streamLines.slice(0, 8).join("\n") || "暂无活跃会话（收到群或私聊消息后出现，或直接在设置页添加 平台:类型:id）")}</span></div>`,
-        `<div class="ms-kv-card"><span class="ms-kv-k">宿主模型清单</span><strong class="ms-kv-v num">${modelLines.length} 个</strong><span class="ms-kv-sub">${esc(modelLines.join("、") || "暂未同步（宿主修改模型设置后自动更新）")}</span></div>`,
+        `<div class="ms-kv-card"><span class="ms-kv-k">宿主模型清单</span><strong class="ms-kv-v num">${modelLines.length} 个</strong><span class="ms-kv-sub">${esc(modelLines.join("、") || "暂未发现已添加模型（在宿主模型设置中添加后自动同步）")}</span></div>`,
         `<div class="ms-kv-card"><span class="ms-kv-k">默认任务分配</span><strong class="ms-kv-v num">${modelGroups.length} 个槽位</strong><span class="ms-kv-sub">${esc(slotLines.join("\n") || "由宿主自动分配")}</span></div>`,
         `<div class="ms-kv-card"><span class="ms-kv-k">已挂载插件与接口</span><strong class="ms-kv-v num">${pluginLines.length} 插件 · ${apiLines.length} 接口</strong><span class="ms-kv-sub">${esc([...pluginLines.slice(0, 6), ...apiLines.slice(0, 4)].join("\n") || "暂无其他扩展插件")}</span></div>`,
       ].join("");
@@ -4792,6 +4796,28 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           $("#cfg-model-add")?.click();
         }
       });
+    }
+    if ($("#cfg-model-sync")) {
+      $("#cfg-model-sync").onclick = async () => {
+        const btn = $("#cfg-model-sync");
+        btn.disabled = true;
+        try {
+          const r = await rpc("read", "abilities", {});
+          if (r?.success) {
+            if (Array.isArray(r.available_models)) catalog.available_models = r.available_models;
+            if (Array.isArray(r.model_catalog)) catalog.model_catalog = r.model_catalog;
+            if (r.model_tasks) catalog.model_tasks = r.model_tasks;
+          }
+          if (!(catalog.model_catalog || []).some((m) => m && m.source === "host_config")) {
+            hostModelsProbed = true;
+            await refreshDiscovery();
+          }
+          renderModelChainEditor();
+          say("已同步宿主模型列表");
+        } finally {
+          btn.disabled = false;
+        }
+      };
     }
     if ($("#cfg-model-clear")) {
       $("#cfg-model-clear").onclick = () => {

@@ -2299,7 +2299,11 @@
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && !pop.hidden) closePop();
     });
-    window.addEventListener("scroll", () => { if (!pop.hidden) closePop(); }, { passive: true });
+    window.addEventListener("scroll", () => {
+      if (pop.hidden) return;
+      if (pinnedBtn?.isConnected) openPop(pinnedBtn);
+      else closePop();
+    }, { passive: true });
     window.addEventListener("resize", closePop);
   }
 

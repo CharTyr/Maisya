@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import sys
+import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -383,7 +384,7 @@ async def test_scout_tools_person_read_recall_read_and_model_forwarding(tmp_path
                             "message_id": "m-1",
                             "sender_name": "Alice",
                             "user_id": "u-1",
-                            "timestamp": 1794459000,
+                            "timestamp": int(time.time()) - 300,
                             "processed_plain_text": "群友发言",
                         }
                     ],

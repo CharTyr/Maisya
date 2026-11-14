@@ -614,3 +614,116 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await browser.close()
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_abilities_model_picker_lists_and_syncs_unassigned_models_from_model_config_toml(
+    tmp_path,
+):
+    cfg_dir = tmp_path / "host/config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    model_cfg = cfg_dir / "model_config.toml"
+    initial_toml = """
+[[api_providers]]
+name = "SecretProvider"
+base_url = "https://secret-ui-gateway.internal/v1"
+api_key = "sk-ui-secret-key-001"
+
+[[models]]
+name = "active-planner-model"
+model_identifier = "stepfun/step-5"
+api_provider = "StepFun"
+
+[[models]]
+name = "deepseek-r1-standby"
+model_identifier = "deepseek/deepseek-reasoner"
+api_provider = "SecretProvider"
+
+[model_task_config.planner]
+model_list = ["active-planner-model"]
+
+[model_task_config.web_search]
+model_list = ["tavily"]
+"""
+    model_cfg.write_text(initial_toml, encoding="utf-8")
+
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    try:
+        async def capability(name, **arguments):
+            if name == "llm.get_available_models":
+                return {"success": True, "models": ["planner", "utils"]}
+            if name == "statistics.local.models":
+                return {"success": True, "models": []}
+            return {"success": True}
+
+        plugin.ctx.call_capability = capability
+        active, peak = 0, 0
+
+        async def request(mode, arguments):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                return await (
+                    plugin.manage_read(**arguments)
+                    if mode == "read"
+                    else plugin.manage_write(**arguments)
+                )
+            finally:
+                active -= 1
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch()
+            errors = []
+            try:
+                page = await browser.new_page(viewport={"width": 1100, "height": 850})
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                await page.expose_function("backend", request)
+                await page.evaluate(
+                    "window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(_,args)=>window.backend('read',args),action:(_,args)=>window.backend('write',args),navigate:()=>Promise.resolve()}"
+                )
+                doc = Path("webui/abilities.html").read_text(encoding="utf-8").replace(
+                    "<head>",
+                    "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:\">",
+                    1,
+                )
+                await page.set_content(doc)
+                await page.locator("#nav-roles").click()
+                await page.locator('[data-doc-tab="config"]').click()
+
+                await expect(page.locator("#cfg-host-models-list")).to_contain_text(
+                    "deepseek-r1-standby"
+                )
+                await expect(page.locator("#cfg-model-picker")).to_contain_text(
+                    "deepseek-r1-standby"
+                )
+                await expect(page.locator("#cfg-host-models-list")).not_to_contain_text(
+                    "tavily"
+                )
+
+                await page.locator('[data-add-host-model="deepseek-r1-standby"]').click()
+                await expect(page.locator("#cfg-model-chain")).to_contain_text(
+                    "deepseek-r1-standby"
+                )
+
+                model_cfg.write_text(
+                    initial_toml
+                    + '\n[[models]]\nname = "qwen-coder-unused"\nmodel_identifier = "qwen/qwen3-coder"\napi_provider = "Bailian"\n',
+                    encoding="utf-8",
+                )
+                await page.locator("#cfg-model-sync").click()
+                await expect(page.locator("#cfg-host-models-list")).to_contain_text(
+                    "qwen-coder-unused"
+                )
+                await page.locator("#save").click()
+                await expect(page.locator("#feedback")).to_contain_text("已保存")
+                assert "deepseek-r1-standby" in plugin.profiles.get("scout").model_list
+
+                html_text = await page.content()
+                assert "sk-ui-secret-key-001" not in html_text
+                assert "secret-ui-gateway.internal" not in html_text
+                assert not errors and peak <= 2
+            finally:
+                await browser.close()
+    finally:
+        await plugin.on_unload()

@@ -76,6 +76,32 @@ def alias(message_id: str) -> str:
     )
 
 
+def session_rank_key(entry: dict, *, preferred_account_id: str = "") -> tuple:
+    """为同一逻辑会话的多条历史/多账号记录计算 canonical 排序键（越大越优先）。"""
+    aid = str(entry.get("account_id") or "").strip()
+    pref = str(preferred_account_id or "").strip()
+    try:
+        last_h = float(entry.get("last_human_at") or 0.0)
+    except (TypeError, ValueError):
+        last_h = 0.0
+    try:
+        h_cnt = int(entry.get("human_count") or 0)
+    except (TypeError, ValueError):
+        h_cnt = 0
+    try:
+        upd = float(entry.get("updated") or 0.0)
+    except (TypeError, ValueError):
+        upd = 0.0
+    return (
+        1 if (pref and aid and aid == pref) else 0,
+        1 if last_h > 0 else 0,
+        last_h,
+        h_cnt,
+        1 if aid else 0,
+        upd,
+    )
+
+
 @dataclass(frozen=True)
 class Message:
     message_id: str
@@ -328,16 +354,17 @@ class MessageStore:
             ).fetchone()
         return route[0] if route else ""
 
-    def route_for(self, session_id: str) -> dict | None:
+    def route_for(self, session_id: str, *, include_stats: bool = False) -> dict | None:
         with closing(sqlite3.connect(self.path)) as db:
             row = db.execute(
-                "SELECT platform, chat_type, group_id, user_id, account_id, scope "
+                "SELECT platform, chat_type, group_id, user_id, account_id, scope, "
+                "human_count, last_human_at, updated "
                 "FROM session_routes WHERE session_id=?",
                 (session_id,),
             ).fetchone()
         if not row:
             return None
-        return {
+        route = {
             "platform": row[0],
             "chat_type": row[1],
             "group_id": row[2],
@@ -345,6 +372,11 @@ class MessageStore:
             "account_id": row[4],
             "scope": row[5],
         }
+        if include_stats:
+            route["human_count"] = int(row[6] or 0)
+            route["last_human_at"] = float(row[7] or 0.0)
+            route["updated"] = float(row[8] or 0.0)
+        return route
 
     def upsert_route(
         self,
@@ -430,11 +462,12 @@ class MessageStore:
             norm = key
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(
-                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope "
+                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope, "
+                "human_count, last_human_at, updated "
                 "FROM session_routes ORDER BY updated DESC LIMIT 512"
             ).fetchall()
         matched = []
-        for sid, plat, ctype, gid, uid, aid, sc in rows:
+        for sid, plat, ctype, gid, uid, aid, sc, hc, lha, upd in rows:
             plat_l = str(plat or "").strip().lower()
             candidates = {sid}
             if gid:
@@ -455,8 +488,12 @@ class MessageStore:
                         "user_id": uid,
                         "account_id": aid,
                         "scope": sc,
+                        "human_count": int(hc or 0),
+                        "last_human_at": float(lha or 0.0),
+                        "updated": float(upd or 0.0),
                     }
                 )
+        matched.sort(key=session_rank_key, reverse=True)
         return matched
 
     def activity_for(self, session_id: str) -> dict:

@@ -612,6 +612,10 @@ class Management:
     async def _collect_host_models(
         self, *, force: bool = False, probe_host: bool = False
     ) -> dict:
+        if hasattr(self.plugin, "refresh_host_model_catalog"):
+            refreshed = await completed_thread(self.plugin.refresh_host_model_catalog)
+            if refreshed:
+                self._model_catalog_cache["expires"] = 0.0
         now = time.monotonic()
         cached_probe = self._model_catalog_cache.get("probe_data")
         probe_valid = (
@@ -620,15 +624,27 @@ class Management:
             and now < float(self._model_catalog_cache.get("expires") or 0.0)
         )
 
-        entries: dict[str, dict[str, str]] = {}
+        entries: dict[str, dict] = {}
         task_map: dict[str, list[str]] = {}
 
         def add_entry(
-            name: str, *, identifier: str = "", provider: str = "", source: str = "host"
+            name: str,
+            *,
+            identifier: str = "",
+            provider: str = "",
+            source: str = "host",
+            assigned_tasks=(),
         ) -> None:
             cleaned = (name or "").strip()
             if not cleaned or len(cleaned) > 256:
                 return
+            tasks_clean = list(
+                dict.fromkeys(
+                    str(t).strip()
+                    for t in (assigned_tasks or ())
+                    if isinstance(t, str) and str(t).strip()
+                )
+            )
             existing = entries.get(cleaned)
             if existing is None:
                 entries[cleaned] = {
@@ -636,12 +652,17 @@ class Management:
                     "identifier": identifier.strip(),
                     "provider": provider.strip(),
                     "source": source,
+                    "assigned_tasks": tasks_clean,
                 }
             else:
                 if identifier and not existing["identifier"]:
                     existing["identifier"] = identifier.strip()
                 if provider and not existing["provider"]:
                     existing["provider"] = provider.strip()
+                cur_tasks = existing.setdefault("assigned_tasks", [])
+                for t in tasks_clean:
+                    if t not in cur_tasks:
+                        cur_tasks.append(t)
 
         host_catalog = getattr(self.plugin, "_host_model_catalog", None)
         if isinstance(host_catalog, dict):
@@ -652,6 +673,7 @@ class Management:
                         identifier=str(item.get("identifier") or ""),
                         provider=str(item.get("provider") or ""),
                         source=str(item.get("source") or "host_config"),
+                        assigned_tasks=item.get("assigned_tasks") or (),
                     )
             for task_key, assigned in (host_catalog.get("tasks") or {}).items():
                 if isinstance(task_key, str) and isinstance(assigned, list):
@@ -662,8 +684,13 @@ class Management:
                     ]
                     if cleaned_assigned:
                         task_map[task_key] = cleaned_assigned
-                        for model_name in cleaned_assigned:
-                            add_entry(model_name, source="task_config")
+                        if task_key != "web_search":
+                            for model_name in cleaned_assigned:
+                                add_entry(
+                                    model_name,
+                                    source="task_config",
+                                    assigned_tasks=[task_key],
+                                )
 
         if probe_host and not probe_valid:
             ctx = getattr(self.plugin, "ctx", None)
@@ -676,7 +703,7 @@ class Management:
                 except Exception:
                     return default
 
-            probe_entries: list[dict[str, str]] = []
+            probe_entries: list[dict] = []
             probe_tasks: dict[str, list[str]] = {}
 
             raw_models = await probe("llm.get_available_models", {})
@@ -706,15 +733,17 @@ class Management:
                                 if isinstance(m, str) and str(m).strip()
                             ]
                             probe_tasks[key] = cleaned
-                            for model_name in cleaned:
-                                probe_entries.append(
-                                    {
-                                        "name": model_name,
-                                        "identifier": "",
-                                        "provider": "",
-                                        "source": "available_models",
-                                    }
-                                )
+                            if key != "web_search":
+                                for model_name in cleaned:
+                                    probe_entries.append(
+                                        {
+                                            "name": model_name,
+                                            "identifier": "",
+                                            "provider": "",
+                                            "source": "available_models",
+                                            "assigned_tasks": [key],
+                                        }
+                                    )
                         elif isinstance(val, dict):
                             name = str(
                                 val.get("name") or val.get("model_name") or key
@@ -727,13 +756,14 @@ class Management:
                                         val.get("api_provider") or val.get("provider") or ""
                                     ),
                                     "source": "available_models",
+                                    "assigned_tasks": [key] if key != "web_search" else [],
                                 }
                             )
                             probe_tasks[key] = [name]
                         else:
                             probe_tasks.setdefault(key, [])
 
-            raw_stats = await probe("statistics.local.models", {})
+            raw_stats = await probe("statistics.local.models", {}, top_models=100)
             stat_items = (
                 raw_stats.get("models")
                 if isinstance(raw_stats, dict)
@@ -779,6 +809,7 @@ class Management:
                         identifier=str(item.get("identifier") or ""),
                         provider=str(item.get("provider") or ""),
                         source=str(item.get("source") or "host"),
+                        assigned_tasks=item.get("assigned_tasks") or (),
                     )
             for key, val in (cached_probe.get("tasks") or {}).items():
                 task_map.setdefault(key, val)

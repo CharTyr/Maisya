@@ -5,8 +5,10 @@ import html
 import json
 import sqlite3
 import time
+import tomllib
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from maibot_sdk import API, Command, HookHandler, MaiBotPlugin, Tool
 from maibot_sdk.types import ErrorPolicy, HookMode
@@ -21,6 +23,7 @@ if __package__:
     from .maisya.maker import AgentRuntime
     from .maisya.management import Management
     from .maisya.memory import MemoryLayers
+    from .maisya.pathsafe import path_is_link_like
     from .maisya.pulse import Pulse
     from .maisya.scout import call_capability
     from .maisya.shaping import execute_shape, resolve_chat_target
@@ -36,6 +39,7 @@ if __package__:
         format_stream_spec,
         normalize_admins,
         parse_stream_spec,
+        session_rank_key,
         strip_mention_all,
     )
     from .maisya.vault import (
@@ -55,6 +59,7 @@ else:
     from maisya.maker import AgentRuntime
     from maisya.management import Management
     from maisya.memory import MemoryLayers
+    from maisya.pathsafe import path_is_link_like
     from maisya.pulse import Pulse
     from maisya.scout import call_capability
     from maisya.shaping import execute_shape, resolve_chat_target
@@ -71,6 +76,7 @@ else:
         format_stream_spec,
         normalize_admins,
         parse_stream_spec,
+        session_rank_key,
         strip_mention_all,
     )
     from maisya.vault import (
@@ -134,28 +140,11 @@ def _merge_settings_dict(base: dict, saved: dict, file_cfg: dict) -> dict:
 
 
 def _sanitize_host_model_catalog(config_data: dict) -> dict:
-    """从宿主 model 配置广播中仅提取公开模型名与任务分配（严禁保存密钥/URL）。"""
-    models: list[dict[str, str]] = []
-    seen: set[str] = set()
-    raw_models = config_data.get("models")
-    if isinstance(raw_models, list):
-        for entry in raw_models[:128]:
-            if not isinstance(entry, dict):
-                continue
-            name = str(entry.get("name") or "").strip()
-            if not name or len(name) > 256 or name in seen:
-                continue
-            seen.add(name)
-            models.append(
-                {
-                    "name": name,
-                    "identifier": str(entry.get("model_identifier") or "").strip()[:128],
-                    "provider": str(entry.get("api_provider") or "").strip()[:128],
-                    "source": "host_config",
-                }
-            )
+    """从宿主 model 配置广播或配置文件仅提取公开模型名与任务分配（严禁保存密钥/URL）。"""
     tasks: dict[str, list[str]] = {}
     raw_tasks = config_data.get("model_task_config")
+    if not isinstance(raw_tasks, dict):
+        raw_tasks = config_data.get("tasks")
     if isinstance(raw_tasks, dict):
         for task_name, task_cfg in raw_tasks.items():
             if not isinstance(task_name, str) or not task_name.strip():
@@ -168,11 +157,52 @@ def _sanitize_host_model_catalog(config_data: dict) -> dict:
             if isinstance(raw_list, list):
                 cleaned = [
                     str(item).strip()
-                    for item in raw_list[:32]
+                    for item in raw_list[:64]
                     if isinstance(item, str) and str(item).strip()
                 ]
                 if cleaned:
                     tasks[task_name.strip()] = list(dict.fromkeys(cleaned))
+
+    assigned_by_model: dict[str, list[str]] = {}
+    for task_name, assigned_list in tasks.items():
+        if task_name == "web_search":
+            continue
+        for model_name in assigned_list:
+            slots = assigned_by_model.setdefault(model_name, [])
+            if task_name not in slots:
+                slots.append(task_name)
+
+    models: list[dict] = []
+    seen: set[str] = set()
+    raw_models = config_data.get("models")
+    if isinstance(raw_models, list):
+        for entry in raw_models[:512]:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name or len(name) > 256 or name in seen:
+                continue
+            seen.add(name)
+            raw_assigned = assigned_by_model.get(name)
+            if raw_assigned is None and not tasks and isinstance(entry.get("assigned_tasks"), list):
+                raw_assigned = [
+                    str(t).strip()[:64]
+                    for t in entry["assigned_tasks"][:32]
+                    if isinstance(t, str) and str(t).strip()
+                ]
+            models.append(
+                {
+                    "name": name,
+                    "identifier": str(
+                        entry.get("model_identifier") or entry.get("identifier") or ""
+                    ).strip()[:128],
+                    "provider": str(
+                        entry.get("api_provider") or entry.get("provider") or ""
+                    ).strip()[:128],
+                    "source": "host_config",
+                    "assigned_tasks": list(dict.fromkeys(raw_assigned or ())),
+                }
+            )
     return {"models": models, "tasks": tasks, "updated": time.time()}
 
 
@@ -205,6 +235,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self._stream_cache = {"expires": 0.0, "streams": {}}
         self._avatar_cache = {}
         self._host_model_catalog = {"models": [], "tasks": {}, "updated": 0.0}
+        self._host_model_mtime = None
 
     async def on_load(self):
         file_settings = Settings.model_validate(self.get_plugin_config_data())
@@ -249,6 +280,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             except (ValueError, TypeError):
                 pass
+        await asyncio.to_thread(self.refresh_host_model_catalog)
         self.vault = await asyncio.to_thread(Vault, self.data_root / "vault")
         self.messages = await asyncio.to_thread(
             MessageStore, self.data_root / "maisya.db"
@@ -510,6 +542,71 @@ class MaisyaPlugin(MaiBotPlugin):
             if cand is None or not cand.is_plugin_relayed
         )
 
+    def _resolve_host_model_config_path(self) -> Path | None:
+        host_root: Path | None = None
+        if getattr(self, "data_root", None):
+            dr = Path(self.data_root).absolute()
+            if dr.parent.name == "data":
+                host_root = dr.parent.parent
+        if host_root is None:
+            ctx = getattr(self, "ctx", None)
+            data_dir = getattr(getattr(ctx, "paths", None), "data_dir", None)
+            if data_dir:
+                dd = Path(data_dir).absolute()
+                if dd.parent.name == "plugins" and dd.parent.parent.name == "data":
+                    host_root = dd.parent.parent.parent
+        if host_root is None or path_is_link_like(host_root):
+            return None
+        cfg_dir = host_root / "config"
+        cfg_path = cfg_dir / "model_config.toml"
+        if (
+            path_is_link_like(cfg_dir)
+            or path_is_link_like(cfg_path)
+            or not cfg_path.is_file()
+        ):
+            return None
+        return cfg_path
+
+    def refresh_host_model_catalog(self) -> bool:
+        """只读同步宿主实例 config/model_config.toml 中的公开模型名与任务分配（不读取密钥/URL）。"""
+        try:
+            cfg_path = self._resolve_host_model_config_path()
+            if cfg_path is None:
+                return False
+            st = cfg_path.stat()
+            if st.st_size > 2 * 1024 * 1024:
+                return False
+            sig = (int(st.st_mtime_ns), int(st.st_size))
+            if (
+                self._host_model_mtime == sig
+                and isinstance(self._host_model_catalog, dict)
+                and self._host_model_catalog.get("models")
+            ):
+                return False
+            raw = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+            subset = {
+                "models": raw.get("models"),
+                "model_task_config": raw.get("model_task_config"),
+            }
+            del raw
+            catalog = _sanitize_host_model_catalog(subset)
+            self._host_model_catalog = catalog
+            self._host_model_mtime = sig
+            if getattr(self, "data_root", None):
+                atomic_private_write(
+                    self.data_root / "host_models.json",
+                    json.dumps(catalog, ensure_ascii=False).encode(),
+                )
+            return True
+        except (
+            OSError,
+            UnicodeDecodeError,
+            tomllib.TOMLDecodeError,
+            ValueError,
+            TypeError,
+        ):
+            return False
+
     async def on_config_update(self, scope, config_data, version):
         if scope == "bot":
             await self._refresh_admins()
@@ -728,6 +825,47 @@ class MaisyaPlugin(MaiBotPlugin):
                 if msg_sid:
                     aliases.add(msg_sid)
                 aliases.update(m_aliases)
+
+        # 同逻辑会话（相同 平台:类型:id）在多机器人账号/历史路由下可能有多个 sibling session_id，统一桥接其别名
+        strict_specs = {
+            format_stream_spec(*p)
+            for p in (parse_stream_spec(tok) for tok in aliases)
+            if p is not None
+        }
+        if strict_specs:
+            if self.messages:
+                for spec in list(strict_specs):
+                    for hit in self.messages.find_sessions(spec):
+                        hit_plat = str(hit.get("platform") or "").strip().lower()
+                        hit_gid = str(hit.get("group_id") or "").strip()
+                        hit_uid = str(hit.get("user_id") or "").strip()
+                        hit_ctype = "group" if hit_gid else ("private" if hit_uid else "")
+                        hit_spec = format_stream_spec(hit_plat, hit_ctype, hit_gid or hit_uid)
+                        hit_sid = str(hit.get("session_id") or "").strip()
+                        if hit_spec == spec and hit_sid:
+                            aliases.add(hit_sid)
+                            aliases.update(self.messages.aliases_for(hit_sid, hit_plat))
+            for s_sid, meta in streams.items():
+                if not isinstance(meta, dict):
+                    continue
+                m_plat = str(meta.get("platform") or "").strip().lower()
+                m_gid = str(meta.get("group_id") or "").strip()
+                m_uid = str(meta.get("user_id") or "").strip()
+                m_ctype = "group" if m_gid else ("private" if m_uid else "")
+                m_spec = format_stream_spec(m_plat, m_ctype, m_gid or m_uid)
+                if m_spec in strict_specs:
+                    aliases.add(s_sid)
+                    aliases.update(self._route_aliases(m_plat, m_gid, m_uid))
+            for (msg_sid, _, _), (_, msg) in (getattr(self, "_bootstrap_messages", {}) or {}).items():
+                m_plat = str(getattr(msg, "platform", "") or "").strip().lower()
+                m_gid = str(getattr(msg, "group_id", "") or "").strip()
+                m_uid = str(getattr(msg, "user_id", "") or "").strip()
+                m_ctype = "group" if m_gid else ("private" if m_uid else "")
+                m_spec = format_stream_spec(m_plat, m_ctype, m_gid or m_uid)
+                if m_spec in strict_specs:
+                    if msg_sid:
+                        aliases.add(msg_sid)
+                    aliases.update(self._route_aliases(m_plat, m_gid, m_uid))
         return aliases
 
     def canonical_stream_spec(self, token: str, platform: str = "") -> str:
@@ -766,31 +904,98 @@ class MaisyaPlugin(MaiBotPlugin):
                 return format_stream_spec(plat, "group" if gid else "private", gid or uid)
         return ""
 
+    def _enriched_session_entry(self, sid: str, streams: dict) -> dict:
+        entry: dict = {"session_id": sid}
+        s_meta = streams.get(sid) if isinstance(streams, dict) else None
+        if isinstance(s_meta, dict):
+            entry.update(s_meta)
+        if self.messages is not None:
+            r_meta = self.messages.route_for(sid, include_stats=True)
+            if isinstance(r_meta, dict):
+                for key, val in r_meta.items():
+                    if val not in (None, "", 0, 0.0) and entry.get(key) in (None, "", 0, 0.0):
+                        entry[key] = val
+                if r_meta.get("account_id") and not entry.get("account_id"):
+                    entry["account_id"] = r_meta["account_id"]
+                if r_meta.get("last_human_at"):
+                    entry["last_human_at"] = max(
+                        float(entry.get("last_human_at") or 0.0),
+                        float(r_meta.get("last_human_at") or 0.0),
+                    )
+                if r_meta.get("human_count"):
+                    entry["human_count"] = max(
+                        int(entry.get("human_count") or 0),
+                        int(r_meta.get("human_count") or 0),
+                    )
+                if r_meta.get("updated"):
+                    entry["updated"] = max(
+                        float(entry.get("updated") or 0.0),
+                        float(r_meta.get("updated") or 0.0),
+                    )
+        return entry
+
+    def _entry_stream_spec(self, entry: dict) -> str:
+        plat = str(entry.get("platform") or "").strip().lower()
+        gid = str(entry.get("group_id") or "").strip()
+        uid = str(entry.get("user_id") or "").strip()
+        ctype = str(
+            entry.get("chat_type") or ("group" if gid else ("private" if uid else ""))
+        ).strip().lower()
+        return str(entry.get("stream_spec") or "") or (
+            format_stream_spec(plat, ctype, gid or uid) if (plat and ctype and (gid or uid)) else ""
+        )
+
     def resolve_known_session_id(self, token: str, *, allow_unresolved: bool = True) -> str:
         raw = str(token or "").strip()
         if not raw or raw == "self":
             return raw
         streams = (getattr(self, "_stream_cache", {}) or {}).get("streams", {})
+        direct_entry = None
         if raw in streams:
-            return raw
-        if self.messages:
-            if self.messages.route_for(raw):
+            direct_entry = self._enriched_session_entry(raw, streams)
+        elif self.messages and self.messages.route_for(raw):
+            direct_entry = self._enriched_session_entry(raw, streams)
+        if direct_entry is not None:
+            if str(direct_entry.get("account_id") or "").strip():
                 return raw
-            found = self.messages.find_sessions(raw)
-            uniq = {str(m.get("session_id") or "").strip() for m in found if m.get("session_id")}
-            if len(uniq) == 1:
-                return next(iter(uniq))
+            spec = self._entry_stream_spec(direct_entry)
+            if spec:
+                siblings: dict[str, dict] = {}
+                if self.messages:
+                    for hit in self.messages.find_sessions(spec):
+                        h_sid = str(hit.get("session_id") or "").strip()
+                        if h_sid:
+                            cand = self._enriched_session_entry(h_sid, streams)
+                            if self._entry_stream_spec(cand) == spec and str(cand.get("account_id") or "").strip():
+                                siblings[h_sid] = cand
+                for s_sid in streams:
+                    cand = self._enriched_session_entry(s_sid, streams)
+                    if self._entry_stream_spec(cand) == spec and str(cand.get("account_id") or "").strip():
+                        siblings[s_sid] = cand
+                if siblings:
+                    return max(siblings.values(), key=session_rank_key)["session_id"]
+            return raw
+
         parsed = parse_stream_spec(raw)
         norm = format_stream_spec(*parsed) if parsed else raw
-        stream_hits: set[str] = set()
+        hits_by_sid: dict[str, dict] = {}
+        if self.messages:
+            for item in self.messages.find_sessions(raw):
+                h_sid = str(item.get("session_id") or "").strip()
+                if h_sid:
+                    hits_by_sid[h_sid] = self._enriched_session_entry(h_sid, streams)
         for sid, meta in streams.items():
             if not isinstance(meta, dict):
                 continue
             aliases = self.chat_aliases_for(sid, str(meta.get("platform") or ""))
             if raw in aliases or norm in aliases:
-                stream_hits.add(sid)
-        if len(stream_hits) == 1:
-            return next(iter(stream_hits))
+                hits_by_sid[sid] = self._enriched_session_entry(sid, streams)
+        if len(hits_by_sid) == 1:
+            return next(iter(hits_by_sid))
+        if len(hits_by_sid) > 1:
+            specs = {self._entry_stream_spec(c) for c in hits_by_sid.values()}
+            if len(specs) == 1 and next(iter(specs)):
+                return max(hits_by_sid.values(), key=session_rank_key)["session_id"]
         boot_hits: set[str] = set()
         for (msg_sid, _, _), (_, msg) in (getattr(self, "_bootstrap_messages", {}) or {}).items():
             if not msg_sid:
@@ -2238,7 +2443,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             "maisya_shape",
                             "maisya_later",
                         }
-                    ]
+                    ],
                 },
             }
         if self._pending_sources.get(chat_id):
@@ -2264,7 +2469,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             "maisya_shape",
                             "maisya_later",
                         }
-                    ]
+                    ],
                 },
             }
 
@@ -2412,6 +2617,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 "modified_kwargs": {
                     "tool_definitions": filtered,
                     "items": [*kwargs.get("items", []), item],
+                    "item_schema_version": kwargs.get("item_schema_version", 1),
                 },
             }
 
@@ -2520,6 +2726,7 @@ class MaisyaPlugin(MaiBotPlugin):
             "modified_kwargs": {
                 "tool_definitions": filtered,
                 "items": [*kwargs.get("items", []), item],
+                "item_schema_version": kwargs.get("item_schema_version", 1),
             },
         }
 
@@ -2628,10 +2835,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
         if not facts:
             return {"action": "continue"}
+        extra_prompt = str(kwargs.get("extra_prompt") or "") + "\n" + facts
         return {
             "action": "continue",
             "modified_kwargs": {
-                "extra_prompt": str(kwargs.get("extra_prompt") or "") + "\n" + facts,
+                "extra_prompt": extra_prompt,
                 "reply_tool_args": {
                     **arguments,
                     **({"_maisya_receipt": receipt} if receipt else {}),

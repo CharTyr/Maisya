@@ -731,3 +731,117 @@ async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_pat
         assert "http://" not in html_doc.split("<!--")[0]  # no external CSS/font links
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_score_select_top_level_source_and_render_card_default_candidates(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        cur = plugin.memory.read("profile", target="digest", document="profile.toml")
+        plugin.memory.write(
+            "profile",
+            cur["content"].replace("enabled = false", "enabled = true"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
+        enabled_profile = plugin.profiles.get("digest")
+        row = plugin.threads.create(
+            enabled_profile,
+            "验证顶级数字 source 评分与省略 candidates 默认渲染",
+            chat_id="chat",
+            platform="qq",
+            user_id="",
+            workspace="digest_top_level_source",
+        )
+        ctx = {**row, "profile_snapshot": row["profile_snapshot"]}
+        work = await plugin.runtime._work(ctx)
+
+        recent_rfc = formatdate(time.time() - 3600, usegmt=True)
+        candidates = [
+            {
+                "title": "AI 编程代理的工作流架构复盘",
+                "url": "https://simonwillison.net/2026/11/agent-workflow/",
+                "kind": "news",
+                "published": recent_rfc,
+                "source_text": "Simon Willison analyzes repeatable agent workflow architectures and failure modes.",
+                "quote": "repeatable agent workflow architectures",
+                "summary": "详细复盘可复现代理工作流的常见失败点与收敛手法。",
+                "note": "对当前调试多步编排与工具返回格式很有参考价值。",
+                "topic": "AI工具",
+                "info": 4,
+                "source": 5,
+                "relevance": 4,
+                "timeliness": 5,
+                "chat": 4,
+            },
+            {
+                "title": "本地轻量终端渲染器发布 0.9 版本",
+                "url": "https://vendor.example/term-renderer-09",
+                "kind": "news",
+                "published": recent_rfc,
+                "source_text": "The 0.9 release cuts memory usage by half for ASCII tables and dashboards.",
+                "quote": "cuts memory usage by half",
+                "summary": "表格与状态面板渲染内存占用减半。",
+                "why": "适合本地调试工具面板。",
+                "topic": "开发工具",
+                "info": 4,
+                "source": "5",
+                "relevance": 4,
+                "timeliness": 4,
+                "chat": 4,
+            },
+        ]
+
+        res = await plugin.runtime.call(
+            "digest_feed",
+            {"action": "score_select", "candidates": candidates, "max_items": 5},
+            ctx,
+        )
+        by_url = {it["url"]: it for it in res["selected"]}
+        assert set(by_url) == {
+            "https://simonwillison.net/2026/11/agent-workflow/",
+            "https://vendor.example/term-renderer-09",
+        }
+        assert by_url["https://simonwillison.net/2026/11/agent-workflow/"]["avg"] == 4.4
+        assert by_url["https://simonwillison.net/2026/11/agent-workflow/"]["source"] == "simonwillison.net"
+        assert by_url["https://vendor.example/term-renderer-09"]["avg"] == 4.2
+        assert by_url["https://vendor.example/term-renderer-09"]["source"] == "vendor.example"
+
+        # PROFILE.md omits `candidates` when calling render_card_html right after score_select
+        card_res = await plugin.runtime.call(
+            "digest_feed",
+            {
+                "action": "render_card_html",
+                "slot_label": "测试午报",
+                "group_title": "独立开发社",
+                "output_path": "out/digest-card.html",
+            },
+            ctx,
+        )
+        assert card_res["count"] == 2
+        html_doc = work.read("out/digest-card.html")["text"]
+        assert "AI 编程代理的工作流架构复盘" in html_doc
+        assert "simonwillison.net" in html_doc
+        assert "看点：对当前调试多步编排与工具返回格式很有参考价值。" in html_doc
+        assert "本地轻量终端渲染器发布 0.9 版本" in html_doc
+
+        # Subsequent 0-selected score_select clears last_selected so stale items aren't re-rendered
+        empty_res = await plugin.runtime.call(
+            "digest_feed",
+            {"action": "score_select", "candidates": [], "max_items": 5},
+            ctx,
+        )
+        assert empty_res["selected"] == []
+        empty_card = await plugin.runtime.call(
+            "digest_feed",
+            {
+                "action": "render_card_html",
+                "output_path": "out/digest-card.html",
+            },
+            ctx,
+        )
+        assert empty_card["count"] == 0
+    finally:
+        await plugin.on_unload()

@@ -938,3 +938,147 @@ async def test_private_chat_unenabled_admin_full_control(tmp_path, monkeypatch):
     finally:
         await plugin.on_unload()
 
+
+@pytest.mark.asyncio
+async def test_multi_session_id_disambiguation_and_empty_account_upgrade(tmp_path):
+    plugin = await _boot_plugin(
+        tmp_path, permissions=["qq:Alice"], enabled_chats=["qq:group:100246809"]
+    )
+
+    async def rpc(name, **arguments):
+        if name == "chat.get_all_streams":
+            return {"streams": []}
+        if name == "llm.get_available_models":
+            return ["claude-sonnet-4-6"]
+        if name == "llm.generate_with_tools":
+            return {"success": True, "response": "多会话归并测试完成。", "tool_calls": []}
+        return {"success": True}
+
+    plugin.ctx.call_capability = rpc
+    try:
+        # 同一逻辑群 qq:group:100246809 下存在多个历史/多账号/仅记忆 session_id
+        plugin.messages.upsert_route(
+            "sid_legacy_empty",
+            platform="qq",
+            chat_type="group",
+            group_id="100246809",
+            account_id="",
+        )
+        plugin.messages.upsert_route(
+            "sid_bot_old",
+            platform="qq",
+            chat_type="group",
+            group_id="100246809",
+            account_id="30002",
+        )
+        plugin.messages.record(
+            Message(
+                "m-grp-human",
+                "sid_bot_active",
+                "qq",
+                "Bob",
+                False,
+                False,
+                group_id="100246809",
+                account_id="30001",
+            )
+        )
+        plugin.messages.upsert_route(
+            "sid_mem_sibling",
+            platform="qq",
+            chat_type="group",
+            group_id="100246809",
+            account_id="",
+        )
+        mem_write = plugin.memory.write(
+            "memory",
+            "关注独立游戏与开源工具，拒绝水文。",
+            chat_id="sid_mem_sibling",
+            expected_version=0,
+        )
+        assert mem_write["content"] == "关注独立游戏与开源工具，拒绝水文。"
+
+        admin_ev = _private_msg(
+            "m-admin-multi",
+            "查看独立开发社群并排好每日早报",
+            session_id="priv_admin_30001",
+            user_id="Alice",
+        )
+        admin_ev["message_info"]["account_id"] = "30001"
+        await plugin.after_receive(message=admin_ev)
+        plugin.messages.upsert_route(
+            "priv_admin_30001",
+            platform="qq",
+            chat_type="private",
+            user_id="Alice",
+            account_id="30001",
+        )
+
+        # 1. overview 精准消歧并折叠 known_chats，且桥接 sibling session_id 的 MEMORY.md
+        ov = await plugin.shape_tool(
+            action="read",
+            kind="overview",
+            target_chat="qq:group:100246809",
+            source_msg_id="m-admin-multi",
+            chat_id="priv_admin_30001",
+            platform="qq",
+        )
+        assert ov["success"] is True, ov
+        group_known = [
+            item
+            for item in ov["known_chats"]
+            if item.get("stream_spec") == "qq:group:100246809"
+        ]
+        assert len(group_known) == 1
+        assert group_known[0]["chat_id"] == "sid_bot_active"
+        assert "关注独立游戏与开源工具" in ov["target_stream"]["memory"]["content"]
+        assert "关注独立游戏与开源工具" in plugin.memory.context("sid_bot_active")["memory"]
+
+        # 2. maisya_later 按 qq:group:100246809 安排每日计划应精准落到 sid_bot_active
+        later_daily = await plugin.later_tool(
+            action="schedule",
+            daily_at=["09:00"],
+            profile="scout",
+            workspace="digest",
+            reason="执行每日资讯简报",
+            target_chat="qq:group:100246809",
+            replace=True,
+            source_msg_id="m-admin-multi",
+            chat_id="priv_admin_30001",
+            platform="qq",
+        )
+        assert later_daily["success"] is True, later_daily
+        assert later_daily["target"] == "chat:sid_bot_active"
+
+        # 3. 显式传入旧的空 account_id session_id 也会自动升级到 sid_bot_active
+        assert plugin.resolve_known_session_id("sid_legacy_empty") == "sid_bot_active"
+        later_legacy = await plugin.later_tool(
+            action="schedule",
+            in_seconds=60,
+            reason="测试空账号会话自动升级",
+            target_chat="sid_legacy_empty",
+            source_msg_id="m-admin-multi",
+            chat_id="priv_admin_30001",
+            platform="qq",
+        )
+        assert later_legacy["success"] is True, later_legacy
+        assert later_legacy["target"] == "chat:sid_bot_active"
+
+        # 4. maisya_agent 按 qq:group:100246809 启动线程也应绑定 sid_bot_active
+        agent_res = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            target_chat="qq:group:100246809",
+            deliver_to="none",
+            message="核查多 session 归并目标",
+            wait_seconds=10,
+            source_msg_id="m-admin-multi",
+            chat_id="priv_admin_30001",
+            platform="qq",
+        )
+        assert agent_res["success"] is True, agent_res
+        row = plugin.threads.get(agent_res["thread_id"], "priv_admin_30001", allow_any_chat=True)
+        assert row["chat_id"] == "sid_bot_active"
+    finally:
+        await plugin.on_unload()
+

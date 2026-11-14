@@ -854,16 +854,28 @@ class HostContract(unittest.TestCase):
                     )
                 ]
                 result = await plugin.before_planner(
-                    session_id="contract-chat", tool_definitions=tools, items=[]
+                    session_id="contract-chat",
+                    tool_definitions=tools,
+                    items=[],
+                    item_schema_version=1,
                 )
                 modified = result["modified_kwargs"]
+                self.assertEqual(modified.get("item_schema_version"), 1)
                 rebuilt = deserialize_prompt_items(
                     modified["items"],
-                    item_schema_version=1,
+                    item_schema_version=modified.get("item_schema_version"),
                     mode=ContextProtocolMode.REQUEST_CONTEXT,
                 )
                 self.assertEqual(len(rebuilt), 1)
                 self.assertEqual(len(modified["tool_definitions"]), 5)
+
+                unlisted = await plugin.before_planner(
+                    session_id="unlisted-contract-chat",
+                    tool_definitions=tools,
+                    items=[],
+                    item_schema_version=1,
+                )
+                self.assertNotIn("items", unlisted["modified_kwargs"])
                 await plugin.on_unload()
 
         asyncio.run(run())

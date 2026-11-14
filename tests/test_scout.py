@@ -282,3 +282,182 @@ async def test_host_model_config_broadcast_sanitizes_secrets_and_feeds_abilities
         assert "secret.example" not in serialized
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_host_model_config_toml_lists_unused_unassigned_models_without_reload_or_secret_leak(
+    tmp_path,
+):
+    import json as _json
+    import os
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from maibot_sdk.context import PluginPaths
+    from test_foundation import event, loaded
+
+    from plugin import create_plugin
+
+    cfg_dir = tmp_path / "host/config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    model_cfg = cfg_dir / "model_config.toml"
+    initial_toml = """
+[[api_providers]]
+name = "DeepSeek"
+base_url = "https://private-gateway.internal/v1"
+api_key = "sk-top-secret-provider-key"
+
+[[models]]
+name = "step-5-preview"
+model_identifier = "stepfun/step-5"
+api_provider = "StepFun"
+
+[[models]]
+name = "deepseek-r1-standby"
+model_identifier = "deepseek/deepseek-reasoner"
+api_provider = "DeepSeek"
+
+[[models]]
+name = "qwen-coder-unused"
+model_identifier = "qwen/qwen3-coder"
+api_provider = "Bailian"
+
+[model_task_config.planner]
+model_list = ["step-5-preview"]
+
+[model_task_config.web_search]
+model_list = ["tavily"]
+"""
+    model_cfg.write_text(initial_toml, encoding="utf-8")
+
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    try:
+        llm_calls = []
+
+        async def capability(name, **arguments):
+            if name == "llm.get_available_models":
+                return {"success": True, "models": ["planner", "utils", "web_search"]}
+            if name == "statistics.local.models":
+                return {"success": True, "models": []}
+            if name == "llm.generate_with_tools":
+                llm_calls.append(dict(arguments))
+                return {"success": True, "response": "ok", "tool_calls": []}
+            return {"success": True}
+
+        plugin.ctx.call_capability = capability
+        import time as _time
+
+        msg_evt = event(text="检查可用模型", user="Alice", platform="qq", group=False)
+        msg_evt["timestamp"] = str(int(_time.time()))
+        await plugin.after_receive(message=msg_evt)
+
+        # 1. Immediately after on_load() (no on_config_update, empty statistics):
+        # all [[models]] including unassigned/unused ones appear, and web_search is excluded
+        abilities = await plugin.manage_read("abilities", "{}")
+        assert abilities["success"] is True
+        for name in ("step-5-preview", "deepseek-r1-standby", "qwen-coder-unused"):
+            assert name in abilities["available_models"]
+        assert "tavily" not in abilities["available_models"]
+        by_name = {m["name"]: m for m in abilities["model_catalog"]}
+        assert by_name["deepseek-r1-standby"]["provider"] == "DeepSeek"
+        assert by_name["deepseek-r1-standby"]["identifier"] == "deepseek/deepseek-reasoner"
+        assert by_name["deepseek-r1-standby"]["assigned_tasks"] == []
+        assert by_name["step-5-preview"]["assigned_tasks"] == ["planner"]
+
+        ov = await plugin.shape_tool(
+            action="read",
+            kind="overview",
+            source_msg_id="host-message-123456789",
+            chat_id="chat",
+            platform="qq",
+        )
+        assert ov["success"] is True, ov
+        assert "qwen-coder-unused" in ov["host_models"]["names"]
+        assert "deepseek-r1-standby" in ov["host_models"]["names"]
+        assert "tavily" not in ov["host_models"]["names"]
+
+        # 2. Live modification of model_config.toml on disk picks up newly added unused model without reload
+        model_cfg.write_text(
+            initial_toml
+            + '\n[[models]]\nname = "glm-4-air-unused"\nmodel_identifier = "zhipu/glm-4-air"\napi_provider = "Zhipu"\n',
+            encoding="utf-8",
+        )
+        abilities2 = await plugin.manage_read("abilities", "{}")
+        assert "glm-4-air-unused" in abilities2["available_models"]
+        ov2 = await plugin.shape_tool(
+            action="read",
+            kind="overview",
+            source_msg_id="host-message-123456789",
+            chat_id="chat",
+            platform="qq",
+        )
+        assert "glm-4-air-unused" in ov2["host_models"]["names"]
+
+        # 3. Assigning an unused host model to a role works end-to-end with Scout.step
+        patched = await plugin.shape_tool(
+            action="patch",
+            kind="profile",
+            target="scout",
+            patch={"model_name": "qwen-coder-unused"},
+            source_msg_id="host-message-123456789",
+            chat_id="chat",
+            platform="qq",
+        )
+        assert patched["success"] is True, patched
+        res = await Scout(plugin.ctx).step(
+            plugin.profiles.get("scout"),
+            [{"role": "user", "content": "test unused model"}],
+        )
+        assert res["response"] == "ok"
+        assert llm_calls[-1]["model_name"] == "qwen-coder-unused"
+
+        # 4. Zero secret leakage across abilities, overview, discovery, and persisted host_models.json
+        disc = await plugin.manage_read("discovery", "{}")
+        host_models_disk = (plugin.data_root / "host_models.json").read_text(encoding="utf-8")
+        combined = (
+            _json.dumps(abilities2, ensure_ascii=False)
+            + _json.dumps(ov2, ensure_ascii=False)
+            + _json.dumps(disc, ensure_ascii=False)
+            + host_models_disk
+        )
+        assert "sk-top-secret-provider-key" not in combined
+        assert "private-gateway.internal" not in combined
+
+        saved_payload = _json.loads(host_models_disk)
+        saved_by_name = {m["name"]: m for m in saved_payload["models"]}
+        assert saved_by_name["deepseek-r1-standby"]["provider"] == "DeepSeek"
+        assert saved_by_name["deepseek-r1-standby"]["identifier"] == "deepseek/deepseek-reasoner"
+    finally:
+        await plugin.on_unload()
+
+    # 5. Reloading from saved host_models.json when model_config.toml is absent preserves fields
+    os.remove(Path(tmp_path / "host/config/model_config.toml"))
+
+    async def get_perm(key, default=None):
+        return ["qq:Alice"] if key == "plugin.permission" else default
+
+    reloaded = create_plugin()
+    reloaded._ctx = SimpleNamespace(
+        config=SimpleNamespace(get=get_perm),
+        paths=PluginPaths(
+            data_dir=tmp_path / "host/data/plugins/chartyr.maisya",
+            runtime_dir=tmp_path / "runtime",
+        ),
+        logger=plugin.ctx.logger,
+    )
+    reloaded.set_plugin_config(
+        {
+            "plugin": {"enabled": True, "config_version": "0.1.0"},
+            "enabled_chats": ["chat"],
+        }
+    )
+    await reloaded.on_load()
+    try:
+        ab_reloaded = await reloaded.manage_read("abilities", "{}")
+        by_name = {m["name"]: m for m in ab_reloaded["model_catalog"]}
+        assert by_name["deepseek-r1-standby"]["provider"] == "DeepSeek"
+        assert by_name["deepseek-r1-standby"]["identifier"] == "deepseek/deepseek-reasoner"
+        assert by_name["step-5-preview"]["assigned_tasks"] == ["planner"]
+        assert "glm-4-air-unused" in ab_reloaded["available_models"]
+    finally:
+        await reloaded.on_unload()

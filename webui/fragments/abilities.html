@@ -242,7 +242,10 @@
               <span class="mil-label" style="margin:0">角色模型分配与回退顺序</span>
               <button type="button" class="mil-help" data-help="可从宿主已添加的模型中按顺序分配一个或多个模型：优先调用 #1 主选，不可用或报错时自动依次回退到 #2、#3…；未分配具体模型时默认沿用上方宿主模型槽位 (task)" aria-label="查看角色模型分配说明" aria-expanded="false">?</button>
             </div>
-            <button type="button" class="mil-key mil-key--sm" id="cfg-model-clear">清空</button>
+            <div class="mil-row" style="gap:6px">
+              <button type="button" class="mil-key mil-key--sm" id="cfg-model-sync" title="重新同步宿主模型列表中的全部已添加模型">同步模型列表</button>
+              <button type="button" class="mil-key mil-key--sm" id="cfg-model-clear">清空</button>
+            </div>
           </div>
           <div id="cfg-model-chain" class="cfg-model-chain" aria-label="已分配模型顺序列表"></div>
           <div class="cfg-model-controls">

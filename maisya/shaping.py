@@ -16,7 +16,7 @@ from .digest import DigestWorkspace
 from .memory import MemoryLayers, parse_skill_meta
 from .recipes import build_recipe_draft, serialize_profile_toml
 from .scout import call_capability
-from .trust import format_stream_spec, parse_stream_spec
+from .trust import format_stream_spec, parse_stream_spec, session_rank_key
 from .vault import atomic_private_write
 from .workspaces import completed_thread
 
@@ -148,6 +148,7 @@ def _bootstrap_route_for(plugin, session_id: str) -> dict | None:
         "chat_type": ctype,
         "group_id": gid,
         "user_id": "" if ctype == "group" else uid,
+        "account_id": str(getattr(msg, "account_id", "") or "").strip(),
     }
 
 
@@ -203,24 +204,116 @@ async def _open_session_for_spec(plugin, plat: str, kind: str, tid: str) -> str:
     return sid
 
 
-def _pick_match(matches: list[dict], raw: str, current_platform: str) -> tuple[str, str]:
-    if len(matches) == 1:
-        item = matches[0]
-        return item["session_id"], item.get("platform") or current_platform or "qq"
-    unique_pairs = {(m["session_id"], m.get("platform") or "") for m in matches}
+def _logical_chat_key(entry: dict) -> tuple[str, str, str] | None:
+    plat_l = str(entry.get("platform") or "").strip().lower()
+    gid = str(entry.get("group_id") or "").strip()
+    uid = str(entry.get("user_id") or "").strip()
+    ctype_l = str(
+        entry.get("chat_type") or ("group" if gid else ("private" if uid else ""))
+    ).strip().lower()
+    tid = gid if ctype_l == "group" else uid
+    if not plat_l or ctype_l not in ("group", "private") or not tid:
+        return None
+    return plat_l, ctype_l, tid
+
+
+def _pick_match(
+    matches: list[dict],
+    raw: str,
+    current_platform: str,
+    *,
+    preferred_account_id: str = "",
+) -> tuple[str, str]:
+    deduped_by_sid: dict[str, dict] = {}
+    for item in matches:
+        sid = str(item.get("session_id") or "").strip()
+        if not sid:
+            continue
+        prev = deduped_by_sid.get(sid)
+        if prev is None:
+            deduped_by_sid[sid] = dict(item)
+        else:
+            merged = dict(prev)
+            for k, v in item.items():
+                if v not in (None, "", 0, 0.0) and merged.get(k) in (None, "", 0, 0.0):
+                    merged[k] = v
+            deduped_by_sid[sid] = merged
+
+    grouped: dict[tuple, list[dict]] = {}
+    for item in deduped_by_sid.values():
+        lkey = _logical_chat_key(item)
+        bucket_key = ("logical", lkey) if lkey is not None else ("sid", item["session_id"])
+        grouped.setdefault(bucket_key, []).append(item)
+
+    collapsed: list[dict] = []
+    for group in grouped.values():
+        best = max(
+            group,
+            key=lambda m: session_rank_key(m, preferred_account_id=preferred_account_id),
+        )
+        best = dict(best)
+        if not best.get("name"):
+            for cand in group:
+                if cand.get("name"):
+                    best["name"] = cand["name"]
+                    break
+        collapsed.append(best)
+
+    if len(collapsed) == 1:
+        item = collapsed[0]
+        return item["session_id"], str(item.get("platform") or current_platform or "qq").strip().lower()
+    unique_pairs = {(m["session_id"], str(m.get("platform") or "").strip().lower()) for m in collapsed}
     if len(unique_pairs) == 1:
         sid, plat = next(iter(unique_pairs))
         return sid, plat or current_platform or "qq"
     plat_l = current_platform.strip().lower()
     if plat_l:
-        filtered = [m for m in matches if (m.get("platform") or "").lower() == plat_l]
+        filtered = [m for m in collapsed if str(m.get("platform") or "").strip().lower() == plat_l]
         if len({m["session_id"] for m in filtered}) == 1 and filtered:
-            return filtered[0]["session_id"], filtered[0].get("platform") or plat_l
-    preview = ", ".join(
-        f"{m.get('name') or m.get('group_id') or m['session_id']}({m.get('group_id') or m['session_id']})"
-        for m in matches[:4]
-    )
+            return filtered[0]["session_id"], str(filtered[0].get("platform") or plat_l).strip().lower()
+    preview_parts = []
+    for m in collapsed[:4]:
+        lkey = _logical_chat_key(m)
+        spec = format_stream_spec(*lkey) if lkey is not None else str(m.get("stream_spec") or "")
+        label = str(m.get("name") or m.get("group_id") or m.get("user_id") or m["session_id"])
+        detail = f"{spec}, session_id={m['session_id']}" if spec else f"session_id={m['session_id']}"
+        preview_parts.append(f"{label}({detail})")
+    preview = ", ".join(preview_parts)
     raise ValueError(f"找到多个与「{raw}」匹配的会话，请改用更精确的 平台:类型:id 或 session_id：{preview}")
+
+
+def _merge_session_records(
+    streams: dict[str, dict], routes_list: list[dict]
+) -> dict[str, dict]:
+    merged: dict[str, dict] = {}
+    for sid, info in (streams or {}).items():
+        if sid and isinstance(info, dict):
+            merged[sid] = {"session_id": sid, **info}
+    for r in routes_list or []:
+        sid = str(r.get("session_id") or "").strip()
+        if not sid:
+            continue
+        base = dict(merged.get(sid) or {"session_id": sid})
+        for field in (
+            "platform",
+            "chat_type",
+            "group_id",
+            "user_id",
+            "account_id",
+            "scope",
+        ):
+            if not base.get(field) and r.get(field):
+                base[field] = r[field]
+        for num_field in ("human_count", "last_human_at", "updated"):
+            val = r.get(num_field)
+            if val and not base.get(num_field):
+                base[num_field] = val
+        if not base.get("stream_spec"):
+            lkey = _logical_chat_key(base)
+            if lkey is not None:
+                base["stream_spec"] = format_stream_spec(*lkey)
+        merged[sid] = base
+    return merged
 
 
 async def resolve_chat_target(
@@ -238,46 +331,100 @@ async def resolve_chat_target(
         return current_chat_id, cur_plat or "qq"
 
     streams = await plugin._resolve_chat_sources()
-    if raw in streams:
-        plat = str(streams[raw].get("platform") or cur_plat or "qq").strip().lower()
-        return raw, plat
-
     messages = getattr(plugin, "messages", None)
-    if messages is not None:
-        route = messages.route_for(raw)
-        if route:
-            return raw, str(route.get("platform") or cur_plat or "qq").strip().lower()
-        found = messages.find_sessions(raw)
-        if found:
-            return _pick_match(found, raw, cur_plat)
+    routes_list = (
+        messages.list_routes(limit=1000)
+        if messages is not None and hasattr(messages, "list_routes")
+        else []
+    )
+    merged_records = _merge_session_records(streams, routes_list)
+
+    preferred_account_id = ""
+    if current_chat_id:
+        cur_meta = merged_records.get(current_chat_id)
+        if cur_meta and cur_meta.get("account_id"):
+            preferred_account_id = str(cur_meta["account_id"]).strip()
+        if not preferred_account_id and messages is not None:
+            cur_route = messages.route_for(current_chat_id)
+            if cur_route and cur_route.get("account_id"):
+                preferred_account_id = str(cur_route["account_id"]).strip()
+        if not preferred_account_id:
+            boot_cur = _bootstrap_route_for(plugin, current_chat_id)
+            if boot_cur and boot_cur.get("account_id"):
+                preferred_account_id = str(boot_cur["account_id"]).strip()
+
+    def _upgrade_empty_account_sibling(sid: str, entry: dict | None) -> tuple[str, str]:
+        base = dict(merged_records.get(sid) or entry or {"session_id": sid})
+        plat = str(base.get("platform") or cur_plat or "qq").strip().lower()
+        if str(base.get("account_id") or "").strip():
+            return sid, plat
+        lkey = _logical_chat_key(base)
+        if lkey is None:
+            return sid, plat
+        siblings = [
+            rec
+            for rec in merged_records.values()
+            if _logical_chat_key(rec) == lkey and str(rec.get("account_id") or "").strip()
+        ]
+        if siblings:
+            best = max(
+                siblings,
+                key=lambda m: session_rank_key(m, preferred_account_id=preferred_account_id),
+            )
+            return best["session_id"], str(best.get("platform") or plat or "qq").strip().lower()
+        return sid, plat
+
+    if raw in streams:
+        return _upgrade_empty_account_sibling(raw, streams[raw])
+
+    if raw in merged_records:
+        return _upgrade_empty_account_sibling(raw, merged_records[raw])
 
     parsed = parse_stream_spec(raw)
     norm_spec = format_stream_spec(*parsed) if parsed else ""
     norm = norm_spec or _normalize_colon_token(raw)
-    alias_hits = []
-    for sid, info in streams.items():
+
+    hits: list[dict] = []
+    if messages is not None:
+        route = messages.route_for(raw)
+        if route:
+            return _upgrade_empty_account_sibling(raw, route)
+        for f in messages.find_sessions(raw):
+            f_sid = str(f.get("session_id") or "").strip()
+            enriched = dict(merged_records.get(f_sid) or {})
+            enriched.update({k: v for k, v in f.items() if v not in (None, "", 0, 0.0)})
+            enriched["session_id"] = f_sid
+            hits.append(enriched)
+
+    for sid, info in merged_records.items():
         cands = _stream_aliases(sid, info)
         if raw in cands or norm in cands or (norm_spec and norm_spec in cands):
-            alias_hits.append({"session_id": sid, **info})
-    if alias_hits:
-        return _pick_match(alias_hits, raw, cur_plat)
+            hits.append(info)
+    if hits:
+        return _pick_match(
+            hits, raw, cur_plat, preferred_account_id=preferred_account_id
+        )
 
     raw_lower = raw.lower()
     exact_name_hits = [
-        {"session_id": sid, **info}
-        for sid, info in streams.items()
+        info
+        for info in merged_records.values()
         if str(info.get("name") or "").strip().lower() == raw_lower
     ]
     if exact_name_hits:
-        return _pick_match(exact_name_hits, raw, cur_plat)
+        return _pick_match(
+            exact_name_hits, raw, cur_plat, preferred_account_id=preferred_account_id
+        )
 
     partial_name_hits = [
-        {"session_id": sid, **info}
-        for sid, info in streams.items()
+        info
+        for info in merged_records.values()
         if info.get("name") and raw_lower in str(info.get("name") or "").strip().lower()
     ]
     if partial_name_hits:
-        return _pick_match(partial_name_hits, raw, cur_plat)
+        return _pick_match(
+            partial_name_hits, raw, cur_plat, preferred_account_id=preferred_account_id
+        )
 
     if parsed is not None:
         plat, kind, tid = parsed
@@ -387,11 +534,16 @@ async def collect_known_chats(plugin) -> list[dict]:
             {
                 "sid": sid,
                 "spec": spec,
+                "raw_name": str(s_info.get("name") or "").strip(),
                 "name": str(s_info.get("name") or gid or uid or spec or sid),
                 "plat": plat,
                 "ctype": ctype,
                 "gid": gid,
                 "uid": uid,
+                "account_id": str(s_info.get("account_id") or r_info.get("account_id") or "").strip(),
+                "human_count": int(s_info.get("human_count") or r_info.get("human_count") or 0),
+                "last_human_at": float(s_info.get("last_human_at") or r_info.get("last_human_at") or 0.0),
+                "updated": float(s_info.get("updated") or r_info.get("updated") or 0.0),
                 "avatar": str(s_info.get("avatar") or ""),
                 "aliases": aliases,
             }
@@ -411,11 +563,16 @@ async def collect_known_chats(plugin) -> list[dict]:
                 {
                     "sid": norm_tok,
                     "spec": norm_tok,
+                    "raw_name": "",
                     "name": tid or norm_tok,
                     "plat": plat,
                     "ctype": ctype,
                     "gid": tid if ctype == "group" else "",
                     "uid": tid if ctype == "private" else "",
+                    "account_id": "",
+                    "human_count": 0,
+                    "last_human_at": 0.0,
+                    "updated": 0.0,
                     "avatar": "",
                     "aliases": {token, norm_tok},
                 }
@@ -425,18 +582,55 @@ async def collect_known_chats(plugin) -> list[dict]:
                 {
                     "sid": token,
                     "spec": "",
+                    "raw_name": "",
                     "name": token,
                     "plat": "",
                     "ctype": "",
                     "gid": "",
                     "uid": "",
+                    "account_id": "",
+                    "human_count": 0,
+                    "last_human_at": 0.0,
+                    "updated": 0.0,
                     "avatar": "",
                     "aliases": {token},
                 }
             )
 
-    result: list[dict] = []
+    grouped_records: dict[tuple[str, str], list[dict]] = {}
     for rec in records:
+        key = ("spec", rec["spec"]) if rec["spec"] else ("sid", rec["sid"])
+        grouped_records.setdefault(key, []).append(rec)
+
+    collapsed_records: list[dict] = []
+    for group in grouped_records.values():
+        if len(group) == 1:
+            collapsed_records.append(group[0])
+            continue
+        best = max(group, key=session_rank_key)
+        merged = dict(best)
+        merged_aliases: set[str] = set()
+        for item in group:
+            merged_aliases.update(item["aliases"])
+        merged["aliases"] = merged_aliases
+        if not merged.get("avatar"):
+            for item in sorted(group, key=session_rank_key, reverse=True):
+                if item.get("avatar"):
+                    merged["avatar"] = item["avatar"]
+                    break
+        readable = [
+            item
+            for item in group
+            if item.get("raw_name")
+            and item["raw_name"]
+            not in {item["sid"], item["gid"], item["uid"], item["spec"]}
+        ]
+        if readable:
+            merged["name"] = max(readable, key=session_rank_key)["raw_name"]
+        collapsed_records.append(merged)
+
+    result: list[dict] = []
+    for rec in collapsed_records:
         aliases = rec["aliases"]
         is_enabled = bool(aliases & enabled_set)
         proactive_level = ""

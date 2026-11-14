@@ -34,7 +34,7 @@
 | M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | 双主题体系（`millennium` 默认协调 MaiBot 宿主的 0px 质感千禧机械主题 + `maiwork` 可选清朗手账主题，顶栏 `#ui-style-toggle` 即时切换与 `ui_style` 持久化）；全页零口号并用 `?` 帮助弹窗收纳说明文字；`现场`（顶部 `01→04 FLOW` 拓扑、状态与读数条、上下文窗口+示波器趋势、近期活动+活动现场引导、底部折叠唤醒抽屉）、`产物`（交付物/图片预览/持续工作区与角色小鱼）、`能力`（Skill 画廊/工作台 + 角色名册与默认折叠高级覆盖字段 + 配方分享导入面板）、`手账`（分册徽章与 `?` 指引 + 直达意图队列与自动笔记回执 + `A_Memorix` 边界）、`设置`（一般设置 vs 高级设置分级、预设快捷调度、动态自定义联网展开） |
 | 真实模型 + 第三方搜索插件 / EXA 冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开宿主 `web_search`）：`scout` 自动兼容 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
 | Wave 1 跨平台、市场元数据与 3-OS CI | **各切片并行合流中** | `_manifest.json` 规范 `GPL-3.0-or-later` / `display.icon` / `urls` 并在宿主测试包纳入 `logo.svg`；新增 `.github/workflows/tests.yml`（Ubuntu/macOS/Windows Python 3.13）；`README.md` 补充市场安装与 MaiWork 对比；新增 `maisya/pathsafe.py`，打通 TG `::tg-topic::mt=` 话题流、QQ 官方大小写 OpenID、Docker+NapCat `base64://` 群文件兜底与 `render.html2png` 缺浏览器提示 |
-| **部署到线上 `plugins/` 与热重载验证** | **已部署上线并验证激活（保留安全静默开关）** | 已备份 `maisya-deploy-20261114-111739` 至 `/root/backups/` 并原子同步 57 个运行时文件（保留线上 `config.toml`）；实机日志 `chartyr.maisya v0.0.1 加载成功 / 注册完成`（`on_load=0.131s`，`loaded=15 failed=0`，`errors=[]`，`A_Memorix` 正常，`host_unchanged=true`）；线上保持 `enabled = true`、`enabled_chats = []`、`sandbox.enabled = false` 等待按需开群启用 |
+| **部署到线上 `plugins/` 与热重载验证** | **已部署上线并验证激活** | 最新部署备份 `maisya-deploy-20261114-162806` 至 `/root/backups/`（SQLite 在线只读 `.backup()` 校验通过），原子同步 **62** 个运行时文件并完整保留线上 `config.toml`；实机热重载日志 `chartyr.maisya 注册完成` / `on_load` 耗时 `0.296s`（`loaded=15 failed=0`，`core loaded=3 failed=0`，`A_Memorix` 与适配器正常，宿主代码与兄弟插件源码/配置零改动）；实机 `host_models.json` 启动即同步全量 **106** 个宿主 `[[models]]`（含 9 个已分配与 97 个未分配备用模型，排除 `tavily`、零密钥/URL 留存），4 处投递/简报修复已随本版上线 |
 
 ## 3. 本地与隔离验证命令
 
@@ -42,7 +42,7 @@
 # 1. WebUI 构建一致性检查
 python3 webui/build.py --check
 
-# 2. 全量本地与 Chromium UI 测试（当前 236 passed）
+# 2. 全量本地与 Chromium UI 测试（当前 249 passed）
 PYTHONPATH=.:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider
 
 # 3. 真实宿主 venv 隔离契约（22 tests，自动校验 host_unchanged）
@@ -76,6 +76,9 @@ python3 tests_sandbox/run_isolated.py --execute
    - 在 Maisya 管理台 `设置 -> 一般设置 -> 启用会话白名单` 用条目添加目标流（如 `qq:group:12345678`），或由管理员在私聊发一段话经 `maisya_shape` 一站式开启；
    - 启用「每日资讯」可直接在私聊交代启用 `digest`、配好 `digest_sources`、用 `maisya_later(daily_at=..., target_chat=...)` 挂每日排班，并可用 `deliver_to="current"` 在私聊试跑验收后再推往目标群。
 4. **若需再次同步线上插件**：必须先取得用户当次明确授权，将旧插件与活数据（SQLite 必须用只读 `.backup()`）归档到 `/root/backups/`，再原子更新 `plugins/CharTyr_Maisya/` 并保留线上 `config.toml`，严禁改动宿主代码或重启线上服务。
+
+- **角色模型清单完整性**：`MaisyaPlugin` 启动及刷新能力/概览时按 mtime/size 增量只读解析宿主 `config/model_config.toml` 中的全量 `[[models]]`（含已配置但未分配任务槽位、尚无统计用量的模型，不读取 `api_providers`/`api_key`/`base_url`，且不将 `web_search` 混入模型选项），配合热重载订阅并在管理台「模型与权限配置」提供「同步模型列表」按钮。
+- **线上已发布修复汇总（`maisya-deploy-20261114-162806`）**：已全量部署同名多 `session_id` 按活跃账号对齐与空 `account_id` 补齐（`trust.py` / `shaping.py` / `plugin.py`）、`digest_feed` 数值 `source` 评分解析与 `render_card_html` 自动回读本轮入选条目（`digest.py`）、`maisaka.planner.before_request` 在追加 `items` 时保留 `item_schema_version`（`plugin.py`），以及全量宿主 `[[models]]` 清单读取与 WebUI「同步模型列表」（待在测试群下一次自然对话或 `19:30` 每日简报触发时验收真实出图投递效果）。
 
 ## 5. 工作方式红线（摘自 `AGENTS.md`）
 
