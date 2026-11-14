@@ -1,9 +1,14 @@
 """意图存储与社交分寸状态：提醒、主动搭话与自身活动统一经 Pulse 过闸。"""
 
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 import json
 import re
 import time
 import uuid
+
+from .trust import STREAM_SPEC_RE, format_stream_spec, parse_stream_spec
 
 KINDS = {"return", "proactive", "silent"}
 SOURCES = {
@@ -15,11 +20,36 @@ SOURCES = {
     "webhook",
     "workflow",
 }
-CHAT_TARGET = re.compile(r"^chat:[^\s:]{1,256}$")
+CHAT_TARGET = re.compile(
+    r"^chat:(?:[^\s:]{1,256}|[a-z][a-z0-9_-]{0,31}:(?:group|private):[^\s:]{1,200})$"
+)
+DAILY_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
 
 def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def next_daily_due(
+    now_ts: float, hhmm: str, tz_offset_minutes: int = 480
+) -> tuple[float, str]:
+    """按给定每日钟点（HH:MM）和时区偏移计算下一次触发时间戳（至少在 now+5s 之后）。"""
+    match = DAILY_TIME_RE.fullmatch(str(hhmm or ""))
+    if not match:
+        raise ValueError("每日时刻格式应为 24 小时制 HH:MM（如 08:30）")
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("每日时刻小时应为 00-23、分钟应为 00-59")
+    offset = int(tz_offset_minutes)
+    if not -720 <= offset <= 840:
+        raise ValueError("时区偏移应在 -720 到 840 分钟之间")
+    tz = timezone(timedelta(minutes=offset))
+    now_f = float(now_ts)
+    now_dt = datetime.fromtimestamp(now_f, tz=tz)
+    candidate = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate.timestamp() <= now_f + 5:
+        candidate = candidate + timedelta(days=1)
+    return candidate.timestamp(), f"{hour:02d}:{minute:02d}"
 
 
 class Intents:
@@ -86,6 +116,54 @@ class Intents:
             ).fetchall()
         return [self._intent(row) for row in rows]
 
+    def list_all(self, *, status: str = "pending", limit: int = 50) -> list[dict]:
+        bounded = min(max(int(limit), 1), 200)
+        with self.store.connect() as db:
+            if status:
+                rows = db.execute(
+                    "SELECT * FROM intents WHERE status=? ORDER BY due_at LIMIT ?",
+                    (status, bounded),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM intents ORDER BY due_at DESC LIMIT ?",
+                    (bounded,),
+                ).fetchall()
+        return [self._intent(row) for row in rows]
+
+    def cancel_matching_workflows(
+        self, target: str, *, profile: str, workspace: str = ""
+    ) -> list[str]:
+        if not target or not profile:
+            return []
+        now = self.clock()
+        cancelled = []
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT intent_id, payload FROM intents WHERE target=? AND status='pending'",
+                (target,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if not (payload.get("every_seconds") or payload.get("daily_at")):
+                    continue
+                if payload.get("profile") != profile:
+                    continue
+                if workspace and str(payload.get("workspace") or "") != workspace:
+                    continue
+                db.execute(
+                    "UPDATE intents SET status='cancelled', handled=? WHERE intent_id=? AND status='pending'",
+                    (now, row["intent_id"]),
+                )
+                cancelled.append(row["intent_id"])
+        return cancelled
+
     def schedule(
         self,
         *,
@@ -100,7 +178,7 @@ class Intents:
         event_key="",
         event_digest="",
     ):
-        if kind not in KINDS or source not in SOURCES or not CHAT_TARGET.match(target):
+        if kind not in KINDS or source not in SOURCES or not CHAT_TARGET.fullmatch(target):
             raise ValueError("意图类型、来源或目标无效")
         if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
             raise ValueError("意图需要一句 500 字符以内的理由")
@@ -254,7 +332,7 @@ class Intents:
         )
 
     def social_gate(self, target, *, sleep_window="", now=None):
-        if not CHAT_TARGET.match(target):
+        if not CHAT_TARGET.fullmatch(target):
             return False, "invalid_target"
         chat_id = target.split(":", 1)[1]
         if self.in_sleep_window(sleep_window, now=now):

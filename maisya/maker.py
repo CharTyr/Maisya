@@ -331,9 +331,17 @@ class AgentRuntime(Scout):
                 imported.append(
                     {"path": relative, "message_id": message_id, "bytes": len(content)}
                 )
+        allow_any_chat = bool(
+            (row.get("grant") or {}).get("scheduled_admin")
+            or (row.get("grant") or {}).get("admin_direct")
+        )
         for previous_id in previous_threads:
             previous = await completed_thread(
-                self.store.get, previous_id, row["chat_id"], allow_self=True
+                self.store.get,
+                previous_id,
+                row["chat_id"],
+                allow_self=True,
+                allow_any_chat=allow_any_chat,
             )
             if previous["profile_snapshot"][
                 "access"

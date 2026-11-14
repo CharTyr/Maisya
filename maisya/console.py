@@ -278,9 +278,26 @@ def snapshot(
                 "items": context_items,
                 "history_points": history_points,
             }
-            selected["model"] = (
-                profile.get("model") or profile.get("task") or "utils"
+            explicit_models = list(
+                dict.fromkeys(
+                    m.strip()
+                    for m in (
+                        profile.get("model_name") or profile.get("model") or "",
+                        *(profile.get("fallback_models") or ()),
+                    )
+                    if isinstance(m, str) and m.strip()
+                )
             )
+            task_slot = profile.get("task") or "utils"
+            selected["model_chain"] = explicit_models
+            if explicit_models:
+                selected["model"] = (
+                    f"{explicit_models[0]} (+{len(explicit_models) - 1}备选)"
+                    if len(explicit_models) > 1
+                    else explicit_models[0]
+                )
+            else:
+                selected["model"] = task_slot
             selected["tools"] = profile.get("tools", [])
             records = db.execute(
                 "SELECT seq,kind,revision,payload,at FROM thread_events WHERE thread_id=? AND seq>? ORDER BY seq LIMIT 30",

@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from .abilities import FISH_SEED_RE
 from .config import Settings
 from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
+from .shaping import collect_known_chats, resolve_chat_target, resolve_stream_spec
 from .recipes import (
     build_recipe_draft,
     build_recipe_preview,
@@ -29,6 +30,7 @@ from .services import (
     validate_endpoint_targets,
     validate_web_bindings,
 )
+from .trust import format_stream_spec, parse_stream_spec
 from .vault import atomic_private_write
 from .workspaces import completed_thread, regular_open
 
@@ -98,6 +100,7 @@ class Management:
         self.lock = asyncio.Lock()
         self.tasks = set()
         self.closed = False
+        self._model_catalog_cache = {"expires": 0.0, "data": None}
 
     @asynccontextmanager
     async def request(self):
@@ -153,15 +156,19 @@ class Management:
                                 "model",
                                 "task",
                                 "model_name",
+                                "fallback_models",
                                 "tools",
                                 "web_provider",
                                 "max_steps",
                                 "bound",
                                 "enabled",
                                 "skills",
+                                "allow_users",
+                                "allow_chats",
                                 "fish_seed",
                             }
                         }
+                        | {"model_list": list(profile.model_list)}
                     )
                 except (ValueError, OSError) as error:
                     profiles.append(
@@ -321,6 +328,113 @@ class Management:
                 mapping[path.name] = ""
         return mapping
 
+    def _known_chats_sync(self) -> list[dict]:
+        plugin = self.plugin
+        streams = (getattr(plugin, "_stream_cache", {}) or {}).get("streams", {}) or {}
+        routes = (
+            {r["session_id"]: r for r in plugin.messages.list_routes()}
+            if getattr(plugin, "messages", None) is not None
+            else {}
+        )
+        enabled_set = set(plugin.settings.enabled_chats)
+        records: list[dict] = []
+        seen_sids: set[str] = set()
+        for sid in [*streams.keys(), *routes.keys()]:
+            if not sid or sid in seen_sids:
+                continue
+            seen_sids.add(sid)
+            s_info = streams.get(sid) or {}
+            r_info = routes.get(sid) or {}
+            plat = str(s_info.get("platform") or r_info.get("platform") or "").strip().lower()
+            gid = str(s_info.get("group_id") or r_info.get("group_id") or "").strip()
+            uid = str(s_info.get("user_id") or r_info.get("user_id") or "").strip()
+            ctype = str(
+                s_info.get("chat_type")
+                or r_info.get("chat_type")
+                or ("group" if gid else ("private" if uid else ""))
+            ).strip().lower()
+            spec = str(s_info.get("stream_spec") or "").strip()
+            if not spec and plat and (gid or uid):
+                spec = format_stream_spec(plat, "group" if gid else "private", gid or uid)
+            aliases = plugin.chat_aliases_for(sid, plat) | {sid}
+            if spec:
+                aliases.add(spec)
+            records.append(
+                {
+                    "chat_id": sid,
+                    "stream_spec": spec,
+                    "stream_id": spec or sid,
+                    "name": str(s_info.get("name") or gid or uid or spec or sid),
+                    "platform": plat,
+                    "chat_type": ctype,
+                    "group_id": gid,
+                    "user_id": uid,
+                    "enabled": bool(aliases & enabled_set),
+                    "aliases": aliases,
+                }
+            )
+        for raw in plugin.settings.enabled_chats:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            parsed = parse_stream_spec(token)
+            norm = format_stream_spec(*parsed) if parsed else token
+            if any(token in rec["aliases"] or norm in rec["aliases"] for rec in records):
+                continue
+            if parsed is not None:
+                plat, ctype, tid = parsed
+                records.append(
+                    {
+                        "chat_id": norm,
+                        "stream_spec": norm,
+                        "stream_id": norm,
+                        "name": tid or norm,
+                        "platform": plat,
+                        "chat_type": ctype,
+                        "group_id": tid if ctype == "group" else "",
+                        "user_id": tid if ctype == "private" else "",
+                        "enabled": True,
+                        "aliases": {token, norm},
+                    }
+                )
+            else:
+                records.append(
+                    {
+                        "chat_id": token,
+                        "stream_spec": "",
+                        "stream_id": token,
+                        "name": token,
+                        "platform": "",
+                        "chat_type": "",
+                        "group_id": "",
+                        "user_id": "",
+                        "enabled": True,
+                        "aliases": {token},
+                    }
+                )
+        return [{k: v for k, v in rec.items() if k != "aliases"} for rec in records]
+
+    def _resolve_memory_chat_id(self, raw_chat_id: str) -> str:
+        raw = str(raw_chat_id or "").strip()
+        if not raw:
+            return raw
+        sid = self.plugin.resolve_known_session_id(raw)
+        if sid != raw:
+            with self.plugin.threads.connect() as db:
+                has_sid = db.execute(
+                    'SELECT 1 FROM memory_versions WHERE kind="memory" AND chat_id=? LIMIT 1',
+                    (sid,),
+                ).fetchone()
+                if has_sid:
+                    return sid
+                has_raw = db.execute(
+                    'SELECT 1 FROM memory_versions WHERE kind="memory" AND chat_id=? LIMIT 1',
+                    (raw,),
+                ).fetchone()
+                if has_raw:
+                    return raw
+        return sid
+
     def _settings(self):
         settings = self.plugin.settings.model_dump()
         return {
@@ -352,9 +466,17 @@ class Management:
                 )
             ]
         chats.update(plugin.settings.enabled_chats)
-        chat_id = options.get("chat_id", "")
+        raw_nonempty = {str(c).strip() for c in chats if str(c or "").strip()}
+        deduped = {
+            ("self" if c == "self" else (plugin.canonical_stream_spec(c) or c))
+            for c in raw_nonempty
+        }
+        source_ids = sorted(deduped | raw_nonempty)
+        raw_chat_id = str(options.get("chat_id", "") or "").strip()
+        chat_id = self._resolve_memory_chat_id(raw_chat_id)
         return {
-            "chats": sorted(chats),
+            "chats": sorted(deduped),
+            "_source_chat_ids": source_ids,
             "context": plugin.memory.context(chat_id),
             "results": plugin.memory.search(options.get("query", ""), chat_id)
             if chat_id
@@ -486,6 +608,202 @@ class Management:
             out["meta"] = meta
         return out
 
+    async def _collect_host_models(
+        self, *, force: bool = False, probe_host: bool = False
+    ) -> dict:
+        now = time.monotonic()
+        cached_probe = self._model_catalog_cache.get("probe_data")
+        probe_valid = (
+            not force
+            and isinstance(cached_probe, dict)
+            and now < float(self._model_catalog_cache.get("expires") or 0.0)
+        )
+
+        entries: dict[str, dict[str, str]] = {}
+        task_map: dict[str, list[str]] = {}
+
+        def add_entry(
+            name: str, *, identifier: str = "", provider: str = "", source: str = "host"
+        ) -> None:
+            cleaned = (name or "").strip()
+            if not cleaned or len(cleaned) > 256:
+                return
+            existing = entries.get(cleaned)
+            if existing is None:
+                entries[cleaned] = {
+                    "name": cleaned,
+                    "identifier": identifier.strip(),
+                    "provider": provider.strip(),
+                    "source": source,
+                }
+            else:
+                if identifier and not existing["identifier"]:
+                    existing["identifier"] = identifier.strip()
+                if provider and not existing["provider"]:
+                    existing["provider"] = provider.strip()
+
+        host_catalog = getattr(self.plugin, "_host_model_catalog", None)
+        if isinstance(host_catalog, dict):
+            for item in host_catalog.get("models") or ():
+                if isinstance(item, dict) and isinstance(item.get("name"), str):
+                    add_entry(
+                        item["name"],
+                        identifier=str(item.get("identifier") or ""),
+                        provider=str(item.get("provider") or ""),
+                        source=str(item.get("source") or "host_config"),
+                    )
+            for task_key, assigned in (host_catalog.get("tasks") or {}).items():
+                if isinstance(task_key, str) and isinstance(assigned, list):
+                    cleaned_assigned = [
+                        str(m).strip()
+                        for m in assigned
+                        if isinstance(m, str) and str(m).strip()
+                    ]
+                    if cleaned_assigned:
+                        task_map[task_key] = cleaned_assigned
+                        for model_name in cleaned_assigned:
+                            add_entry(model_name, source="task_config")
+
+        if probe_host and not probe_valid:
+            ctx = getattr(self.plugin, "ctx", None)
+
+            async def probe(capability, default, **kwargs):
+                if ctx is None:
+                    return default
+                try:
+                    return await call_capability(ctx, capability, **kwargs)
+                except Exception:
+                    return default
+
+            probe_entries: list[dict[str, str]] = []
+            probe_tasks: dict[str, list[str]] = {}
+
+            raw_models = await probe("llm.get_available_models", {})
+            if isinstance(raw_models, list):
+                for item in raw_models:
+                    if isinstance(item, str) and item.strip():
+                        probe_tasks.setdefault(item.strip(), [])
+            elif isinstance(raw_models, dict):
+                unpacked = raw_models.get("models")
+                if isinstance(unpacked, list):
+                    for item in unpacked:
+                        if isinstance(item, str) and item.strip():
+                            probe_tasks.setdefault(item.strip(), [])
+                else:
+                    model_dict = (
+                        unpacked
+                        if isinstance(unpacked, dict)
+                        else {k: v for k, v in raw_models.items() if k != "success"}
+                    )
+                    for key, val in model_dict.items():
+                        if not isinstance(key, str) or not key.strip():
+                            continue
+                        if isinstance(val, list):
+                            cleaned = [
+                                str(m).strip()
+                                for m in val
+                                if isinstance(m, str) and str(m).strip()
+                            ]
+                            probe_tasks[key] = cleaned
+                            for model_name in cleaned:
+                                probe_entries.append(
+                                    {
+                                        "name": model_name,
+                                        "identifier": "",
+                                        "provider": "",
+                                        "source": "available_models",
+                                    }
+                                )
+                        elif isinstance(val, dict):
+                            name = str(
+                                val.get("name") or val.get("model_name") or key
+                            ).strip()
+                            probe_entries.append(
+                                {
+                                    "name": name,
+                                    "identifier": str(val.get("model_identifier") or ""),
+                                    "provider": str(
+                                        val.get("api_provider") or val.get("provider") or ""
+                                    ),
+                                    "source": "available_models",
+                                }
+                            )
+                            probe_tasks[key] = [name]
+                        else:
+                            probe_tasks.setdefault(key, [])
+
+            raw_stats = await probe("statistics.local.models", {})
+            stat_items = (
+                raw_stats.get("models")
+                if isinstance(raw_stats, dict)
+                else raw_stats
+            )
+            if isinstance(stat_items, list):
+                for item in stat_items[:128]:
+                    if isinstance(item, str) and item.strip():
+                        probe_entries.append(
+                            {
+                                "name": item.strip(),
+                                "identifier": "",
+                                "provider": "",
+                                "source": "statistics",
+                            }
+                        )
+                    elif isinstance(item, dict):
+                        name = str(
+                            item.get("model_name") or item.get("name") or ""
+                        ).strip()
+                        if name:
+                            probe_entries.append(
+                                {
+                                    "name": name,
+                                    "identifier": str(item.get("model_identifier") or ""),
+                                    "provider": str(
+                                        item.get("provider")
+                                        or item.get("api_provider")
+                                        or ""
+                                    ),
+                                    "source": "statistics",
+                                }
+                            )
+
+            cached_probe = {"entries": probe_entries, "tasks": probe_tasks}
+            self._model_catalog_cache = {"expires": now + 15.0, "probe_data": cached_probe}
+
+        if isinstance(cached_probe, dict):
+            for item in cached_probe.get("entries") or ():
+                if isinstance(item, dict):
+                    add_entry(
+                        str(item.get("name") or ""),
+                        identifier=str(item.get("identifier") or ""),
+                        provider=str(item.get("provider") or ""),
+                        source=str(item.get("source") or "host"),
+                    )
+            for key, val in (cached_probe.get("tasks") or {}).items():
+                task_map.setdefault(key, val)
+
+        profiles_mgr = getattr(self.plugin, "profiles", None)
+        if (
+            profiles_mgr
+            and getattr(profiles_mgr, "path", None)
+            and profiles_mgr.path.exists()
+        ):
+            for path in sorted(profiles_mgr.path.iterdir()):
+                if path.is_dir() and not path.is_symlink():
+                    try:
+                        prof = profiles_mgr.get(path.name)
+                        for m in prof.model_list:
+                            add_entry(m, source="profile")
+                    except (ValueError, OSError):
+                        continue
+
+        catalog_list = list(entries.values())
+        return {
+            "models": catalog_list,
+            "names": [item["name"] for item in catalog_list],
+            "tasks": task_map,
+        }
+
     async def _discovery(self):
         ctx = getattr(self.plugin, "ctx", None)
 
@@ -498,20 +816,38 @@ class Management:
                 return default
 
         raw_streams = await probe("chat.get_all_streams", [], platform="all_platforms")
-        streams = (
+        raw_stream_list = (
             raw_streams.get("streams") or raw_streams.get("data") or []
             if isinstance(raw_streams, dict)
             else raw_streams
         )
-        raw_models = await probe("llm.get_available_models", {})
-        if isinstance(raw_models, dict):
-            models = (
-                raw_models["models"]
-                if isinstance(raw_models.get("models"), dict)
-                else {k: v for k, v in raw_models.items() if k != "success"}
-            )
-        else:
-            models = {}
+        streams = []
+        for s in raw_stream_list if isinstance(raw_stream_list, list) else []:
+            if isinstance(s, dict):
+                plat_s = str(s.get("platform") or "").strip().lower()
+                is_grp = bool(
+                    s.get("is_group_session")
+                    or s.get("chat_type") == "group"
+                    or s.get("group_id")
+                )
+                gid_s = str(s.get("group_id") or "").strip()
+                uid_s = str(s.get("user_id") or "").strip()
+                tid_s = gid_s if is_grp else uid_s
+                spec_s = (
+                    format_stream_spec(plat_s, "group" if is_grp else "private", tid_s)
+                    if (plat_s and tid_s)
+                    else ""
+                )
+                streams.append(
+                    {
+                        **s,
+                        "platform": plat_s or str(s.get("platform") or ""),
+                        "stream_spec": spec_s,
+                    }
+                )
+            else:
+                streams.append(s)
+        host_models = await self._collect_host_models(force=True, probe_host=True)
         raw_plugins = await probe("component.list_loaded_plugins", [])
         plugins = (
             raw_plugins.get("plugins") or []
@@ -521,8 +857,10 @@ class Management:
         raw_apis = await probe("api.list", [])
         apis = raw_apis.get("apis") or [] if isinstance(raw_apis, dict) else raw_apis
         return {
-            "streams": streams if isinstance(streams, list) else [],
-            "models": models if isinstance(models, dict) else {},
+            "streams": streams,
+            "models": host_models["tasks"],
+            "available_models": host_models["names"],
+            "model_catalog": host_models["models"],
             "plugins": plugins if isinstance(plugins, list) else [],
             "apis": apis if isinstance(apis, list) else [],
         }
@@ -535,6 +873,11 @@ class Management:
         options = self.arguments(payload)
         if section == "abilities":
             result = await completed_thread(self._assets)
+            result["known_chats"] = await completed_thread(self._known_chats_sync)
+            host_models = await self._collect_host_models()
+            result["available_models"] = host_models["names"]
+            result["model_catalog"] = host_models["models"]
+            result["model_tasks"] = host_models["tasks"]
         elif section == "asset":
             allowed = {
                 key: value
@@ -542,6 +885,10 @@ class Management:
                 if key in {"target", "chat_id", "document", "version"}
             }
             kind = options["kind"]
+            if kind == "memory" and allowed.get("chat_id"):
+                allowed["chat_id"] = await completed_thread(
+                    self._resolve_memory_chat_id, str(allowed["chat_id"])
+                )
             result = await completed_thread(self.plugin.memory.read, kind, **allowed)
             result["history"] = await completed_thread(
                 self.plugin.memory.history,
@@ -549,7 +896,11 @@ class Management:
                 **{key: value for key, value in allowed.items() if key != "version"},
             )
         elif section == "settings":
-            result = self._settings()
+            result = await completed_thread(self._settings)
+            result["known_chats"] = await collect_known_chats(self.plugin)
+            assets = await completed_thread(self._assets)
+            result["profiles"] = [p["id"] for p in assets["profiles"]]
+            result["profile_cards"] = assets["profiles"]
         elif section == "services":
             config = await completed_thread(self.plugin.runtime.services.load)
             await completed_thread(self._validate_services, config)
@@ -559,14 +910,23 @@ class Management:
             result = {"configuration": config, "version": self._version(config)}
         elif section == "memory":
             result = await completed_thread(self._memory, options)
-            result["chat_sources"] = await self.plugin._resolve_chat_sources(
-                result.get("chats", [])
-            )
+            source_ids = result.pop("_source_chat_ids", None) or result.get("chats", [])
+            result["chat_sources"] = await self.plugin._resolve_chat_sources(source_ids)
         elif section == "outputs":
             result = await completed_thread(self._outputs, options)
-            result["chat_sources"] = await self.plugin._resolve_chat_sources(
-                result.get("chats", [])
+            source_ids = list(
+                dict.fromkeys(
+                    [
+                        *result.get("chats", []),
+                        *(
+                            i.get("chat_id")
+                            for i in [*result.get("items", []), *result.get("recent", [])]
+                            if i.get("chat_id")
+                        ),
+                    ]
+                )
             )
+            result["chat_sources"] = await self.plugin._resolve_chat_sources(source_ids)
         elif section == "artifact":
             result = await completed_thread(self._artifact, options)
         elif section == "workspace":
@@ -613,7 +973,11 @@ class Management:
                 result = await completed_thread(self._transfer, options)
         else:
             raise ValueError("未知管理查询")
-        return {"success": True, **self.plugin.vault.redact(result)}
+        return {
+            "success": True,
+            "ui_style": self.plugin.settings.ui_style,
+            **self.plugin.vault.redact(result),
+        }
 
     def _resolve_workspace_dir(self, workspace_id: str) -> tuple[Path | None, dict]:
         if not isinstance(workspace_id, str) or not re.fullmatch(
@@ -860,13 +1224,28 @@ class Management:
                 }
             )
 
-        chat_items = [i for i in items if not chat_id or i["chat_id"] == chat_id]
-        chat_workspaces = [w for w in workspaces if not chat_id or w["chat_id"] == chat_id]
+        filter_aliases: set[str] = set()
+        if chat_id:
+            resolved_filter = self.plugin.resolve_known_session_id(chat_id)
+            filter_aliases = (
+                {chat_id, resolved_filter}
+                | self.plugin.chat_aliases_for(chat_id)
+                | self.plugin.chat_aliases_for(resolved_filter)
+            )
+        chat_items = [i for i in items if not filter_aliases or i["chat_id"] in filter_aliases]
+        chat_workspaces = [w for w in workspaces if not filter_aliases or w["chat_id"] in filter_aliases]
         stats = {
             "total": len(chat_items),
             "attachments": sum(1 for i in chat_items if i["kind"] == "attachment"),
             "workspace_out": sum(1 for i in chat_items if i["kind"] == "workspace_out"),
             "conclusions": sum(1 for i in chat_items if i["kind"] == "conclusion"),
+            "pages": sum(1 for i in chat_items if i.get("media_kind") == "html"),
+            "images": sum(1 for i in chat_items if i.get("media_kind") == "image"),
+            "docs": sum(
+                1
+                for i in chat_items
+                if i.get("media_kind") in {"markdown", "text", "binary"}
+            ),
             "workspaces": len(chat_workspaces),
         }
 
@@ -895,10 +1274,30 @@ class Management:
                 ).lower()
             ]
         filtered.sort(key=lambda item: item.get("at", 0.0), reverse=True)
+        recent = sorted(
+            chat_items, key=lambda item: item.get("at", 0.0), reverse=True
+        )[:5]
+        for entry in (*filtered[:80], *recent):
+            cid = str(entry.get("chat_id") or "")
+            parsed_c = parse_stream_spec(cid)
+            entry["stream_spec"] = (
+                self.plugin.canonical_stream_spec(cid)
+                or (format_stream_spec(*parsed_c) if parsed_c else "")
+            )
+        deduped_chats = {
+            (
+                "self"
+                if str(c).strip() == "self"
+                else (self.plugin.canonical_stream_spec(str(c).strip()) or str(c).strip())
+            )
+            for c in chats
+            if str(c or "").strip()
+        }
         return {
             "items": filtered[:80],
+            "recent": recent,
             "workspaces": chat_workspaces[:60],
-            "chats": sorted(c for c in chats if c),
+            "chats": sorted(deduped_chats),
             "stats": stats,
             "profile_fish": self._profile_fish_map(),
         }
@@ -1054,6 +1453,10 @@ class Management:
                 for key, value in options.items()
                 if key in {"target", "chat_id", "document", "expected_version"}
             }
+            if kind == "memory" and allowed.get("chat_id"):
+                allowed["chat_id"] = await completed_thread(
+                    self._resolve_memory_chat_id, str(allowed["chat_id"])
+                )
             if type(allowed.get("expected_version")) is not int:
                 raise ValueError("请先读取当前版本")
             function = (
@@ -1143,7 +1546,44 @@ class Management:
         elif action == "settings":
             if options.get("expected_version") != self._settings()["version"]:
                 raise ValueError("设置已变化，请刷新后再保存")
-            settings = Settings.model_validate(options["settings"])
+            raw_settings = dict(options["settings"]) if isinstance(options.get("settings"), dict) else options["settings"]
+            if isinstance(raw_settings, dict):
+                if isinstance(raw_settings.get("enabled_chats"), list):
+                    normalized_chats = []
+                    for item in raw_settings["enabled_chats"]:
+                        token = str(item or "").strip()
+                        if not token:
+                            continue
+                        try:
+                            token = (
+                                await resolve_stream_spec(
+                                    plugin, token, allow_unknown_ascii=True
+                                )
+                                or token
+                            )
+                        except ValueError:
+                            pass
+                        if token not in normalized_chats:
+                            normalized_chats.append(token)
+                    raw_settings["enabled_chats"] = normalized_chats
+                if isinstance(raw_settings.get("chat_proactive_levels"), dict):
+                    normalized_levels = {}
+                    for k, v in raw_settings["chat_proactive_levels"].items():
+                        key = str(k or "").strip()
+                        if not key:
+                            continue
+                        try:
+                            key = (
+                                await resolve_stream_spec(
+                                    plugin, key, allow_unknown_ascii=True
+                                )
+                                or key
+                            )
+                        except ValueError:
+                            pass
+                        normalized_levels[key] = v
+                    raw_settings["chat_proactive_levels"] = normalized_levels
+            settings = Settings.model_validate(raw_settings)
             await plugin.on_config_update("self", settings.model_dump(), 0)
             await completed_thread(
                 atomic_private_write,
@@ -1182,9 +1622,20 @@ class Management:
             )
             result = {"intent_id": row["intent_id"]}
         elif action == "schedule_intent":
-            chat_id = str(options.get("chat_id") or "").strip()
-            if not chat_id:
+            raw_chat_id = str(options.get("chat_id") or "").strip()
+            if not raw_chat_id:
                 raise ValueError("请填写目标会话 chat_id")
+            explicit_platform = str(options.get("platform") or "").strip().lower()
+            if raw_chat_id == "self":
+                chat_id = "self"
+                resolved_platform = "self"
+            else:
+                chat_id, resolved_platform = await resolve_chat_target(
+                    plugin,
+                    raw_chat_id,
+                    current_platform=explicit_platform,
+                    allow_unknown_ascii=True,
+                )
             profile_name = str(options.get("profile") or "").strip()
             if profile_name:
                 ability = await completed_thread(plugin.profiles.get, profile_name)
@@ -1202,7 +1653,7 @@ class Management:
                 raise ValueError("周期执行间隔至少 300 秒")
             kind = str(options.get("kind") or "return").strip() or "return"
             payload = {
-                "platform": str(options.get("platform") or "qq").strip() or "qq",
+                "platform": explicit_platform or resolved_platform or "qq",
                 "profile": profile_name or str(plugin.settings.heartbeat_profile or "scout"),
                 "workspace": str(options.get("workspace") or "").strip(),
                 "prompt": prompt or reason,

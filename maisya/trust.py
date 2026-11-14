@@ -17,6 +17,49 @@ MENTION_ALL_TEXT = re.compile(
     r"@全体成员|@所有人|\[CQ:at,qq=all(?:,[^\]]*)?\]", re.IGNORECASE
 )
 MENTION_ALL_TARGETS = frozenset({"all", "全体成员", "所有人"})
+STREAM_SPEC_RE = re.compile(
+    r"^([a-z][a-z0-9_-]{0,31}):(group|private):([^\s:]{1,200})$"
+)
+
+
+def parse_stream_spec(raw: str | None) -> tuple[str, str, str] | None:
+    text = str(raw or "").strip()
+    if text.lower().startswith("chat:"):
+        text = text[5:].strip()
+    if ":" not in text:
+        return None
+    parts = text.split(":", 2)
+    if len(parts) != 3:
+        return None
+    plat, kind, tid = parts[0].strip().lower(), parts[1].strip().lower(), parts[2].strip()
+    candidate = f"{plat}:{kind}:{tid}"
+    match = STREAM_SPEC_RE.fullmatch(candidate)
+    if not match:
+        return None
+    return match.group(1), match.group(2), match.group(3)
+
+
+def format_stream_spec(
+    platform: str | None,
+    chat_type: str = "",
+    raw_id: str = "",
+    *,
+    group_id: str = "",
+    user_id: str = "",
+) -> str:
+    plat = str(platform or "").strip().lower()
+    gid = str(group_id or "").strip()
+    uid = str(user_id or "").strip()
+    ctype = str(chat_type or "").strip().lower()
+    if not ctype:
+        ctype = "group" if gid else ("private" if uid else "")
+    if ctype in {"user", "dm", "c2c"}:
+        ctype = "private"
+    tid = str(raw_id or (gid if ctype == "group" else uid) or gid or uid).strip()
+    if not plat or ctype not in {"group", "private"} or not tid:
+        return ""
+    candidate = f"{plat}:{ctype}:{tid}"
+    return candidate if STREAM_SPEC_RE.fullmatch(candidate) else ""
 
 
 def alias(message_id: str) -> str:
@@ -301,6 +344,119 @@ class MessageStore:
             "scope": row[5],
         }
 
+    def upsert_route(
+        self,
+        session_id: str,
+        *,
+        platform: str,
+        chat_type: str,
+        group_id: str = "",
+        user_id: str = "",
+        account_id: str = "",
+        scope: str = "",
+    ) -> None:
+        sid = str(session_id or "").strip()
+        plat = str(platform or "").strip().lower()
+        ctype = str(chat_type or "").strip().lower()
+        gid = str(group_id or "").strip()
+        uid = "" if gid else str(user_id or "").strip()
+        if not sid or not plat or ctype not in {"group", "private"}:
+            return
+        now = time.time() if self.clock is None else self.clock()
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute(
+                "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "platform=excluded.platform, chat_type=excluded.chat_type, "
+                "group_id=CASE WHEN excluded.group_id!='' THEN excluded.group_id ELSE session_routes.group_id END, "
+                "user_id=CASE WHEN excluded.user_id!='' THEN excluded.user_id ELSE session_routes.user_id END, "
+                "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
+                "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
+                "updated=excluded.updated",
+                (
+                    sid,
+                    plat,
+                    ctype,
+                    gid,
+                    uid,
+                    str(account_id or "").strip(),
+                    str(scope or "").strip(),
+                    now,
+                ),
+            )
+
+    def aliases_for(
+        self,
+        session_id: str,
+        platform: str = "",
+        *,
+        group_id: str = "",
+        user_id: str = "",
+    ) -> set[str]:
+        aliases: set[str] = set()
+        sid = str(session_id or "").strip()
+        if sid:
+            aliases.add(sid)
+        route = self.route_for(sid) if sid else None
+        plat = (
+            str(platform or "").strip()
+            or str((route or {}).get("platform") or "").strip()
+        ).lower()
+        gid = str(group_id or "").strip() or str((route or {}).get("group_id") or "").strip()
+        uid = "" if gid else (str(user_id or "").strip() or str((route or {}).get("user_id") or "").strip())
+        if gid:
+            aliases.update({gid, f"group:{gid}"})
+            if plat:
+                aliases.update({f"{plat}:{gid}", f"{plat}:group:{gid}"})
+        elif uid:
+            aliases.add(f"private:{uid}")
+            if plat:
+                aliases.update({f"{plat}:{uid}", f"{plat}:private:{uid}"})
+        return aliases
+
+    def find_sessions(self, token: str) -> list[dict]:
+        key = str(token or "").strip()
+        if not key:
+            return []
+        parsed = parse_stream_spec(key)
+        if parsed is not None:
+            norm = f"{parsed[0]}:{parsed[1]}:{parsed[2]}"
+        elif ":" in key:
+            head, tail = key.split(":", 1)
+            norm = f"{head.strip().lower()}:{tail.strip()}"
+        else:
+            norm = key
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute(
+                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope "
+                "FROM session_routes ORDER BY updated DESC LIMIT 512"
+            ).fetchall()
+        matched = []
+        for sid, plat, ctype, gid, uid, aid, sc in rows:
+            plat_l = str(plat or "").strip().lower()
+            candidates = {sid}
+            if gid:
+                candidates.update({gid, f"group:{gid}"})
+                if plat_l:
+                    candidates.update({f"{plat_l}:{gid}", f"{plat_l}:group:{gid}"})
+            elif uid:
+                candidates.update({uid, f"private:{uid}"})
+                if plat_l:
+                    candidates.update({f"{plat_l}:{uid}", f"{plat_l}:private:{uid}"})
+            if key in candidates or norm in candidates:
+                matched.append(
+                    {
+                        "session_id": sid,
+                        "platform": plat_l,
+                        "chat_type": ctype,
+                        "group_id": gid,
+                        "user_id": uid,
+                        "account_id": aid,
+                        "scope": sc,
+                    }
+                )
+        return matched
+
     def activity_for(self, session_id: str) -> dict:
         with closing(sqlite3.connect(self.path)) as db:
             row = db.execute(
@@ -315,6 +471,31 @@ class MessageStore:
             "human_count": int(row[1]),
             "last_human_at": float(row[2]),
         }
+
+    def list_routes(self, limit: int = 256) -> list[dict]:
+        cap = max(1, min(int(limit), 1000))
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute(
+                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope, "
+                "human_count, last_human_at, updated "
+                "FROM session_routes ORDER BY updated DESC LIMIT ?",
+                (cap,),
+            ).fetchall()
+        return [
+            {
+                "session_id": sid,
+                "platform": str(plat or "").strip().lower(),
+                "chat_type": str(ctype or "").strip().lower(),
+                "group_id": str(gid or "").strip(),
+                "user_id": str(uid or "").strip(),
+                "account_id": str(aid or "").strip(),
+                "scope": str(sc or "").strip(),
+                "human_count": int(hc or 0),
+                "last_human_at": float(lha or 0.0),
+                "updated": float(upd or 0.0),
+            }
+            for sid, plat, ctype, gid, uid, aid, sc, hc, lha, upd in rows
+        ]
 
 
 def normalize_admins(permissions) -> set[str]:

@@ -159,6 +159,24 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 )
                 await plugin.engine.drain()
                 assert not errors
+                assert await page.locator(".ms-page-sub").count() == 0
+                flow_box = await page.locator("#flow-panel").bounding_box()
+                threads_box = await page.locator("#threads-panel").bounding_box()
+                assert flow_box is not None and threads_box is not None
+                assert flow_box["y"] < threads_box["y"]
+                await expect(page.locator("#fl-cnt-gate")).to_have_text("PLANNER")
+                await expect(page.locator("#flow")).to_contain_text("02 主脑调度")
+                await expect(page.locator("#fl-gate")).to_contain_text("MaiBot Planner")
+                assert "关怀 (平衡)" not in await page.locator("#fl-gate").inner_text()
+                await page.locator("#flow-panel .mil-help").first.click()
+                await expect(page.locator("#mil-help-pop")).to_be_visible()
+                await page.keyboard.press("Escape")
+                await expect(page.locator("#mil-help-pop")).to_be_hidden()
+                assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
+                await page.locator("#ui-style-toggle").click()
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+                await page.locator("#ui-style-toggle").click()
+                assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
                 destination = Path(".local-checks")
                 destination.mkdir(exist_ok=True)
                 await page.screenshot(path=str(destination / "now-desktop.png"))

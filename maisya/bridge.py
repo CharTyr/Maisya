@@ -7,6 +7,18 @@ import time
 import uuid
 
 
+def _grant_admin_direct(raw_grant) -> bool:
+    if isinstance(raw_grant, dict):
+        return bool(raw_grant.get("admin_direct"))
+    if not raw_grant:
+        return False
+    try:
+        parsed = json.loads(raw_grant)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and bool(parsed.get("admin_direct"))
+
+
 def record_return(db, thread_id, revision, event_seq):
     source = db.execute(
         'SELECT payload FROM thread_events WHERE thread_id=? AND revision=? AND kind="input"',
@@ -89,7 +101,9 @@ class Bridge:
     def claim_delivery(self, row, route):
         thread_id = row["thread_id"]
         revision = row.get("completed_revision", row["revision"])
-        destination = row.get("delivery_chat_id", row["chat_id"])
+        destination = (
+            row.get("delivery_chat_id") or row.get("return_chat_id") or row["chat_id"]
+        )
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute(
@@ -154,6 +168,17 @@ class Bridge:
 
     def new_input(self, chat_id):
         self._blocked.discard(chat_id)
+
+    def has_pending_for(self, chat_id: str) -> bool:
+        return bool(
+            chat_id
+            and (
+                chat_id in self._blocked
+                or self._offered.get(chat_id)
+                or self._manual.get(chat_id)
+                or any(v[0] == chat_id for v in self._retries.values())
+            )
+        )
 
     async def suppress_reply(self, chat_id):
         if chat_id not in self._blocked:
@@ -226,7 +251,7 @@ class Bridge:
         parameters = [self.clock() - 600]
         where = ""
         if chat_id is not None:
-            where += " AND t.chat_id=?"
+            where += " AND COALESCE(g.chat_id, t.chat_id)=?"
             parameters.append(chat_id)
         for column, value in (("group_id", group_id), ("thread_id", thread_id)):
             if value is not None:
@@ -238,8 +263,12 @@ class Bridge:
             where += " AND i.event_seq IN (" + ",".join("?" for _ in ids) + ")"
             parameters.extend(ids)
         rows = db.execute(
-            "SELECT i.*, t.chat_id, t.platform, t.profile, e.payload FROM return_intents i "
-            "JOIN agent_threads t ON t.thread_id=i.thread_id JOIN thread_events e ON e.seq=i.event_seq "
+            "SELECT i.*, COALESCE(g.chat_id, t.chat_id) AS return_chat_id, tc.grant AS raw_grant, "
+            "t.chat_id, t.platform, t.profile, e.payload FROM return_intents i "
+            "JOIN agent_threads t ON t.thread_id=i.thread_id "
+            "JOIN thread_events e ON e.seq=i.event_seq "
+            "LEFT JOIN return_groups g ON g.group_id=i.group_id "
+            "LEFT JOIN thread_context tc ON tc.thread_id=t.thread_id "
             "WHERE i.consumed=0 AND i.available_at>=? AND t.revision=i.revision "
             "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting')"
             + where
@@ -382,7 +411,10 @@ class Bridge:
         for row in rows:
             if row.get("manual"):
                 current = self.store.get(
-                    row["thread_id"], row["chat_id"], allow_self=True
+                    row["thread_id"],
+                    row["chat_id"],
+                    allow_self=True,
+                    allow_any_chat=True,
                 )
                 if (
                     current["completed_revision"] == row["revision"]
@@ -408,9 +440,10 @@ class Bridge:
             row for row in rows if not row.get("manual") and row["event_seq"] in valid
         ]
 
-    def claim_ready(self, enabled):
+    def claim_ready(self, enabled, *, plugin_enabled=None):
         now = self.clock()
         batches = {}
+        allow_plugin = plugin_enabled() if callable(plugin_enabled) else True
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             groups = db.execute(
@@ -441,7 +474,10 @@ class Bridge:
                     if row["origin"] == "user"
                     and not row["inline"]
                     and row["available_at"] <= now
-                    and enabled(row["chat_id"], row["platform"])
+                    and (
+                        enabled(group["chat_id"], row["platform"])
+                        or (allow_plugin and _grant_admin_direct(row.get("raw_grant")))
+                    )
                 ]
                 if not rows:
                     continue

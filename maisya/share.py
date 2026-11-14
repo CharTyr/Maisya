@@ -68,6 +68,7 @@ class Share:
         target_chat_id=None,
         target_platform=None,
         is_admin=False,
+        allow_admin_destination: bool = False,
     ):
         if self.closing:
             raise RuntimeError("插件正在关闭")
@@ -82,6 +83,7 @@ class Share:
                 target_chat_id=target_chat_id,
                 target_platform=target_platform,
                 is_admin=is_admin,
+                allow_admin_destination=allow_admin_destination,
             )
         except asyncio.CancelledError:
             receipt = self._active[task]
@@ -111,12 +113,17 @@ class Share:
         target_chat_id=None,
         target_platform=None,
         is_admin=False,
+        allow_admin_destination: bool = False,
     ):
         thread_id, chat_id = row["thread_id"], row["chat_id"]
         source_chat_id = chat_id
-        if target_chat_id:
-            if row["owner"] != "self":
+        if target_chat_id and target_chat_id != source_chat_id:
+            if row["owner"] != "self" and not is_admin:
                 raise PermissionError("会话线程只能在原会话分享")
+            if ref_msg_ids:
+                raise PermissionError("跨会话分享不能引用原会话消息")
+            chat_id = target_chat_id
+        elif target_chat_id:
             chat_id = target_chat_id
         revision = row["completed_revision"]
         if row["state"] != "idle" or revision != row["revision"]:
@@ -218,7 +225,10 @@ class Share:
         current = await asyncio.to_thread(self.store.get, thread_id, source_chat_id)
         if (
             self.closing
-            or not self.enabled(chat_id, target_platform or row["platform"])
+            or not (
+                self.enabled(chat_id, target_platform or row["platform"])
+                or (is_admin and allow_admin_destination)
+            )
             or current["state"] != "idle"
             or current["revision"] != revision
         ):

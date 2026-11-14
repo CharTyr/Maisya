@@ -1,10 +1,12 @@
-"""将共用千禧机械样式与页面骨架打包为宿主所需的自包含 HTML。"""
+"""将 Maisya 双主题工作台样式（清朗手账默认 + MaiBot 千禧机械主题）与页面骨架打包为宿主所需的自包含 HTML。"""
 
 import sys
 from pathlib import Path
 
 
-def _render_management(root: Path, css: str, fish_js: str, page: str, title: str) -> str:
+def _render_management(
+    root: Path, css: str, fish_js: str, page: str, title: str
+) -> str:
     template = (root / "management.html.in").read_text(encoding="utf-8")
     body = (root / "fragments" / f"{page}.html").read_text(encoding="utf-8").rstrip("\n")
     return (
@@ -25,16 +27,17 @@ def main():
     root = Path(__file__).resolve().parent
     css = (root / "millennium.css").read_text(encoding="utf-8").rstrip("\n")
     fish_js = (root / "fish.js").read_text(encoding="utf-8").rstrip("\n")
+    pages = (
+        ("outputs", "产物"),
+        ("abilities", "能力"),
+        ("memory", "手账"),
+        ("settings", "设置"),
+    )
     targets: list[tuple[Path, str]] = [
         (root / "now.html", _render_now(root, css, fish_js)),
         *(
             (root / f"{page}.html", _render_management(root, css, fish_js, page, title))
-            for page, title in (
-                ("outputs", "产物"),
-                ("abilities", "能力"),
-                ("memory", "手账"),
-                ("settings", "设置"),
-            )
+            for page, title in pages
         ),
     ]
     check = "--check" in sys.argv

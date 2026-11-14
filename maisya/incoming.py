@@ -7,9 +7,27 @@ import json
 import re
 import time
 
-from .intents import CHAT_TARGET
+from .intents import CHAT_TARGET, parse_stream_spec
 from .memory import MemoryLayers
 from .workspaces import completed_thread
+
+
+def _extract_target_chat(raw_target: str) -> str:
+    text = str(raw_target or "").strip()
+    if text.lower().startswith("chat:"):
+        return text[5:].strip()
+    return text
+
+
+def _valid_webhook_target(raw_target: str) -> bool:
+    text = str(raw_target or "").strip()
+    if not text:
+        return False
+    return bool(
+        CHAT_TARGET.fullmatch(text)
+        or parse_stream_spec(text) is not None
+        or text == "self"
+    )
 
 
 class Incoming:
@@ -39,10 +57,10 @@ class Incoming:
                 "enabled",
             }:
                 raise ValueError("事件通道含未知字段")
-            if not CHAT_TARGET.fullmatch(channel.get("target", "")) or channel.get(
+            if not _valid_webhook_target(channel.get("target", "")) or channel.get(
                 "kind"
             ) not in {"proactive", "silent"}:
-                raise ValueError("事件通道需要固定目标与 proactive/silent 类型")
+                raise ValueError("事件通道需要固定目标（如 qq:group:12345678）与 proactive/silent 类型")
             self.plugin.vault._validate_handle(channel.get("secret_handle", ""))
             has_profile = bool(channel.get("profile"))
             has_thread = bool(channel.get("thread_id"))
@@ -65,13 +83,23 @@ class Incoming:
                 if not allowed:
                     raise ValueError("事件通道绑定的角色必须允许自主使用")
             elif channel.get("kind") == "silent":
-                chat = channel["target"].split(":", 1)[1]
+                chat_token = _extract_target_chat(channel["target"])
+                chat = (
+                    "self"
+                    if chat_token == "self"
+                    else (self.plugin.resolve_known_session_id(chat_token) or chat_token)
+                )
                 row = self.plugin.threads.get(
                     channel.get("thread_id", ""), chat, allow_self=chat == "self"
                 )
-                if row["chat_id"] != chat or not self.plugin._activity_permitted(
-                    {**row, "grant": {}}
-                ):
+                row_aliases = (
+                    self.plugin.chat_aliases_for(row["chat_id"], row.get("platform", ""))
+                    if row.get("chat_id")
+                    else set()
+                )
+                if (
+                    row["chat_id"] != chat and chat_token not in row_aliases
+                ) or not self.plugin._activity_permitted({**row, "grant": {}}):
                     raise ValueError("外部续接只允许无需真实用户授权的原目标线程")
 
     async def receive(self, channel, event_id, timestamp, payload, signature):
@@ -118,10 +146,21 @@ class Incoming:
             ).encode()
         ).hexdigest()
         key = hashlib.sha256((channel + "\n" + event_id).encode()).hexdigest()
-        target_chat = binding["target"].split(":", 1)[1]
-        platform = await completed_thread(
-            self.plugin.messages.platform_for, target_chat
+        raw_target_chat = _extract_target_chat(binding["target"])
+        parsed_spec = parse_stream_spec(raw_target_chat)
+        target_chat = (
+            "self"
+            if raw_target_chat == "self"
+            else (self.plugin.resolve_known_session_id(raw_target_chat) or raw_target_chat)
         )
+        platform = (
+            await completed_thread(self.plugin.messages.platform_for, target_chat)
+            if target_chat != "self"
+            else "self"
+        )
+        if not platform and parsed_spec is not None:
+            platform = parsed_spec[0]
+        intent_target = f"chat:{target_chat}"
         async with self._lock:
             existing = await completed_thread(
                 self.plugin.intents.event_exists, key, digest
@@ -178,7 +217,7 @@ class Incoming:
                     self.plugin.intents.schedule,
                     kind=binding["kind"],
                     source="webhook",
-                    target=binding["target"],
+                    target=intent_target,
                     due_at=self.plugin.intents.clock(),
                     reason=reason_text,
                     thread_id=started["thread_id"],
@@ -196,7 +235,7 @@ class Incoming:
                 self.plugin.intents.schedule,
                 kind=binding["kind"],
                 source="webhook",
-                target=binding["target"],
+                target=intent_target,
                 due_at=self.plugin.intents.clock(),
                 reason=self.plugin.vault.redact(event.get("reason", "")),
                 thread_id=binding.get("thread_id", ""),

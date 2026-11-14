@@ -74,6 +74,7 @@ def _summarize_tool_calls(calls: list) -> str:
 class ThreadStore:
     def __init__(self, path: Path):
         self.path = path
+        self.chat_aliases = None
         with self.connect() as db, db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute(
@@ -134,6 +135,26 @@ class ThreadStore:
                     "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
                     (owner, chat_id, workspace),
                 ).fetchone()
+                if (
+                    binding is None
+                    and owner == "chat"
+                    and callable(getattr(self, "chat_aliases", None))
+                ):
+                    try:
+                        aliases = sorted(
+                            set(self.chat_aliases(chat_id, platform)) - {chat_id}
+                        )
+                    except (TypeError, ValueError):
+                        aliases = []
+                    for alias in aliases:
+                        if not isinstance(alias, str) or not alias:
+                            continue
+                        binding = db.execute(
+                            "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
+                            (owner, alias, workspace),
+                        ).fetchone()
+                        if binding is not None:
+                            break
                 if binding:
                     if binding["profile"] != profile.id:
                         raise ValueError("该工作区已绑定另一个角色")
@@ -186,12 +207,33 @@ class ThreadStore:
                             raise PermissionError(
                                 "工作区绑定线程的权限快照不同，请先停止原线程再显式续接"
                             )
+                        if (
+                            binding["chat_id"] != chat_id
+                            and previous["state"] == "active"
+                        ):
+                            raise RuntimeError("工作区正在运行中，请稍候再试")
+                        if (
+                            binding["chat_id"] != chat_id
+                            and previous["state"] != "active"
+                        ):
+                            db.execute(
+                                "UPDATE agent_threads SET chat_id=?, platform=? WHERE thread_id=?",
+                                (chat_id, platform, binding["thread_id"]),
+                            )
+                            db.execute(
+                                "UPDATE agent_workspaces SET chat_id=? WHERE workspace_id=?",
+                                (chat_id, binding["workspace_id"]),
+                            )
                         db.execute(
                             "UPDATE agent_threads SET profile_snapshot=? WHERE thread_id=?",
                             (encode(updated), binding["thread_id"]),
                         )
                         db.commit()
-                        return self.get(binding["thread_id"], chat_id)
+                        return self.get(
+                            binding["thread_id"],
+                            chat_id,
+                            allow_any_chat=binding["chat_id"] != chat_id,
+                        )
                     workspace_id = binding["workspace_id"]
                 else:
                     workspace_id = (
@@ -201,7 +243,7 @@ class ThreadStore:
                         ).hexdigest()[:24]
                     )
                 db.execute(
-                    "INSERT INTO agent_workspaces VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET thread_id=excluded.thread_id",
+                    "INSERT INTO agent_workspaces VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET chat_id=excluded.chat_id, thread_id=excluded.thread_id",
                     (workspace_id, owner, chat_id, workspace, profile.id, thread_id),
                 )
             db.execute(
@@ -239,7 +281,7 @@ class ThreadStore:
             )
         return self.get(thread_id, chat_id)
 
-    def get(self, thread_id, chat_id, *, allow_self=False):
+    def get(self, thread_id, chat_id, *, allow_self=False, allow_any_chat=False):
         with self.connect() as db:
             row = db.execute(
                 "SELECT * FROM agent_threads WHERE thread_id=?", (thread_id,)
@@ -253,8 +295,10 @@ class ThreadStore:
         result = dict(row)
         result["workspace_id"] = context["workspace_id"] if context else ""
         result["grant"] = json.loads(context["grant"]) if context else {}
-        if result["chat_id"] != chat_id and not (
-            allow_self and result["owner"] == "self"
+        if (
+            not allow_any_chat
+            and result["chat_id"] != chat_id
+            and not (allow_self and result["owner"] == "self")
         ):
             raise PermissionError("线程不属于当前会话")
         for key in ("result", "history", "profile_snapshot"):
@@ -522,7 +566,9 @@ class ThreadStore:
             )
         return result
 
-    def search(self, query, chat_id, *, scope="available", limit=5):
+    def search(
+        self, query, chat_id, *, scope="available", limit=5, all_chats=False, chat_ids=None
+    ):
         if (
             scope not in {"chat", "self", "available"}
             or not isinstance(query, str)
@@ -532,12 +578,40 @@ class ThreadStore:
         limit = max(1, min(int(limit), 10))
         tokens = re.findall(r"\w+", query, flags=re.UNICODE)[:12]
         match = " AND ".join('"' + token + '"*' for token in tokens)
-        scopes = {
-            "chat": '(t.owner="chat" AND t.chat_id=?)',
-            "self": 't.owner="self"',
-            "available": '((t.owner="chat" AND t.chat_id=?) OR t.owner="self")',
-        }
-        parameters = [] if scope == "self" else [chat_id]
+        if all_chats:
+            scopes = {
+                "chat": 't.owner="chat"',
+                "self": 't.owner="self"',
+                "available": "1=1",
+            }
+            parameters = []
+        elif chat_ids:
+            cids = sorted(
+                {c for c in [chat_id, *(chat_ids or ())] if isinstance(c, str) and c}
+            )
+            if len(cids) > 1:
+                placeholders = ",".join("?" for _ in cids)
+                scopes = {
+                    "chat": f'(t.owner="chat" AND t.chat_id IN ({placeholders}))',
+                    "self": 't.owner="self"',
+                    "available": f'((t.owner="chat" AND t.chat_id IN ({placeholders})) OR t.owner="self")',
+                }
+                parameters = [] if scope == "self" else list(cids)
+            else:
+                target_cid = cids[0] if cids else chat_id
+                scopes = {
+                    "chat": '(t.owner="chat" AND t.chat_id=?)',
+                    "self": 't.owner="self"',
+                    "available": '((t.owner="chat" AND t.chat_id=?) OR t.owner="self")',
+                }
+                parameters = [] if scope == "self" else [target_cid]
+        else:
+            scopes = {
+                "chat": '(t.owner="chat" AND t.chat_id=?)',
+                "self": 't.owner="self"',
+                "available": '((t.owner="chat" AND t.chat_id=?) OR t.owner="self")',
+            }
+            parameters = [] if scope == "self" else [chat_id]
         with self.connect() as db:
             if query and not match:
                 return []
@@ -606,6 +680,7 @@ class ThreadStore:
                     "thread_id": tid,
                     "profile": row["profile"],
                     "owner": row["owner"],
+                    "chat_id": row["chat_id"],
                     "state": row["state"],
                     "title": title,
                     "workspace": ws_name,

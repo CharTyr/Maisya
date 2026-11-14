@@ -55,7 +55,7 @@ async def test_recipe_draft_strips_allowlists_scans_privacy_and_blocks_secrets(t
             'environment = "readonly"\n'
             'access = "admins"\n'
             'tools = ["web_search", "web_fetch"]\n'
-            'allow_chats = ["chat", "902106123"]\n'
+            'allow_chats = ["chat", "100246809"]\n'
             'allow_users = ["qq:Alice"]\n'
             'secrets = ["paid_api"]\n'
             'skills = ["chart-spec"]\n',
@@ -66,7 +66,7 @@ async def test_recipe_draft_strips_allowlists_scans_privacy_and_blocks_secrets(t
         )
         notes_path = plugin.profiles.path / "analyst/NOTES.md"
         notes_path.write_text(
-            "测试环境地址 192.168.1.50，联系 dev@example.com，路径 /Users/alice/work，群 902106123。\n",
+            "测试环境地址 192.168.1.50，联系 dev@example.com，路径 /Users/alice/work，群 100246809。\n",
             encoding="utf-8",
         )
         preset_dir = plugin.profiles.path / "analyst/preset"
@@ -126,7 +126,7 @@ async def test_recipe_draft_strips_allowlists_scans_privacy_and_blocks_secrets(t
             exported_toml = zf.read("profile.toml").decode("utf-8")
             assert "allow_chats" not in exported_toml
             assert "allow_users" not in exported_toml
-            assert "902106123" not in exported_toml
+            assert "100246809" not in exported_toml
             manifest = json.loads(zf.read("recipe.json").decode("utf-8"))
             assert manifest["routines"][0]["title"] == "每日行业巡检"
             assert "chat" not in json.dumps(manifest["routines"], ensure_ascii=False)

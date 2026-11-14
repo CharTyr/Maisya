@@ -86,15 +86,41 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     )
                     await page.set_content(document)
                     await expect(page.locator("h1")).to_have_text(title)
+                    assert await page.locator(".ms-page-sub").count() == 0
+                    if await page.locator(".mil-help").count() > 0:
+                        await page.locator(".mil-help").first.click()
+                        await expect(page.locator("#mil-help-pop")).to_be_visible()
+                        pop_box = await page.locator("#mil-help-pop").bounding_box()
+                        vp = page.viewport_size
+                        assert pop_box is not None and vp is not None
+                        assert pop_box["x"] >= 0 and pop_box["x"] + pop_box["width"] <= vp["width"]
+                        await page.keyboard.press("Escape")
+                        await expect(page.locator("#mil-help-pop")).to_be_hidden()
                     if name == "outputs":
                         await expect(page.locator("#out-st-total")).not_to_have_text("0")
                         await page.locator('[data-out-idx="0"]').click()
                         await expect(page.locator("#out-stage")).to_be_visible()
                         await expect(page.locator("#out-cur-badge")).not_to_be_empty()
+                        await page.locator('[data-out-space="docs"]').click()
+                        await expect(page.locator("#out-space-heading")).to_have_text(
+                            "文档与代码"
+                        )
+                        await page.locator('[data-out-layout="grid"]').click()
+                        await expect(page.locator("#out-list")).to_have_class(
+                            re.compile("out-grid")
+                        )
+                        await page.locator('[data-out-layout="table"]').click()
+                        await page.locator('[data-out-space="all"]').click()
+                        await expect(
+                            page.locator("#out-recent-list button").first
+                        ).to_be_visible()
+                        await page.locator("#out-recent-list button").first.click()
                         await page.locator('[data-out-kind="workspace_out"]').click()
                         await page.locator('[data-out-idx="0"]').click()
                         await expect(page.locator("#out-stage")).to_contain_text("周报摘要")
+                        await page.locator('[data-out-kind="all"]').click()
                         assert await page.evaluate("Boolean(window.pwned)") is False
+                        await page.locator('[data-out-space="workspaces"]').click()
                         await page.locator("#workspaces button").first.click()
                         await page.locator("#workspace-files button").first.click()
                         await expect(page.locator("#workspace-content")).not_to_be_empty()
@@ -227,6 +253,38 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         )
                         await expect(page.locator("#cfg-visual")).to_be_visible()
                         await expect(page.locator("#cfg-title")).to_have_value("探索者")
+                        await plugin.on_config_update(
+                            "model",
+                            {
+                                "models": [
+                                    {
+                                        "name": "step-5-preview",
+                                        "model_identifier": "stepfun/step-5",
+                                        "api_provider": "StepFun",
+                                    },
+                                    {
+                                        "name": "glm-5",
+                                        "model_identifier": "zhipu/glm-5",
+                                        "api_provider": "Zhipu",
+                                    },
+                                ],
+                                "api_providers": [
+                                    {"name": "StepFun", "api_key": "sk-never-show"}
+                                ],
+                            },
+                            3,
+                        )
+                        await page.locator("#cfg-model-name").fill("step-5-preview")
+                        await page.locator("#cfg-model-add").click()
+                        await page.locator("#cfg-model-name").fill("glm-5")
+                        await page.locator("#cfg-model-add").click()
+                        await expect(page.locator("#cfg-model-chain")).to_contain_text(
+                            "#1 主选"
+                        )
+                        await expect(page.locator("#cfg-model-chain")).to_contain_text(
+                            "#2 备选"
+                        )
+                        await page.locator('[data-model-move="down"][data-model-idx="0"]').click()
                         await page.locator('[data-cfg-tool="workspace_file"]').check()
                         await expect(page.locator("#content")).to_have_value(
                             re.compile("workspace_file")
@@ -235,12 +293,38 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(page.locator("#feedback")).to_contain_text(
                             "已保存"
                         )
+                        assert plugin.profiles.get("scout").model_list == (
+                            "glm-5",
+                            "step-5-preview",
+                        )
                         assert (
                             "workspace_file"
                             in plugin.memory.read(
                                 "profile", target="scout", document="profile.toml"
                             )["content"]
                         )
+                        await page.locator("#cfg-access").select_option("listed")
+                        await expect(
+                            page.locator("#cfg-allow-scope-wrap")
+                        ).to_be_visible()
+                        await page.locator("#cfg-chat-id").fill("12345678")
+                        await page.locator("#cfg-add-chat-btn").click()
+                        await expect(page.locator("#content")).to_have_value(
+                            re.compile(r'allow_chats\s*=\s*\["qq:group:12345678"\]')
+                        )
+                        await page.locator("#save").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
+                        assert plugin.profiles.get("scout").access == "listed"
+                        assert "qq:group:12345678" in plugin.profiles.get("scout").allow_chats
+                        await page.locator('[data-cfg-rm-chat="0"]').click()
+                        await page.locator("#cfg-access").select_option("everyone")
+                        await page.locator("#save").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
+                        assert plugin.profiles.get("scout").access == "everyone"
                         await page.locator('[data-doc-tab="notes"]').click()
                         await expect(page.locator("#content")).to_be_enabled()
                         await page.locator("#content").fill("先核对原始来源。")
@@ -333,6 +417,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                             page.locator('[data-kind-tab="memory"]')
                         ).to_contain_text("会话备忘")
                         await expect(page.locator("aside")).to_contain_text("A_Memorix")
+                        await expect(page.locator("#intent-list")).to_be_visible()
                         await page.locator("#chat").select_option("chat")
                         await expect(page.locator("#content")).to_be_enabled()
                         await page.locator("#content").fill(
@@ -357,11 +442,20 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         )
                         assert await page.locator("img").count() == 0
                     else:
+                        # Default view opens in General Settings (一般设置) with Millennium style
+                        assert (
+                            await page.locator("html").get_attribute("data-ui-style")
+                            == "millennium"
+                        )
+                        await expect(
+                            page.locator('[data-settings-mode="general"]')
+                        ).to_have_attribute("aria-pressed", "true")
+                        await expect(page.locator("#ui_style")).to_be_visible()
                         await expect(page.locator("#proactive_level")).to_be_visible()
                         await expect(page.locator("#web_provider")).to_be_visible()
                         await expect(
                             page.locator("#web_provider_custom")
-                        ).to_be_visible()
+                        ).to_be_hidden()
                         await expect(
                             page.locator("#daily_proactive_limit")
                         ).to_be_visible()
@@ -369,28 +463,88 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                             page.locator("#heartbeat_interval_minutes")
                         ).to_be_visible()
                         await expect(page.locator("#heartbeat_profile")).to_be_visible()
-                        await page.locator("#proactive_level").select_option("quiet")
+                        await expect(page.locator("#health")).to_be_visible()
+
+                        # Advanced panels stay hidden until the user switches to 高级设置
+                        await expect(page.locator("#vault-handle")).to_be_hidden()
+                        await expect(page.locator("#service-config")).to_be_hidden()
+                        await expect(page.locator("#webhook-config")).to_be_hidden()
+
+                        # Progressive disclosure for custom web provider
+                        await page.locator("#web_provider").select_option("custom")
+                        await expect(
+                            page.locator("#web_provider_custom")
+                        ).to_be_visible()
                         await page.locator("#web_provider").select_option(
                             "google_search_plugin"
                         )
+                        await expect(
+                            page.locator("#web_provider_custom")
+                        ).to_be_hidden()
+
+                        # Theme switch & persistence: millennium <-> maiwork
+                        await page.locator("#ui_style").select_option("maiwork")
+                        assert (
+                            await page.locator("html").get_attribute("data-ui-style")
+                            == "maiwork"
+                        )
+                        await page.locator("#proactive_level").select_option("quiet")
                         await page.locator("#save-settings").click()
                         await expect(page.locator("#feedback")).to_contain_text(
                             "已保存"
                         )
+                        assert plugin.settings.ui_style == "maiwork"
                         assert plugin.settings.proactive_level == "quiet"
                         assert plugin.settings.web_provider == "google_search_plugin"
                         await expect(page.locator("#health")).to_contain_text(
                             "联网来源：google_search_plugin"
                         )
-                        await page.locator("#vault-handle").fill("drawing")
-                        await page.locator("#vault-value").fill(
-                            "ui-private-secret-value"
+
+                        await page.locator("#ui_style").select_option("millennium")
+                        await page.locator("#save-settings").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
                         )
-                        await page.locator("#save-vault").click()
-                        await expect(page.locator("#vault-value")).to_have_value("")
-                        assert "drawing" in plugin.vault.handles()
-                        assert "ui-private-secret-value" not in await page.content()
+                        assert (
+                            await page.locator("html").get_attribute("data-ui-style")
+                            == "millennium"
+                        )
+                        assert plugin.settings.ui_style == "millennium"
+
+                        # Interactive entry-list whitelist (platform:type:id) & per-chat level + sleep selects
+                        await page.locator("#wl-add-id").fill("12345678")
+                        await page.locator("#wl-add-btn").click()
+                        await expect(page.locator("#chat-whitelist-box")).to_contain_text(
+                            "qq:group:12345678"
+                        )
+                        added_row = page.locator(".ms-entry-row", has_text="qq:group:12345678")
+                        await added_row.locator("select[data-wl-level]").select_option("lively")
+                        await page.locator("label.mil-switch", has=page.locator("#sleep-enabled")).click()
+                        await page.locator("#sleep-start").select_option("01")
+                        await page.locator("#sleep-end").select_option("08")
+                        await page.locator("#save-settings").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
+                        assert "qq:group:12345678" in plugin.settings.enabled_chats
+                        assert (
+                            plugin.settings.chat_proactive_levels.get("qq:group:12345678")
+                            == "lively"
+                        )
+                        assert plugin.settings.sleep_window == "01-08"
+                        await added_row.locator("button[data-wl-remove]").click()
+                        await page.locator("#save-settings").click()
+                        await expect(page.locator("#feedback")).to_contain_text(
+                            "已保存"
+                        )
+                        assert "qq:group:12345678" not in plugin.settings.enabled_chats
+
+                        # Scheduled preset controls (in General Settings; fine fields expandable)
                         await page.locator('[data-sched-preset="digest"]').click()
+                        if not await page.locator("#intent-profile").is_visible():
+                            await page.locator(
+                                "#sched-advanced-details summary"
+                            ).click()
                         await expect(page.locator("#intent-profile")).to_have_value(
                             "digest"
                         )
@@ -414,6 +568,20 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                             and row["reason"] == "每天巡检一次热点"
                             for row in plugin.intents.list("chat:chat")
                         )
+
+                        # Switch to Advanced Settings (高级设置) for vault & JSON tools
+                        await page.locator('[data-settings-mode="advanced"]').click()
+                        await expect(page.locator("#vault-handle")).to_be_visible()
+                        await expect(page.locator("#service-config")).to_be_visible()
+                        await expect(page.locator("#webhook-config")).to_be_visible()
+                        await page.locator("#vault-handle").fill("drawing")
+                        await page.locator("#vault-value").fill(
+                            "ui-private-secret-value"
+                        )
+                        await page.locator("#save-vault").click()
+                        await expect(page.locator("#vault-value")).to_have_value("")
+                        assert "drawing" in plugin.vault.handles()
+                        assert "ui-private-secret-value" not in await page.content()
                     await page.set_viewport_size({"width": 390, "height": 844})
                     await page.evaluate(
                         "window.dispatchEvent(new CustomEvent('maibot:context',{detail:{theme:'dark'}}))"
@@ -422,6 +590,22 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                     assert await page.evaluate(
                         "document.documentElement.scrollWidth<=window.innerWidth"
                     )
+                    if name == "settings":
+                        await page.locator("#ui-style-toggle").click()
+                        assert (
+                            await page.locator("html").get_attribute("data-ui-style")
+                            == "maiwork"
+                        )
+                        assert (
+                            await page.locator("html").get_attribute("class") == "dark"
+                        )
+                        assert await page.evaluate(
+                            "document.documentElement.scrollWidth<=window.innerWidth"
+                        )
+                        await page.locator('[data-settings-mode="general"]').click()
+                        assert await page.evaluate(
+                            "document.documentElement.scrollWidth<=window.innerWidth"
+                        )
                     await page.screenshot(
                         path=".local-checks/" + name + "-mobile.png", full_page=True
                     )

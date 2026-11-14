@@ -1,89 +1,260 @@
 <!doctype html>
-<html lang="zh-CN" data-dashboard-style="millennium">
+<html lang="zh-CN" data-ui-style="millennium" data-dashboard-style="millennium">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maisya · 现场</title>
 <style>
-/* Maisya WebUI · MaiBot 千禧机械硬件设计系统 (0px 直角 / 注塑外壳 / 下沉液晶屏 / 3D 机械键帽) */
+/* Maisya WebUI · 双主题设计系统
+   1. 默认主题：MaiBot 千禧机械风 [data-ui-style="millennium"]（0px 直角 / 塑料机壳凹凸导角与纹理 / 百叶散热窗与丝印 / 下沉液晶屏与深色示波器 / 立体机械键帽 / 高可读系统无衬线正文）
+   2. 可选主题：MaiWork 清朗手账风 [data-ui-style="maiwork"]（白底/深黑画布、发丝分割线、胶囊按键、毛玻璃导航条、清晰可读留白，为 :root 基础层） */
+
 :root {
+  --mil-shell: #ffffff;
+  --mil-panel: #ffffff;
+  --mil-screen: #f7f7f9;
+  --mil-well: #f2f2f5;
+  --mil-scope: #181c20;
+  --mil-scope-ink: #e5f3e9;
+  --mil-scope-grid: rgba(255, 255, 255, 0.06);
+  --mil-glass: rgba(255, 255, 255, 0.84);
+
+  --mil-ink: #111114;
+  --mil-ink-2: #3a3a3c;
+  --mil-muted: #6e6e73;
+  --mil-print: #3a3a3c;
+  --mil-line: #ececf0;
+  --mil-rule: #ececf0;
+  --mil-hi: transparent;
+  --mil-lo: #d1d1d6;
+  --mil-drop: rgba(17, 17, 20, 0.05);
+  --mil-vent: transparent;
+
+  --mil-key: #f2f2f5;
+  --mil-key-hi: #e7e7ec;
+  --mil-key-side: #d1d1d6;
+
+  --mil-accent: #2f6fe8;
+  --mil-accent-soft: rgba(47, 111, 232, 0.09);
+  --mil-accent-border: rgba(47, 111, 232, 0.28);
+
+  --mil-on: #111114;
+  --mil-on-side: #111114;
+  --mil-on-ink: #ffffff;
+  --mil-hot: #111114;
+  --mil-hot-side: #111114;
+  --mil-hot-ink: #ffffff;
+
+  --mil-live: #2f6fe8;
+  --mil-ok: #34c759;
+  --mil-ok-soft: rgba(52, 199, 89, 0.14);
+  --mil-ok-ink: #1c7c36;
+  --mil-warn: #ff9f0a;
+  --mil-warn-soft: rgba(255, 159, 10, 0.15);
+  --mil-warn-ink: #ad6200;
+  --mil-danger: #ff3b30;
+  --mil-danger-side: #d70015;
+  --mil-danger-soft: rgba(255, 59, 48, 0.12);
+  --mil-danger-ink: #d70015;
+  --mil-led: #34c759;
+  --mil-led-run: #2f6fe8;
+  --mil-led-bad: #ff3b30;
+  --mil-meter: #111114;
+
+  --mil-screen-shade: transparent;
+  --mil-screen-grid: transparent;
+  --mil-grain-shell: none;
+  --mil-grain-panel: none;
+  --mil-lcd-grid: none;
+  --mil-raise: 0 2px 12px rgba(17, 17, 20, 0.04);
+  --mil-sunk: none;
+  --mil-radius: 18px;
+  --mil-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --mil-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --mil-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --ctx-system: #dbeafe;
+  --ctx-memory: #dcfce7;
+  --ctx-user: #fef3c7;
+  --ctx-assistant: #ccfbf1;
+  --ctx-tool: #ffedd5;
+  --ctx-free: #ededf2;
+  --ctx-tile-ink: #111114;
+  color-scheme: light;
+}
+
+:root.dark {
+  --mil-shell: #0e0e10;
+  --mil-panel: #1c1c1f;
+  --mil-screen: #161618;
+  --mil-well: #242427;
+  --mil-scope: #14171a;
+  --mil-scope-ink: #e5f3e9;
+  --mil-scope-grid: rgba(255, 255, 255, 0.06);
+  --mil-glass: rgba(22, 22, 25, 0.84);
+
+  --mil-ink: #f2f2f5;
+  --mil-ink-2: #d1d1d6;
+  --mil-muted: #98989f;
+  --mil-print: #d1d1d6;
+  --mil-line: #2a2a2e;
+  --mil-rule: #2a2a2e;
+  --mil-hi: transparent;
+  --mil-lo: #48484e;
+  --mil-drop: rgba(0, 0, 0, 0.45);
+  --mil-vent: transparent;
+
+  --mil-key: #242427;
+  --mil-key-hi: #2f2f34;
+  --mil-key-side: #3a3a40;
+
+  --mil-accent: #5b8cff;
+  --mil-accent-soft: rgba(91, 140, 255, 0.16);
+  --mil-accent-border: rgba(91, 140, 255, 0.36);
+
+  --mil-on: #f2f2f5;
+  --mil-on-side: #d1d1d6;
+  --mil-on-ink: #111114;
+  --mil-hot: #f2f2f5;
+  --mil-hot-side: #d1d1d6;
+  --mil-hot-ink: #111114;
+
+  --mil-live: #5b8cff;
+  --mil-ok: #30d158;
+  --mil-ok-soft: rgba(48, 209, 88, 0.16);
+  --mil-ok-ink: #66e087;
+  --mil-warn: #ff9f0a;
+  --mil-warn-soft: rgba(255, 159, 10, 0.18);
+  --mil-warn-ink: #ffd479;
+  --mil-danger: #ff453a;
+  --mil-danger-side: #a92820;
+  --mil-danger-soft: rgba(255, 69, 58, 0.18);
+  --mil-danger-ink: #ff6961;
+  --mil-led: #30d158;
+  --mil-led-run: #5b8cff;
+  --mil-led-bad: #ff453a;
+  --mil-meter: #5b8cff;
+
+  --mil-raise: 0 2px 16px rgba(0, 0, 0, 0.32);
+
+  --ctx-system: #1d3557;
+  --ctx-memory: #164430;
+  --ctx-user: #583f14;
+  --ctx-assistant: #134e4a;
+  --ctx-tool: #5c2f18;
+  --ctx-free: #232328;
+  --ctx-tile-ink: #f2f2f5;
+  color-scheme: dark;
+}
+
+/* ───────────── MaiBot 宿主千禧机械主题 (浅色 · 3材质塑料机壳/下沉液晶屏/立体键帽) ───────────── */
+:root[data-ui-style="millennium"] {
   --mil-shell: #ddd4bf;
   --mil-panel: #ebe4d2;
   --mil-well: #cfc6af;
   --mil-screen: #fbf9f0;
   --mil-screen-shade: rgba(112, 104, 90, 0.14);
-  --mil-screen-grid: rgba(130, 124, 112, 0.08);
+  --mil-screen-grid: rgba(130, 124, 112, 0.065);
   --mil-scope: #403c37;
   --mil-scope-ink: #e5f3e9;
-  --mil-scope-grid: rgba(255, 255, 255, 0.075);
-  --mil-ink: #322d2a;
-  --mil-muted: #766f66;
-  --mil-print: #5f5849;
+  --mil-scope-grid: rgba(255, 255, 255, 0.08);
+  --mil-glass: #ebe4d2;
+
+  --mil-ink: #2b2623;
+  --mil-ink-2: #433d37;
+  --mil-muted: #665f55;
+  --mil-print: #5a5345;
   --mil-line: #5a544a;
   --mil-rule: #d3cec0;
   --mil-hi: #f6f1e3;
   --mil-lo: #bdb39c;
   --mil-drop: #9c927b;
   --mil-vent: #afa58d;
+
   --mil-key: #f3eee1;
   --mil-key-hi: #fdfbf5;
   --mil-key-side: #cbbfa8;
+
+  --mil-accent: #5fa873;
+  --mil-accent-soft: rgba(143, 214, 160, 0.28);
+  --mil-accent-border: #5fa873;
+
   --mil-on: #8fd6a0;
   --mil-on-side: #5fa873;
-  --mil-on-ink: #253323;
+  --mil-on-ink: #1f2e1e;
   --mil-hot: #f08a5d;
   --mil-hot-side: #c2643c;
-  --mil-hot-ink: #3a241a;
+  --mil-hot-ink: #352016;
   --mil-danger: #c2452f;
   --mil-danger-side: #8f3020;
   --mil-danger-ink: #fff8f5;
+
+  --mil-live: #f08a5d;
+  --mil-ok: #5fa873;
+  --mil-ok-soft: #dff4e4;
+  --mil-ok-ink: #1f2e1e;
   --mil-warn: #ffd84a;
+  --mil-warn-soft: #fae8ca;
   --mil-warn-ink: #3d3210;
+  --mil-danger-soft: #fbe1de;
   --mil-led: #8fd6a0;
   --mil-led-run: #ffd84a;
   --mil-led-bad: #f08a5d;
   --mil-meter: #5fa873;
+
   --mil-raise: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 5px 0 var(--mil-drop);
   --mil-sunk: inset 3px 3px 0 var(--mil-screen-shade), -1px -1px 0 1px var(--mil-lo), 1px 1px 0 1px var(--mil-hi);
-  --mil-grain-shell: radial-gradient(rgba(90, 84, 74, 0.1) 1px, transparent 1px);
-  --mil-grain-panel: radial-gradient(rgba(90, 84, 74, 0.065) 1px, transparent 1px);
+  --mil-grain-shell: radial-gradient(rgba(90, 84, 74, 0.09) 1px, transparent 1px);
+  --mil-grain-panel: radial-gradient(rgba(90, 84, 74, 0.06) 1px, transparent 1px);
   --mil-lcd-grid: linear-gradient(var(--mil-screen-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-screen-grid) 1px, transparent 1px);
   --mil-radius: 0px;
-  --mil-font-display: var(--maibot-font-display, "Departure Mono", "Ark Pixel 12px SC", ui-monospace, monospace);
-  --mil-font-body: var(--maibot-font-body, "Ark Pixel 12px SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+
+  /* 英文丝印、数字与徽章保留像素/等宽机箱质感；中文正文保持高可读无衬线体 */
+  --mil-font-display: var(--maibot-font-display, "Departure Mono", "JetBrains Mono", ui-monospace, monospace);
+  --mil-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --mil-font-mono: var(--maibot-font-mono, "Departure Mono", "JetBrains Mono", ui-monospace, monospace);
-  /* 上下文分布色板 */
+
   --ctx-system: #74ba85;
   --ctx-memory: #6da3d4;
   --ctx-user: #e7be46;
-  --ctx-assistant: #9e89d4;
+  --ctx-assistant: #5ec4b8;
   --ctx-tool: #f08a5d;
   --ctx-free: #e5decb;
-  color-scheme: light;
+  --ctx-tile-ink: #2b2623;
 }
 
-:root.dark {
+/* ───────────── MaiBot 宿主千禧机械主题 (深色 · 炭石墨机壳 + 护眼深绿OLED内屏) ───────────── */
+:root.dark[data-ui-style="millennium"] {
   --mil-shell: #2f2c28;
   --mil-panel: #3a3631;
   --mil-well: #25221f;
   --mil-screen: #1e221e;
   --mil-screen-shade: rgba(0, 0, 0, 0.42);
-  --mil-screen-grid: rgba(143, 214, 160, 0.055);
+  --mil-screen-grid: rgba(143, 214, 160, 0.05);
   --mil-scope: #181c18;
   --mil-scope-ink: #b9e7c5;
   --mil-scope-grid: rgba(143, 214, 160, 0.075);
+  --mil-glass: #3a3631;
+
   --mil-ink: #eee9de;
-  --mil-muted: #a0988a;
-  --mil-print: #b3ab9c;
+  --mil-ink-2: #d6cfc2;
+  --mil-muted: #a8a092;
+  --mil-print: #bdb5a6;
   --mil-line: #171513;
   --mil-rule: #3c423b;
   --mil-hi: #524d46;
   --mil-lo: #24211d;
   --mil-drop: #141210;
   --mil-vent: #645e55;
+
   --mil-key: #4d4841;
   --mil-key-hi: #605a52;
   --mil-key-side: #302c27;
+
+  --mil-accent: #8fd6a0;
+  --mil-accent-soft: rgba(143, 214, 160, 0.22);
+  --mil-accent-border: #5fa873;
+
   --mil-on: #8fd6a0;
   --mil-on-side: #5fa873;
   --mil-on-ink: #1e2a20;
@@ -92,48 +263,31 @@
   --mil-hot-ink: #2c1e16;
   --mil-danger: #c2452f;
   --mil-danger-side: #7d2517;
-  --mil-danger-ink: #fff;
+  --mil-danger-ink: #ffffff;
+
+  --mil-live: #f08a5d;
+  --mil-ok: #8fd6a0;
+  --mil-ok-soft: rgba(143, 214, 160, 0.2);
+  --mil-ok-ink: #b9e7c5;
   --mil-warn: #ffd84a;
-  --mil-warn-ink: #29220a;
+  --mil-warn-soft: rgba(255, 216, 74, 0.2);
+  --mil-warn-ink: #ffd84a;
+  --mil-danger-soft: rgba(194, 69, 47, 0.28);
   --mil-led: #8fd6a0;
   --mil-led-run: #ffd84a;
   --mil-led-bad: #f08a5d;
   --mil-meter: #8fd6a0;
+
   --mil-grain-shell: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
   --mil-grain-panel: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+
   --ctx-system: #5da56f;
   --ctx-memory: #568ec2;
   --ctx-user: #cfa334;
-  --ctx-assistant: #836ec0;
+  --ctx-assistant: #4aaea2;
   --ctx-tool: #de784b;
   --ctx-free: #2a302a;
-  color-scheme: dark;
-}
-
-/* 当宿主切换为 modern 风格时平滑适配其毛玻璃卡片语义 */
-:root[data-dashboard-style="modern"] {
-  --mil-shell: var(--maibot-background, #f6f7fb);
-  --mil-panel: var(--maibot-surface, #ffffff);
-  --mil-well: var(--maibot-muted, #f0f2f7);
-  --mil-screen: var(--maibot-surface, #ffffff);
-  --mil-screen-shade: rgba(15, 23, 42, 0.04);
-  --mil-screen-grid: transparent;
-  --mil-ink: var(--maibot-foreground, #1f2329);
-  --mil-muted: var(--maibot-muted-foreground, #667085);
-  --mil-print: var(--maibot-muted-foreground, #667085);
-  --mil-line: var(--maibot-border, #d8dee8);
-  --mil-rule: var(--maibot-border, #e5e9f0);
-  --mil-hi: transparent;
-  --mil-lo: transparent;
-  --mil-drop: rgba(15, 23, 42, 0.08);
-  --mil-key: var(--maibot-surface, #ffffff);
-  --mil-key-hi: transparent;
-  --mil-key-side: var(--maibot-border, #d8dee8);
-  --mil-raise: 0 2px 10px rgba(15, 23, 42, 0.06);
-  --mil-sunk: inset 0 1px 3px rgba(15, 23, 42, 0.05);
-  --mil-grain-shell: none;
-  --mil-grain-panel: none;
-  --mil-radius: 10px;
+  --ctx-tile-ink: #eee9de;
 }
 
 *, *::before, *::after {
@@ -145,13 +299,18 @@ html, body {
   padding: 0;
   min-height: 100%;
   background-color: var(--mil-shell);
-  background-image: var(--mil-grain-shell);
-  background-size: 5px 5px;
   color: var(--mil-ink);
   font-family: var(--mil-font-body);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.56;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:root[data-ui-style="millennium"],
+:root[data-ui-style="millennium"] body {
+  background-image: var(--mil-grain-shell);
+  background-size: 5px 5px;
 }
 
 button, input, select, textarea {
@@ -172,94 +331,218 @@ pre, code, .mono, .num {
 }
 
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--mil-well);
-  border-left: 1px solid var(--mil-line);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--mil-lo);
+  border-radius: 999px;
+}
+:root[data-ui-style="millennium"] ::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+:root[data-ui-style="millennium"] ::-webkit-scrollbar-track {
+  background: var(--mil-well);
+  border-left: 1px solid var(--mil-line);
+}
+:root[data-ui-style="millennium"] ::-webkit-scrollbar-thumb {
+  background: var(--mil-lo);
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
 }
 
-/* ───────────── 机身外壳容器 ───────────── */
+/* ───────────── 页面外壳与顶栏 ───────────── */
 
 .mil-shell {
-  max-width: 1460px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 12px 14px 28px;
+  padding: 18px 28px 56px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 22px;
+}
+:root[data-ui-style="millennium"] .mil-shell {
+  max-width: 1380px;
+  padding: 16px 20px 44px;
+  gap: 18px;
 }
 
-/* 顶部机箱控制条 */
 .mil-topbar {
-  background-color: var(--mil-panel);
-  background-image: var(--mil-grain-panel);
-  background-size: 5px 5px;
-  border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
-  box-shadow: var(--mil-raise);
-  padding: 10px 14px;
+  position: sticky;
+  top: 12px;
+  z-index: 30;
+  background: var(--mil-glass);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid var(--mil-line);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(17, 17, 20, 0.04);
+  padding: 8px 16px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 10px 16px;
+}
+:root[data-ui-style="millennium"] .mil-topbar {
+  position: static;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-raise);
+  padding: 11px 16px;
 }
 
 .mil-brand {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
+.ms-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .mil-spectrum {
-  display: grid;
-  grid-template-columns: repeat(3, 8px);
-  height: 22px;
-  border: 2px solid var(--mil-line);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex-shrink: 0;
 }
 .mil-spectrum i {
   display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }
-.mil-spectrum i:nth-child(1) { background: var(--mil-on); }
-.mil-spectrum i:nth-child(2) { background: var(--mil-warn); }
-.mil-spectrum i:nth-child(3) { background: var(--mil-hot); }
+.mil-spectrum i:nth-child(1) { background: var(--mil-accent); }
+.mil-spectrum i:nth-child(2) { background: var(--mil-ok); }
+.mil-spectrum i:nth-child(3) { background: var(--mil-warn); }
+
+:root[data-ui-style="millennium"] .mil-spectrum {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 8px);
+  align-items: stretch;
+  gap: 0;
+  height: 22px;
+  border: 2px solid var(--mil-line);
+}
+:root[data-ui-style="millennium"] .mil-spectrum i {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+:root[data-ui-style="millennium"] .mil-spectrum i:nth-child(1) { background: var(--mil-on); }
+:root[data-ui-style="millennium"] .mil-spectrum i:nth-child(2) { background: var(--mil-warn); }
+:root[data-ui-style="millennium"] .mil-spectrum i:nth-child(3) { background: var(--mil-hot); }
 
 .mil-nameplate {
   font-family: var(--mil-font-display);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mil-ink);
+  flex-shrink: 0;
+}
+:root[data-ui-style="millennium"] .mil-nameplate {
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
+  letter-spacing: 0.18em;
   padding: 3px 8px;
-  background: var(--mil-line);
-  color: var(--mil-key);
-  font-synthesis: none;
-  flex-shrink: 0;
+  background: #5a544a;
+  color: #f3eee1;
+}
+:root.dark[data-ui-style="millennium"] .mil-nameplate {
+  background: #ebe4d2;
+  color: #25221f;
 }
 
 .mil-page-title {
-  font-family: var(--mil-font-display);
+  font-family: var(--mil-font-body);
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  color: var(--mil-ink);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+:root[data-ui-style="millennium"] .mil-page-title {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  line-height: 1.2;
-  font-synthesis: none;
 }
 
 .mil-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  background: var(--mil-well);
+  border: 0;
+  border-radius: 999px;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.mil-nav .mil-key {
+  min-height: 30px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mil-muted);
+  box-shadow: none;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.mil-nav .mil-key[aria-current="page"] {
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-ui-style="millennium"] .mil-nav {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow-x: visible;
+}
+:root[data-ui-style="millennium"] .mil-nav .mil-key {
+  min-height: 29px;
+  padding: 3px 11px 7px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+:root[data-ui-style="millennium"] .mil-nav .mil-key[aria-current="page"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 5px;
+  padding-bottom: 5px;
+  transform: translateY(2px);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .mil-top-right {
@@ -273,55 +556,105 @@ pre, code, .mono, .num {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  padding: 5px 12px;
+  background: var(--mil-well);
+  border: 0;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--mil-ink-2);
+}
+:root[data-ui-style="millennium"] .mil-led-pill {
   padding: 4px 10px;
-  background: var(--mil-screen);
+  background-color: var(--mil-screen);
   background-image: var(--mil-lcd-grid);
   background-size: 3px 3px;
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
   font-family: var(--mil-font-mono);
   font-size: 12px;
   font-weight: 700;
 }
 
-/* 方形电源 / 状态 LED（绝对不用圆点） */
 .mil-led {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 0;
-  border: 2px solid var(--mil-line);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   background: var(--mil-led);
-  box-shadow: 0 0 0 1px var(--mil-lo);
+  box-shadow: 0 0 0 3px var(--mil-ok-soft);
   flex-shrink: 0;
 }
 .mil-led--run {
   background: var(--mil-led-run);
-  animation: mil-pulse 1.1s steps(2, end) infinite;
+  box-shadow: 0 0 0 3px var(--mil-accent-soft);
+  animation: mil-pulse 1.6s ease-in-out infinite;
 }
 .mil-led--bad {
   background: var(--mil-led-bad);
+  box-shadow: 0 0 0 3px var(--mil-danger-soft);
 }
 .mil-led--off {
+  background: var(--mil-muted);
+  box-shadow: none;
+}
+
+:root[data-ui-style="millennium"] .mil-led {
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  box-shadow: 0 0 0 1px var(--mil-lo);
+}
+:root[data-ui-style="millennium"] .mil-led--run {
+  animation: mil-pulse-step 1.1s steps(2, end) infinite;
+}
+:root[data-ui-style="millennium"] .mil-led--off {
   background: var(--mil-well);
 }
 
 @keyframes mil-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.88); }
+}
+@keyframes mil-pulse-step {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
 
-/* ───────────── 模块面板 ───────────── */
+/* ───────────── 模块面板、丝印标头、百叶散热窗 ───────────── */
 
 .mil-panel {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 22px 0 4px;
+  min-width: 0;
+}
+.mil-panel--flat {
+  border-top: 0;
+  padding-top: 4px;
+}
+.mil-panel--soft {
+  background: var(--mil-screen);
+  border: 0;
+  border-radius: 18px;
+  padding: 18px 20px;
+}
+
+:root[data-ui-style="millennium"] .mil-panel,
+:root[data-ui-style="millennium"] .mil-panel--flat,
+:root[data-ui-style="millennium"] .mil-panel--soft {
   background-color: var(--mil-panel);
   background-image: var(--mil-grain-panel);
   background-size: 5px 5px;
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   box-shadow: var(--mil-raise);
-  padding: 12px 14px 14px;
-  min-width: 0;
+  padding: 15px 18px 17px;
 }
 
 .mil-head {
@@ -329,9 +662,14 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 8px;
-  margin-bottom: 10px;
+  gap: 8px 14px;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 0;
+}
+:root[data-ui-style="millennium"] .mil-head {
+  padding-bottom: 9px;
+  margin-bottom: 13px;
   border-bottom: 2px solid var(--mil-lo);
   box-shadow: 0 2px 0 var(--mil-hi);
 }
@@ -346,29 +684,34 @@ pre, code, .mono, .num {
 
 .mil-silk {
   font-family: var(--mil-font-display);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--mil-print);
-  font-synthesis: none;
-}
-
-.mil-head-title {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 18.5px;
+  font-weight: 800;
+  letter-spacing: 0.005em;
   color: var(--mil-ink);
-}
-
-.mil-head-r {
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
 }
+.mil-silk-en {
+  display: none;
+}
 
-/* 模压散热百叶窗 */
+:root[data-ui-style="millennium"] .mil-silk {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mil-print);
+}
+:root[data-ui-style="millennium"] .mil-silk-en {
+  display: inline;
+}
+
+/* 模压散热百叶窗（MaiWork 隐藏，千禧显现） */
 .mil-vent {
+  display: none;
+}
+:root[data-ui-style="millennium"] .mil-vent {
   display: inline-block;
   width: 34px;
   height: 10px;
@@ -376,72 +719,157 @@ pre, code, .mono, .num {
   background: repeating-linear-gradient(90deg, var(--mil-vent) 0 2px, transparent 2px 6px);
 }
 
-/* ───────────── 内嵌下沉式液晶屏 & 示波器屏 ───────────── */
+.mil-head-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ───────────── 柔和内屏 / 下沉液晶屏 / 示波器 ───────────── */
 
 .mil-screen {
+  background: var(--mil-screen);
+  border: 0;
+  border-radius: 16px;
+  padding: 15px 17px;
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .mil-screen {
   background-color: var(--mil-screen);
   background-image: var(--mil-lcd-grid);
   background-size: 3px 3px;
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   box-shadow: var(--mil-sunk);
-  padding: 10px 12px;
-  min-width: 0;
+  padding: 12px 14px;
 }
 
 .mil-scope {
+  background: var(--mil-scope);
+  color: var(--mil-scope-ink);
+  border: 0;
+  border-radius: 16px;
+  padding: 13px 15px;
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .mil-scope {
   background-color: var(--mil-scope);
   background-image: linear-gradient(var(--mil-scope-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-scope-grid) 1px, transparent 1px);
   background-size: 12px 12px;
-  color: var(--mil-scope-ink);
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   box-shadow: inset 3px 3px 0 rgba(0, 0, 0, 0.36);
-  padding: 10px 12px;
-  min-width: 0;
+  padding: 11px 13px;
 }
 
-/* ───────────── 立体机械键帽 ───────────── */
+/* ───────────── 问号说明按钮与悬浮气泡 ───────────── */
+
+.mil-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--mil-lo);
+  background: var(--mil-well);
+  color: var(--mil-muted);
+  font-family: var(--mil-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+:root[data-ui-style="millennium"] .mil-help {
+  border-radius: 0;
+  border: 1.5px solid var(--mil-line);
+  background: var(--mil-key);
+  color: var(--mil-print);
+  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+}
+.mil-help[aria-expanded="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  border-color: var(--mil-line);
+}
+@media (hover: hover) and (pointer: fine) {
+  .mil-help:hover {
+    background: var(--mil-on);
+    color: var(--mil-on-ink);
+    border-color: var(--mil-line);
+  }
+}
+.mil-help:focus-visible {
+  outline: 2px solid var(--mil-accent);
+  outline-offset: 2px;
+}
+
+.mil-help-pop {
+  position: fixed;
+  z-index: 990;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 9px 12px;
+  font-family: var(--mil-font-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--mil-ink);
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+:root[data-ui-style="millennium"] .mil-help-pop {
+  background-color: var(--mil-screen);
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: 0 4px 0 var(--mil-drop);
+}
+
+/* ───────────── 胶囊按钮 & 3D 机械键帽 ───────────── */
 
 .mil-key {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 33px;
-  padding: 4px 12px 8px;
-  border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  max-width: 100%;
+  min-height: 36px;
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 999px;
   background: var(--mil-key);
   color: var(--mil-ink);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.25;
   cursor: pointer;
   white-space: nowrap;
   text-decoration: none;
-  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
-  transition: transform 80ms steps(2, end), background-color 120ms ease, box-shadow 80ms steps(2, end);
+  box-shadow: none;
+  transition: transform 110ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 110ms ease;
 }
-
 .mil-key--sm {
-  min-height: 27px;
-  padding: 2px 9px 6px;
-  font-size: 12px;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 12.5px;
 }
-
 .mil-key--hot {
   background: var(--mil-hot);
   color: var(--mil-hot-ink);
-  box-shadow: inset 0 -4px 0 var(--mil-hot-side), inset 2px 2px 0 rgba(255, 255, 255, 0.3);
+  font-weight: 700;
 }
-
 .mil-key--danger {
-  background: var(--mil-danger);
+  background: var(--mil-danger-soft);
   color: var(--mil-danger-ink);
-  box-shadow: inset 0 -4px 0 var(--mil-danger-side), inset 2px 2px 0 rgba(255, 255, 255, 0.22);
 }
-
 .mil-key--on,
 .mil-key[aria-pressed="true"],
 .mil-key[aria-current="page"],
@@ -449,28 +877,72 @@ pre, code, .mono, .num {
 .mil-key[aria-selected="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);
-  padding-top: 6px;
-  padding-bottom: 4px;
+}
+
+:root[data-ui-style="millennium"] .mil-key {
+  min-height: 34px;
+  padding: 5px 12px 9px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  font-weight: 700;
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+}
+:root[data-ui-style="millennium"] .mil-key--sm {
+  min-height: 29px;
+  padding: 3px 10px 7px;
+  font-size: 12px;
+}
+:root[data-ui-style="millennium"] .mil-key--hot {
+  background: var(--mil-hot);
+  color: var(--mil-hot-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-hot-side), inset 2px 2px 0 rgba(255, 255, 255, 0.3);
+}
+:root[data-ui-style="millennium"] .mil-key--danger {
+  background: var(--mil-danger);
+  color: var(--mil-danger-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-danger-side), inset 2px 2px 0 rgba(255, 255, 255, 0.22);
+}
+:root[data-ui-style="millennium"] .mil-key--on,
+:root[data-ui-style="millennium"] .mil-key[aria-pressed="true"],
+:root[data-ui-style="millennium"] .mil-key[aria-current="page"],
+:root[data-ui-style="millennium"] .mil-key[aria-current="true"],
+:root[data-ui-style="millennium"] .mil-key[aria-selected="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 7px;
+  padding-bottom: 5px;
   transform: translateY(2px);
   box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .mil-key:disabled {
-  opacity: 0.48;
+  opacity: 0.45;
   cursor: not-allowed;
   transform: none;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .mil-key:not(:disabled):hover {
-    filter: brightness(1.03);
+  .mil-nav .mil-key:not([aria-current="page"]):hover {
+    color: var(--mil-ink);
+  }
+  .mil-key:not(:disabled):not(.mil-key--hot):not(.mil-key--danger):not([aria-pressed="true"]):not([aria-current="page"]):hover {
+    background: var(--mil-key-hi);
+  }
+  .mil-key--hot:not(:disabled):hover,
+  .mil-key--danger:not(:disabled):hover {
+    filter: brightness(1.04);
   }
 }
 
 .mil-key:not(:disabled):active {
+  transform: scale(0.97);
+}
+:root[data-ui-style="millennium"] .mil-key:not(:disabled):active {
   transform: translateY(3px);
-  padding-top: 6px;
-  padding-bottom: 4px;
+  padding-top: 7px;
+  padding-bottom: 5px;
   box-shadow: inset 0 -1px 0 var(--mil-key-side);
 }
 
@@ -479,20 +951,60 @@ pre, code, .mono, .num {
 .mil-select:focus-visible,
 .mil-textarea:focus-visible,
 .mil-switch input:focus-visible + span {
-  outline: 2px solid var(--mil-hot);
+  outline: 2px solid var(--mil-accent);
   outline-offset: 2px;
 }
 
-/* 分段键帽组（无间隙串联） */
+/* 分段键帽组 */
 .mil-seg {
   display: inline-flex;
   flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--mil-well);
 }
 .mil-seg .mil-key {
-  margin-left: -2px;
+  min-height: 29px;
+  padding: 4px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mil-muted);
+  box-shadow: none;
 }
-.mil-seg .mil-key:first-child {
+.mil-seg .mil-key[aria-pressed="true"] {
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-ui-style="millennium"] .mil-seg {
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+:root[data-ui-style="millennium"] .mil-seg .mil-key {
+  margin-left: -2px;
+  min-height: 29px;
+  padding: 3px 10px 7px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+}
+:root[data-ui-style="millennium"] .mil-seg .mil-key:first-child {
   margin-left: 0;
+}
+:root[data-ui-style="millennium"] .mil-seg .mil-key[aria-pressed="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 5px;
+  padding-bottom: 5px;
+  transform: translateY(2px);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 /* ───────────── 表单控件 ───────────── */
@@ -500,15 +1012,22 @@ pre, code, .mono, .num {
 .mil-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
 .mil-label {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mil-ink-2);
+}
+:root[data-ui-style="millennium"] .mil-label {
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--mil-print);
-  letter-spacing: 0.04em;
 }
 
 .mil-input,
@@ -516,32 +1035,48 @@ pre, code, .mono, .num {
 .mil-textarea {
   width: 100%;
   min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  font-size: 13.5px;
+}
+:root[data-ui-style="millennium"] .mil-input,
+:root[data-ui-style="millennium"] .mil-select,
+:root[data-ui-style="millennium"] .mil-textarea {
   padding: 7px 10px;
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   background: var(--mil-screen);
-  color: var(--mil-ink);
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
-  font-size: 13px;
+}
+
+.mil-input:focus,
+.mil-select:focus,
+.mil-textarea:focus {
+  outline: none;
+  border-color: var(--mil-accent);
+  box-shadow: 0 0 0 3px var(--mil-accent-soft);
 }
 
 .mil-textarea {
   resize: vertical;
-  min-height: 110px;
-  line-height: 1.5;
+  min-height: 112px;
+  line-height: 1.62;
 }
-
 .mil-textarea--code {
   font-family: var(--mil-font-mono);
   font-size: 12.5px;
+  line-height: 1.55;
 }
 
-/* 方形拨动开关 */
+/* 开关与复选 */
 .mil-switch {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   cursor: pointer;
   user-select: none;
 }
@@ -554,76 +1089,121 @@ pre, code, .mono, .num {
 .mil-switch-track {
   position: relative;
   width: 44px;
-  height: 24px;
-  border: 2px solid var(--mil-line);
+  height: 25px;
+  border-radius: 999px;
+  border: 1px solid var(--mil-lo);
   background: var(--mil-well);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
   flex-shrink: 0;
-  transition: background-color 140ms ease;
 }
 .mil-switch-track::after {
   content: "";
   position: absolute;
   top: 2px;
   left: 2px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.mil-switch input:checked + .mil-switch-track {
+  background: var(--mil-ok);
+  border-color: var(--mil-ok);
+}
+.mil-switch input:checked + .mil-switch-track::after {
+  transform: translateX(19px);
+}
+
+:root[data-ui-style="millennium"] .mil-switch-track {
+  height: 24px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+}
+:root[data-ui-style="millennium"] .mil-switch-track::after {
   width: 16px;
   height: 16px;
+  border-radius: 0;
   border: 2px solid var(--mil-line);
   background: var(--mil-key);
   box-shadow: inset 0 -2px 0 var(--mil-key-side);
-  transition: transform 140ms steps(3, end), background-color 140ms ease;
 }
-.mil-switch input:checked + .mil-switch-track {
+:root[data-ui-style="millennium"] .mil-switch input:checked + .mil-switch-track {
   background: var(--mil-on);
+  border-color: var(--mil-line);
 }
-.mil-switch input:checked + .mil-switch-track::after {
+:root[data-ui-style="millennium"] .mil-switch input:checked + .mil-switch-track::after {
   transform: translateX(20px);
   background: var(--mil-key-hi);
 }
 .mil-switch-txt {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
+  color: var(--mil-ink-2);
 }
 
-/* 勾选方框芯片 */
 .mil-chk {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-key);
-  font-size: 12px;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--mil-line);
+  border-radius: 999px;
+  background: var(--mil-panel);
+  font-size: 12.5px;
+  color: var(--mil-ink-2);
   cursor: pointer;
 }
+:root[data-ui-style="millennium"] .mil-chk {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  font-weight: 600;
+}
 .mil-chk input {
-  accent-color: var(--mil-on-side);
-  width: 14px;
-  height: 14px;
+  accent-color: var(--mil-accent);
+  width: 15px;
+  height: 15px;
   margin: 0;
 }
 
-/* ───────────── 分段液晶槽进度条 & 标签徽章 ───────────── */
+/* ───────────── 进度条、徽章、头像、反馈条 ───────────── */
 
 .mil-meter {
-  height: 14px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-screen);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mil-well);
   overflow: hidden;
-  padding: 1px;
 }
 .mil-meter > i {
   display: block;
   height: 100%;
   width: 0%;
-  background: repeating-linear-gradient(90deg, var(--mil-meter) 0 8px, transparent 8px 10px);
-  transition: width 240ms ease;
+  border-radius: 999px;
+  background: var(--mil-meter);
+  transition: width 240ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-.mil-meter--warn > i {
+.mil-meter--warn > i { background: var(--mil-warn); }
+.mil-meter--hot > i { background: var(--mil-danger); }
+
+:root[data-ui-style="millennium"] .mil-meter {
+  height: 14px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  padding: 1px;
+}
+:root[data-ui-style="millennium"] .mil-meter > i {
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, var(--mil-meter) 0 8px, transparent 8px 10px);
+}
+:root[data-ui-style="millennium"] .mil-meter--warn > i {
   background: repeating-linear-gradient(90deg, var(--mil-warn) 0 8px, transparent 8px 10px);
 }
-.mil-meter--hot > i {
+:root[data-ui-style="millennium"] .mil-meter--hot > i {
   background: repeating-linear-gradient(90deg, var(--mil-hot) 0 8px, transparent 8px 10px);
 }
 
@@ -631,21 +1211,45 @@ pre, code, .mono, .num {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 7px;
+  max-width: 100%;
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--mil-well);
+  color: var(--mil-ink-2);
+  font-family: var(--mil-font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+:root[data-ui-style="millennium"] .mil-tag {
+  border-radius: 0;
   border: 2px solid var(--mil-line);
   background: var(--mil-well);
   color: var(--mil-ink);
   font-family: var(--mil-font-mono);
   font-size: 11px;
   font-weight: 700;
-  line-height: 1.4;
+  padding: 1px 7px;
 }
-.mil-tag--ok { background: var(--mil-on); color: var(--mil-on-ink); }
-.mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
-.mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
-.mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
-.mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
-[data-profile][data-enabled="false"] { opacity: 0.78; }
+.mil-tag.mono,
+.mil-tag.num {
+  font-family: var(--mil-font-mono);
+}
+.mil-tag--ok { background: var(--mil-ok-soft); color: var(--mil-ok-ink); }
+.mil-tag--warn { background: var(--mil-warn-soft); color: var(--mil-warn-ink); }
+.mil-tag--hot { background: var(--mil-accent-soft); color: var(--mil-accent); }
+.mil-tag--bad { background: var(--mil-danger-soft); color: var(--mil-danger-ink); }
+.mil-tag--off { background: var(--mil-screen); color: var(--mil-muted); }
+
+:root[data-ui-style="millennium"] .mil-tag--ok { background: var(--mil-on); color: var(--mil-on-ink); }
+:root[data-ui-style="millennium"] .mil-tag--warn { background: var(--mil-warn); color: #3d3210; }
+:root[data-ui-style="millennium"] .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
+:root[data-ui-style="millennium"] .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+:root[data-ui-style="millennium"] .mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
+[data-profile][data-enabled="false"] { opacity: 0.72; }
 
 .mil-avatar {
   position: relative;
@@ -655,13 +1259,18 @@ pre, code, .mono, .num {
   width: 26px;
   height: 26px;
   flex-shrink: 0;
-  border: 2px solid var(--mil-line);
+  border: 1px solid var(--mil-line);
+  border-radius: 50%;
   background: var(--mil-well);
   color: var(--mil-ink);
   font-family: var(--mil-font-display);
   font-size: 12px;
   font-weight: 700;
   overflow: hidden;
+}
+:root[data-ui-style="millennium"] .mil-avatar {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
 }
 .mil-avatar--sm {
   width: 20px;
@@ -676,7 +1285,8 @@ pre, code, .mono, .num {
 }
 
 .mil-hint {
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--mil-muted);
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -684,44 +1294,55 @@ pre, code, .mono, .num {
 
 .mil-feedback {
   min-height: 20px;
-  padding: 6px 10px;
-  border: 2px dashed var(--mil-rule);
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
   background: var(--mil-screen);
-  font-size: 12.5px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   overflow-wrap: anywhere;
+}
+:root[data-ui-style="millennium"] .mil-feedback {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
 }
 .mil-feedback:empty {
   display: none;
 }
 .mil-feedback--err {
-  border-style: solid;
-  border-color: var(--mil-danger);
-  color: var(--mil-danger);
+  background: var(--mil-danger-soft);
+  color: var(--mil-danger-ink);
 }
 .mil-feedback--ok {
-  border-style: solid;
-  border-color: var(--mil-on-side);
-  background: rgba(143, 214, 160, 0.16);
+  background: var(--mil-ok-soft);
+  color: var(--mil-ok-ink);
 }
 
 .mil-pre {
   margin: 0;
-  padding: 10px 12px;
-  border: 2px solid var(--mil-line);
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
   background: var(--mil-screen);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
   font-family: var(--mil-font-mono);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.56;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
   max-height: 360px;
   overflow-y: auto;
 }
+:root[data-ui-style="millennium"] .mil-pre {
+  background-color: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+}
 
-/* ───────────── 通用网格、工具条、弹窗抽屉 ───────────── */
+/* ───────────── 通用网格、弹窗与窄屏适配 ───────────── */
 
 .mil-row {
   display: flex;
@@ -733,13 +1354,13 @@ pre, code, .mono, .num {
 .mil-grid-2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 16px;
 }
 
 .mil-split {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(270px, 340px) minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
 }
 
@@ -747,29 +1368,34 @@ pre, code, .mono, .num {
   position: fixed;
   inset: 0;
   z-index: 900;
-  background: rgba(24, 22, 19, 0.56);
+  background: rgba(14, 14, 16, 0.52);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: 18px;
 }
-.mil-scrim[hidden] {
-  display: none;
-}
+.mil-scrim[hidden] { display: none; }
 
 .mil-modal {
   width: min(760px, 100%);
   max-height: 88vh;
   overflow-y: auto;
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-line);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+:root[data-ui-style="millennium"] .mil-modal {
   background-color: var(--mil-panel);
   background-image: var(--mil-grain-panel);
   background-size: 5px 5px;
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 8px 0 var(--mil-drop);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .sr-only {
@@ -784,23 +1410,44 @@ pre, code, .mono, .num {
   border: 0;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 960px) {
   .mil-grid-2,
   .mil-split {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 720px) {
   .mil-shell {
-    padding: 8px 8px 20px;
-    gap: 10px;
+    padding: 12px 14px 36px;
+    gap: 16px;
   }
   .mil-topbar {
-    padding: 8px 10px;
+    position: static;
+    padding: 10px 12px;
+    border-radius: 18px;
+  }
+  :root[data-ui-style="millennium"] .mil-topbar {
+    border-radius: 0;
   }
   .mil-panel {
-    padding: 10px 10px 12px;
+    padding: 16px 0 2px;
+  }
+  .mil-panel--soft {
+    padding: 14px;
+  }
+  :root[data-ui-style="millennium"] .mil-panel,
+  :root[data-ui-style="millennium"] .mil-panel--flat,
+  :root[data-ui-style="millennium"] .mil-panel--soft {
+    padding: 13px 14px 15px;
+  }
+  .mil-nav .mil-key {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .mil-key:not(.mil-nav .mil-key) {
+    white-space: normal;
+    text-align: center;
   }
 }
 
@@ -822,11 +1469,18 @@ pre, code, .mono, .num {
 }
 .mil-fish--off {
   opacity: 0.45;
-  filter: grayscale(0.7);
+  filter: grayscale(0.75);
 }
 .mil-fish--well {
+  padding: 4px;
+  border: 1px solid var(--mil-line);
+  border-radius: 14px;
+  background: var(--mil-panel);
+}
+:root[data-ui-style="millennium"] .mil-fish--well {
   padding: 3px;
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   background: var(--mil-screen);
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
 }
@@ -840,35 +1494,38 @@ pre, code, .mono, .num {
 }
 
 .role-fish-bar {
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .role-fish-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
 }
 .fish-drawer {
-  border-top: 2px dashed var(--mil-rule);
-  padding-top: 10px;
+  border-top: 1px solid var(--mil-line);
+  padding-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+:root[data-ui-style="millennium"] .fish-drawer {
+  border-top: 2px dashed var(--mil-rule);
 }
 .fish-preview-box {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 .fish-opts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+  gap: 8px;
   min-width: 0;
 }
 .fish-opt {
@@ -876,18 +1533,24 @@ pre, code, .mono, .num {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 5px 4px;
-  border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
-  background: var(--mil-key);
+  gap: 4px;
+  padding: 6px 5px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
   min-width: 0;
+  transition: transform 110ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+:root[data-ui-style="millennium"] .fish-opt {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  font-weight: 700;
   box-shadow: inset 0 -2px 0 var(--mil-key-side);
-  transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
 }
 .fish-opt svg {
   width: 36px;
@@ -896,12 +1559,16 @@ pre, code, .mono, .num {
 .fish-opt[aria-pressed="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);
+  border-color: var(--mil-on);
+}
+:root[data-ui-style="millennium"] .fish-opt[aria-pressed="true"] {
+  border-color: var(--mil-line);
   box-shadow: inset 0 -1px 0 var(--mil-on-side);
 }
 .fish-swatches {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 9px;
 }
 .fish-swatch {
   width: 28px;
@@ -909,10 +1576,10 @@ pre, code, .mono, .num {
   border-radius: 50%;
   background: var(--c);
   border: 2px solid var(--mil-panel);
-  box-shadow: 0 0 0 1.5px var(--mil-line);
+  box-shadow: 0 0 0 1.5px var(--mil-lo);
   cursor: pointer;
   padding: 0;
-  transition: transform 80ms ease, box-shadow 120ms ease;
+  transition: transform 110ms ease, box-shadow 140ms ease;
 }
 .fish-swatch[aria-pressed="true"] {
   box-shadow: 0 0 0 2.5px var(--mil-ink);
@@ -924,8 +1591,226 @@ pre, code, .mono, .num {
 }
 .fish-opt:focus-visible,
 .fish-swatch:focus-visible {
-  outline: 2px solid var(--mil-hot);
+  outline: 2px solid var(--mil-accent);
   outline-offset: 2px;
+}
+
+.ms-entry-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.ms-entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.ms-entry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+  min-width: 0;
+  max-width: 100%;
+}
+:root[data-ui-style="millennium"] .ms-entry-row {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 1px 1px 0 var(--mil-lo);
+}
+.ms-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.ms-entry-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mil-ink);
+  overflow-wrap: anywhere;
+}
+.ms-entry-code {
+  font-family: var(--mil-mono);
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.ms-entry-ctl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ms-entry-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+.ms-entry-ctl .mil-select,
+.ms-entry-add .mil-select,
+#sleep-range-wrap .mil-select {
+  width: auto;
+  flex: 0 0 auto;
+}
+.ms-entry-add .mil-select,
+.ms-entry-add .mil-input {
+  min-width: 0;
+  max-width: 100%;
+}
+.ms-chat-chip {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+  text-align: left;
+  padding: 7px 9px;
+}
+.ms-chat-chip-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.ms-chat-chip-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.ms-chat-chip-spec {
+  font-size: 10.5px;
+  color: var(--mil-muted);
+  padding-left: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ms-inline-unit {
+  font-size: 12.5px;
+  color: var(--mil-muted);
+  white-space: nowrap;
+}
+.ms-health-grid,
+.ms-discovery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.ms-kv-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .ms-kv-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 1px 1px 0 var(--mil-lo);
+}
+.ms-kv-k {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mil-muted);
+}
+.ms-kv-v {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mil-ink);
+  overflow-wrap: anywhere;
+}
+.ms-kv-sub {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.ms-receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ms-receipt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .ms-receipt-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+.ms-receipt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ms-receipt-meta {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.ms-builder-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+}
+:root[data-ui-style="millennium"] .ms-builder-box {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+@media (max-width: 560px) {
+  .ms-entry-row,
+  .ms-entry-add,
+  .ms-kv-card,
+  .ms-receipt-card {
+    padding: 8px;
+  }
+  .ms-health-grid,
+  .ms-discovery-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -934,7 +1819,6 @@ pre, code, .mono, .num {
     animation: none;
   }
   .mil-key,
-  .mil-switch-track,
   .mil-switch-track::after,
   .mil-meter > i,
   .fish-opt,
@@ -943,21 +1827,52 @@ pre, code, .mono, .num {
   }
 }
 
-/* ───────────── 现场页专用布局与 Aisya 交互样式 ───────────── */
+/* ───────────── 现场页专用布局与交互样式 ───────────── */
 
 /* 1. 处理流向图 (FLOW) */
 .flow-box {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 0.92fr) minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 42px;
+  gap: 32px;
   align-items: stretch;
-  padding: 14px 16px 16px;
+  padding: 20px;
+  border: 0;
+  border-radius: 20px;
+  background-color: var(--mil-screen);
+}
+:root[data-ui-style="millennium"] .flow-box {
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   background-color: var(--mil-screen);
   background-image: radial-gradient(var(--mil-rule) 1px, transparent 1px);
   background-size: 12px 12px;
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  gap: 38px;
+  padding: 16px;
+}
+:root[data-ui-style="millennium"] .fl-svg path.on {
+  stroke: var(--mil-on-side);
+  stroke-width: 2.8px;
+}
+:root[data-ui-style="millennium"] .fl-svg path.live {
+  stroke: var(--mil-hot);
+  stroke-width: 2.8px;
+}
+:root[data-ui-style="millennium"] .pkt {
+  fill: var(--mil-on);
+  stroke: var(--mil-line);
+}
+:root[data-ui-style="millennium"] .pkt.hot {
+  fill: var(--mil-hot);
+}
+:root[data-ui-style="millennium"] .fl-col-h {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--mil-print);
+  padding: 4px 8px;
+  border: 1.5px solid var(--mil-lo);
+  background: var(--mil-panel);
 }
 
 .fl-svg, .fl-sky {
@@ -976,36 +1891,36 @@ pre, code, .mono, .num {
 .fl-svg path {
   fill: none;
   stroke: var(--mil-lo);
-  stroke-width: 1.8px;
-  stroke-dasharray: 4 3;
+  stroke-width: 1.6px;
+  stroke-dasharray: 4 4;
   opacity: 0.72;
 }
 .fl-svg path.on {
-  stroke: var(--mil-on-side);
-  stroke-width: 2.8px;
+  stroke: var(--mil-accent);
+  stroke-width: 2.2px;
   stroke-dasharray: none;
-  opacity: 1;
+  opacity: 0.9;
 }
 .fl-svg path.live {
-  stroke: var(--mil-hot);
-  stroke-width: 2.8px;
-  stroke-dasharray: 7 5;
+  stroke: var(--mil-live);
+  stroke-width: 2.4px;
+  stroke-dasharray: 6 5;
   opacity: 1;
-  animation: fl-dash 0.7s linear infinite;
+  animation: fl-dash 0.8s linear infinite;
 }
 @keyframes fl-dash {
-  to { stroke-dashoffset: -24; }
+  to { stroke-dashoffset: -22; }
 }
 
 .pkt {
-  fill: var(--mil-on);
-  stroke: var(--mil-line);
+  fill: var(--mil-accent);
+  stroke: var(--mil-panel);
   stroke-width: 1.5px;
 }
-.pkt.hot { fill: var(--mil-hot); }
+.pkt.hot { fill: var(--mil-live); }
 .pkt.warn { fill: var(--mil-warn); }
 .pkt.held {
-  animation: mil-pulse 0.9s steps(2, end) infinite;
+  animation: mil-pulse 1.1s ease-in-out infinite;
 }
 
 .fl-col {
@@ -1032,16 +1947,13 @@ pre, code, .mono, .num {
   justify-content: space-between;
   gap: 6px;
   font-family: var(--mil-font-display);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--mil-print);
-  padding: 4px 8px;
-  border: 1.5px solid var(--mil-lo);
-  background: var(--mil-panel);
+  color: var(--mil-muted);
+  padding: 2px 4px;
 }
 .fl-stage-arrow {
-  color: var(--mil-muted);
+  color: var(--mil-lo);
   font-family: var(--mil-font-mono);
 }
 
@@ -1049,39 +1961,65 @@ pre, code, .mono, .num {
   position: relative;
   width: 100%;
   text-align: left;
-  padding: 9px 11px;
-  border: 2px solid var(--mil-line);
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
   background: var(--mil-panel);
   color: var(--mil-ink);
-  box-shadow: 0 3px 0 var(--mil-lo);
+  box-shadow: 0 2px 8px rgba(17, 17, 20, 0.04);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
-  transition: transform 80ms steps(2, end), background-color 120ms ease;
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 120ms ease;
+}
+:root[data-ui-style="millennium"] .fl-node {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: 0 3px 0 var(--mil-lo);
 }
 .fl-node[data-port-in="1"]::before,
 .fl-node[data-port-out="1"]::after {
   content: "";
   position: absolute;
   top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mil-lo);
+  background: var(--mil-panel);
+  z-index: 4;
+}
+:root[data-ui-style="millennium"] .fl-node[data-port-in="1"]::before,
+:root[data-ui-style="millennium"] .fl-node[data-port-out="1"]::after {
   width: 7px;
   height: 7px;
   margin-top: -3.5px;
-  border: 1.5px solid var(--mil-line);
+  border-radius: 0;
+  border-color: var(--mil-line);
   background: var(--mil-screen);
-  z-index: 4;
 }
 .fl-node[data-port-in="1"]::before { left: -5px; }
 .fl-node[data-port-out="1"]::after { right: -5px; }
 .fl-node.on[data-port-in="1"]::before,
 .fl-node.on[data-port-out="1"]::after {
+  background: var(--mil-accent);
+  border-color: var(--mil-panel);
+}
+:root[data-ui-style="millennium"] .fl-node.on[data-port-in="1"]::before,
+:root[data-ui-style="millennium"] .fl-node.on[data-port-out="1"]::after {
   background: var(--mil-on);
   border-color: var(--mil-on-side);
 }
 .fl-node.run[data-port-in="1"]::before,
 .fl-node.run[data-port-out="1"]::after {
+  background: var(--mil-live);
+  border-color: var(--mil-panel);
+}
+:root[data-ui-style="millennium"] .fl-node.run[data-port-in="1"]::before,
+:root[data-ui-style="millennium"] .fl-node.run[data-port-out="1"]::after {
   background: var(--mil-hot);
   border-color: var(--mil-hot-side);
 }
@@ -1091,6 +2029,12 @@ pre, code, .mono, .num {
 }
 
 .fl-node.on {
+  background: var(--mil-accent-soft);
+  color: var(--mil-ink);
+  border-color: var(--mil-accent);
+  box-shadow: 0 0 0 1px var(--mil-accent-border);
+}
+:root[data-ui-style="millennium"] .fl-node.on {
   background: var(--mil-on);
   color: var(--mil-on-ink);
   border-color: var(--mil-on-side);
@@ -1098,42 +2042,66 @@ pre, code, .mono, .num {
 }
 
 .fl-node.run {
+  border-color: var(--mil-accent-border);
+  box-shadow: inset 3px 0 0 var(--mil-accent), 0 2px 6px rgba(37, 99, 235, 0.08);
+}
+:root[data-ui-style="millennium"] .fl-node.run {
   border-color: var(--mil-hot-side);
   box-shadow: inset 4px 0 0 var(--mil-hot), 0 3px 0 var(--mil-lo);
 }
 
 .fl-node--gate {
   background: var(--mil-panel);
+  box-shadow: inset 3px 0 0 var(--mil-ok), 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+:root[data-ui-style="millennium"] .fl-node--gate {
   box-shadow: 0 3px 0 var(--mil-lo), inset 4px 0 0 var(--mil-on-side);
 }
 .fl-node--gate[data-port-in="1"]::before,
 .fl-node--gate[data-port-out="1"]::after {
+  background: var(--mil-ok);
+  border-color: var(--mil-panel);
+}
+:root[data-ui-style="millennium"] .fl-node--gate[data-port-in="1"]::before,
+:root[data-ui-style="millennium"] .fl-node--gate[data-port-out="1"]::after {
   background: var(--mil-on);
   border-color: var(--mil-on-side);
+}
+
+.fl-subband {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--mil-rule);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .fl-node-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .fl-node-name {
   font-weight: 700;
-  font-size: 12.5px;
+  font-size: 13.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .fl-node-sub {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--mil-muted);
   overflow-wrap: anywhere;
 }
 .fl-node.on .fl-node-sub {
+  color: var(--mil-ink-2);
+}
+:root[data-ui-style="millennium"] .fl-node.on .fl-node-sub {
   color: var(--mil-on-ink);
   opacity: 0.86;
 }
@@ -1142,7 +2110,7 @@ pre, code, .mono, .num {
 .strip-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 20px;
   align-items: stretch;
 }
 .strip-grid > .mil-panel {
@@ -1154,7 +2122,7 @@ pre, code, .mono, .num {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
   flex: 1;
 }
 
@@ -1168,20 +2136,20 @@ pre, code, .mono, .num {
 
 .strip-state {
   font-family: var(--mil-font-display);
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1.1;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
 }
 
 .strip-steps {
   margin: 0;
-  padding-left: 16px;
-  font-size: 12px;
+  padding-left: 18px;
+  font-size: 12.5px;
   color: var(--mil-muted);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .strip-steps li {
   overflow-wrap: anywhere;
@@ -1190,66 +2158,82 @@ pre, code, .mono, .num {
 .strip-leds {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  padding-top: 8px;
-  border-top: 2px dashed var(--mil-rule);
-  font-size: 12px;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--mil-rule);
+  font-size: 12.5px;
+  color: var(--mil-ink-2);
 }
 
 .strip-led-item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
   flex: 1;
 }
 
 .kpi-cell {
-  border: 2px solid var(--mil-line);
+  border: 0;
+  border-radius: 18px;
   background: var(--mil-screen);
-  background-image: var(--mil-lcd-grid);
-  background-size: 3px 3px;
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
-  padding: 8px 10px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 4px;
+  gap: 6px;
+}
+:root[data-ui-style="millennium"] .kpi-cell {
+  background-color: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-sunk);
+  padding: 12px 14px;
 }
 
 .kpi-val {
   font-family: var(--mil-font-display);
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 800;
   line-height: 1.1;
-  font-synthesis: none;
+  font-variant-numeric: tabular-nums;
 }
 
 .kpi-lbl {
-  font-size: 11.5px;
-  color: var(--mil-print);
-  font-weight: 700;
+  font-size: 13px;
+  color: var(--mil-muted);
+  font-weight: 600;
 }
 
-/* 3. 上下文窗口 (CONTEXT MAP / WAFER GRID / OSCILLOSCOPE) */
+/* 3. 上下文窗口 (方块 / 方格 + 趋势图) */
 .ctx-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 12px;
+  gap: 16px;
   align-items: start;
 }
 
 .ctx-board {
   position: relative;
-  min-height: 224px;
+  min-height: 226px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--mil-screen);
+  padding: 4px;
+  overflow: hidden;
+}
+:root[data-ui-style="millennium"] .ctx-board {
   border: 2px solid var(--mil-line);
-  background: var(--mil-well);
-  padding: 2px;
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  padding: 0;
 }
 
 .ctx-map-stage {
@@ -1257,27 +2241,37 @@ pre, code, .mono, .num {
   width: 100%;
   height: 220px;
   overflow: hidden;
+  border-radius: 12px;
   background: var(--ctx-free);
+}
+:root[data-ui-style="millennium"] .ctx-map-stage {
+  border-radius: 0;
 }
 
 .cm-tile {
   position: absolute;
-  border: 1.5px solid var(--mil-line);
-  padding: 3px 5px;
+  border: 1.5px solid var(--mil-panel);
+  border-radius: 6px;
+  padding: 5px 7px;
   overflow: hidden;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   text-align: left;
-  color: #1f1c19;
-  font-size: 11px;
-  line-height: 1.2;
+  color: var(--ctx-tile-ink);
+  font-size: 11.5px;
+  line-height: 1.25;
+  transition: opacity 150ms ease;
+}
+:root[data-ui-style="millennium"] .cm-tile {
+  border: 1.5px solid var(--mil-line);
+  border-radius: 0;
 }
 .cm-tile[data-cat="system"] { background: var(--ctx-system); }
 .cm-tile[data-cat="memory"] { background: var(--ctx-memory); }
 .cm-tile[data-cat="user"] { background: var(--ctx-user); }
-.cm-tile[data-cat="assistant"] { background: var(--ctx-assistant); color: #191624; }
+.cm-tile[data-cat="assistant"] { background: var(--ctx-assistant); }
 .cm-tile[data-cat="tool"] { background: var(--ctx-tool); }
 .cm-tile[data-cat="free"] {
   background: var(--ctx-free);
@@ -1290,24 +2284,27 @@ pre, code, .mono, .num {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 600;
 }
 .cm-tile span {
   font-family: var(--mil-font-mono);
-  font-size: 10px;
-  opacity: 0.9;
+  font-size: 10.5px;
+  opacity: 0.85;
 }
 
 .cm-grid {
   display: grid;
   grid-template-columns: repeat(20, minmax(0, 1fr));
   gap: 2px;
-  padding: 4px;
+  padding: 6px;
+  border-radius: 9px;
   background: var(--mil-screen);
 }
 .cm-cell {
   aspect-ratio: 1;
-  border: 1px solid rgba(90, 84, 74, 0.35);
+  border: 0;
+  border-radius: 2px;
   background: var(--ctx-free);
   cursor: pointer;
   padding: 0;
@@ -1325,12 +2322,13 @@ pre, code, .mono, .num {
   z-index: 980;
   pointer-events: none;
   max-width: 280px;
-  padding: 6px 8px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-screen);
+  padding: 8px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
-  box-shadow: 0 4px 0 var(--mil-drop);
-  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 .cm-tip[hidden] { display: none; }
@@ -1338,32 +2336,50 @@ pre, code, .mono, .num {
 .ctx-cats {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .ctx-swatch {
   display: inline-block;
   width: 9px;
   height: 9px;
-  border: 1.5px solid var(--mil-line);
+  border-radius: 3px;
+  border: 1px solid var(--mil-line);
+}
+
+:root[data-ui-style="millennium"] .cm-grid,
+:root[data-ui-style="millennium"] .cm-cell,
+:root[data-ui-style="millennium"] .cm-tip,
+:root[data-ui-style="millennium"] .ctx-swatch {
+  border-radius: 0;
+}
+:root[data-ui-style="millennium"] .cm-tip {
+  border: 2px solid var(--mil-line);
+  box-shadow: 0 4px 0 var(--mil-drop);
 }
 
 .ctx-items {
   display: flex;
   flex-direction: column;
-  max-height: 158px;
+  max-height: 180px;
   overflow-y: auto;
-  border: 2px solid var(--mil-line);
+  border: 0;
+  border-radius: 16px;
   background: var(--mil-screen);
+}
+:root[data-ui-style="millennium"] .ctx-items {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-sunk);
 }
 
 .ci-row {
   width: 100%;
   border: 0;
-  border-bottom: 2px dashed var(--mil-rule);
+  border-bottom: 1px solid var(--mil-rule);
   background: transparent;
   color: var(--mil-ink);
-  padding: 6px 8px;
+  padding: 8px 12px;
   cursor: pointer;
   text-align: left;
   display: grid;
@@ -1371,10 +2387,14 @@ pre, code, .mono, .num {
   gap: 8px;
   align-items: center;
 }
+:root[data-ui-style="millennium"] .ci-row {
+  border-bottom: 2px dashed var(--mil-rule);
+  padding: 7px 10px;
+}
 .ci-row:last-child { border-bottom: 0; }
 .ci-row-name {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1382,16 +2402,23 @@ pre, code, .mono, .num {
 .ci-row-bar {
   grid-column: 2 / 4;
   height: 4px;
+  border-radius: 999px;
   background: var(--mil-well);
+  overflow: hidden;
+}
+:root[data-ui-style="millennium"] .ci-row-bar,
+:root[data-ui-style="millennium"] .ci-row-bar > i {
+  border-radius: 0;
 }
 .ci-row-bar > i {
   display: block;
   height: 100%;
-  background: var(--mil-meter);
+  border-radius: 999px;
+  background: var(--mil-accent);
 }
 @media (hover: hover) and (pointer: fine) {
   .ci-row:hover {
-    background: rgba(143, 214, 160, 0.22);
+    background: var(--mil-accent-soft);
   }
 }
 
@@ -1401,74 +2428,106 @@ pre, code, .mono, .num {
   display: block;
 }
 
-/* 4. 处理记录与详情检查器 */
+/* 4. 近期活动列表与活动现场检查器 */
 .thread-list {
   display: flex;
   flex-direction: column;
-  max-height: 520px;
+  gap: 6px;
+  max-height: 580px;
   overflow-y: auto;
+  padding: 0;
+}
+:root[data-ui-style="millennium"] .thread-list {
+  gap: 0;
 }
 
 .thread-row {
   width: 100%;
   text-align: left;
   border: 0;
-  border-bottom: 2px dashed var(--mil-rule);
-  background: transparent;
+  border-radius: 14px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
-  padding: 9px 10px;
+  padding: 12px 14px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-.thread-row:last-child { border-bottom: 0; }
 .thread-row.on {
+  background: var(--mil-accent-soft);
+  box-shadow: inset 3px 0 0 var(--mil-accent);
+  color: var(--mil-ink);
+}
+:root[data-ui-style="millennium"] .thread-row {
+  border-bottom: 2px dashed var(--mil-rule);
+  border-radius: 0;
+  background: transparent;
+  padding: 11px 12px;
+}
+:root[data-ui-style="millennium"] .thread-row:last-child {
+  border-bottom: 0;
+}
+:root[data-ui-style="millennium"] .thread-row.on {
   background: var(--mil-on);
+  box-shadow: none;
   color: var(--mil-on-ink);
 }
 @media (hover: hover) and (pointer: fine) {
   .thread-row:not(.on):hover {
-    background: rgba(143, 214, 160, 0.16);
+    background: var(--mil-key-hi);
+  }
+  :root[data-ui-style="millennium"] .thread-row:not(.on):hover {
+    background: var(--mil-accent-soft);
   }
 }
 
 .thread-title {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 13.5px;
   overflow-wrap: anywhere;
 }
 .thread-excerpt {
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--mil-muted);
   overflow-wrap: anywhere;
 }
 .thread-row.on .thread-excerpt {
+  color: var(--mil-ink-2);
+}
+:root[data-ui-style="millennium"] .thread-row.on .thread-excerpt {
   color: var(--mil-on-ink);
-  opacity: 0.86;
+  opacity: 0.88;
 }
 
 .inspector-h2 {
   font-family: var(--mil-font-display);
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.3;
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
 .events-box {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   max-height: 360px;
   overflow-y: auto;
 }
 
 .ev-det {
-  border: 2px solid var(--mil-line);
+  border: 0;
+  border-radius: 14px;
   background: var(--mil-screen);
-  padding: 6px 9px;
+  padding: 10px 14px;
+}
+:root[data-ui-style="millennium"] .ev-det {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
 }
 .ev-det summary {
   cursor: pointer;
@@ -1476,33 +2535,39 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 .ev-det pre {
-  margin: 8px 0 4px;
-  padding: 8px;
-  border: 1px dashed var(--mil-rule);
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
   background: var(--mil-panel);
   font-family: var(--mil-font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 220px;
   overflow-y: auto;
 }
+:root[data-ui-style="millennium"] .ev-det pre {
+  border: 1px dashed var(--mil-rule);
+  border-radius: 0;
+}
 
 .launch-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 14px;
 }
 
 @media (max-width: 960px) {
   .flow-box {
     grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-    padding: 10px;
+    gap: 12px;
+    padding: 14px;
   }
   .fl-svg, .fl-sky,
   .fl-node[data-port-in="1"]::before,
@@ -1515,16 +2580,30 @@ pre, code, .mono, .num {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-svg path.live,
+  .pkt.held {
+    animation: none;
+  }
+  .fl-node,
+  .cm-tile,
+  .thread-row {
+    transition: none;
+  }
+}
 </style>
 </head>
 <body>
 <div class="mil-shell">
 
-  <!-- 顶部机箱控制条 -->
+  <!-- 顶部导航条 -->
   <header class="mil-topbar">
     <div class="mil-brand">
-      <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span class="mil-nameplate">MAISYA</span>
+      <div class="ms-wordmark">
+        <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="mil-nameplate">MAISYA</span>
+      </div>
       <h1 class="mil-page-title">现场</h1>
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm" aria-current="page" data-nav="now">现场</button>
@@ -1535,6 +2614,7 @@ pre, code, .mono, .num {
       </nav>
     </div>
     <div class="mil-top-right">
+      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换千禧机械风 / 清朗手账风">千禧机械</button>
       <div class="mil-led-pill" id="top-led-pill">
         <span class="mil-led" id="top-led"></span>
         <span id="top-state-text">待命</span>
@@ -1543,16 +2623,17 @@ pre, code, .mono, .num {
     </div>
   </header>
 
-  <!-- 1. 处理流向 (FLOW) -->
+  <!-- 1. 处理流向 (FLOW：会话来源 → 脉搏闸门 → 角色 → 活动与产出) -->
   <section class="mil-panel" id="flow-panel" aria-label="处理流向">
     <div class="mil-head">
       <div class="mil-head-l">
-        <span class="mil-silk">FLOW · 处理流向</span>
-        <span class="mil-hint" id="flow-filter-hint">点击会话筛选 · 点击线程定位</span>
+        <span class="mil-silk"><span class="mil-silk-en">FLOW · </span>处理流向</span>
+        <span class="mil-tag" id="flow-filter-hint" hidden></span>
+        <button type="button" class="mil-help" data-help="由 MaiBot Planner 作为主脑调度各角色与原生工具，Pulse 仅负责回返唤醒与主动冒泡节奏；点左侧会话筛选全页，点角色预设唤醒对象，点右侧活动检视或引导" aria-label="查看处理流向说明" aria-expanded="false">?</button>
       </div>
       <div class="mil-head-r">
         <button type="button" class="mil-key mil-key--sm" id="flow-all-chats" aria-pressed="true">全部会话</button>
-        <span class="mil-vent" aria-hidden="true"></span>
+        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
       </div>
     </div>
     <div class="flow-box" id="flow">
@@ -1562,7 +2643,7 @@ pre, code, .mono, .num {
         <div class="fl-list" id="fl-chats"></div>
       </div>
       <div class="fl-col">
-        <div class="fl-col-h"><span>02 脉搏闸门 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-gate">PULSE</span></div>
+        <div class="fl-col-h"><span>02 主脑调度 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-gate">PLANNER</span></div>
         <div class="fl-list" id="fl-gate"></div>
       </div>
       <div class="fl-col">
@@ -1578,10 +2659,10 @@ pre, code, .mono, .num {
 
   <!-- 2. 当前动态 + 实时读数 -->
   <section class="strip-grid" aria-label="实时状态与读数">
-    <div class="mil-panel">
+    <div class="mil-panel mil-panel--flat">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">STATUS · 当前动态</span></div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">STATUS · </span>当前动态</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
       </div>
       <div class="mil-screen strip-screen">
         <div class="strip-main">
@@ -1596,10 +2677,10 @@ pre, code, .mono, .num {
       </div>
     </div>
 
-    <div class="mil-panel">
+    <div class="mil-panel mil-panel--flat">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">TELEMETRY · 实时读数</span></div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">TELEMETRY · </span>实时读数</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
       </div>
       <div class="kpi-grid">
         <div class="kpi-cell"><span class="kpi-lbl">活动线程</span><span class="kpi-val" id="kpi-active">0</span></div>
@@ -1610,31 +2691,32 @@ pre, code, .mono, .num {
     </div>
   </section>
 
-  <!-- 3. 上下文窗口 (方块 / 方格 + 示波器) -->
+  <!-- 3. 上下文窗口 (方块 / 方格 + 趋势折线) -->
   <section class="mil-panel" id="ctx-panel" aria-label="上下文窗口">
     <div class="mil-head">
       <div class="mil-head-l">
-        <span class="mil-silk">CONTEXT · 上下文窗口</span>
+        <span class="mil-silk"><span class="mil-silk-en">CONTEXT · </span>上下文窗口</span>
         <span class="mil-tag" id="ctx-health">未选线程</span>
+        <button type="button" class="mil-help" id="ctx-help" data-help="支持方块面积与 400 格晶圆视图；点击任意区块或右侧条目可弹出脱敏原文阅读器" aria-label="查看上下文窗口说明" aria-expanded="false">?</button>
       </div>
       <div class="mil-head-r">
         <div class="mil-seg" role="group" aria-label="上下文视图模式">
           <button type="button" class="mil-key mil-key--sm" data-ctx-view="map" aria-pressed="true">方块</button>
           <button type="button" class="mil-key mil-key--sm" data-ctx-view="grid" aria-pressed="false">方格</button>
         </div>
-        <span class="mil-vent" aria-hidden="true"></span>
+        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
       </div>
     </div>
 
-    <div class="mil-row" id="ctx-threads" style="margin-bottom:10px"></div>
+    <div class="mil-row" id="ctx-threads" style="margin-bottom:12px"></div>
 
-    <div class="mil-screen" style="margin-bottom:10px">
-      <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
+    <div class="mil-screen" style="margin-bottom:14px">
+      <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
         <strong class="num" id="ctx-readout">0 / 48.0K 字符 (0%)</strong>
-        <span class="mil-hint" id="ctx-meta">点击方块、方格或右侧条目可阅读脱敏原文</span>
+        <button type="button" class="mil-help" id="ctx-bar-help" data-help="按角色来源统计字符占比，接近归档线时将由系统自动整理早期历史" aria-label="查看容量计量说明" aria-expanded="false">?</button>
       </div>
       <div class="mil-meter" id="ctx-meter"><i id="ctx-meter-bar"></i></div>
-      <div class="ctx-cats" id="ctx-cats" style="margin-top:8px"></div>
+      <div class="ctx-cats" id="ctx-cats" style="margin-top:10px"></div>
     </div>
 
     <div class="ctx-layout">
@@ -1642,11 +2724,11 @@ pre, code, .mono, .num {
         <div class="ctx-map-stage" id="ctx-map"></div>
         <div class="cm-grid" id="ctx-grid" hidden></div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
         <div class="mil-scope">
-          <div class="mil-row" style="justify-content:space-between;margin-bottom:4px">
-            <span class="mil-silk" style="color:var(--mil-scope-ink)">TREND · 轮次上下文增长</span>
-            <span class="num" style="font-size:11px" id="ctx-spark-label">—</span>
+          <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
+            <span class="mil-label" style="color:var(--mil-scope-ink)"><span class="mil-silk-en">TREND · </span>轮次上下文增长</span>
+            <span class="num mil-hint" id="ctx-spark-label">—</span>
           </div>
           <svg class="scope-svg" id="ctx-spark" viewBox="0 0 320 96" preserveAspectRatio="none" aria-label="上下文历史趋势折线"></svg>
         </div>
@@ -1655,11 +2737,11 @@ pre, code, .mono, .num {
     </div>
   </section>
 
-  <!-- 4. 近期活动 + 活动详情与引导 -->
+  <!-- 4. 近期活动 + 活动现场详情与引导 -->
   <section class="mil-split" aria-label="近期活动与详情">
-    <div class="mil-panel" id="threads-panel">
+    <aside class="mil-panel mil-panel--soft" id="threads-panel">
       <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk">ACTIVITY · 近期活动</span></div>
+        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">ACTIVITY · </span>近期活动</span></div>
         <div class="mil-head-r">
           <div class="mil-seg" id="th-filters" role="group" aria-label="线程状态筛选">
             <button type="button" class="mil-key mil-key--sm" data-th-filter="all" aria-pressed="true">全部</button>
@@ -1667,50 +2749,60 @@ pre, code, .mono, .num {
             <button type="button" class="mil-key mil-key--sm" data-th-filter="delivered" aria-pressed="false">已交付</button>
             <button type="button" class="mil-key mil-key--sm" data-th-filter="error" aria-pressed="false">异常</button>
           </div>
+          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         </div>
       </div>
-      <div class="mil-screen thread-list" id="threads">
+      <div class="thread-list" id="threads">
         <p class="mil-hint">正在读取线程记录…</p>
       </div>
-    </div>
+    </aside>
 
-    <div class="mil-panel" id="inspector-panel">
+    <div class="mil-panel mil-panel--flat" id="inspector-panel">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk">LIVE · 活动现场</span>
+          <span class="mil-silk"><span class="mil-silk-en">LIVE · </span>活动现场</span>
           <span class="mil-tag" id="ins-state-tag">—</span>
         </div>
         <div class="mil-head-r" id="ins-meta-tags"></div>
       </div>
 
-      <div class="mil-screen" style="margin-bottom:10px">
-        <div class="mil-row" style="gap:10px;align-items:center;flex-wrap:nowrap">
-          <span class="mil-fish mil-fish--well" id="ins-role-fish" style="width:40px;height:40px" hidden aria-hidden="true"></span>
+      <div class="mil-screen" style="margin-bottom:16px">
+        <div class="mil-row" style="gap:12px;align-items:center;flex-wrap:nowrap">
+          <span class="mil-fish mil-fish--well" id="ins-role-fish" style="width:44px;height:44px" hidden aria-hidden="true"></span>
           <div style="min-width:0;flex:1">
             <h2 class="inspector-h2" id="title">等待选择线程</h2>
             <div class="mil-hint" id="meta" style="margin-top:4px"></div>
           </div>
         </div>
-        <pre class="mil-pre" id="result-box" style="margin-top:8px;max-height:160px" hidden></pre>
-        <div class="mil-row" id="deliveries-row" style="margin-top:8px"></div>
+        <pre class="mil-pre" id="result-box" style="margin-top:12px;max-height:220px" hidden></pre>
+        <div class="mil-row" id="deliveries-row" style="margin-top:10px"></div>
       </div>
 
-      <div class="mil-field" style="margin-bottom:10px">
-        <span class="mil-label">步骤时间线（支持分页读取超长工具结果）</span>
+      <div class="mil-field" style="margin-bottom:16px">
+        <div class="mil-row" style="justify-content:space-between">
+          <span class="mil-label">步骤时间线</span>
+          <button type="button" class="mil-help" data-help="记录执行过程与工具调用；超长结果可展开后分页阅读" aria-label="查看步骤时间线说明" aria-expanded="false">?</button>
+        </div>
         <div class="events-box" id="events">
           <p class="mil-hint">选择一条线程后展示执行事件。</p>
         </div>
       </div>
 
-      <div class="mil-screen" style="display:flex;flex-direction:column;gap:8px">
-        <label class="mil-label" for="message">对当前活动搭句话 / 补充方向（按活动独立暂存草稿）</label>
-        <textarea id="message" class="mil-textarea" rows="3" style="min-height:80px" placeholder="顺口补充想法、调整方向，或让当前活动立即转向（Ctrl/Cmd + Enter 发送）"></textarea>
+      <div class="mil-screen" style="display:flex;flex-direction:column;gap:10px">
         <div class="mil-row" style="justify-content:space-between">
-          <label class="mil-switch">
-            <input type="checkbox" id="steer">
-            <span class="mil-switch-track"></span>
-            <span class="mil-switch-txt">立即转向（优先切到新方向）</span>
-          </label>
+          <label class="mil-label" for="message">对当前活动搭句话 / 补充方向</label>
+          <button type="button" class="mil-help" data-help="按线程独立暂存未发送草稿；支持 Ctrl/Cmd + Enter 快捷发送" aria-label="查看搭话说明" aria-expanded="false">?</button>
+        </div>
+        <textarea id="message" class="mil-textarea" rows="3" style="min-height:84px" placeholder="顺口补充想法或调整方向…"></textarea>
+        <div class="mil-row" style="justify-content:space-between">
+          <div class="mil-row" style="gap:6px">
+            <label class="mil-switch">
+              <input type="checkbox" id="steer">
+              <span class="mil-switch-track"></span>
+              <span class="mil-switch-txt">立即转向</span>
+            </label>
+            <button type="button" class="mil-help" data-help="开启后将中断当前后续步骤，优先切换到新方向" aria-label="查看立即转向说明" aria-expanded="false">?</button>
+          </div>
           <div class="mil-row">
             <button type="button" class="mil-key mil-key--hot" id="send-note">引导</button>
             <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
@@ -1723,47 +2815,51 @@ pre, code, .mono, .num {
 
   <!-- 5. 临时唤醒角色（默认收起，日常由对话与脉搏自主触发） -->
   <details class="mil-panel" id="launch-panel" aria-label="临时唤醒角色">
-    <summary class="mil-head" style="cursor:pointer;list-style:none;margin-bottom:0;padding-bottom:2px;border-bottom:0;box-shadow:none">
+    <summary class="mil-head" style="cursor:pointer;list-style:none;margin-bottom:0;padding-bottom:0;border-bottom:0">
       <div class="mil-head-l">
-        <span class="mil-silk">▸ WAKE · 临时唤醒某个角色</span>
-        <span class="mil-hint">可选旁路入口：日常由对话与脉搏自主触发，管理员也可在此直接点名唤醒</span>
+        <span class="mil-silk"><span class="mil-silk-en">WAKE · </span>▸ 临时唤醒某个角色</span>
+        <button type="button" class="mil-help" data-help="可选旁路入口：日常由对话与脉搏自主触发，管理员也可在此直接点名唤醒" aria-label="查看临时唤醒说明" aria-expanded="false">?</button>
       </div>
-      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
     </summary>
-    <div style="margin-top:12px;padding-top:12px;border-top:2px solid var(--mil-lo)">
-      <div class="mil-row" id="launch-profile-chips" style="margin-bottom:10px"></div>
-      <div class="launch-grid" style="margin-bottom:10px">
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--mil-rule)">
+      <div class="mil-row" id="launch-profile-chips" style="margin-bottom:12px"></div>
+      <div class="launch-grid" style="margin-bottom:12px">
         <div class="mil-field">
           <label class="mil-label" for="launch-profile">执行角色</label>
           <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
           <datalist id="launch-profile-list"></datalist>
         </div>
         <div class="mil-field">
-          <label class="mil-label" for="launch-chat">关联会话（支持 self 自身活动）</label>
-          <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="输入 chat_id 或 self">
+          <div class="mil-row" style="gap:6px">
+            <label class="mil-label" for="launch-chat">关联会话</label>
+            <button type="button" class="mil-help" data-help="填写群/私聊 chat_id，或输入 self 发起自身探索活动" aria-label="查看关联会话说明" aria-expanded="false">?</button>
+          </div>
+          <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="chat_id 或 self">
           <datalist id="launch-chat-list"></datalist>
         </div>
         <div class="mil-field">
           <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
-          <input id="launch-workspace" class="mil-input mono" placeholder="例如 digest_daily">
+          <input id="launch-workspace" class="mil-input mono" placeholder="digest_daily">
         </div>
       </div>
-      <div class="mil-field" style="margin-bottom:10px">
+      <div class="mil-field" style="margin-bottom:12px">
         <label class="mil-label" for="launch-prompt">想推进或了解的事</label>
-        <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:68px" placeholder="写下想关注或探索的事情（Ctrl/Cmd + Enter 唤醒）"></textarea>
+        <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:72px" placeholder="写下想关注或探索的事情…"></textarea>
       </div>
       <div class="mil-row" style="justify-content:space-between">
         <div class="mil-row" id="launch-chat-chips"></div>
         <button type="button" class="mil-key mil-key--hot" id="launch-run">立即唤醒</button>
       </div>
-      <div class="mil-feedback" id="launch-feedback" style="margin-top:8px" aria-live="polite"></div>
+      <div class="mil-feedback" id="launch-feedback" style="margin-top:10px" aria-live="polite"></div>
     </div>
   </details>
 
 </div>
 
-<!-- 悬浮提示 & 上下文条目原文阅读器 -->
+<!-- 悬浮提示、说明气泡 & 上下文条目原文阅读器 -->
 <div class="cm-tip" id="cm-tip" hidden></div>
+<div class="mil-help-pop" id="mil-help-pop" role="tooltip" hidden></div>
 
 <div class="mil-scrim" id="ctx-scrim" hidden>
   <div class="mil-modal" role="dialog" aria-modal="true" aria-labelledby="ctx-modal-title">
@@ -2233,15 +3329,37 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     return p;
   };
 
+  let savedUiStyle = "millennium";
+  let manualUiStyle = "";
+  let lastCtx = null;
+  function effectiveUiStyle(hostStyle) {
+    const pref = manualUiStyle || savedUiStyle || "millennium";
+    if (pref === "auto") return hostStyle === "millennium" ? "millennium" : "maiwork";
+    return pref === "maiwork" ? "maiwork" : "millennium";
+  }
   function applyTheme(ctx) {
-    const c = ctx || window.maibot?.context || {};
+    if (ctx) lastCtx = ctx;
+    const c = ctx || lastCtx || window.maibot?.context || {};
     const theme = c.theme === "dark" ? "dark" : "light";
     document.documentElement.className = theme === "dark" ? "dark" : "";
     const styleName = c.dashboardStyle || "millennium";
     document.documentElement.setAttribute("data-dashboard-style", styleName);
+    const eff = effectiveUiStyle(styleName);
+    document.documentElement.setAttribute("data-ui-style", eff);
+    const btn = $("#ui-style-toggle");
+    if (btn) {
+      btn.textContent = eff === "millennium" ? "千禧机械" : "清朗手账";
+      btn.setAttribute("aria-pressed", String(eff === "millennium"));
+    }
   }
   applyTheme();
   window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
+  $("#ui-style-toggle")?.addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-ui-style") || "millennium";
+    manualUiStyle = cur === "millennium" ? "maiwork" : "millennium";
+    applyTheme();
+    drawFlowLines();
+  });
 
   const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 
@@ -2335,8 +3453,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
     const defs = `<defs>
       <marker id="fl-arr-idle" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-lo)" stroke="none"/></marker>
-      <marker id="fl-arr-on" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-on-side)" stroke="none"/></marker>
-      <marker id="fl-arr-run" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-hot)" stroke="none"/></marker>
+      <marker id="fl-arr-on" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-accent)" stroke="none"/></marker>
+      <marker id="fl-arr-run" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-live)" stroke="none"/></marker>
     </defs>`;
     svg.innerHTML = defs + paths.join("");
   }
@@ -2360,6 +3478,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       rect.setAttribute("width", "7");
       rect.setAttribute("height", "7");
+      rect.setAttribute("rx", "3.5");
       rect.setAttribute("class", "pkt");
       sky.append(rect);
       activeTrips.push({ el: rect, key: w.dataset.k, t0: performance.now(), ms: 720 });
@@ -2385,15 +3504,35 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     if (activeTrips.length) flightRaf = requestAnimationFrame(tickFlight);
   }
 
+  function canonChatKey(snap, cid) {
+    if (!cid) return "";
+    if (cid === "self") return "self";
+    const src = snap?.chat_sources?.[cid];
+    if (src?.stream_spec) return src.stream_spec;
+    return cid;
+  }
+
+  function sameChat(snap, a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return canonChatKey(snap, a) === canonChatKey(snap, b);
+  }
+
   function chatMeta(snap, cid) {
-    const src = snap?.chat_sources?.[cid] || {};
+    const allSrcs = snap?.chat_sources || {};
+    let src = allSrcs[cid] || {};
+    if (!src.name && cid && cid !== "self") {
+      const hit = Object.values(allSrcs).find((s) => s && (s.stream_spec === cid || s.chat_id === cid));
+      if (hit) src = hit;
+    }
+    const spec = src.stream_spec || (cid !== "self" && /^[a-z0-9_-]+:(group|private):/i.test(cid) ? cid : "");
     const name = src.name || (cid === "self" ? "自身活动" : cid);
     const plat = src.platform || (cid === "self" ? "self" : "");
     const typeLabel = src.chat_type === "group" ? "群" : src.chat_type === "private" ? "私" : "";
     const rawAv = String(src.avatar || "");
     const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
     const mono = (name || cid || "?").trim().slice(0, 1).toUpperCase();
-    return { name, plat, typeLabel, safeAv, mono };
+    return { name, spec, plat, typeLabel, safeAv, mono };
   }
   function avatarHtml(meta, small = false) {
     return `<span class="mil-avatar${small ? " mil-avatar--sm" : ""}" aria-hidden="true">${esc(meta.mono)}${meta.safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(meta.safeAv)}')"></span>` : ""}</span>`;
@@ -2405,15 +3544,33 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     const cards = snap.profile_cards?.length
       ? snap.profile_cards
       : (snap.profiles || []).map((id) => ({ id, title: id, environment: "readonly", autonomous: true }));
-    const enabledChats = new Set(snap.enabled_chats || []);
-    threads.forEach((t) => { if (t.chat_id) enabledChats.add(t.chat_id); });
-    const chats = [...enabledChats].slice(0, 8);
+    const dedupMap = new Map();
+    const pushChat = (rawCid) => {
+      if (!rawCid) return;
+      const k = canonChatKey(snap, rawCid);
+      const pref = rawCid === "self" ? "self" : (canonChatKey(snap, rawCid) || rawCid);
+      if (!dedupMap.has(k) || (rawCid.includes(":") && !dedupMap.get(k).includes(":"))) {
+        dedupMap.set(k, pref);
+      }
+    };
+    (snap.enabled_chats || []).forEach(pushChat);
+    threads.forEach((t) => { if (t.chat_id) pushChat(t.chat_id); });
+    const chats = [...dedupMap.values()].slice(0, 8);
     $("#fl-cnt-chat").textContent = String(chats.length);
     $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter));
-    const filterLabel = state.chatFilter ? chatMeta(snap, state.chatFilter).name : "";
-    $("#flow-filter-hint").textContent = state.chatFilter
-      ? `当前按会话筛选：${filterLabel}`
-      : "点击会话筛选全页 · 点击活动直接检视";
+    const filterHint = $("#flow-filter-hint");
+    const filterMeta = state.chatFilter ? chatMeta(snap, state.chatFilter) : null;
+    const filterLabel = filterMeta?.name || "";
+    if (state.chatFilter) {
+      filterHint.hidden = false;
+      const specSuffix = filterMeta?.spec || state.chatFilter;
+      filterHint.textContent = filterLabel === specSuffix
+        ? `筛选：${specSuffix}`
+        : `筛选：${filterLabel} · ${specSuffix}`;
+    } else {
+      filterHint.hidden = true;
+      filterHint.textContent = "";
+    }
 
     const selThread = threads.find((t) => t.thread_id === state.threadId) || snap.selected || null;
     const selChat = state.chatFilter || selThread?.chat_id || "";
@@ -2421,28 +3578,35 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     $("#fl-chats").innerHTML = chats.length
       ? chats.map((cid) => {
-          const activeHere = threads.some((t) => t.chat_id === cid && (t.state === "active" || t.state === "waiting"));
-          const on = selChat === cid;
+          const activeHere = threads.some((t) => sameChat(snap, t.chat_id, cid) && (t.state === "active" || t.state === "waiting"));
+          const on = sameChat(snap, selChat, cid);
           const m = chatMeta(snap, cid);
-          const cnt = threads.filter((t) => t.chat_id === cid).length;
+          const cnt = threads.filter((t) => sameChat(snap, t.chat_id, cid)).length;
           const sub = [m.plat ? m.plat.toUpperCase() : "", m.typeLabel, `${cnt} 条活动`].filter(Boolean).join(" · ");
-          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-port-out="1" data-flow-chat="${esc(cid)}" title="${esc(m.name)} (${esc(cid)})">
+          const dispCode = m.spec || cid;
+          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-port-out="1" data-flow-chat="${esc(cid)}" title="${esc(m.name)} (${esc(dispCode)})">
             <span class="fl-node-top">
               <span class="mil-row" style="gap:7px;min-width:0;flex:1;flex-wrap:nowrap">${avatarHtml(m)}<span class="fl-node-name">${esc(m.name)}</span></span>
               <span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span>
             </span>
-            <span class="fl-node-sub">${esc(sub)}${m.name !== cid ? ` · <span class="mono">${esc(cid)}</span>` : ""}</span>
+            <span class="fl-node-sub">${esc(sub)}${m.name !== dispCode ? ` · <span class="mono">${esc(dispCode)}</span>` : ""}</span>
           </button>`;
         }).join("")
       : `<div class="fl-node fl-node--static" data-port-out="1"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;
 
-    const levelMap = { quiet: "安静 (仅被动)", care: "关怀 (平衡)", lively: "活跃 (可冒泡)" };
+    const levelLabelMap = { quiet: "安静", care: "平衡", lively: "活跃" };
+    const levelText = levelLabelMap[pulse.proactive_level] || "平衡";
     const dailyPct = pulse.daily_limit ? Math.min(100, Math.round(((pulse.daily_used || 0) / pulse.daily_limit) * 100)) : 0;
+    const pendingIntents = snap.stats?.pending_intents ?? (snap.scheduled_intents || []).length;
+    const routeTag = pulse.web_provider && pulse.web_provider !== "auto" ? pulse.web_provider : "自动路由";
     $("#fl-gate").innerHTML = `<div class="fl-node fl-node--static fl-node--gate" data-port-in="1" data-port-out="1">
-      <span class="fl-node-top"><span class="fl-node-name">${esc(levelMap[pulse.proactive_level] || "关怀")}</span><span class="mil-tag ${pulse.enabled !== false && !pulse.in_sleep ? "mil-tag--ok" : ""}">${pulse.in_sleep ? "休眠" : pulse.enabled !== false ? "在线" : "停用"}</span></span>
-      <span class="fl-node-sub">今日主动 ${pulse.daily_used || 0} / ${pulse.daily_limit ?? 1} · 待唤醒 ${snap.stats?.pending_intents ?? (snap.scheduled_intents || []).length}</span>
-      <div class="mil-meter" style="margin-top:2px"><i style="width:${dailyPct}%"></i></div>
-      <span class="fl-node-sub">联网：${esc(pulse.web_provider || "auto")}</span>
+      <span class="fl-node-top"><span class="fl-node-name">MaiBot Planner</span><span class="mil-tag ${pulse.enabled !== false && !pulse.in_sleep ? "mil-tag--ok" : ""}">${pulse.in_sleep ? "休眠" : pulse.enabled !== false ? "调度中" : "停用"}</span></span>
+      <span class="fl-node-sub">主脑调度 · 原生开口与工具编排</span>
+      <span class="fl-node-sub mono">maisya_agent · 联网 ${esc(routeTag)}</span>
+      <div class="fl-subband">
+        <span class="fl-node-sub">Pulse (${esc(levelText)}) 主动 ${pulse.daily_used || 0} / ${pulse.daily_limit ?? 1} · 待唤醒 ${pendingIntents}</span>
+        <div class="mil-meter" style="margin-top:2px"><i style="width:${dailyPct}%"></i></div>
+      </div>
     </div>`;
 
     const orderedCards = [...cards].sort((a, b) => Number(b.enabled !== false) - Number(a.enabled !== false));
@@ -2453,9 +3617,11 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const isOff = p.enabled === false;
       const cls = isOff ? "mil-fish--off" : "";
       const fish = roleFishHtml(p.id, p.fish_seed || "", 26, running ? {} : { still: true }, cls);
+      const chain = Array.isArray(p.model_list) && p.model_list.length ? p.model_list : (p.model_name ? [p.model_name] : []);
+      const modelLabel = chain.length ? (chain.length > 1 ? `${chain[0]} +${chain.length - 1}` : chain[0]) : (p.task || "utils");
       return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" style="${isOff ? "opacity:0.65" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}">
         <span class="fl-node-top"><span class="mil-row" style="gap:6px;min-width:0;flex:1;flex-wrap:nowrap">${fish}<span class="fl-node-name">${esc(p.title || p.id)}</span></span><span class="mil-tag ${isOff ? "mil-tag--off" : ""}">${esc(isOff ? "已停用" : (p.environment === "sandbox" ? "沙箱" : "只读"))}</span></span>
-        <span class="fl-node-sub mono">${esc(p.id)}${isOff ? " · 停用" : p.autonomous ? " · 可自主" : " · 需授权"}</span>
+        <span class="fl-node-sub mono">${esc(p.id)} · ${esc(modelLabel)}${isOff ? " · 停用" : p.autonomous ? "" : " · 需授权"}</span>
       </button>`;
     }).join("");
 
@@ -2480,6 +3646,63 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
   /* ───────────── 2. 当前动态条与计数器 ───────────── */
 
+  const EVENT_KIND_LABELS = {
+    opened: "发起活动",
+    started: "开始处理",
+    step: "推理推进",
+    tools: "调用工具",
+    tool_call: "调用工具",
+    tool_result: "工具返回",
+    input: "任务输入",
+    question: "等待确认",
+    redirect: "转向调整",
+    note: "补充引导",
+    steered: "立即转向",
+    completed: "执行完成",
+    delivered: "结果交付",
+    waiting: "等待回复",
+    stopped: "已停止",
+    failed: "执行异常",
+    error: "执行异常",
+    model_fallback: "模型回退",
+  };
+  const ORIGIN_LABELS = {
+    user: "对话触发",
+    console: "现场唤醒",
+    schedule: "定时触发",
+    routine: "周期例行",
+    heartbeat: "自主探索",
+    webhook: "外部推送",
+    intent: "主动意图",
+  };
+
+  function formatChatInline(snap, cid) {
+    if (!cid || cid === "self") return "自身活动";
+    const m = chatMeta(snap, cid);
+    const code = m.spec || cid;
+    return m.name && m.name !== code ? `${m.name} · ${code}` : code;
+  }
+
+  function friendlyEventBrief(snap, e) {
+    const raw = String(e?.text || "").trim();
+    if (raw.startsWith("{") && raw.endsWith("}")) {
+      try {
+        const j = JSON.parse(raw);
+        if (j && typeof j === "object") {
+          const parts = [];
+          if (j.origin) parts.push(ORIGIN_LABELS[j.origin] || String(j.origin));
+          if (j.owner) {
+            parts.push(j.owner === "self" ? "自身记录" : j.owner === "chat" ? "会话线程" : formatChatInline(snap, j.owner));
+          }
+          const summary = j.summary || j.message || j.reason || j.text;
+          if (summary) parts.push(String(summary).replace(/\s+/g, " ").slice(0, 72));
+          if (parts.length) return parts.join(" · ");
+        }
+      } catch {}
+    }
+    return raw.replace(/\s+/g, " ").slice(0, 90);
+  }
+
   function renderStrip(snap) {
     const sel = snap.selected;
     const threads = snap.threads || [];
@@ -2502,11 +3725,11 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     if (activeThreads.length) {
       $("#now-headline").textContent = `${activeThreads.length} 个线程正在推进`;
-      $("#now-subline").textContent = `${activeThreads[0].title}（${activeThreads[0].profile} · ${activeThreads[0].chat_id}）`;
+      $("#now-subline").textContent = `${activeThreads[0].title}（${activeThreads[0].profile} · ${formatChatInline(snap, activeThreads[0].chat_id)}）`;
     } else if (sel) {
       const st = STATE_LABEL[sel.state] || ["就绪", "", ""];
       $("#now-headline").textContent = sel.result?.error ? "线程出错" : `最近：${st[0]}`;
-      $("#now-subline").textContent = `${threads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${sel.chat_id}`;
+      $("#now-subline").textContent = `${threads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${formatChatInline(snap, sel.chat_id)}`;
     } else {
       $("#now-headline").textContent = "待命";
       $("#now-subline").textContent = "等待群聊触发或由管理员直接发起工作流";
@@ -2520,7 +3743,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     const evs = state.events.slice(-3);
     $("#now-steps").innerHTML = evs.length
-      ? evs.map((e) => `<li><span class="mono">[${esc(e.kind)}]</span> ${esc(String(e.text || "").replace(/\s+/g, " ").slice(0, 90))}</li>`).join("")
+      ? evs.map((e) => `<li><span class="mil-tag">${esc(EVENT_KIND_LABELS[e.kind] || e.kind)}</span> ${esc(friendlyEventBrief(snap, e))}</li>`).join("")
       : `<li>暂无最新步骤日志</li>`;
 
     $("#now-leds").innerHTML = `
@@ -2627,7 +3850,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     const lbl = $("#ctx-spark-label");
     if (!svg) return;
     if (!points || !points.length) {
-      svg.innerHTML = `<text x="12" y="52" fill="#9bc2a5" font-size="12">暂无历史轮次轨迹</text>`;
+      svg.innerHTML = `<text x="12" y="52" fill="var(--mil-scope-ink)" font-size="12">暂无历史轮次轨迹</text>`;
       lbl.textContent = "—";
       return;
     }
@@ -2640,11 +3863,11 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     });
     const lineD = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
     const areaD = `${lineD} L${coords[coords.length - 1][0].toFixed(1)},${H - pad} L${coords[0][0].toFixed(1)},${H - pad} Z`;
-    const dots = coords.map(([x, y]) => `<rect x="${(x - 2.5).toFixed(1)}" y="${(y - 2.5).toFixed(1)}" width="5" height="5" fill="#ffd84a"/>`).join("");
+    const dots = coords.map(([x, y]) => `<rect x="${(x - 2.5).toFixed(1)}" y="${(y - 2.5).toFixed(1)}" width="5" height="5" fill="#ffd84a" stroke="#181c18" stroke-width="1"/>`).join("");
     svg.innerHTML = `
       <line x1="0" y1="${H - pad}" x2="${W}" y2="${H - pad}" stroke="rgba(143,214,160,0.35)" stroke-width="1"/>
-      <path d="${areaD}" fill="rgba(143,214,160,0.18)"/>
-      <path d="${lineD}" fill="none" stroke="#8fd6a0" stroke-width="2.5"/>
+      <path d="${areaD}" fill="rgba(143,214,160,0.16)"/>
+      <path d="${lineD}" fill="none" stroke="#8fd6a0" stroke-width="2.2" stroke-linecap="square" stroke-linejoin="miter"/>
       ${dots}
     `;
     const latest = points[points.length - 1];
@@ -2800,6 +4023,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     host.innerHTML = list.map((t) => {
       const st = STATE_LABEL[t.state] || ["未知", "", ""];
       const on = t.thread_id === state.threadId;
+      const cm = chatMeta(snap, t.chat_id);
+      const chatDisp = cm.name && cm.name !== (cm.spec || t.chat_id) ? `${cm.name} (${cm.spec || t.chat_id})` : (cm.spec || t.chat_id);
       return `<button type="button" class="thread-row${on ? " on" : ""}" data-thread="${esc(t.thread_id)}">
         <div class="mil-row" style="justify-content:space-between;gap:6px">
           <div class="mil-row" style="gap:6px;min-width:0">
@@ -2810,7 +4035,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         </div>
         ${t.excerpt ? `<div class="thread-excerpt">${esc(t.excerpt)}</div>` : ""}
         <div class="mil-row" style="justify-content:space-between;font-size:11px">
-          <span class="mil-row mono" style="gap:5px">${roleFishHtml(t.profile, snapFishSeed(snap, t.profile), 18, (t.state === "active" || t.state === "waiting") ? {} : { still: true })}<span>${esc(t.profile)} · ${esc(t.chat_id)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span></span>
+          <span class="mil-row mono" style="gap:5px">${roleFishHtml(t.profile, snapFishSeed(snap, t.profile), 18, (t.state === "active" || t.state === "waiting") ? {} : { still: true })}<span>${esc(t.profile)} · ${esc(chatDisp)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span></span>
           <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
         </div>
       </button>`;
@@ -2850,7 +4075,11 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       });
     }
     $("#title").textContent = rowSummary?.title || sel.thread_id;
-    $("#meta").textContent = `${sel.thread_id} · 会话 ${sel.chat_id} · 角色 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
+    const selCm = chatMeta(snap, sel.chat_id);
+    const selChatDisp = selCm.name && selCm.name !== (selCm.spec || sel.chat_id)
+      ? `${selCm.name} · ${selCm.spec || sel.chat_id}`
+      : (selCm.spec || sel.chat_id);
+    $("#meta").textContent = `${sel.thread_id} · 会话 ${selChatDisp} · 角色 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
     $("#ins-state-tag").textContent = st[0];
     $("#ins-state-tag").className = `mil-tag ${st[1]}`;
     $("#ins-meta-tags").innerHTML = [
@@ -2894,7 +4123,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       det.className = "ev-det";
       det.setAttribute("data-event", String(ev.seq));
       const sum = document.createElement("summary");
-      sum.innerHTML = `<span class="mil-tag">#${ev.seq} ${esc(ev.kind)}</span><span class="num">R${ev.revision} · ${fmtTime(ev.at)}</span>`;
+      const kindTxt = EVENT_KIND_LABELS[ev.kind] || ev.kind;
+      sum.innerHTML = `<span class="mil-tag">#${ev.seq} ${esc(kindTxt)}</span><span class="num">R${ev.revision} · ${fmtTime(ev.at)}</span>`;
       const pre = document.createElement("pre");
       pre.textContent = ev.text || "";
       det.append(sum, pre);
@@ -2940,9 +4170,11 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     $("#launch-profile-chips").innerHTML = profiles.slice(0, 6).map((p) =>
       `<button type="button" class="mil-key mil-key--sm" data-pick-profile="${esc(p)}"><span class="mil-row" style="gap:5px">${roleFishHtml(p, snapFishSeed(snap, p), 18, { still: true })}<span>${esc(p)}</span></span></button>`
     ).join("");
-    $("#launch-chat-chips").innerHTML = [...chats.slice(0, 4), "self"].map((c) =>
-      `<button type="button" class="mil-key mil-key--sm" data-pick-chat="${esc(c)}">${c === "self" ? "自身活动 self" : esc(c)}</button>`
-    ).join("");
+    $("#launch-chat-chips").innerHTML = [...chats.slice(0, 4), "self"].map((c) => {
+      const m = chatMeta(snap, c);
+      const disp = c === "self" ? "自身活动 self" : (m.name && m.name !== c ? `${m.name} (${c})` : c);
+      return `<button type="button" class="mil-key mil-key--sm" data-pick-chat="${esc(c)}" title="${esc(c)}">${esc(disp)}</button>`;
+    }).join("");
     const lc = $("#launch-chat");
     if (!lc.value && chats.length) lc.value = chats[0];
   }
@@ -2972,6 +4204,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       $("#feedback").textContent = snap?.error || "现场快照读取失败";
       $("#feedback").className = "mil-feedback mil-feedback--err";
       return;
+    }
+    if (snap.ui_style) {
+      savedUiStyle = snap.ui_style;
+      applyTheme();
     }
     lastSnapshotAt = Date.now();
     state.lastSnap = snap;
@@ -3220,6 +4456,69 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     drawFlowLines();
     if (state.lastSnap && state.ctxView === "map") renderContext(state.lastSnap);
   });
+
+  function initHelpPopovers() {
+    const pop = $("#mil-help-pop");
+    if (!pop) return;
+    let activeBtn = null;
+    let pinnedBtn = null;
+    const closePop = () => {
+      if (activeBtn) activeBtn.setAttribute("aria-expanded", "false");
+      activeBtn = null;
+      pinnedBtn = null;
+      pop.hidden = true;
+    };
+    const openPop = (btn) => {
+      const text = btn?.dataset?.help || "";
+      if (!text) return;
+      if (activeBtn && activeBtn !== btn) activeBtn.setAttribute("aria-expanded", "false");
+      activeBtn = btn;
+      activeBtn.setAttribute("aria-expanded", "true");
+      pop.textContent = text;
+      pop.hidden = false;
+      const r = btn.getBoundingClientRect();
+      const pw = pop.offsetWidth || 260;
+      const ph = pop.offsetHeight || 60;
+      const left = Math.max(12, Math.min(window.innerWidth - pw - 12, r.left + r.width / 2 - pw / 2));
+      const top = r.bottom + ph + 16 < window.innerHeight ? r.bottom + 8 : Math.max(12, r.top - ph - 8);
+      pop.style.left = `${Math.round(left)}px`;
+      pop.style.top = `${Math.round(top)}px`;
+    };
+    document.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".mil-help");
+      if (btn) {
+        if (btn.closest("summary")) ev.preventDefault();
+        ev.stopPropagation();
+        if (pinnedBtn === btn && !pop.hidden) closePop();
+        else { pinnedBtn = btn; openPop(btn); }
+        return;
+      }
+      if (!pop.hidden && !ev.target.closest("#mil-help-pop")) closePop();
+    });
+    document.addEventListener("mouseenter", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && !pinnedBtn && window.matchMedia?.("(hover: hover)").matches) openPop(btn);
+    }, true);
+    document.addEventListener("mouseleave", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && activeBtn === btn && pinnedBtn !== btn && window.matchMedia?.("(hover: hover)").matches) closePop();
+    }, true);
+    document.addEventListener("focusin", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && !pinnedBtn) openPop(btn);
+    });
+    document.addEventListener("focusout", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && activeBtn === btn && pinnedBtn !== btn) closePop();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !pop.hidden) closePop();
+    });
+    window.addEventListener("scroll", () => { if (!pop.hidden) closePop(); }, { passive: true });
+    window.addEventListener("resize", closePop);
+  }
+
+  initHelpPopovers();
 
   Promise.resolve(window.maibot?.ready).then(() => {
     applyTheme();

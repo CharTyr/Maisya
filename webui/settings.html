@@ -1,89 +1,260 @@
 <!doctype html>
-<html lang="zh-CN" data-dashboard-style="millennium">
+<html lang="zh-CN" data-ui-style="millennium" data-dashboard-style="millennium">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Maisya · 设置</title>
 <style>
-/* Maisya WebUI · MaiBot 千禧机械硬件设计系统 (0px 直角 / 注塑外壳 / 下沉液晶屏 / 3D 机械键帽) */
+/* Maisya WebUI · 双主题设计系统
+   1. 默认主题：MaiBot 千禧机械风 [data-ui-style="millennium"]（0px 直角 / 塑料机壳凹凸导角与纹理 / 百叶散热窗与丝印 / 下沉液晶屏与深色示波器 / 立体机械键帽 / 高可读系统无衬线正文）
+   2. 可选主题：MaiWork 清朗手账风 [data-ui-style="maiwork"]（白底/深黑画布、发丝分割线、胶囊按键、毛玻璃导航条、清晰可读留白，为 :root 基础层） */
+
 :root {
+  --mil-shell: #ffffff;
+  --mil-panel: #ffffff;
+  --mil-screen: #f7f7f9;
+  --mil-well: #f2f2f5;
+  --mil-scope: #181c20;
+  --mil-scope-ink: #e5f3e9;
+  --mil-scope-grid: rgba(255, 255, 255, 0.06);
+  --mil-glass: rgba(255, 255, 255, 0.84);
+
+  --mil-ink: #111114;
+  --mil-ink-2: #3a3a3c;
+  --mil-muted: #6e6e73;
+  --mil-print: #3a3a3c;
+  --mil-line: #ececf0;
+  --mil-rule: #ececf0;
+  --mil-hi: transparent;
+  --mil-lo: #d1d1d6;
+  --mil-drop: rgba(17, 17, 20, 0.05);
+  --mil-vent: transparent;
+
+  --mil-key: #f2f2f5;
+  --mil-key-hi: #e7e7ec;
+  --mil-key-side: #d1d1d6;
+
+  --mil-accent: #2f6fe8;
+  --mil-accent-soft: rgba(47, 111, 232, 0.09);
+  --mil-accent-border: rgba(47, 111, 232, 0.28);
+
+  --mil-on: #111114;
+  --mil-on-side: #111114;
+  --mil-on-ink: #ffffff;
+  --mil-hot: #111114;
+  --mil-hot-side: #111114;
+  --mil-hot-ink: #ffffff;
+
+  --mil-live: #2f6fe8;
+  --mil-ok: #34c759;
+  --mil-ok-soft: rgba(52, 199, 89, 0.14);
+  --mil-ok-ink: #1c7c36;
+  --mil-warn: #ff9f0a;
+  --mil-warn-soft: rgba(255, 159, 10, 0.15);
+  --mil-warn-ink: #ad6200;
+  --mil-danger: #ff3b30;
+  --mil-danger-side: #d70015;
+  --mil-danger-soft: rgba(255, 59, 48, 0.12);
+  --mil-danger-ink: #d70015;
+  --mil-led: #34c759;
+  --mil-led-run: #2f6fe8;
+  --mil-led-bad: #ff3b30;
+  --mil-meter: #111114;
+
+  --mil-screen-shade: transparent;
+  --mil-screen-grid: transparent;
+  --mil-grain-shell: none;
+  --mil-grain-panel: none;
+  --mil-lcd-grid: none;
+  --mil-raise: 0 2px 12px rgba(17, 17, 20, 0.04);
+  --mil-sunk: none;
+  --mil-radius: 18px;
+  --mil-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --mil-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --mil-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --ctx-system: #dbeafe;
+  --ctx-memory: #dcfce7;
+  --ctx-user: #fef3c7;
+  --ctx-assistant: #ccfbf1;
+  --ctx-tool: #ffedd5;
+  --ctx-free: #ededf2;
+  --ctx-tile-ink: #111114;
+  color-scheme: light;
+}
+
+:root.dark {
+  --mil-shell: #0e0e10;
+  --mil-panel: #1c1c1f;
+  --mil-screen: #161618;
+  --mil-well: #242427;
+  --mil-scope: #14171a;
+  --mil-scope-ink: #e5f3e9;
+  --mil-scope-grid: rgba(255, 255, 255, 0.06);
+  --mil-glass: rgba(22, 22, 25, 0.84);
+
+  --mil-ink: #f2f2f5;
+  --mil-ink-2: #d1d1d6;
+  --mil-muted: #98989f;
+  --mil-print: #d1d1d6;
+  --mil-line: #2a2a2e;
+  --mil-rule: #2a2a2e;
+  --mil-hi: transparent;
+  --mil-lo: #48484e;
+  --mil-drop: rgba(0, 0, 0, 0.45);
+  --mil-vent: transparent;
+
+  --mil-key: #242427;
+  --mil-key-hi: #2f2f34;
+  --mil-key-side: #3a3a40;
+
+  --mil-accent: #5b8cff;
+  --mil-accent-soft: rgba(91, 140, 255, 0.16);
+  --mil-accent-border: rgba(91, 140, 255, 0.36);
+
+  --mil-on: #f2f2f5;
+  --mil-on-side: #d1d1d6;
+  --mil-on-ink: #111114;
+  --mil-hot: #f2f2f5;
+  --mil-hot-side: #d1d1d6;
+  --mil-hot-ink: #111114;
+
+  --mil-live: #5b8cff;
+  --mil-ok: #30d158;
+  --mil-ok-soft: rgba(48, 209, 88, 0.16);
+  --mil-ok-ink: #66e087;
+  --mil-warn: #ff9f0a;
+  --mil-warn-soft: rgba(255, 159, 10, 0.18);
+  --mil-warn-ink: #ffd479;
+  --mil-danger: #ff453a;
+  --mil-danger-side: #a92820;
+  --mil-danger-soft: rgba(255, 69, 58, 0.18);
+  --mil-danger-ink: #ff6961;
+  --mil-led: #30d158;
+  --mil-led-run: #5b8cff;
+  --mil-led-bad: #ff453a;
+  --mil-meter: #5b8cff;
+
+  --mil-raise: 0 2px 16px rgba(0, 0, 0, 0.32);
+
+  --ctx-system: #1d3557;
+  --ctx-memory: #164430;
+  --ctx-user: #583f14;
+  --ctx-assistant: #134e4a;
+  --ctx-tool: #5c2f18;
+  --ctx-free: #232328;
+  --ctx-tile-ink: #f2f2f5;
+  color-scheme: dark;
+}
+
+/* ───────────── MaiBot 宿主千禧机械主题 (浅色 · 3材质塑料机壳/下沉液晶屏/立体键帽) ───────────── */
+:root[data-ui-style="millennium"] {
   --mil-shell: #ddd4bf;
   --mil-panel: #ebe4d2;
   --mil-well: #cfc6af;
   --mil-screen: #fbf9f0;
   --mil-screen-shade: rgba(112, 104, 90, 0.14);
-  --mil-screen-grid: rgba(130, 124, 112, 0.08);
+  --mil-screen-grid: rgba(130, 124, 112, 0.065);
   --mil-scope: #403c37;
   --mil-scope-ink: #e5f3e9;
-  --mil-scope-grid: rgba(255, 255, 255, 0.075);
-  --mil-ink: #322d2a;
-  --mil-muted: #766f66;
-  --mil-print: #5f5849;
+  --mil-scope-grid: rgba(255, 255, 255, 0.08);
+  --mil-glass: #ebe4d2;
+
+  --mil-ink: #2b2623;
+  --mil-ink-2: #433d37;
+  --mil-muted: #665f55;
+  --mil-print: #5a5345;
   --mil-line: #5a544a;
   --mil-rule: #d3cec0;
   --mil-hi: #f6f1e3;
   --mil-lo: #bdb39c;
   --mil-drop: #9c927b;
   --mil-vent: #afa58d;
+
   --mil-key: #f3eee1;
   --mil-key-hi: #fdfbf5;
   --mil-key-side: #cbbfa8;
+
+  --mil-accent: #5fa873;
+  --mil-accent-soft: rgba(143, 214, 160, 0.28);
+  --mil-accent-border: #5fa873;
+
   --mil-on: #8fd6a0;
   --mil-on-side: #5fa873;
-  --mil-on-ink: #253323;
+  --mil-on-ink: #1f2e1e;
   --mil-hot: #f08a5d;
   --mil-hot-side: #c2643c;
-  --mil-hot-ink: #3a241a;
+  --mil-hot-ink: #352016;
   --mil-danger: #c2452f;
   --mil-danger-side: #8f3020;
   --mil-danger-ink: #fff8f5;
+
+  --mil-live: #f08a5d;
+  --mil-ok: #5fa873;
+  --mil-ok-soft: #dff4e4;
+  --mil-ok-ink: #1f2e1e;
   --mil-warn: #ffd84a;
+  --mil-warn-soft: #fae8ca;
   --mil-warn-ink: #3d3210;
+  --mil-danger-soft: #fbe1de;
   --mil-led: #8fd6a0;
   --mil-led-run: #ffd84a;
   --mil-led-bad: #f08a5d;
   --mil-meter: #5fa873;
+
   --mil-raise: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 5px 0 var(--mil-drop);
   --mil-sunk: inset 3px 3px 0 var(--mil-screen-shade), -1px -1px 0 1px var(--mil-lo), 1px 1px 0 1px var(--mil-hi);
-  --mil-grain-shell: radial-gradient(rgba(90, 84, 74, 0.1) 1px, transparent 1px);
-  --mil-grain-panel: radial-gradient(rgba(90, 84, 74, 0.065) 1px, transparent 1px);
+  --mil-grain-shell: radial-gradient(rgba(90, 84, 74, 0.09) 1px, transparent 1px);
+  --mil-grain-panel: radial-gradient(rgba(90, 84, 74, 0.06) 1px, transparent 1px);
   --mil-lcd-grid: linear-gradient(var(--mil-screen-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-screen-grid) 1px, transparent 1px);
   --mil-radius: 0px;
-  --mil-font-display: var(--maibot-font-display, "Departure Mono", "Ark Pixel 12px SC", ui-monospace, monospace);
-  --mil-font-body: var(--maibot-font-body, "Ark Pixel 12px SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+
+  /* 英文丝印、数字与徽章保留像素/等宽机箱质感；中文正文保持高可读无衬线体 */
+  --mil-font-display: var(--maibot-font-display, "Departure Mono", "JetBrains Mono", ui-monospace, monospace);
+  --mil-font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --mil-font-mono: var(--maibot-font-mono, "Departure Mono", "JetBrains Mono", ui-monospace, monospace);
-  /* 上下文分布色板 */
+
   --ctx-system: #74ba85;
   --ctx-memory: #6da3d4;
   --ctx-user: #e7be46;
-  --ctx-assistant: #9e89d4;
+  --ctx-assistant: #5ec4b8;
   --ctx-tool: #f08a5d;
   --ctx-free: #e5decb;
-  color-scheme: light;
+  --ctx-tile-ink: #2b2623;
 }
 
-:root.dark {
+/* ───────────── MaiBot 宿主千禧机械主题 (深色 · 炭石墨机壳 + 护眼深绿OLED内屏) ───────────── */
+:root.dark[data-ui-style="millennium"] {
   --mil-shell: #2f2c28;
   --mil-panel: #3a3631;
   --mil-well: #25221f;
   --mil-screen: #1e221e;
   --mil-screen-shade: rgba(0, 0, 0, 0.42);
-  --mil-screen-grid: rgba(143, 214, 160, 0.055);
+  --mil-screen-grid: rgba(143, 214, 160, 0.05);
   --mil-scope: #181c18;
   --mil-scope-ink: #b9e7c5;
   --mil-scope-grid: rgba(143, 214, 160, 0.075);
+  --mil-glass: #3a3631;
+
   --mil-ink: #eee9de;
-  --mil-muted: #a0988a;
-  --mil-print: #b3ab9c;
+  --mil-ink-2: #d6cfc2;
+  --mil-muted: #a8a092;
+  --mil-print: #bdb5a6;
   --mil-line: #171513;
   --mil-rule: #3c423b;
   --mil-hi: #524d46;
   --mil-lo: #24211d;
   --mil-drop: #141210;
   --mil-vent: #645e55;
+
   --mil-key: #4d4841;
   --mil-key-hi: #605a52;
   --mil-key-side: #302c27;
+
+  --mil-accent: #8fd6a0;
+  --mil-accent-soft: rgba(143, 214, 160, 0.22);
+  --mil-accent-border: #5fa873;
+
   --mil-on: #8fd6a0;
   --mil-on-side: #5fa873;
   --mil-on-ink: #1e2a20;
@@ -92,48 +263,31 @@
   --mil-hot-ink: #2c1e16;
   --mil-danger: #c2452f;
   --mil-danger-side: #7d2517;
-  --mil-danger-ink: #fff;
+  --mil-danger-ink: #ffffff;
+
+  --mil-live: #f08a5d;
+  --mil-ok: #8fd6a0;
+  --mil-ok-soft: rgba(143, 214, 160, 0.2);
+  --mil-ok-ink: #b9e7c5;
   --mil-warn: #ffd84a;
-  --mil-warn-ink: #29220a;
+  --mil-warn-soft: rgba(255, 216, 74, 0.2);
+  --mil-warn-ink: #ffd84a;
+  --mil-danger-soft: rgba(194, 69, 47, 0.28);
   --mil-led: #8fd6a0;
   --mil-led-run: #ffd84a;
   --mil-led-bad: #f08a5d;
   --mil-meter: #8fd6a0;
+
   --mil-grain-shell: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
   --mil-grain-panel: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+
   --ctx-system: #5da56f;
   --ctx-memory: #568ec2;
   --ctx-user: #cfa334;
-  --ctx-assistant: #836ec0;
+  --ctx-assistant: #4aaea2;
   --ctx-tool: #de784b;
   --ctx-free: #2a302a;
-  color-scheme: dark;
-}
-
-/* 当宿主切换为 modern 风格时平滑适配其毛玻璃卡片语义 */
-:root[data-dashboard-style="modern"] {
-  --mil-shell: var(--maibot-background, #f6f7fb);
-  --mil-panel: var(--maibot-surface, #ffffff);
-  --mil-well: var(--maibot-muted, #f0f2f7);
-  --mil-screen: var(--maibot-surface, #ffffff);
-  --mil-screen-shade: rgba(15, 23, 42, 0.04);
-  --mil-screen-grid: transparent;
-  --mil-ink: var(--maibot-foreground, #1f2329);
-  --mil-muted: var(--maibot-muted-foreground, #667085);
-  --mil-print: var(--maibot-muted-foreground, #667085);
-  --mil-line: var(--maibot-border, #d8dee8);
-  --mil-rule: var(--maibot-border, #e5e9f0);
-  --mil-hi: transparent;
-  --mil-lo: transparent;
-  --mil-drop: rgba(15, 23, 42, 0.08);
-  --mil-key: var(--maibot-surface, #ffffff);
-  --mil-key-hi: transparent;
-  --mil-key-side: var(--maibot-border, #d8dee8);
-  --mil-raise: 0 2px 10px rgba(15, 23, 42, 0.06);
-  --mil-sunk: inset 0 1px 3px rgba(15, 23, 42, 0.05);
-  --mil-grain-shell: none;
-  --mil-grain-panel: none;
-  --mil-radius: 10px;
+  --ctx-tile-ink: #eee9de;
 }
 
 *, *::before, *::after {
@@ -145,13 +299,18 @@ html, body {
   padding: 0;
   min-height: 100%;
   background-color: var(--mil-shell);
-  background-image: var(--mil-grain-shell);
-  background-size: 5px 5px;
   color: var(--mil-ink);
   font-family: var(--mil-font-body);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.56;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:root[data-ui-style="millennium"],
+:root[data-ui-style="millennium"] body {
+  background-image: var(--mil-grain-shell);
+  background-size: 5px 5px;
 }
 
 button, input, select, textarea {
@@ -172,94 +331,218 @@ pre, code, .mono, .num {
 }
 
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--mil-well);
-  border-left: 1px solid var(--mil-line);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--mil-lo);
+  border-radius: 999px;
+}
+:root[data-ui-style="millennium"] ::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+:root[data-ui-style="millennium"] ::-webkit-scrollbar-track {
+  background: var(--mil-well);
+  border-left: 1px solid var(--mil-line);
+}
+:root[data-ui-style="millennium"] ::-webkit-scrollbar-thumb {
+  background: var(--mil-lo);
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
 }
 
-/* ───────────── 机身外壳容器 ───────────── */
+/* ───────────── 页面外壳与顶栏 ───────────── */
 
 .mil-shell {
-  max-width: 1460px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 12px 14px 28px;
+  padding: 18px 28px 56px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 22px;
+}
+:root[data-ui-style="millennium"] .mil-shell {
+  max-width: 1380px;
+  padding: 16px 20px 44px;
+  gap: 18px;
 }
 
-/* 顶部机箱控制条 */
 .mil-topbar {
-  background-color: var(--mil-panel);
-  background-image: var(--mil-grain-panel);
-  background-size: 5px 5px;
-  border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
-  box-shadow: var(--mil-raise);
-  padding: 10px 14px;
+  position: sticky;
+  top: 12px;
+  z-index: 30;
+  background: var(--mil-glass);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid var(--mil-line);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(17, 17, 20, 0.04);
+  padding: 8px 16px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 10px 16px;
+}
+:root[data-ui-style="millennium"] .mil-topbar {
+  position: static;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: var(--mil-raise);
+  padding: 11px 16px;
 }
 
 .mil-brand {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
+.ms-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .mil-spectrum {
-  display: grid;
-  grid-template-columns: repeat(3, 8px);
-  height: 22px;
-  border: 2px solid var(--mil-line);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex-shrink: 0;
 }
 .mil-spectrum i {
   display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }
-.mil-spectrum i:nth-child(1) { background: var(--mil-on); }
-.mil-spectrum i:nth-child(2) { background: var(--mil-warn); }
-.mil-spectrum i:nth-child(3) { background: var(--mil-hot); }
+.mil-spectrum i:nth-child(1) { background: var(--mil-accent); }
+.mil-spectrum i:nth-child(2) { background: var(--mil-ok); }
+.mil-spectrum i:nth-child(3) { background: var(--mil-warn); }
+
+:root[data-ui-style="millennium"] .mil-spectrum {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 8px);
+  align-items: stretch;
+  gap: 0;
+  height: 22px;
+  border: 2px solid var(--mil-line);
+}
+:root[data-ui-style="millennium"] .mil-spectrum i {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+:root[data-ui-style="millennium"] .mil-spectrum i:nth-child(1) { background: var(--mil-on); }
+:root[data-ui-style="millennium"] .mil-spectrum i:nth-child(2) { background: var(--mil-warn); }
+:root[data-ui-style="millennium"] .mil-spectrum i:nth-child(3) { background: var(--mil-hot); }
 
 .mil-nameplate {
   font-family: var(--mil-font-display);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mil-ink);
+  flex-shrink: 0;
+}
+:root[data-ui-style="millennium"] .mil-nameplate {
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
+  letter-spacing: 0.18em;
   padding: 3px 8px;
-  background: var(--mil-line);
-  color: var(--mil-key);
-  font-synthesis: none;
-  flex-shrink: 0;
+  background: #5a544a;
+  color: #f3eee1;
+}
+:root.dark[data-ui-style="millennium"] .mil-nameplate {
+  background: #ebe4d2;
+  color: #25221f;
 }
 
 .mil-page-title {
-  font-family: var(--mil-font-display);
+  font-family: var(--mil-font-body);
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  color: var(--mil-ink);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+:root[data-ui-style="millennium"] .mil-page-title {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  line-height: 1.2;
-  font-synthesis: none;
 }
 
 .mil-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  background: var(--mil-well);
+  border: 0;
+  border-radius: 999px;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.mil-nav .mil-key {
+  min-height: 30px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mil-muted);
+  box-shadow: none;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.mil-nav .mil-key[aria-current="page"] {
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-ui-style="millennium"] .mil-nav {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow-x: visible;
+}
+:root[data-ui-style="millennium"] .mil-nav .mil-key {
+  min-height: 29px;
+  padding: 3px 11px 7px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+:root[data-ui-style="millennium"] .mil-nav .mil-key[aria-current="page"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 5px;
+  padding-bottom: 5px;
+  transform: translateY(2px);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .mil-top-right {
@@ -273,55 +556,105 @@ pre, code, .mono, .num {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  padding: 5px 12px;
+  background: var(--mil-well);
+  border: 0;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--mil-ink-2);
+}
+:root[data-ui-style="millennium"] .mil-led-pill {
   padding: 4px 10px;
-  background: var(--mil-screen);
+  background-color: var(--mil-screen);
   background-image: var(--mil-lcd-grid);
   background-size: 3px 3px;
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
   font-family: var(--mil-font-mono);
   font-size: 12px;
   font-weight: 700;
 }
 
-/* 方形电源 / 状态 LED（绝对不用圆点） */
 .mil-led {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 0;
-  border: 2px solid var(--mil-line);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   background: var(--mil-led);
-  box-shadow: 0 0 0 1px var(--mil-lo);
+  box-shadow: 0 0 0 3px var(--mil-ok-soft);
   flex-shrink: 0;
 }
 .mil-led--run {
   background: var(--mil-led-run);
-  animation: mil-pulse 1.1s steps(2, end) infinite;
+  box-shadow: 0 0 0 3px var(--mil-accent-soft);
+  animation: mil-pulse 1.6s ease-in-out infinite;
 }
 .mil-led--bad {
   background: var(--mil-led-bad);
+  box-shadow: 0 0 0 3px var(--mil-danger-soft);
 }
 .mil-led--off {
+  background: var(--mil-muted);
+  box-shadow: none;
+}
+
+:root[data-ui-style="millennium"] .mil-led {
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  box-shadow: 0 0 0 1px var(--mil-lo);
+}
+:root[data-ui-style="millennium"] .mil-led--run {
+  animation: mil-pulse-step 1.1s steps(2, end) infinite;
+}
+:root[data-ui-style="millennium"] .mil-led--off {
   background: var(--mil-well);
 }
 
 @keyframes mil-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.88); }
+}
+@keyframes mil-pulse-step {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
 
-/* ───────────── 模块面板 ───────────── */
+/* ───────────── 模块面板、丝印标头、百叶散热窗 ───────────── */
 
 .mil-panel {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 22px 0 4px;
+  min-width: 0;
+}
+.mil-panel--flat {
+  border-top: 0;
+  padding-top: 4px;
+}
+.mil-panel--soft {
+  background: var(--mil-screen);
+  border: 0;
+  border-radius: 18px;
+  padding: 18px 20px;
+}
+
+:root[data-ui-style="millennium"] .mil-panel,
+:root[data-ui-style="millennium"] .mil-panel--flat,
+:root[data-ui-style="millennium"] .mil-panel--soft {
   background-color: var(--mil-panel);
   background-image: var(--mil-grain-panel);
   background-size: 5px 5px;
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   box-shadow: var(--mil-raise);
-  padding: 12px 14px 14px;
-  min-width: 0;
+  padding: 15px 18px 17px;
 }
 
 .mil-head {
@@ -329,9 +662,14 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 8px;
-  margin-bottom: 10px;
+  gap: 8px 14px;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 0;
+}
+:root[data-ui-style="millennium"] .mil-head {
+  padding-bottom: 9px;
+  margin-bottom: 13px;
   border-bottom: 2px solid var(--mil-lo);
   box-shadow: 0 2px 0 var(--mil-hi);
 }
@@ -346,29 +684,34 @@ pre, code, .mono, .num {
 
 .mil-silk {
   font-family: var(--mil-font-display);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--mil-print);
-  font-synthesis: none;
-}
-
-.mil-head-title {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 18.5px;
+  font-weight: 800;
+  letter-spacing: 0.005em;
   color: var(--mil-ink);
-}
-
-.mil-head-r {
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
 }
+.mil-silk-en {
+  display: none;
+}
 
-/* 模压散热百叶窗 */
+:root[data-ui-style="millennium"] .mil-silk {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mil-print);
+}
+:root[data-ui-style="millennium"] .mil-silk-en {
+  display: inline;
+}
+
+/* 模压散热百叶窗（MaiWork 隐藏，千禧显现） */
 .mil-vent {
+  display: none;
+}
+:root[data-ui-style="millennium"] .mil-vent {
   display: inline-block;
   width: 34px;
   height: 10px;
@@ -376,72 +719,157 @@ pre, code, .mono, .num {
   background: repeating-linear-gradient(90deg, var(--mil-vent) 0 2px, transparent 2px 6px);
 }
 
-/* ───────────── 内嵌下沉式液晶屏 & 示波器屏 ───────────── */
+.mil-head-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ───────────── 柔和内屏 / 下沉液晶屏 / 示波器 ───────────── */
 
 .mil-screen {
+  background: var(--mil-screen);
+  border: 0;
+  border-radius: 16px;
+  padding: 15px 17px;
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .mil-screen {
   background-color: var(--mil-screen);
   background-image: var(--mil-lcd-grid);
   background-size: 3px 3px;
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   box-shadow: var(--mil-sunk);
-  padding: 10px 12px;
-  min-width: 0;
+  padding: 12px 14px;
 }
 
 .mil-scope {
+  background: var(--mil-scope);
+  color: var(--mil-scope-ink);
+  border: 0;
+  border-radius: 16px;
+  padding: 13px 15px;
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .mil-scope {
   background-color: var(--mil-scope);
   background-image: linear-gradient(var(--mil-scope-grid) 1px, transparent 1px), linear-gradient(90deg, var(--mil-scope-grid) 1px, transparent 1px);
   background-size: 12px 12px;
-  color: var(--mil-scope-ink);
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   box-shadow: inset 3px 3px 0 rgba(0, 0, 0, 0.36);
-  padding: 10px 12px;
-  min-width: 0;
+  padding: 11px 13px;
 }
 
-/* ───────────── 立体机械键帽 ───────────── */
+/* ───────────── 问号说明按钮与悬浮气泡 ───────────── */
+
+.mil-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--mil-lo);
+  background: var(--mil-well);
+  color: var(--mil-muted);
+  font-family: var(--mil-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+:root[data-ui-style="millennium"] .mil-help {
+  border-radius: 0;
+  border: 1.5px solid var(--mil-line);
+  background: var(--mil-key);
+  color: var(--mil-print);
+  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+}
+.mil-help[aria-expanded="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  border-color: var(--mil-line);
+}
+@media (hover: hover) and (pointer: fine) {
+  .mil-help:hover {
+    background: var(--mil-on);
+    color: var(--mil-on-ink);
+    border-color: var(--mil-line);
+  }
+}
+.mil-help:focus-visible {
+  outline: 2px solid var(--mil-accent);
+  outline-offset: 2px;
+}
+
+.mil-help-pop {
+  position: fixed;
+  z-index: 990;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 9px 12px;
+  font-family: var(--mil-font-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--mil-ink);
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+:root[data-ui-style="millennium"] .mil-help-pop {
+  background-color: var(--mil-screen);
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: 0 4px 0 var(--mil-drop);
+}
+
+/* ───────────── 胶囊按钮 & 3D 机械键帽 ───────────── */
 
 .mil-key {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 33px;
-  padding: 4px 12px 8px;
-  border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  max-width: 100%;
+  min-height: 36px;
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 999px;
   background: var(--mil-key);
   color: var(--mil-ink);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.25;
   cursor: pointer;
   white-space: nowrap;
   text-decoration: none;
-  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
-  transition: transform 80ms steps(2, end), background-color 120ms ease, box-shadow 80ms steps(2, end);
+  box-shadow: none;
+  transition: transform 110ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 110ms ease;
 }
-
 .mil-key--sm {
-  min-height: 27px;
-  padding: 2px 9px 6px;
-  font-size: 12px;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 12.5px;
 }
-
 .mil-key--hot {
   background: var(--mil-hot);
   color: var(--mil-hot-ink);
-  box-shadow: inset 0 -4px 0 var(--mil-hot-side), inset 2px 2px 0 rgba(255, 255, 255, 0.3);
+  font-weight: 700;
 }
-
 .mil-key--danger {
-  background: var(--mil-danger);
+  background: var(--mil-danger-soft);
   color: var(--mil-danger-ink);
-  box-shadow: inset 0 -4px 0 var(--mil-danger-side), inset 2px 2px 0 rgba(255, 255, 255, 0.22);
 }
-
 .mil-key--on,
 .mil-key[aria-pressed="true"],
 .mil-key[aria-current="page"],
@@ -449,28 +877,72 @@ pre, code, .mono, .num {
 .mil-key[aria-selected="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);
-  padding-top: 6px;
-  padding-bottom: 4px;
+}
+
+:root[data-ui-style="millennium"] .mil-key {
+  min-height: 34px;
+  padding: 5px 12px 9px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  font-weight: 700;
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+}
+:root[data-ui-style="millennium"] .mil-key--sm {
+  min-height: 29px;
+  padding: 3px 10px 7px;
+  font-size: 12px;
+}
+:root[data-ui-style="millennium"] .mil-key--hot {
+  background: var(--mil-hot);
+  color: var(--mil-hot-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-hot-side), inset 2px 2px 0 rgba(255, 255, 255, 0.3);
+}
+:root[data-ui-style="millennium"] .mil-key--danger {
+  background: var(--mil-danger);
+  color: var(--mil-danger-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-danger-side), inset 2px 2px 0 rgba(255, 255, 255, 0.22);
+}
+:root[data-ui-style="millennium"] .mil-key--on,
+:root[data-ui-style="millennium"] .mil-key[aria-pressed="true"],
+:root[data-ui-style="millennium"] .mil-key[aria-current="page"],
+:root[data-ui-style="millennium"] .mil-key[aria-current="true"],
+:root[data-ui-style="millennium"] .mil-key[aria-selected="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 7px;
+  padding-bottom: 5px;
   transform: translateY(2px);
   box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .mil-key:disabled {
-  opacity: 0.48;
+  opacity: 0.45;
   cursor: not-allowed;
   transform: none;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .mil-key:not(:disabled):hover {
-    filter: brightness(1.03);
+  .mil-nav .mil-key:not([aria-current="page"]):hover {
+    color: var(--mil-ink);
+  }
+  .mil-key:not(:disabled):not(.mil-key--hot):not(.mil-key--danger):not([aria-pressed="true"]):not([aria-current="page"]):hover {
+    background: var(--mil-key-hi);
+  }
+  .mil-key--hot:not(:disabled):hover,
+  .mil-key--danger:not(:disabled):hover {
+    filter: brightness(1.04);
   }
 }
 
 .mil-key:not(:disabled):active {
+  transform: scale(0.97);
+}
+:root[data-ui-style="millennium"] .mil-key:not(:disabled):active {
   transform: translateY(3px);
-  padding-top: 6px;
-  padding-bottom: 4px;
+  padding-top: 7px;
+  padding-bottom: 5px;
   box-shadow: inset 0 -1px 0 var(--mil-key-side);
 }
 
@@ -479,20 +951,60 @@ pre, code, .mono, .num {
 .mil-select:focus-visible,
 .mil-textarea:focus-visible,
 .mil-switch input:focus-visible + span {
-  outline: 2px solid var(--mil-hot);
+  outline: 2px solid var(--mil-accent);
   outline-offset: 2px;
 }
 
-/* 分段键帽组（无间隙串联） */
+/* 分段键帽组 */
 .mil-seg {
   display: inline-flex;
   flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--mil-well);
 }
 .mil-seg .mil-key {
-  margin-left: -2px;
+  min-height: 29px;
+  padding: 4px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mil-muted);
+  box-shadow: none;
 }
-.mil-seg .mil-key:first-child {
+.mil-seg .mil-key[aria-pressed="true"] {
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-ui-style="millennium"] .mil-seg {
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+:root[data-ui-style="millennium"] .mil-seg .mil-key {
+  margin-left: -2px;
+  min-height: 29px;
+  padding: 3px 10px 7px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  box-shadow: inset 0 -4px 0 var(--mil-key-side), inset 2px 2px 0 var(--mil-key-hi);
+}
+:root[data-ui-style="millennium"] .mil-seg .mil-key:first-child {
   margin-left: 0;
+}
+:root[data-ui-style="millennium"] .mil-seg .mil-key[aria-pressed="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  padding-top: 5px;
+  padding-bottom: 5px;
+  transform: translateY(2px);
+  box-shadow: inset 0 -1px 0 var(--mil-on-side), inset 1px 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 /* ───────────── 表单控件 ───────────── */
@@ -500,15 +1012,22 @@ pre, code, .mono, .num {
 .mil-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
 .mil-label {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mil-ink-2);
+}
+:root[data-ui-style="millennium"] .mil-label {
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--mil-print);
-  letter-spacing: 0.04em;
 }
 
 .mil-input,
@@ -516,32 +1035,48 @@ pre, code, .mono, .num {
 .mil-textarea {
   width: 100%;
   min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  font-size: 13.5px;
+}
+:root[data-ui-style="millennium"] .mil-input,
+:root[data-ui-style="millennium"] .mil-select,
+:root[data-ui-style="millennium"] .mil-textarea {
   padding: 7px 10px;
   border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
+  border-radius: 0;
   background: var(--mil-screen);
-  color: var(--mil-ink);
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
-  font-size: 13px;
+}
+
+.mil-input:focus,
+.mil-select:focus,
+.mil-textarea:focus {
+  outline: none;
+  border-color: var(--mil-accent);
+  box-shadow: 0 0 0 3px var(--mil-accent-soft);
 }
 
 .mil-textarea {
   resize: vertical;
-  min-height: 110px;
-  line-height: 1.5;
+  min-height: 112px;
+  line-height: 1.62;
 }
-
 .mil-textarea--code {
   font-family: var(--mil-font-mono);
   font-size: 12.5px;
+  line-height: 1.55;
 }
 
-/* 方形拨动开关 */
+/* 开关与复选 */
 .mil-switch {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   cursor: pointer;
   user-select: none;
 }
@@ -554,76 +1089,121 @@ pre, code, .mono, .num {
 .mil-switch-track {
   position: relative;
   width: 44px;
-  height: 24px;
-  border: 2px solid var(--mil-line);
+  height: 25px;
+  border-radius: 999px;
+  border: 1px solid var(--mil-lo);
   background: var(--mil-well);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
   flex-shrink: 0;
-  transition: background-color 140ms ease;
 }
 .mil-switch-track::after {
   content: "";
   position: absolute;
   top: 2px;
   left: 2px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.mil-switch input:checked + .mil-switch-track {
+  background: var(--mil-ok);
+  border-color: var(--mil-ok);
+}
+.mil-switch input:checked + .mil-switch-track::after {
+  transform: translateX(19px);
+}
+
+:root[data-ui-style="millennium"] .mil-switch-track {
+  height: 24px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-well);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+}
+:root[data-ui-style="millennium"] .mil-switch-track::after {
   width: 16px;
   height: 16px;
+  border-radius: 0;
   border: 2px solid var(--mil-line);
   background: var(--mil-key);
   box-shadow: inset 0 -2px 0 var(--mil-key-side);
-  transition: transform 140ms steps(3, end), background-color 140ms ease;
 }
-.mil-switch input:checked + .mil-switch-track {
+:root[data-ui-style="millennium"] .mil-switch input:checked + .mil-switch-track {
   background: var(--mil-on);
+  border-color: var(--mil-line);
 }
-.mil-switch input:checked + .mil-switch-track::after {
+:root[data-ui-style="millennium"] .mil-switch input:checked + .mil-switch-track::after {
   transform: translateX(20px);
   background: var(--mil-key-hi);
 }
 .mil-switch-txt {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
+  color: var(--mil-ink-2);
 }
 
-/* 勾选方框芯片 */
 .mil-chk {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-key);
-  font-size: 12px;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--mil-line);
+  border-radius: 999px;
+  background: var(--mil-panel);
+  font-size: 12.5px;
+  color: var(--mil-ink-2);
   cursor: pointer;
 }
+:root[data-ui-style="millennium"] .mil-chk {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  font-weight: 600;
+}
 .mil-chk input {
-  accent-color: var(--mil-on-side);
-  width: 14px;
-  height: 14px;
+  accent-color: var(--mil-accent);
+  width: 15px;
+  height: 15px;
   margin: 0;
 }
 
-/* ───────────── 分段液晶槽进度条 & 标签徽章 ───────────── */
+/* ───────────── 进度条、徽章、头像、反馈条 ───────────── */
 
 .mil-meter {
-  height: 14px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-screen);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mil-well);
   overflow: hidden;
-  padding: 1px;
 }
 .mil-meter > i {
   display: block;
   height: 100%;
   width: 0%;
-  background: repeating-linear-gradient(90deg, var(--mil-meter) 0 8px, transparent 8px 10px);
-  transition: width 240ms ease;
+  border-radius: 999px;
+  background: var(--mil-meter);
+  transition: width 240ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-.mil-meter--warn > i {
+.mil-meter--warn > i { background: var(--mil-warn); }
+.mil-meter--hot > i { background: var(--mil-danger); }
+
+:root[data-ui-style="millennium"] .mil-meter {
+  height: 14px;
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+  padding: 1px;
+}
+:root[data-ui-style="millennium"] .mil-meter > i {
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, var(--mil-meter) 0 8px, transparent 8px 10px);
+}
+:root[data-ui-style="millennium"] .mil-meter--warn > i {
   background: repeating-linear-gradient(90deg, var(--mil-warn) 0 8px, transparent 8px 10px);
 }
-.mil-meter--hot > i {
+:root[data-ui-style="millennium"] .mil-meter--hot > i {
   background: repeating-linear-gradient(90deg, var(--mil-hot) 0 8px, transparent 8px 10px);
 }
 
@@ -631,21 +1211,45 @@ pre, code, .mono, .num {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 7px;
+  max-width: 100%;
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--mil-well);
+  color: var(--mil-ink-2);
+  font-family: var(--mil-font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+:root[data-ui-style="millennium"] .mil-tag {
+  border-radius: 0;
   border: 2px solid var(--mil-line);
   background: var(--mil-well);
   color: var(--mil-ink);
   font-family: var(--mil-font-mono);
   font-size: 11px;
   font-weight: 700;
-  line-height: 1.4;
+  padding: 1px 7px;
 }
-.mil-tag--ok { background: var(--mil-on); color: var(--mil-on-ink); }
-.mil-tag--warn { background: var(--mil-warn); color: var(--mil-warn-ink); }
-.mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
-.mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
-.mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
-[data-profile][data-enabled="false"] { opacity: 0.78; }
+.mil-tag.mono,
+.mil-tag.num {
+  font-family: var(--mil-font-mono);
+}
+.mil-tag--ok { background: var(--mil-ok-soft); color: var(--mil-ok-ink); }
+.mil-tag--warn { background: var(--mil-warn-soft); color: var(--mil-warn-ink); }
+.mil-tag--hot { background: var(--mil-accent-soft); color: var(--mil-accent); }
+.mil-tag--bad { background: var(--mil-danger-soft); color: var(--mil-danger-ink); }
+.mil-tag--off { background: var(--mil-screen); color: var(--mil-muted); }
+
+:root[data-ui-style="millennium"] .mil-tag--ok { background: var(--mil-on); color: var(--mil-on-ink); }
+:root[data-ui-style="millennium"] .mil-tag--warn { background: var(--mil-warn); color: #3d3210; }
+:root[data-ui-style="millennium"] .mil-tag--hot { background: var(--mil-hot); color: var(--mil-hot-ink); }
+:root[data-ui-style="millennium"] .mil-tag--bad { background: var(--mil-danger); color: var(--mil-danger-ink); }
+:root[data-ui-style="millennium"] .mil-tag--off { background: var(--mil-well); color: var(--mil-muted); border-style: dashed; }
+[data-profile][data-enabled="false"] { opacity: 0.72; }
 
 .mil-avatar {
   position: relative;
@@ -655,13 +1259,18 @@ pre, code, .mono, .num {
   width: 26px;
   height: 26px;
   flex-shrink: 0;
-  border: 2px solid var(--mil-line);
+  border: 1px solid var(--mil-line);
+  border-radius: 50%;
   background: var(--mil-well);
   color: var(--mil-ink);
   font-family: var(--mil-font-display);
   font-size: 12px;
   font-weight: 700;
   overflow: hidden;
+}
+:root[data-ui-style="millennium"] .mil-avatar {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
 }
 .mil-avatar--sm {
   width: 20px;
@@ -676,7 +1285,8 @@ pre, code, .mono, .num {
 }
 
 .mil-hint {
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--mil-muted);
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -684,44 +1294,55 @@ pre, code, .mono, .num {
 
 .mil-feedback {
   min-height: 20px;
-  padding: 6px 10px;
-  border: 2px dashed var(--mil-rule);
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
   background: var(--mil-screen);
-  font-size: 12.5px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   overflow-wrap: anywhere;
+}
+:root[data-ui-style="millennium"] .mil-feedback {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
 }
 .mil-feedback:empty {
   display: none;
 }
 .mil-feedback--err {
-  border-style: solid;
-  border-color: var(--mil-danger);
-  color: var(--mil-danger);
+  background: var(--mil-danger-soft);
+  color: var(--mil-danger-ink);
 }
 .mil-feedback--ok {
-  border-style: solid;
-  border-color: var(--mil-on-side);
-  background: rgba(143, 214, 160, 0.16);
+  background: var(--mil-ok-soft);
+  color: var(--mil-ok-ink);
 }
 
 .mil-pre {
   margin: 0;
-  padding: 10px 12px;
-  border: 2px solid var(--mil-line);
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
   background: var(--mil-screen);
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
   font-family: var(--mil-font-mono);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.56;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
   max-height: 360px;
   overflow-y: auto;
 }
+:root[data-ui-style="millennium"] .mil-pre {
+  background-color: var(--mil-screen);
+  background-image: var(--mil-lcd-grid);
+  background-size: 3px 3px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
+}
 
-/* ───────────── 通用网格、工具条、弹窗抽屉 ───────────── */
+/* ───────────── 通用网格、弹窗与窄屏适配 ───────────── */
 
 .mil-row {
   display: flex;
@@ -733,13 +1354,13 @@ pre, code, .mono, .num {
 .mil-grid-2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 16px;
 }
 
 .mil-split {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(270px, 340px) minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
 }
 
@@ -747,29 +1368,34 @@ pre, code, .mono, .num {
   position: fixed;
   inset: 0;
   z-index: 900;
-  background: rgba(24, 22, 19, 0.56);
+  background: rgba(14, 14, 16, 0.52);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: 18px;
 }
-.mil-scrim[hidden] {
-  display: none;
-}
+.mil-scrim[hidden] { display: none; }
 
 .mil-modal {
   width: min(760px, 100%);
   max-height: 88vh;
   overflow-y: auto;
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-line);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+:root[data-ui-style="millennium"] .mil-modal {
   background-color: var(--mil-panel);
   background-image: var(--mil-grain-panel);
   background-size: 5px 5px;
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 8px 0 var(--mil-drop);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .sr-only {
@@ -784,23 +1410,44 @@ pre, code, .mono, .num {
   border: 0;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 960px) {
   .mil-grid-2,
   .mil-split {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 720px) {
   .mil-shell {
-    padding: 8px 8px 20px;
-    gap: 10px;
+    padding: 12px 14px 36px;
+    gap: 16px;
   }
   .mil-topbar {
-    padding: 8px 10px;
+    position: static;
+    padding: 10px 12px;
+    border-radius: 18px;
+  }
+  :root[data-ui-style="millennium"] .mil-topbar {
+    border-radius: 0;
   }
   .mil-panel {
-    padding: 10px 10px 12px;
+    padding: 16px 0 2px;
+  }
+  .mil-panel--soft {
+    padding: 14px;
+  }
+  :root[data-ui-style="millennium"] .mil-panel,
+  :root[data-ui-style="millennium"] .mil-panel--flat,
+  :root[data-ui-style="millennium"] .mil-panel--soft {
+    padding: 13px 14px 15px;
+  }
+  .mil-nav .mil-key {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .mil-key:not(.mil-nav .mil-key) {
+    white-space: normal;
+    text-align: center;
   }
 }
 
@@ -822,11 +1469,18 @@ pre, code, .mono, .num {
 }
 .mil-fish--off {
   opacity: 0.45;
-  filter: grayscale(0.7);
+  filter: grayscale(0.75);
 }
 .mil-fish--well {
+  padding: 4px;
+  border: 1px solid var(--mil-line);
+  border-radius: 14px;
+  background: var(--mil-panel);
+}
+:root[data-ui-style="millennium"] .mil-fish--well {
   padding: 3px;
   border: 2px solid var(--mil-line);
+  border-radius: 0;
   background: var(--mil-screen);
   box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
 }
@@ -840,35 +1494,38 @@ pre, code, .mono, .num {
 }
 
 .role-fish-bar {
-  margin-bottom: 10px;
+  margin-bottom: 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .role-fish-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
 }
 .fish-drawer {
-  border-top: 2px dashed var(--mil-rule);
-  padding-top: 10px;
+  border-top: 1px solid var(--mil-line);
+  padding-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+:root[data-ui-style="millennium"] .fish-drawer {
+  border-top: 2px dashed var(--mil-rule);
 }
 .fish-preview-box {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 .fish-opts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+  gap: 8px;
   min-width: 0;
 }
 .fish-opt {
@@ -876,18 +1533,24 @@ pre, code, .mono, .num {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 5px 4px;
-  border: 2px solid var(--mil-line);
-  border-radius: var(--mil-radius);
-  background: var(--mil-key);
+  gap: 4px;
+  padding: 6px 5px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
   min-width: 0;
+  transition: transform 110ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+:root[data-ui-style="millennium"] .fish-opt {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-key);
+  font-weight: 700;
   box-shadow: inset 0 -2px 0 var(--mil-key-side);
-  transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
 }
 .fish-opt svg {
   width: 36px;
@@ -896,12 +1559,16 @@ pre, code, .mono, .num {
 .fish-opt[aria-pressed="true"] {
   background: var(--mil-on);
   color: var(--mil-on-ink);
+  border-color: var(--mil-on);
+}
+:root[data-ui-style="millennium"] .fish-opt[aria-pressed="true"] {
+  border-color: var(--mil-line);
   box-shadow: inset 0 -1px 0 var(--mil-on-side);
 }
 .fish-swatches {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 9px;
 }
 .fish-swatch {
   width: 28px;
@@ -909,10 +1576,10 @@ pre, code, .mono, .num {
   border-radius: 50%;
   background: var(--c);
   border: 2px solid var(--mil-panel);
-  box-shadow: 0 0 0 1.5px var(--mil-line);
+  box-shadow: 0 0 0 1.5px var(--mil-lo);
   cursor: pointer;
   padding: 0;
-  transition: transform 80ms ease, box-shadow 120ms ease;
+  transition: transform 110ms ease, box-shadow 140ms ease;
 }
 .fish-swatch[aria-pressed="true"] {
   box-shadow: 0 0 0 2.5px var(--mil-ink);
@@ -924,8 +1591,226 @@ pre, code, .mono, .num {
 }
 .fish-opt:focus-visible,
 .fish-swatch:focus-visible {
-  outline: 2px solid var(--mil-hot);
+  outline: 2px solid var(--mil-accent);
   outline-offset: 2px;
+}
+
+.ms-entry-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.ms-entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.ms-entry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+  min-width: 0;
+  max-width: 100%;
+}
+:root[data-ui-style="millennium"] .ms-entry-row {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 1px 1px 0 var(--mil-lo);
+}
+.ms-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.ms-entry-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mil-ink);
+  overflow-wrap: anywhere;
+}
+.ms-entry-code {
+  font-family: var(--mil-mono);
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.ms-entry-ctl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ms-entry-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+.ms-entry-ctl .mil-select,
+.ms-entry-add .mil-select,
+#sleep-range-wrap .mil-select {
+  width: auto;
+  flex: 0 0 auto;
+}
+.ms-entry-add .mil-select,
+.ms-entry-add .mil-input {
+  min-width: 0;
+  max-width: 100%;
+}
+.ms-chat-chip {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+  text-align: left;
+  padding: 7px 9px;
+}
+.ms-chat-chip-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.ms-chat-chip-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.ms-chat-chip-spec {
+  font-size: 10.5px;
+  color: var(--mil-muted);
+  padding-left: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ms-inline-unit {
+  font-size: 12.5px;
+  color: var(--mil-muted);
+  white-space: nowrap;
+}
+.ms-health-grid,
+.ms-discovery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.ms-kv-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .ms-kv-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  box-shadow: inset 1px 1px 0 var(--mil-lo);
+}
+.ms-kv-k {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mil-muted);
+}
+.ms-kv-v {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mil-ink);
+  overflow-wrap: anywhere;
+}
+.ms-kv-sub {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.ms-receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ms-receipt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+  min-width: 0;
+}
+:root[data-ui-style="millennium"] .ms-receipt-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+.ms-receipt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ms-receipt-meta {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow-wrap: anywhere;
+}
+.ms-builder-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-sunk);
+}
+:root[data-ui-style="millennium"] .ms-builder-box {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+}
+@media (max-width: 560px) {
+  .ms-entry-row,
+  .ms-entry-add,
+  .ms-kv-card,
+  .ms-receipt-card {
+    padding: 8px;
+  }
+  .ms-health-grid,
+  .ms-discovery-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -934,7 +1819,6 @@ pre, code, .mono, .num {
     animation: none;
   }
   .mil-key,
-  .mil-switch-track,
   .mil-switch-track::after,
   .mil-meter > i,
   .fish-opt,
@@ -947,7 +1831,7 @@ pre, code, .mono, .num {
 .ab-roster {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   max-height: 360px;
   overflow-y: auto;
 }
@@ -955,73 +1839,131 @@ pre, code, .mono, .num {
 .ab-card {
   width: 100%;
   text-align: left;
-  padding: 8px 10px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-key);
+  padding: 11px 13px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  box-shadow: inset 0 -3px 0 var(--mil-key-side);
+  gap: 5px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 140ms ease;
+}
+.ab-card:active {
+  transform: scale(0.99);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ab-card:not([aria-current="true"]):hover {
+    border-color: var(--mil-lo);
+    background: var(--mil-key-hi);
+  }
 }
 .ab-card[aria-current="true"] {
-  background: var(--mil-on);
-  color: var(--mil-on-ink);
-  box-shadow: inset 0 -1px 0 var(--mil-on-side);
+  background: var(--mil-accent-soft);
+  border-color: var(--mil-accent);
+  color: var(--mil-ink);
+  box-shadow: 0 0 0 1px var(--mil-accent-border);
 }
 .ab-desc {
-  font-size: 11.5px;
-  line-height: 1.4;
-  opacity: 0.88;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--mil-muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.ab-card[aria-current="true"] .ab-desc {
+  color: var(--mil-ink-2);
+}
 
 .ab-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
 }
 .ab-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   min-width: 0;
 }
 .ab-stage {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   min-width: 0;
 }
 .ab-nav-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 .ab-nav-item {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-key);
-  color: var(--mil-ink);
-  font-weight: 700;
+  gap: 10px;
+  padding: 10px 13px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--mil-ink-2);
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
-  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ab-nav-item:not([aria-current="true"]):hover {
+    background: var(--mil-screen);
+    color: var(--mil-ink);
+  }
 }
 .ab-nav-item[aria-current="true"] {
   background: var(--mil-on);
+  border-color: var(--mil-on);
+  border-radius: 999px;
   color: var(--mil-on-ink);
-  box-shadow: inset 0 -1px 0 var(--mil-on-side);
+}
+.ab-nav-item[aria-current="true"] .mil-tag {
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--mil-on-ink);
+  border-color: transparent;
+}
+:root.dark .ab-nav-item[aria-current="true"] .mil-tag {
+  background: rgba(17, 17, 20, 0.14);
+}
+:root[data-ui-style="millennium"] .ab-nav-item {
+  border-radius: 0;
+  border: 2px solid transparent;
+}
+:root[data-ui-style="millennium"] .ab-nav-item[aria-current="true"] {
+  background: var(--mil-on);
+  border-color: var(--mil-line);
+  border-radius: 0;
+  color: var(--mil-on-ink);
+  box-shadow: var(--mil-key-on-shadow);
+}
+:root[data-ui-style="millennium"] .ab-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-panel-hi, var(--mil-panel));
+  box-shadow: var(--mil-keycap);
+}
+:root[data-ui-style="millennium"] .ab-card[aria-current="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  box-shadow: var(--mil-key-on-shadow);
+}
+:root[data-ui-style="millennium"] .ab-card[aria-current="true"] .ab-desc,
+:root[data-ui-style="millennium"] .ab-card[aria-current="true"] .mil-hint {
+  color: var(--mil-on-ink);
+  opacity: 0.85;
 }
 
 .sk-gallery-head {
@@ -1029,95 +1971,125 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 10px;
-  margin-bottom: 10px;
-  border-bottom: 2px dashed var(--mil-rule);
+  gap: 14px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--mil-rule);
 }
 .sk-gallery-title {
   font-family: var(--mil-font-display);
   font-size: 20px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-weight: 800;
+  line-height: 1.25;
 }
 .sk-gallery-tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 .sk-add-drawer {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 .ab-dropzone {
-  padding: 10px;
-  border: 2px dashed var(--mil-line);
+  padding: 14px;
+  border: 1.5px dashed var(--mil-lo);
+  border-radius: 12px;
   background: var(--mil-panel);
 }
 .ab-dropzone[data-drag="true"],
 #skills-gallery-panel[data-drag="true"] {
-  outline: 3px dashed var(--mil-hot);
+  outline: 2px dashed var(--mil-accent);
   outline-offset: -4px;
 }
 .sk-gallery-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 14px;
   min-height: 180px;
 }
 .sk-item-card {
   width: 100%;
   text-align: left;
-  padding: 11px 12px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-screen);
-  background-image: var(--mil-lcd-grid);
-  background-size: 3px 3px;
+  padding: 15px 16px;
+  border: 1px solid var(--mil-line);
+  border-radius: 14px;
+  background: var(--mil-panel);
   color: var(--mil-ink);
   cursor: pointer;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
-  box-shadow: inset 0 -3px 0 var(--mil-key-side);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 140ms ease;
 }
-.sk-item-card:hover {
-  background-color: var(--mil-key-hi);
+.sk-item-card:active {
+  transform: scale(0.99);
+}
+@media (hover: hover) and (pointer: fine) {
+  .sk-item-card:hover {
+    border-color: var(--mil-accent-border);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+  }
 }
 .sk-item-card[aria-current="true"] {
-  background-color: var(--mil-on);
-  color: var(--mil-on-ink);
+  background: var(--mil-accent-soft);
+  border-color: var(--mil-accent);
+  color: var(--mil-ink);
 }
 .sk-item-ico {
-  width: 36px;
-  height: 36px;
-  border: 2px solid var(--mil-line);
-  background: var(--mil-panel);
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--mil-rule);
+  border-radius: 10px;
+  background: var(--mil-screen);
   display: grid;
   place-items: center;
-  font-family: var(--mil-font-display);
-  font-size: 11px;
+  font-family: var(--mil-font-mono);
+  font-size: 11.5px;
   font-weight: 700;
-  box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo);
 }
 .sk-item-ico--preset {
+  background: var(--mil-accent-soft);
+  color: var(--mil-accent);
+  border-color: var(--mil-accent-border);
+}
+:root[data-ui-style="millennium"] .sk-item-card {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-panel-hi, var(--mil-panel));
+  box-shadow: var(--mil-keycap);
+}
+:root[data-ui-style="millennium"] .sk-item-card[aria-current="true"] {
   background: var(--mil-on);
+  border-color: var(--mil-line);
   color: var(--mil-on-ink);
+  box-shadow: var(--mil-key-on-shadow);
+}
+:root[data-ui-style="millennium"] .sk-item-card[aria-current="true"] .sk-item-desc {
+  color: var(--mil-on-ink);
+  opacity: 0.86;
+}
+:root[data-ui-style="millennium"] .sk-item-ico {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
 }
 .sk-item-ico--custom {
-  background: var(--mil-hot);
-  color: var(--mil-hot-ink);
+  background: var(--mil-warn-soft);
+  color: var(--mil-warn-ink);
+  border-color: rgba(217, 119, 6, 0.25);
 }
 .sk-item-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 .sk-item-desc {
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--mil-muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1146,46 +2118,64 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 9px 10px;
-  border-bottom: 2px dashed var(--mil-rule);
-  background: var(--mil-screen);
+  gap: 14px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--mil-rule);
+  background: transparent;
 }
 .set-row:first-child {
-  border-top: 2px solid var(--mil-line);
+  padding-top: 4px;
 }
 .set-row:last-child {
-  border-bottom: 2px solid var(--mil-line);
+  border-bottom: 0;
+  padding-bottom: 4px;
 }
 .set-row-l {
-  flex: 1 1 240px;
+  flex: 1 1 260px;
   min-width: 0;
 }
 .set-row-t {
-  font-weight: 700;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--mil-ink);
 }
 .set-row-d {
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--mil-muted);
+  margin-top: 2px;
   overflow-wrap: anywhere;
 }
 .set-row-r {
-  flex: 0 1 320px;
+  flex: 0 1 360px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
+}
+.set-row--wide {
+  align-items: flex-start;
+}
+.set-row--wide .set-row-l {
+  flex: 0 1 210px;
+  padding-top: 6px;
+}
+.set-row--wide .set-row-r {
+  flex: 1 1 520px;
+  justify-content: flex-start;
 }
 
 .exp-card {
-  padding: 6px 8px;
-  border-bottom: 2px dashed var(--mil-rule);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--mil-rule);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .exp-card:last-child {
   border-bottom: 0;
@@ -1193,8 +2183,8 @@ pre, code, .mono, .num {
 
 .ws-split {
   display: grid;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: 14px;
   align-items: start;
 }
 
@@ -1204,45 +2194,427 @@ pre, code, .mono, .num {
   }
 }
 
-/* ───────────── 产物页专用样式 ───────────── */
-.out-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.cfg-model-panel {
+  padding: 12px 14px;
+  border-top: 1px solid var(--mil-rule);
+  border-bottom: 1px solid var(--mil-rule);
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
-
-.out-stat {
+:root[data-ui-style="millennium"] .cfg-model-panel {
   border: 2px solid var(--mil-line);
-  background: var(--mil-screen);
-  background-image: var(--mil-lcd-grid);
-  background-size: 3px 3px;
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
-  padding: 8px 12px;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  background: var(--mil-panel);
 }
-
-.out-stat-lbl {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--mil-print);
-}
-
-.out-stat-val {
-  font-family: var(--mil-font-display);
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.out-roster {
+.cfg-model-chain {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.cfg-model-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-rule);
+  min-width: 0;
+  transition: background-color 140ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-ui-style="millennium"] .cfg-model-item {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
+  background: var(--mil-screen);
+}
+.cfg-model-item--primary {
+  border-color: var(--mil-accent-border);
+  background: var(--mil-accent-soft);
+}
+:root[data-ui-style="millennium"] .cfg-model-item--primary {
+  border-color: var(--mil-on-side);
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+.cfg-model-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+}
+.cfg-model-rank {
+  font-family: var(--mil-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--mil-screen);
+  border: 1px solid var(--mil-rule);
+}
+:root[data-ui-style="millennium"] .cfg-model-rank {
+  border-radius: 0;
+  border: 1px solid var(--mil-line);
+  background: var(--mil-panel);
+}
+.cfg-model-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.cfg-model-manual {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.cfg-model-manual .mil-input {
+  flex: 1;
+  min-width: 0;
+}
+.cfg-host-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .cfg-model-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ───────────── 产物页（统一资料空间）专用样式 ───────────── */
+.out-space {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.out-rail {
+  position: sticky;
+  top: 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.out-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.out-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--mil-ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 140ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.out-nav-btn:hover {
+  background: var(--mil-screen);
+}
+.out-nav-btn[aria-current="page"] {
+  background: var(--mil-accent-soft);
+  color: var(--mil-ink);
+  font-weight: 700;
+  border-color: var(--mil-accent-border);
+}
+:root[data-ui-style="millennium"] .out-nav-btn {
+  border-radius: 0;
+  border-width: 1.5px;
+}
+:root[data-ui-style="millennium"] .out-nav-btn[aria-current="page"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  border-color: var(--mil-on-side);
+  box-shadow: 0 2px 0 var(--mil-on-side);
+}
+.out-nav-l {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.out-nav-cnt {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  font-variant-numeric: tabular-nums;
+}
+:root[data-ui-style="millennium"] .out-nav-btn[aria-current="page"] .out-nav-cnt {
+  color: var(--mil-on-ink);
+  opacity: 0.88;
+}
+.out-ico {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.out-ico--all { color: #475569; }
+.out-ico--page { color: #0f766e; }
+.out-ico--img { color: #c2410c; }
+.out-ico--doc { color: #0369a1; }
+.out-ico--con { color: #15803d; }
+.out-ico--ws { color: #854d0e; }
+html.dark .out-ico--all { color: #94a3b8; }
+html.dark .out-ico--page { color: #5eead4; }
+html.dark .out-ico--img { color: #fdba74; }
+html.dark .out-ico--doc { color: #7dd3fc; }
+html.dark .out-ico--con { color: #86efac; }
+html.dark .out-ico--ws { color: #fde047; }
+
+.out-rail-sec {
+  padding-top: 12px;
+  border-top: 1px solid var(--mil-rule);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.out-rail-cap {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--mil-muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.out-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.out-recent-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mil-ink-2);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  transition: background-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.out-recent-item:hover {
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+}
+:root[data-ui-style="millennium"] .out-recent-item {
+  border-radius: 0;
+}
+.out-recent-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.out-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.out-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.out-top-l {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.out-space-title {
+  margin: 0;
+  font-family: var(--mil-font-display);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.out-top-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.out-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.out-search-wrap .mil-input {
+  width: 220px;
+  max-width: 100%;
+}
+.out-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--mil-rule);
+}
+
+.out-table-head {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) 76px 96px;
+  gap: 12px;
+  padding: 10px 10px 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--mil-muted);
+  border-bottom: 1px solid var(--mil-rule);
+}
+.out-table {
+  display: flex;
+  flex-direction: column;
+  max-height: 430px;
+  overflow-y: auto;
+}
+.out-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) 76px 96px;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--mil-rule);
+  background: transparent;
+  color: var(--mil-ink);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.out-row:last-child {
+  border-bottom: 0;
+}
+.out-row:hover {
+  background: var(--mil-screen);
+}
+.out-row[aria-current="true"] {
+  background: var(--mil-accent-soft);
+}
+:root[data-ui-style="millennium"] .out-row[aria-current="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+}
+.out-row-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.out-row-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.out-row-titles strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.out-row-sub {
+  font-size: 11.5px;
+  color: var(--mil-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-ui-style="millennium"] .out-row[aria-current="true"] .out-row-sub,
+:root[data-ui-style="millennium"] .out-row[aria-current="true"] .out-row-meta {
+  color: var(--mil-on-ink);
+  opacity: 0.88;
+}
+.out-row-src {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--mil-ink-2);
+}
+.out-row-meta {
+  font-size: 12px;
+  color: var(--mil-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.out-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  padding-top: 12px;
   max-height: 460px;
   overflow-y: auto;
+}
+.out-grid-card {
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  transition: transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 120ms ease;
+}
+.out-grid-card:hover {
+  background: var(--mil-screen);
+}
+.out-grid-card[aria-current="true"] {
+  border-color: var(--mil-accent);
+  background: var(--mil-accent-soft);
+}
+:root[data-ui-style="millennium"] .out-grid-card {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: 0 3px 0 var(--mil-lo);
+}
+:root[data-ui-style="millennium"] .out-grid-card[aria-current="true"] {
+  background: var(--mil-on);
+  color: var(--mil-on-ink);
+  border-color: var(--mil-on-side);
+}
+
+:root[data-ui-style="millennium"] .out-stage,
+:root[data-ui-style="millennium"] .out-img-stage,
+:root[data-ui-style="millennium"] .ab-dropzone {
+  border-radius: 0;
+  border: 2px solid var(--mil-line);
 }
 
 .out-meta {
@@ -1250,16 +2622,19 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
-  font-size: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
 }
 
 .out-stage {
-  min-height: 220px;
-  max-height: 540px;
+  min-height: 240px;
+  max-height: 580px;
   overflow: auto;
-  padding: 12px;
+  padding: 20px 22px;
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
 }
 
 .out-img-stage {
@@ -1269,45 +2644,48 @@ pre, code, .mono, .num {
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
-  border: 2px dashed var(--mil-rule);
-  background-color: var(--mil-well);
+  border: 1px solid var(--mil-rule);
+  border-radius: 12px;
+  background-color: var(--mil-screen);
 }
 
 .out-doc {
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: 14.5px;
+  line-height: 1.75;
   overflow-wrap: anywhere;
 }
 .out-doc h1, .out-doc h2, .out-doc h3, .out-doc h4 {
-  margin: 0 0 8px;
-  padding-bottom: 4px;
-  border-bottom: 2px dashed var(--mil-rule);
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--mil-rule);
   font-family: var(--mil-font-display);
+  font-weight: 700;
 }
 .out-doc p, .out-doc ul, .out-doc ol, .out-doc blockquote, .out-doc pre {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 .out-doc ul, .out-doc ol {
-  padding-left: 20px;
+  padding-left: 22px;
 }
 .out-doc blockquote {
-  padding: 6px 10px;
-  border-left: 3px solid var(--mil-hot);
-  background: var(--mil-well);
+  padding: 10px 14px;
+  border-left: 3px solid var(--mil-accent);
+  border-radius: 0 8px 8px 0;
+  background: var(--mil-screen);
 }
 .out-doc table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 10px;
-  font-size: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
 }
 .out-doc th, .out-doc td {
-  border: 1.5px solid var(--mil-line);
-  padding: 4px 7px;
+  border: 1px solid var(--mil-line);
+  padding: 6px 10px;
   text-align: left;
 }
 .out-doc th {
-  background: var(--mil-panel);
+  background: var(--mil-screen);
 }
 
 .out-link-item {
@@ -1315,18 +2693,21 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1.5px dashed var(--mil-rule);
-  font-size: 12px;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--mil-rule);
+  font-size: 12.5px;
 }
 .out-link-item:last-child {
   border-bottom: 0;
 }
 
-@media (max-width: 900px) {
-  .out-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 960px) {
+  .out-space {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .out-rail {
+    position: static;
   }
 }
 
@@ -1334,6 +2715,35 @@ pre, code, .mono, .num {
   .set-row-r {
     flex: 1 1 100%;
     justify-content: flex-start;
+  }
+  .out-search-wrap .mil-input {
+    width: 100%;
+    flex: 1;
+  }
+  .out-table-head {
+    display: none;
+  }
+  .out-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+  }
+  .out-row-src {
+    grid-column: 1 / 2;
+  }
+  .out-row-size {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ab-card,
+  .sk-item-card,
+  .out-nav-btn,
+  .out-recent-item,
+  .out-row,
+  .out-grid-card,
+  .cfg-model-item {
+    transition: none;
   }
 }
 </style>
@@ -1343,8 +2753,10 @@ pre, code, .mono, .num {
 
   <header class="mil-topbar">
     <div class="mil-brand">
-      <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span class="mil-nameplate">MAISYA</span>
+      <div class="ms-wordmark">
+        <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="mil-nameplate">MAISYA</span>
+      </div>
       <h1 class="mil-page-title">设置</h1>
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm" data-nav="now">现场</button>
@@ -1355,6 +2767,7 @@ pre, code, .mono, .num {
       </nav>
     </div>
     <div class="mil-top-right">
+      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 清朗手账）">千禧机械</button>
       <div class="mil-led-pill">
         <span class="mil-led" id="mgmt-led"></span>
         <span>管理台</span>
@@ -1364,143 +2777,205 @@ pre, code, .mono, .num {
 
   <div class="mil-feedback" id="feedback" aria-live="polite"></div>
 
-  <!-- 设置分类快速导航 -->
-<div class="mil-panel" style="padding:8px 12px">
-  <div class="mil-row" style="justify-content:space-between">
-    <div class="mil-seg" role="group" aria-label="设置分类筛选">
-      <button type="button" class="mil-key mil-key--sm" data-sec-filter="all" aria-pressed="true">全部面板</button>
-      <button type="button" class="mil-key mil-key--sm" data-sec-filter="talk" aria-pressed="false">对话与主动</button>
-      <button type="button" class="mil-key mil-key--sm" data-sec-filter="vault" aria-pressed="false">保险箱与服务</button>
-      <button type="button" class="mil-key mil-key--sm" data-sec-filter="schedule" aria-pressed="false">定时与外部事件</button>
-      <button type="button" class="mil-key mil-key--sm" data-sec-filter="health" aria-pressed="false">运行健康</button>
-    </div>
-    <span class="mil-hint">宿主管控管理员：<strong id="admins" class="mono">读取中…</strong></span>
+  <!-- 设置层级切换：默认先看「一般设置」，开发与运维参数收入「高级设置」 -->
+<div class="mil-row" style="justify-content:space-between;align-items:center;gap:12px">
+  <div class="mil-seg" id="settings-mode-bar" role="tablist" aria-label="设置层级切换">
+    <button type="button" class="mil-key" data-settings-mode="general" aria-pressed="true">一般设置</button>
+    <button type="button" class="mil-key" data-settings-mode="advanced" aria-pressed="false">高级设置</button>
   </div>
+  <span class="mil-hint">宿主管控管理员：<strong id="admins" class="mono">读取中…</strong></span>
 </div>
 
-<!-- 1. 对话、主动性与联网 -->
-<section class="mil-panel" data-sec-group="talk">
-  <div class="mil-head">
-    <div class="mil-head-l"><span class="mil-silk">TALK & PULSE · 对话、主动性与联网路由</span></div>
-    <div class="mil-head-r"><button class="mil-key mil-key--hot" id="save-settings" type="button">保存设置</button></div>
-  </div>
-  <div id="general-fields" class="set-list" style="margin-bottom:10px"></div>
-  <details class="mil-screen">
-    <summary class="mil-label" style="cursor:pointer">沙箱隔离环境与资源配额（容器模式才需开启）</summary>
-    <div id="sandbox-fields" class="set-list" style="margin-top:8px"></div>
-    <p class="mil-hint" style="margin-top:6px">只读探索与 HTML 渲染出图无需开启 Docker；仅运行代码/二进制脚本工具才启用沙箱。</p>
-  </details>
-</section>
-
-<!-- 2. 凭据保险箱与运行健康 -->
-<div class="mil-grid-2">
-  <section class="mil-panel" data-sec-group="vault">
+<!-- 一、一般设置（默认直达：外观、开关、群聊、主动分寸与常用定时） -->
+<div id="settings-general-view" style="display:flex;flex-direction:column;gap:24px">
+  <section class="mil-panel mil-panel--flat">
     <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">VAULT · 凭据保险箱（只进不出）</span></div>
-      <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"></span></div>
+      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">TALK &amp; PULSE · </span>外观、启用与日常陪伴</span></div>
+      <div class="mil-head-r">
+        <button class="mil-key mil-key--hot" id="save-settings" type="button">保存设置</button>
+        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
     </div>
-    <div class="mil-screen" style="margin-bottom:10px">
-      <div class="mil-label" style="margin-bottom:5px">已登记句柄（点击可填入表单）</div>
-      <div id="handles" class="mil-row"></div>
-    </div>
-    <div class="mil-grid-2" style="margin-bottom:10px">
-      <div class="mil-field"><label class="mil-label" for="vault-handle">句柄名</label><input id="vault-handle" class="mil-input mono" autocomplete="off" placeholder="例如 drawing"></div>
-      <div class="mil-field"><label class="mil-label" for="vault-value">新凭据值</label><input id="vault-value" class="mil-input mono" type="password" autocomplete="new-password" placeholder="保存后永不回显"></div>
-    </div>
-    <div class="mil-row">
-      <button id="save-vault" class="mil-key mil-key--hot" type="button">保存或替换凭据</button>
-      <button id="delete-vault" class="mil-key mil-key--danger" type="button">删除该句柄</button>
-    </div>
+    <div id="general-fields" class="set-list"></div>
   </section>
 
-  <section class="mil-panel" data-sec-group="health">
+  <section class="mil-panel">
     <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">HEALTH · 运行状态与工作区用量</span></div>
-      <div class="mil-head-r"><button id="check" class="mil-key mil-key--sm" type="button">刷新检查</button></div>
+      <div class="mil-head-l">
+        <span class="mil-silk"><span class="mil-silk-en">SCHEDULER · </span>常用定时安排</span>
+        <span class="mil-tag" id="sched-summary-pill">单次 · 60 秒后由 scout 执行</span>
+        <button type="button" class="mil-help" data-help="选择一个周期预设后写下需求即可加入计划队列；点选「资讯简报」会自动填入 digest 周期模板（需先在能力页启用 digest）" aria-label="查看定时安排说明" aria-expanded="false">?</button>
+      </div>
+      <div class="mil-head-r">
+        <div class="mil-row">
+          <button type="button" class="mil-key mil-key--sm" data-sched-preset="once">单次 60s</button>
+          <button type="button" class="mil-key mil-key--sm" data-sched-preset="hourly">每小时巡检</button>
+          <button type="button" class="mil-key mil-key--sm" data-sched-preset="daily">每日简报</button>
+          <button type="button" class="mil-key mil-key--sm" data-sched-preset="digest">资讯简报（预设）</button>
+        </div>
+        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
     </div>
-    <pre id="health" class="mil-pre" style="margin-bottom:10px">正在检查…</pre>
-    <details>
-      <summary class="mil-label" style="cursor:pointer">待唤醒意图与自动笔记学习</summary>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-        <div id="intent-list" class="mil-screen"></div>
-        <pre id="learning" class="mil-pre" style="max-height:140px"></pre>
+    <div class="mil-grid-2" style="margin-bottom:12px">
+      <div class="mil-field">
+        <label class="mil-label" for="intent-chat-select">发往哪段会话</label>
+        <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+          <select id="intent-chat-select" class="mil-select" style="flex:1 1 170px;min-width:0" aria-label="从常用会话选择"></select>
+          <input id="intent-chat" class="mil-input mono" style="flex:1 1 180px;min-width:0" list="intent-chat-list" placeholder="如 qq:group:12345678 / self">
+        </div>
+        <datalist id="intent-chat-list"></datalist>
+      </div>
+      <div class="mil-field">
+        <label class="mil-label" for="intent-profile-select">交给哪个角色执行</label>
+        <select id="intent-profile-select" class="mil-select" aria-label="选择执行角色"></select>
+      </div>
+    </div>
+    <div class="mil-field" style="margin-bottom:12px">
+      <label class="mil-label" for="intent-prompt">让它定时做什么</label>
+      <textarea id="intent-prompt" class="mil-textarea" rows="2" style="min-height:74px" placeholder="例如：每天早上汇总 AI 与设计领域最值得关注的 3 件事"></textarea>
+    </div>
+    <details id="sched-advanced-details" style="margin-bottom:14px">
+      <summary class="mil-label" style="cursor:pointer">更多执行与间隔选项（可选）</summary>
+      <div class="mil-grid-2" style="margin-top:12px">
+        <div class="mil-field">
+          <label class="mil-label" for="intent-profile">自定义角色标识</label>
+          <input id="intent-profile" class="mil-input mono" value="scout" placeholder="scout">
+        </div>
+        <div class="mil-field">
+          <label class="mil-label" for="intent-workspace">持久工作区</label>
+          <input id="intent-workspace" class="mil-input mono" placeholder="例如 digest">
+        </div>
+        <div class="mil-field"><label class="mil-label" for="intent-in">首次延迟 (秒)</label><input id="intent-in" class="mil-input mono" type="number" min="1" value="60"></div>
+        <div class="mil-field"><label class="mil-label" for="intent-every">重复间隔 (秒，0 为仅执行一次)</label><input id="intent-every" class="mil-input mono" type="number" min="0" value="0"></div>
       </div>
     </details>
+    <div class="mil-row" style="justify-content:flex-end">
+      <button id="schedule-intent" class="mil-key mil-key--hot" type="button">加入计划队列</button>
+    </div>
+  </section>
+
+  <section class="mil-panel">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">HEALTH · </span>运行状态速览</span></div>
+      <div class="mil-head-r">
+        <button id="check" class="mil-key mil-key--sm" type="button">刷新检查</button>
+        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
+    </div>
+    <div id="health" class="ms-health-grid" role="region" aria-label="运行状态速览">正在检查…</div>
   </section>
 </div>
 
-<!-- 3. 定时与周期工作流 -->
-<section class="mil-panel" data-sec-group="schedule">
-  <div class="mil-head">
-    <div class="mil-head-l"><span class="mil-silk">SCHEDULER · 定时与周期工作流</span></div>
-    <div class="mil-head-r">
+<!-- 二、高级设置（开发、运维与容器配额：线程上限、Docker 沙箱、凭据保险箱、MCP/Webhook JSON） -->
+<div id="settings-advanced-view" style="display:flex;flex-direction:column;gap:24px" hidden>
+  <section class="mil-panel mil-panel--flat">
+    <div class="mil-head">
+      <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">RUNTIME · </span>高级运行参数与 Docker 沙箱</span></div>
+      <div class="mil-head-r">
+        <button class="mil-key mil-key--hot" id="save-settings-adv" type="button">保存以上设置</button>
+        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
+    </div>
+    <div id="advanced-runtime-fields" class="set-list" style="margin-bottom:14px"></div>
+    <details class="mil-screen" open>
+      <summary class="mil-label" style="cursor:pointer">
+        Docker 沙箱隔离环境与资源配额
+        <button type="button" class="mil-help" style="margin-left:6px" data-help="只读探索与 HTML 渲染出图无需开启 Docker；仅运行代码或二进制脚本工具才需启用沙箱" aria-label="查看 Docker 沙箱说明" aria-expanded="false">?</button>
+      </summary>
+      <div id="sandbox-fields" class="set-list" style="margin-top:10px"></div>
+    </details>
+  </section>
+
+  <div class="mil-grid-2">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk"><span class="mil-silk-en">VAULT · </span>凭据保险箱</span>
+          <span class="mil-tag">只进不出</span>
+          <button type="button" class="mil-help" data-help="密码保存后加密落盘且永不回显；各服务与模板只引用句柄名，不直接暴露明文密钥" aria-label="查看保险箱说明" aria-expanded="false">?</button>
+        </div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
+      </div>
+      <div class="mil-screen" style="margin-bottom:14px">
+        <div class="mil-label" style="margin-bottom:8px">已登记句柄</div>
+        <div id="handles" class="mil-row"></div>
+      </div>
+      <div class="mil-grid-2" style="margin-bottom:14px">
+        <div class="mil-field"><label class="mil-label" for="vault-handle">句柄名</label><input id="vault-handle" class="mil-input mono" autocomplete="off" placeholder="例如 drawing"></div>
+        <div class="mil-field"><label class="mil-label" for="vault-value">新凭据值</label><input id="vault-value" class="mil-input mono" type="password" autocomplete="new-password" placeholder="保存后永不回显"></div>
+      </div>
       <div class="mil-row">
-        <button type="button" class="mil-key mil-key--sm" data-sched-preset="once">单次 60s</button>
-        <button type="button" class="mil-key mil-key--sm" data-sched-preset="hourly">每小时巡检</button>
-        <button type="button" class="mil-key mil-key--sm" data-sched-preset="daily">每日简报</button>
-        <button type="button" class="mil-key mil-key--sm" data-sched-preset="digest">资讯简报（预设）</button>
+        <button id="save-vault" class="mil-key mil-key--hot" type="button">保存或替换凭据</button>
+        <button id="delete-vault" class="mil-key mil-key--danger" type="button">删除该句柄</button>
       </div>
-    </div>
-  </div>
-  <p class="mil-hint" style="margin-bottom:10px">点击「资讯简报（预设）」可一键填入 <span class="mono">digest</span> 周期模板（该角色默认停用，需先在「能力」页开启后再加入队列）。</p>
-  <div class="mil-grid-2" style="margin-bottom:10px">
-    <div class="mil-field">
-      <label class="mil-label" for="intent-chat">目标会话 chat_id</label>
-      <input id="intent-chat" class="mil-input mono" list="intent-chat-list" placeholder="例如 902106123 或 self">
-      <datalist id="intent-chat-list"></datalist>
-    </div>
-    <div class="mil-field">
-      <label class="mil-label" for="intent-profile">执行角色</label>
-      <input id="intent-profile" class="mil-input mono" value="scout" placeholder="scout">
-    </div>
-    <div class="mil-field">
-      <label class="mil-label" for="intent-workspace">可选工作区</label>
-      <input id="intent-workspace" class="mil-input mono" placeholder="例如 digest">
-    </div>
-    <div class="mil-row" style="align-items:end">
-      <div class="mil-field" style="flex:1 1 120px"><label class="mil-label" for="intent-in">首次延迟(秒)</label><input id="intent-in" class="mil-input mono" type="number" min="1" value="60"></div>
-      <div class="mil-field" style="flex:1 1 120px"><label class="mil-label" for="intent-every">周期间隔(0单次/≥300)</label><input id="intent-every" class="mil-input mono" type="number" min="0" value="0"></div>
-    </div>
-  </div>
-  <div class="mil-field" style="margin-bottom:10px">
-    <label class="mil-label" for="intent-prompt">任务提示词</label>
-    <textarea id="intent-prompt" class="mil-textarea" rows="2" style="min-height:70px" placeholder="定时触发时要执行的任务提示词"></textarea>
-  </div>
-  <div class="mil-row" style="justify-content:flex-end">
-    <button id="schedule-intent" class="mil-key mil-key--hot" type="button">加入计划队列</button>
-  </div>
-</section>
+    </section>
 
-<!-- 4. 能力服务与外部事件通道 -->
-<div class="mil-grid-2">
-  <section class="mil-panel" data-sec-group="vault">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">SERVICES · 能力服务与联网别名</span></div>
-      <div class="mil-head-r">
-        <button id="format-services" class="mil-key mil-key--sm" type="button">格式化</button>
-        <button id="save-services" class="mil-key mil-key--sm mil-key--hot" type="button">保存服务登记</button>
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">INTENTS · </span>待唤醒意图与自动笔记学习</span></div>
+        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
       </div>
-    </div>
-    <div id="service-cards" class="mil-screen" style="margin-bottom:8px"></div>
-    <textarea id="service-config" class="mil-textarea mil-textarea--code" rows="12" aria-label="MCP、模板与接口登记" spellcheck="false"></textarea>
-    <p class="mil-hint" style="margin-top:6px">登记可信 MCP、固定执行模板、只读跨插件 API 白名单及 web 别名映射，凭据处只填写保险箱句柄。</p>
-  </section>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div id="intent-list" class="mil-screen" style="max-height:190px;overflow-y:auto"></div>
+        <div id="learning" class="ms-receipt-list"></div>
+      </div>
+    </section>
+  </div>
 
-  <section class="mil-panel" data-sec-group="schedule">
-    <div class="mil-head">
-      <div class="mil-head-l"><span class="mil-silk">WEBHOOKS · 外部事件通道</span></div>
-      <div class="mil-head-r">
-        <button id="format-webhooks" class="mil-key mil-key--sm" type="button">格式化</button>
-        <button id="save-webhooks" class="mil-key mil-key--sm mil-key--hot" type="button">保存事件通道</button>
+  <div class="mil-grid-2">
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk"><span class="mil-silk-en">SERVICES · </span>MCP 与接口登记 (JSON)</span>
+          <button type="button" class="mil-help" data-help="登记可信 MCP 服务、固定执行模板、只读跨插件 API 白名单及 web_provider 别名映射；凭据处只填保险箱句柄" aria-label="查看服务登记说明" aria-expanded="false">?</button>
+        </div>
+        <div class="mil-head-r">
+          <button id="format-services" class="mil-key mil-key--sm" type="button">格式化</button>
+          <button id="save-services" class="mil-key mil-key--sm mil-key--hot" type="button">保存服务登记</button>
+          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        </div>
       </div>
-    </div>
-    <div id="webhook-cards" class="mil-screen" style="margin-bottom:8px"></div>
-    <textarea id="webhook-config" class="mil-textarea mil-textarea--code" rows="12" aria-label="外部事件通道" spellcheck="false"></textarea>
-    <p class="mil-hint" style="margin-top:6px">示例：{"news":{"target":"chat:会话编号","kind":"proactive","profile":"scout","workspace":"digest","secret_handle":"event_key"}}</p>
-  </section>
+      <div id="service-cards" class="mil-screen" style="margin-bottom:12px"></div>
+      <textarea id="service-config" class="mil-textarea mil-textarea--code" rows="12" aria-label="MCP、模板与接口登记" spellcheck="false"></textarea>
+    </section>
+
+    <section class="mil-panel">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span class="mil-silk"><span class="mil-silk-en">WEBHOOKS · </span>外部 Webhook 事件通道 (JSON)</span>
+          <button type="button" class="mil-help" data-help='示例：{"news":{"target":"chat:qq:group:12345678","kind":"proactive","profile":"scout","workspace":"digest","secret_handle":"event_key"}}' aria-label="查看事件通道示例" aria-expanded="false">?</button>
+        </div>
+        <div class="mil-head-r">
+          <button id="format-webhooks" class="mil-key mil-key--sm" type="button">格式化</button>
+          <button id="save-webhooks" class="mil-key mil-key--sm mil-key--hot" type="button">保存事件通道</button>
+          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        </div>
+      </div>
+      <div id="webhook-cards" class="mil-screen" style="margin-bottom:12px"></div>
+      <div id="wh-quick-builder" class="ms-builder-box">
+        <div class="mil-row" style="justify-content:space-between;gap:6px">
+          <span class="mil-label" style="margin:0">快捷添加或更新事件通道</span>
+          <button type="button" class="mil-help" data-help="填好通道名与目标会话后点击填入，系统会自动写入下方 JSON 并可在校验后保存生效" aria-label="查看快捷添加说明" aria-expanded="false">?</button>
+        </div>
+        <div class="mil-grid-2">
+          <div class="mil-field"><label class="mil-label" for="wh-b-name">通道代号</label><input id="wh-b-name" class="mil-input mono" placeholder="如 news"></div>
+          <div class="mil-field"><label class="mil-label" for="wh-b-target">目标会话 (平台:类型:id)</label><input id="wh-b-target" class="mil-input mono" list="intent-chat-list" placeholder="如 qq:group:12345678"></div>
+          <div class="mil-field"><label class="mil-label" for="wh-b-profile">触发角色</label><select id="wh-b-profile" class="mil-select"></select></div>
+          <div class="mil-field"><label class="mil-label" for="wh-b-kind">动作模式</label><select id="wh-b-kind" class="mil-select"><option value="proactive">主动通知 / 简报</option><option value="task">后台任务执行</option></select></div>
+        </div>
+        <div class="mil-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <input id="wh-b-secret" class="mil-input mono" style="flex:1 1 160px;min-width:0" placeholder="可选凭据句柄，如 event_key">
+          <button id="wh-b-add" type="button" class="mil-key mil-key--sm">填入下方配置</button>
+        </div>
+      </div>
+      <textarea id="webhook-config" class="mil-textarea mil-textarea--code" rows="10" aria-label="外部事件通道" spellcheck="false"></textarea>
+    </section>
+  </div>
 </div>
 
 </div>
+
+<div class="mil-help-pop" id="mil-help-pop" role="tooltip" hidden></div>
 
 <script>
 (() => {
@@ -1915,13 +3390,38 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     });
   });
 
+  let savedUiStyle = "millennium";
+  let manualUiStyle = "";
+  let lastCtx = null;
+  function effectiveUiStyle(ctx) {
+    if (manualUiStyle) return manualUiStyle;
+    if (savedUiStyle === "maiwork" || savedUiStyle === "millennium") return savedUiStyle;
+    const dash = (ctx || lastCtx || window.maibot?.context || {}).dashboardStyle || "millennium";
+    return dash === "millennium" ? "millennium" : "maiwork";
+  }
+  function syncUiToggle(style) {
+    const btn = $("#ui-style-toggle");
+    if (!btn) return;
+    const isMil = style === "millennium";
+    btn.textContent = isMil ? "千禧机械" : "清朗手账";
+    btn.setAttribute("aria-pressed", String(isMil));
+  }
   function applyTheme(ctx) {
-    const c = ctx || window.maibot?.context || {};
+    if (ctx) lastCtx = ctx;
+    const c = ctx || lastCtx || window.maibot?.context || {};
     document.documentElement.className = c.theme === "dark" ? "dark" : "";
     document.documentElement.setAttribute("data-dashboard-style", c.dashboardStyle || "millennium");
+    const style = effectiveUiStyle(c);
+    document.documentElement.setAttribute("data-ui-style", style);
+    syncUiToggle(style);
   }
   applyTheme();
   window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
+  $("#ui-style-toggle")?.addEventListener("click", () => {
+    const next = document.documentElement.getAttribute("data-ui-style") === "millennium" ? "maiwork" : "millennium";
+    manualUiStyle = next;
+    applyTheme();
+  });
 
   // 严格限制最多 2 路并发请求，避免触及宿主 inflight 上限
   let inflight = 0;
@@ -1940,7 +3440,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const arg = op === "read"
         ? { section: key, payload: JSON.stringify(body || {}) }
         : { action: key, payload: JSON.stringify(body || {}) };
-      return op === "read" ? await window.maibot.query("read", arg) : await window.maibot.action("write", arg);
+      const res = op === "read" ? await window.maibot.query("read", arg) : await window.maibot.action("write", arg);
+      if (res?.ui_style) {
+        savedUiStyle = res.ui_style;
+        applyTheme();
+      }
+      return res;
     } finally {
       release();
     }
@@ -1976,6 +3481,76 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     if (current !== undefined) sel.value = String(current);
   }
 
+  function helpBtn(text, label = "查看说明") {
+    return text ? `<button type="button" class="mil-help" data-help="${esc(text)}" aria-label="${esc(label)}" aria-expanded="false">?</button>` : "";
+  }
+
+  function initHelpPopovers() {
+    const pop = $("#mil-help-pop");
+    if (!pop) return;
+    let activeBtn = null;
+    let pinnedBtn = null;
+    const closePop = () => {
+      if (activeBtn) activeBtn.setAttribute("aria-expanded", "false");
+      activeBtn = null;
+      pinnedBtn = null;
+      pop.hidden = true;
+    };
+    const openPop = (btn) => {
+      const text = btn?.dataset?.help || "";
+      if (!text) return;
+      if (activeBtn && activeBtn !== btn) activeBtn.setAttribute("aria-expanded", "false");
+      activeBtn = btn;
+      activeBtn.setAttribute("aria-expanded", "true");
+      pop.textContent = text;
+      pop.hidden = false;
+      const r = btn.getBoundingClientRect();
+      const pw = pop.offsetWidth || 260;
+      const ph = pop.offsetHeight || 60;
+      const left = Math.max(12, Math.min(window.innerWidth - pw - 12, r.left + r.width / 2 - pw / 2));
+      const top = r.bottom + ph + 16 < window.innerHeight ? r.bottom + 8 : Math.max(12, r.top - ph - 8);
+      pop.style.left = `${Math.round(left)}px`;
+      pop.style.top = `${Math.round(top)}px`;
+    };
+    document.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".mil-help");
+      if (btn) {
+        if (btn.closest("summary")) ev.preventDefault();
+        ev.stopPropagation();
+        if (pinnedBtn === btn && !pop.hidden) closePop();
+        else { pinnedBtn = btn; openPop(btn); }
+        return;
+      }
+      if (!pop.hidden && !ev.target.closest("#mil-help-pop")) closePop();
+    });
+    document.addEventListener("mouseenter", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && !pinnedBtn && window.matchMedia?.("(hover: hover)").matches) openPop(btn);
+    }, true);
+    document.addEventListener("mouseleave", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && activeBtn === btn && pinnedBtn !== btn && window.matchMedia?.("(hover: hover)").matches) closePop();
+    }, true);
+    document.addEventListener("focusin", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && !pinnedBtn) openPop(btn);
+    });
+    document.addEventListener("focusout", (ev) => {
+      const btn = ev.target.closest?.(".mil-help");
+      if (btn && activeBtn === btn && pinnedBtn !== btn) closePop();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !pop.hidden) closePop();
+    });
+    window.addEventListener("scroll", () => {
+      if (pop.hidden) return;
+      if (pinnedBtn?.isConnected) openPop(pinnedBtn);
+      else closePop();
+    }, { passive: true });
+    window.addEventListener("resize", closePop);
+  }
+  initHelpPopovers();
+
   /* ════════════════════════════════════════════════════════════════
      1. 能力页 (abilities)
      ════════════════════════════════════════════════════════════════ */
@@ -1985,6 +3560,36 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       "recall_read", "person_read", "digest_feed", "workspace_file", "html_render", "result_attach",
       "mcp_call", "plugin_api", "sandbox_exec", "credential_call",
     ];
+    const TOOL_LABELS = {
+      web_search: "联网搜索",
+      web_fetch: "网页正文读取",
+      chat_read: "近期聊天查阅",
+      message_read: "历史消息检索",
+      memory_read: "手账备忘查阅",
+      image_read: "图片内容识读",
+      recall_read: "长期记忆检索",
+      person_read: "成员公开资料",
+      digest_feed: "资讯源巡检",
+      workspace_file: "工作区文件读写",
+      html_render: "排版卡片渲染",
+      result_attach: "生成交付附件",
+      mcp_call: "外部 MCP 工具",
+      plugin_api: "跨插件接口",
+      sandbox_exec: "沙箱代码执行",
+      credential_call: "保险箱凭据请求",
+    };
+    const ACCESS_LABELS = {
+      everyone: "公开可用",
+      admins: "仅管理员",
+      listed: "指定范围",
+    };
+    const SLOT_LABELS = {
+      utils: "通用工具模型",
+      planner: "主规划模型",
+      replyer: "对话回复模型",
+      fast_model: "轻量快速模型",
+      vlm: "图文视觉模型",
+    };
     let catalog = { profiles: [], skills: [], skill_items: [], handles: [] };
     let viewMode = "skills-gallery";
     let selectedProfile = "scout";
@@ -2122,7 +3727,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
 
     function parseSimpleToml(text) {
-      const out = { tools: [], skills: [] };
+      const out = { tools: [], skills: [], allow_chats: [], allow_users: [] };
       String(text || "").split(/\r?\n/).forEach((line) => {
         const clean = line.trim();
         if (!clean || clean.startsWith("#")) return;
@@ -2143,6 +3748,211 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       return out;
     }
 
+    function getTomlModelChain(parsed) {
+      const p = parsed || parseSimpleToml($("#content").value);
+      const out = [];
+      const push = (val) => {
+        const s = String(val || "").trim();
+        if (s && !out.includes(s)) out.push(s);
+      };
+      push(p.model_name || p.model || "");
+      if (Array.isArray(p.fallback_models)) p.fallback_models.forEach(push);
+      if (Array.isArray(p.model_list)) p.model_list.forEach(push);
+      return out.slice(0, 16);
+    }
+
+    function hostModelEntries() {
+      const seen = new Set();
+      const rows = [];
+      const add = (entry) => {
+        if (!entry) return;
+        const name = typeof entry === "string" ? entry.trim() : String(entry.name || "").trim();
+        if (!name || seen.has(name)) return;
+        seen.add(name);
+        rows.push({
+          name,
+          provider: typeof entry === "object" ? String(entry.provider || "").trim() : "",
+          identifier: typeof entry === "object" ? String(entry.identifier || "").trim() : "",
+          source: typeof entry === "object" ? String(entry.source || "") : "",
+        });
+      };
+      (catalog.model_catalog || []).forEach(add);
+      (catalog.available_models || []).forEach(add);
+      return rows;
+    }
+
+    function renderModelChainEditor(parsed) {
+      const chain = getTomlModelChain(parsed);
+      const entries = hostModelEntries();
+      const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
+      const host = $("#cfg-model-chain");
+      const picker = $("#cfg-model-picker");
+      const chipsHost = $("#cfg-host-models-list");
+      const clearBtn = $("#cfg-model-clear");
+      if (!host) return;
+
+      if (clearBtn) clearBtn.disabled = chain.length === 0;
+
+      if (chain.length) {
+        host.innerHTML = chain.map((name, idx) => {
+          const info = byName[name];
+          const detail = [info?.provider, info?.identifier].filter(Boolean).join(" · ");
+          const roleLabel = idx === 0 ? "#1 主选" : `#${idx + 1} 备选`;
+          return `<div class="cfg-model-item${idx === 0 ? " cfg-model-item--primary" : ""}">
+            <div class="cfg-model-main">
+              <span class="cfg-model-rank">${roleLabel}</span>
+              <strong class="mono" style="font-size:13px;overflow-wrap:anywhere">${esc(name)}</strong>
+              ${detail ? `<span class="mil-hint mono">${esc(detail)}</span>` : ""}
+            </div>
+            <div class="mil-row" style="gap:4px;flex-wrap:nowrap">
+              <button type="button" class="mil-key mil-key--sm" data-model-move="up" data-model-idx="${idx}" ${idx === 0 ? "disabled" : ""} aria-label="上移优先级">↑</button>
+              <button type="button" class="mil-key mil-key--sm" data-model-move="down" data-model-idx="${idx}" ${idx === chain.length - 1 ? "disabled" : ""} aria-label="下移优先级">↓</button>
+              <button type="button" class="mil-key mil-key--sm" data-model-rm="${idx}" aria-label="移除此模型">×</button>
+            </div>
+          </div>`;
+        }).join("");
+      } else {
+        const taskName = $("#cfg-task")?.value || "utils";
+        host.innerHTML = `<div class="mil-hint" style="padding:4px 2px">当前未固定具体模型 · 运行时默认使用宿主槽位 <span class="mono">${esc(taskName)}</span></div>`;
+      }
+
+      if (picker) {
+        const unused = entries.filter((e) => !chain.includes(e.name));
+        picker.innerHTML = `<option value="">${entries.length ? (unused.length ? "从宿主已配置模型中追加..." : "宿主可选模型均已加入队列") : "尚未发现宿主模型清单（可在右侧手动输入）"}</option>` +
+          entries.map((e) => {
+            const label = [e.provider, e.identifier].filter(Boolean).join(" · ");
+            const inChain = chain.indexOf(e.name);
+            const suffix = inChain >= 0 ? ` [已选 #${inChain + 1}]` : (label ? ` (${label})` : "");
+            return `<option value="${esc(e.name)}">${esc(e.name + suffix)}</option>`;
+          }).join("");
+        picker.value = "";
+      }
+
+      if (chipsHost) {
+        chipsHost.innerHTML = entries.length
+          ? `<span class="mil-hint" style="margin-right:2px">宿主已配模型：</span>` + entries.map((e) => {
+              const rank = chain.indexOf(e.name);
+              const active = rank >= 0;
+              return `<button type="button" class="mil-key mil-key--sm" data-add-host-model="${esc(e.name)}" aria-pressed="${active ? "true" : "false"}" title="${esc([e.provider, e.identifier].filter(Boolean).join(" / ") || e.name)}">${active ? `#${rank + 1} ` : "+ "}<span class="mono">${esc(e.name)}</span></button>`;
+            }).join("")
+          : `<span class="mil-hint">提示：点击左侧「宿主环境」或保存一次宿主模型设置后，这里会自动列出已配模型</span>`;
+      }
+    }
+
+    function applyModelChainToToml(chain) {
+      const clean = [];
+      (chain || []).forEach((item) => {
+        const s = String(item || "").trim();
+        if (s && !clean.includes(s)) clean.push(s);
+      });
+      const limited = clean.slice(0, 16);
+      setDirty(true);
+      writeTomlKey("model_name", limited[0] ? tomlStr(limited[0]) : null);
+      writeTomlKey("fallback_models", limited.length > 1 ? tomlArr(limited.slice(1)) : null);
+      writeTomlKey("model", null);
+      writeTomlKey("model_list", null);
+      renderModelChainEditor();
+    }
+
+    function addModelToChain(rawName) {
+      const name = String(rawName || "").trim();
+      if (!name) return false;
+      const cur = getTomlModelChain();
+      if (!cur.includes(name)) cur.push(name);
+      applyModelChainToToml(cur);
+      return true;
+    }
+
+    function scopeKnownName(spec) {
+      const known = Array.isArray(catalog.known_chats) ? catalog.known_chats : [];
+      const hit = known.find((k) => k.stream_spec === spec || k.chat_id === spec);
+      const m = String(spec || "").match(/^([a-z0-9_-]+):(group|private):(.+)$/i);
+      if (hit?.name && hit.name !== spec && (!m || hit.name !== m[3])) return hit.name;
+      return m ? `${m[1].toUpperCase()} ${m[2].toLowerCase() === "group" ? "群聊" : "私聊"} · ${m[3]}` : spec;
+    }
+
+    function normalizeScopeChat(raw) {
+      const s = String(raw || "").trim();
+      if (!s) return "";
+      const m = s.match(/^(?:chat:)?([a-z][a-z0-9_-]*):(group|private):([^\s:]+)$/i);
+      if (m) return `${m[1].toLowerCase()}:${m[2].toLowerCase()}:${m[3].trim()}`;
+      const known = Array.isArray(catalog.known_chats) ? catalog.known_chats : [];
+      const hit = known.find((k) => k.chat_id === s || k.stream_spec === s);
+      return hit?.stream_spec || s;
+    }
+
+    function renderRoleScopeEditor(parsed) {
+      const wrap = $("#cfg-allow-scope-wrap");
+      if (!wrap) return;
+      const p = parsed || parseSimpleToml($("#content").value);
+      const access = $("#cfg-access")?.value || p.access || "everyone";
+      wrap.hidden = access !== "listed";
+      if (access !== "listed") return;
+
+      const allowChats = Array.isArray(p.allow_chats) ? p.allow_chats.map((x) => String(x || "").trim()).filter(Boolean) : [];
+      const allowUsers = Array.isArray(p.allow_users) ? p.allow_users.map((x) => String(x || "").trim()).filter(Boolean) : [];
+      const known = Array.isArray(catalog.known_chats) ? catalog.known_chats : [];
+      const availKnown = known.filter((k) => {
+        const sp = String(k.stream_spec || k.chat_id || "").trim();
+        return sp && sp !== "self" && !allowChats.includes(sp);
+      });
+
+      $("#cfg-allow-chats-box").innerHTML = `
+        <div class="mil-row" style="justify-content:space-between;gap:6px">
+          <span class="mil-label" style="margin:0">允许调用的会话白名单（平台:类型:id）</span>
+        </div>
+        <div class="ms-entry-list">
+          ${allowChats.length ? allowChats.map((c, idx) => {
+            const title = scopeKnownName(c);
+            return `<div class="ms-entry-row">
+              <div class="ms-entry-meta">
+                <span class="ms-entry-title">${esc(title)}</span>
+                ${title !== c ? `<span class="mil-tag ms-entry-code">${esc(c)}</span>` : ""}
+              </div>
+              <button type="button" class="mil-key mil-key--sm" data-cfg-rm-chat="${idx}">移除</button>
+            </div>`;
+          }).join("") : `<span class="mil-hint">暂未指定会话（仅下方白名单成员或管理员可用）</span>`}
+        </div>
+        ${availKnown.length ? `<div class="ms-entry-add">
+          <select id="cfg-pick-known-chat" class="mil-select" style="flex:1 1 180px" aria-label="从已发现会话选择">
+            <option value="">从已发现会话挑选…</option>
+            ${availKnown.map((k) => {
+              const sp = k.stream_spec || k.chat_id;
+              return `<option value="${esc(sp)}">${esc(k.name && k.name !== sp ? `${k.name} · ${sp}` : sp)}</option>`;
+            }).join("")}
+          </select>
+          <button type="button" class="mil-key mil-key--sm" id="cfg-add-known-chat">+ 添加所选</button>
+        </div>` : ""}
+        <div class="ms-entry-add">
+          <select id="cfg-chat-plat" class="mil-select" aria-label="会话平台">
+            <option value="qq">QQ</option><option value="telegram">Telegram</option><option value="discord">Discord</option><option value="wechat">微信</option>
+          </select>
+          <select id="cfg-chat-type" class="mil-select" aria-label="会话类型">
+            <option value="group">群聊</option><option value="private">私聊</option>
+          </select>
+          <input id="cfg-chat-id" class="mil-input mono" style="flex:1 1 140px" placeholder="群号或账号，如 12345678" aria-label="允许的群号或账号">
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="cfg-add-chat-btn">+ 添加会话</button>
+        </div>`;
+
+      $("#cfg-allow-users-box").innerHTML = `
+        <span class="mil-label" style="margin:0">允许调用的指定成员（平台:用户ID）</span>
+        <div class="ms-entry-list">
+          ${allowUsers.length ? allowUsers.map((u, idx) =>
+            `<div class="ms-entry-row">
+              <div class="ms-entry-meta"><span class="ms-entry-title mono">${esc(u)}</span></div>
+              <button type="button" class="mil-key mil-key--sm" data-cfg-rm-user="${idx}">移除</button>
+            </div>`
+          ).join("") : `<span class="mil-hint">暂未指定额外成员</span>`}
+        </div>
+        <div class="ms-entry-add">
+          <select id="cfg-user-plat" class="mil-select" aria-label="成员平台">
+            <option value="qq">QQ</option><option value="telegram">Telegram</option><option value="discord">Discord</option><option value="wechat">微信</option>
+          </select>
+          <input id="cfg-user-id" class="mil-input mono" style="flex:1 1 160px" placeholder="成员账号，如 10001（或 qq:10001）" aria-label="成员账号">
+          <button type="button" class="mil-key mil-key--sm" id="cfg-add-user-btn">+ 添加成员</button>
+        </div>`;
+    }
+
     function syncVisualFromToml() {
       loadingConfig = true;
       const p = parseSimpleToml($("#content").value);
@@ -2151,21 +3961,23 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       $("#cfg-env").value = p.environment === "sandbox" ? "sandbox" : "readonly";
       $("#cfg-access").value = ["everyone", "admins", "listed"].includes(p.access) ? p.access : "everyone";
       $("#cfg-task").value = ["utils", "planner", "replyer", "fast_model", "vlm"].includes(p.task) ? p.task : "utils";
-      $("#cfg-model-name").value = p.model_name || "";
+      if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
       $("#cfg-web").value = p.web_provider || "";
       $("#cfg-steps").value = p.max_steps ?? "";
       $("#cfg-temp").value = p.temperature ?? "";
+      renderRoleScopeEditor(p);
+      renderModelChainEditor(p);
 
       const pickedTools = new Set(Array.isArray(p.tools) ? p.tools : []);
       $("#cfg-tools").innerHTML = ALL_TOOLS.map((t) =>
-        `<label class="mil-chk"><input type="checkbox" data-cfg-tool="${esc(t)}" ${pickedTools.has(t) ? "checked" : ""}><span class="mono">${esc(t)}</span></label>`
+        `<label class="mil-chk" title="${esc(t)}"><input type="checkbox" data-cfg-tool="${esc(t)}" ${pickedTools.has(t) ? "checked" : ""}><span>${esc(TOOL_LABELS[t] || t)}</span></label>`
       ).join("");
 
       const pickedSkills = new Set(Array.isArray(p.skills) ? p.skills : []);
       const items = skillItemsList();
       $("#cfg-skills").innerHTML = items.length
         ? items.map((s) =>
-            `<label class="mil-chk" title="${esc(s.description || s.title || s.id)}"><input type="checkbox" data-cfg-skill="${esc(s.id)}" ${pickedSkills.has(s.id) ? "checked" : ""}><span class="mono">${esc(s.id)}</span></label>`
+            `<label class="mil-chk" title="${esc(s.description || s.title || s.id)}"><input type="checkbox" data-cfg-skill="${esc(s.id)}" ${pickedSkills.has(s.id) ? "checked" : ""}><span>${esc(s.title && s.title !== s.id ? `${s.title} (${s.id})` : s.id)}</span></label>`
           ).join("")
         : `<span class="mil-hint">暂无可用技能</span>`;
       loadingConfig = false;
@@ -2335,6 +4147,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
 
     let assetLoadSeq = 0;
+    let hostModelsProbed = false;
     async function loadAsset(preserveDraft = false) {
       const seq = ++assetLoadSeq;
       renderDocModeUI();
@@ -2364,7 +4177,16 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         $("#version").textContent = `v${expectedVersion}`;
         setDirty(false);
         versionHistory(r.history, expectedVersion);
-        if (viewMode === "roles" && $("#document").value === "config") syncVisualFromToml();
+        if (viewMode === "roles" && $("#document").value === "config") {
+          syncVisualFromToml();
+          if (!hostModelsProbed && !(catalog.available_models || []).length) {
+            hostModelsProbed = true;
+            await refreshDiscovery();
+            if (seq === assetLoadSeq && viewMode === "roles" && $("#document").value === "config") {
+              renderModelChainEditor();
+            }
+          }
+        }
         if (viewMode === "skill-editor" && $("#document").value === "skill") syncSkillVisualFromMarkdown();
       } finally {
         if (seq === assetLoadSeq) {
@@ -2438,8 +4260,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const clearBtn = $("#clear-skill-filter");
       if (foot) {
         foot.textContent = (needle || skillScope !== "all")
-          ? `当前显示 ${shownSkills.length} / ${items.length} 项技能 · 点击卡片进入工作台编辑`
-          : `共 ${items.length} 项技能 · 点击卡片进入工作台；也可直接将 .zip / .skill / .tar.gz 拖拽到此区域导入`;
+          ? `当前显示 ${shownSkills.length} / ${items.length} 项技能`
+          : `共 ${items.length} 项技能`;
       }
       if (clearBtn) clearBtn.hidden = !(needle || skillScope !== "all");
 
@@ -2455,6 +4277,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const on = viewMode === "roles" && p.id === selectedProfile;
         const isEnabled = p.enabled !== false;
         const fishCls = [!isEnabled ? "mil-fish--off" : "", freshFishProfile === p.id ? "is-new" : ""].filter(Boolean).join(" ");
+        const chain = Array.isArray(p.model_list) && p.model_list.length ? p.model_list : (p.model_name ? [p.model_name] : []);
+        const modelBadge = chain.length ? (chain.length > 1 ? `${chain[0]} +${chain.length - 1}` : chain[0]) : "默认模型";
+        const envTxt = p.environment === "sandbox" ? "隔离沙箱" : "轻量环境";
+        const accessTxt = ACCESS_LABELS[p.access || "everyone"] || "公开可用";
         return `<button type="button" class="ab-card" data-profile="${esc(p.id)}" data-enabled="${isEnabled}" aria-current="${on}">
           <div class="mil-row" style="gap:9px;align-items:center;flex-wrap:nowrap">
             ${roleFishHtml(p.id, p.fish_seed || "", 36, on && isEnabled ? {} : { still: true }, fishCls)}
@@ -2463,12 +4289,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
                 <strong>${esc(p.title || p.id)}</strong>
                 <span class="mil-row" style="gap:4px">
                   <span class="mil-tag ${isEnabled ? "mil-tag--ok" : "mil-tag--off"}">${isEnabled ? "启用" : "已停用"}</span>
-                  <span class="mil-tag">${esc(p.environment || "readonly")}</span>
+                  <span class="mil-tag">${envTxt}</span>
                 </span>
               </div>
               <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
-                <span class="mono">${esc(p.id)}</span>
-                <span>${esc(p.access || "everyone")} · 技能 ${(p.skills || []).length}</span>
+                <span class="mono">${esc(p.id)} · ${esc(modelBadge)}</span>
+                <span>${esc(accessTxt)} · 技能 ${(p.skills || []).length}</span>
               </div>
             </div>
           </div>
@@ -2497,25 +4323,41 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         return;
       }
       const modelGroups = Object.entries(d.models || {});
+      const availModels = Array.isArray(d.available_models) ? d.available_models : [];
+      const modelCatalog = Array.isArray(d.model_catalog) ? d.model_catalog : [];
+      if (availModels.length) catalog.available_models = availModels;
+      if (modelCatalog.length) catalog.model_catalog = modelCatalog;
       const pluginList = d.plugins || [];
       const apiList = d.apis || [];
       const streamList = d.streams || [];
       $("#discovery-cards").innerHTML = `
-        <div class="mil-row" style="margin-bottom:6px">
+        <div class="mil-row">
           <span class="mil-tag mil-tag--ok">会话流 ${streamList.length}</span>
-          <span class="mil-tag">模型槽位 ${modelGroups.length}</span>
+          <span class="mil-tag">宿主模型 ${availModels.length || modelGroups.length}</span>
           <span class="mil-tag">已加载插件 ${pluginList.length}</span>
-          <span class="mil-tag">公开 API ${apiList.length}</span>
+          <span class="mil-tag">公开接口 ${apiList.length}</span>
         </div>
-        <div class="mil-hint">可用模型：${esc(modelGroups.map(([k, v]) => `${k}(${Array.isArray(v) ? v.join("/") : JSON.stringify(v)})`).join(" · ") || "无")}</div>
-        <div class="mil-hint">可用插件 API：${esc(apiList.map((a) => `${a.plugin_id}.${a.name}`).join("、") || "暂无")}</div>
       `;
-      $("#discovery-info").textContent = JSON.stringify({
-        streams: streamList,
-        models: d.models,
-        plugins: pluginList,
-        apis: apiList,
-      }, null, 2);
+      const streamLines = streamList.map((s) => {
+        const plat = String(s.platform || "").toLowerCase();
+        const gid = String(s.group_id || (s.group_info && s.group_info.group_id) || "");
+        const uid = String(s.user_id || (s.user_info && s.user_info.user_id) || "");
+        const spec = s.stream_spec || (plat && (gid || uid) ? `${plat}:${gid ? "group" : "private"}:${gid || uid}` : (s.stream_id || s.session_id || ""));
+        const title = s.group_name || s.name || s.nickname || spec;
+        return title && title !== spec ? `${title} · ${spec}` : spec;
+      }).filter(Boolean);
+      const modelLines = modelCatalog.length
+        ? modelCatalog.map((m) => m.provider ? `${m.name} (${m.provider})` : m.name)
+        : availModels;
+      const slotLines = modelGroups.map(([k, v]) => `${SLOT_LABELS[k] || k}：${Array.isArray(v) && v.length ? v.join(" → ") : "随宿主默认"}`);
+      const pluginLines = pluginList.map((p) => typeof p === "string" ? p : (p.name || p.plugin_id || JSON.stringify(p))).filter(Boolean);
+      const apiLines = apiList.map((a) => `${a.plugin_id || "插件"}.${a.name}${a.description ? ` — ${a.description}` : ""}`);
+      $("#discovery-info").innerHTML = [
+        `<div class="ms-kv-card"><span class="ms-kv-k">已发现会话流</span><strong class="ms-kv-v num">${streamList.length} 条</strong><span class="ms-kv-sub">${esc(streamLines.slice(0, 8).join("\n") || "暂无活跃会话（收到群或私聊消息后出现，或直接在设置页添加 平台:类型:id）")}</span></div>`,
+        `<div class="ms-kv-card"><span class="ms-kv-k">宿主模型清单</span><strong class="ms-kv-v num">${modelLines.length} 个</strong><span class="ms-kv-sub">${esc(modelLines.join("、") || "暂未同步（宿主修改模型设置后自动更新）")}</span></div>`,
+        `<div class="ms-kv-card"><span class="ms-kv-k">默认任务分配</span><strong class="ms-kv-v num">${modelGroups.length} 个槽位</strong><span class="ms-kv-sub">${esc(slotLines.join("\n") || "由宿主自动分配")}</span></div>`,
+        `<div class="ms-kv-card"><span class="ms-kv-k">已挂载插件与接口</span><strong class="ms-kv-v num">${pluginLines.length} 插件 · ${apiLines.length} 接口</strong><span class="ms-kv-sub">${esc([...pluginLines.slice(0, 6), ...apiLines.slice(0, 4)].join("\n") || "暂无其他扩展插件")}</span></div>`,
+      ].join("");
     }
 
     async function loadCatalog() {
@@ -2708,14 +4550,44 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       }
     });
 
-    ["cfg-title", "cfg-env", "cfg-access", "cfg-task", "cfg-model-name", "cfg-web"].forEach((id) => {
-      const key = { "cfg-title": "title", "cfg-env": "environment", "cfg-access": "access", "cfg-task": "task", "cfg-model-name": "model_name", "cfg-web": "web_provider" }[id];
+    ["cfg-title", "cfg-env", "cfg-access", "cfg-task", "cfg-web"].forEach((id) => {
+      const key = { "cfg-title": "title", "cfg-env": "environment", "cfg-access": "access", "cfg-task": "task", "cfg-web": "web_provider" }[id];
       $(`#${id}`).addEventListener("input", () => {
         setDirty(true);
         const val = $(`#${id}`).value.trim();
-        writeTomlKey(key, (val || (key !== "model_name" && key !== "web_provider")) ? tomlStr(val) : null);
+        writeTomlKey(key, (val || key !== "web_provider") ? tomlStr(val) : null);
+        if (id === "cfg-task") renderModelChainEditor();
+        if (id === "cfg-access") renderRoleScopeEditor();
       });
     });
+    if ($("#cfg-model-picker")) {
+      $("#cfg-model-picker").addEventListener("change", () => {
+        const picked = $("#cfg-model-picker").value.trim();
+        if (picked) addModelToChain(picked);
+      });
+    }
+    if ($("#cfg-model-add")) {
+      $("#cfg-model-add").onclick = () => {
+        const raw = $("#cfg-model-name")?.value.trim() || "";
+        if (!raw) return;
+        addModelToChain(raw);
+        if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
+      };
+    }
+    if ($("#cfg-model-name")) {
+      $("#cfg-model-name").addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          $("#cfg-model-add")?.click();
+        }
+      });
+    }
+    if ($("#cfg-model-clear")) {
+      $("#cfg-model-clear").onclick = () => {
+        if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
+        applyModelChainToToml([]);
+      };
+    }
     ["cfg-steps", "cfg-temp"].forEach((id) => {
       const key = id === "cfg-steps" ? "max_steps" : "temperature";
       $(`#${id}`).addEventListener("input", () => {
@@ -2723,6 +4595,114 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const val = $(`#${id}`).value.trim();
         writeTomlKey(key, val === "" ? null : String(Number(val)));
       });
+    });
+    $("#cfg-visual").addEventListener("click", (ev) => {
+      const moveBtn = ev.target.closest("[data-model-move]");
+      if (moveBtn) {
+        const idx = Number(moveBtn.dataset.modelIdx);
+        const chain = getTomlModelChain();
+        const swapWith = moveBtn.dataset.modelMove === "up" ? idx - 1 : idx + 1;
+        if (swapWith >= 0 && swapWith < chain.length) {
+          [chain[idx], chain[swapWith]] = [chain[swapWith], chain[idx]];
+          applyModelChainToToml(chain);
+        }
+        return;
+      }
+      const rmBtn = ev.target.closest("[data-model-rm]");
+      if (rmBtn) {
+        const idx = Number(rmBtn.dataset.modelRm);
+        const chain = getTomlModelChain();
+        chain.splice(idx, 1);
+        applyModelChainToToml(chain);
+        return;
+      }
+      const chipBtn = ev.target.closest("[data-add-host-model]");
+      if (chipBtn) {
+        const mName = chipBtn.dataset.addHostModel;
+        const chain = getTomlModelChain();
+        const at = chain.indexOf(mName);
+        if (at >= 0) chain.splice(at, 1);
+        else chain.push(mName);
+        applyModelChainToToml(chain);
+        return;
+      }
+      if (ev.target.id === "cfg-add-known-chat") {
+        const spec = normalizeScopeChat($("#cfg-pick-known-chat")?.value || "");
+        if (!spec) return say("请先选择一条会话", true);
+        const p = parseSimpleToml($("#content").value);
+        const list = Array.isArray(p.allow_chats) ? [...p.allow_chats] : [];
+        if (!list.includes(spec)) {
+          list.push(spec);
+          setDirty(true);
+          writeTomlKey("allow_chats", tomlArr(list));
+          renderRoleScopeEditor();
+        }
+        return;
+      }
+      if (ev.target.id === "cfg-add-chat-btn") {
+        const plat = ($("#cfg-chat-plat")?.value || "qq").trim().toLowerCase();
+        const ctype = ($("#cfg-chat-type")?.value || "group").trim().toLowerCase();
+        const raw = ($("#cfg-chat-id")?.value || "").trim();
+        if (!raw) return say("请输入群号或用户 ID", true);
+        const spec = /^(?:chat:)?[a-z][a-z0-9_-]*:(group|private):[^\s:]+$/i.test(raw)
+          ? normalizeScopeChat(raw)
+          : `${plat}:${ctype}:${raw}`;
+        const p = parseSimpleToml($("#content").value);
+        const list = Array.isArray(p.allow_chats) ? [...p.allow_chats] : [];
+        if (!list.includes(spec)) {
+          list.push(spec);
+          setDirty(true);
+          writeTomlKey("allow_chats", tomlArr(list));
+          renderRoleScopeEditor();
+        }
+        return;
+      }
+      const rmChatBtn = ev.target.closest("[data-cfg-rm-chat]");
+      if (rmChatBtn) {
+        const idx = Number(rmChatBtn.dataset.cfgRmChat);
+        const p = parseSimpleToml($("#content").value);
+        const list = Array.isArray(p.allow_chats) ? [...p.allow_chats] : [];
+        list.splice(idx, 1);
+        setDirty(true);
+        writeTomlKey("allow_chats", list.length ? tomlArr(list) : null);
+        renderRoleScopeEditor();
+        return;
+      }
+      if (ev.target.id === "cfg-add-user-btn") {
+        const plat = ($("#cfg-user-plat")?.value || "qq").trim().toLowerCase();
+        const raw = ($("#cfg-user-id")?.value || "").trim();
+        if (!raw) return say("请输入成员账号", true);
+        const entry = raw.includes(":") ? raw.toLowerCase() : `${plat}:${raw}`;
+        const p = parseSimpleToml($("#content").value);
+        const list = Array.isArray(p.allow_users) ? [...p.allow_users] : [];
+        if (!list.includes(entry)) {
+          list.push(entry);
+          setDirty(true);
+          writeTomlKey("allow_users", tomlArr(list));
+          renderRoleScopeEditor();
+        }
+        return;
+      }
+      const rmUserBtn = ev.target.closest("[data-cfg-rm-user]");
+      if (rmUserBtn) {
+        const idx = Number(rmUserBtn.dataset.cfgRmUser);
+        const p = parseSimpleToml($("#content").value);
+        const list = Array.isArray(p.allow_users) ? [...p.allow_users] : [];
+        list.splice(idx, 1);
+        setDirty(true);
+        writeTomlKey("allow_users", list.length ? tomlArr(list) : null);
+        renderRoleScopeEditor();
+      }
+    });
+    $("#cfg-visual").addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      if (ev.target.id === "cfg-chat-id") {
+        ev.preventDefault();
+        $("#cfg-add-chat-btn")?.click();
+      } else if (ev.target.id === "cfg-user-id") {
+        ev.preventDefault();
+        $("#cfg-add-user-btn")?.click();
+      }
     });
     $("#cfg-visual").addEventListener("change", (ev) => {
       if (ev.target.id === "cfg-enabled") {
@@ -2740,6 +4720,13 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     });
 
     $("#save").onclick = async () => {
+      if (viewMode === "roles" && $("#document")?.value === "config") {
+        const pendingModel = $("#cfg-model-name")?.value.trim();
+        if (pendingModel) {
+          addModelToChain(pendingModel);
+          if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
+        }
+      }
       const q = targetQuery();
       $("#save").disabled = true;
       say("");
@@ -3166,11 +5153,11 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           const chats = pv.enabled_chats || [];
           $("#rcp-routine-chat").innerHTML = [
             `<option value="">暂不挂载（仅导入角色）</option>`,
-            ...chats.map((c) => `<option value="${esc(c)}">挂载至会话 ${esc(c)}</option>`),
+            ...chats.map((c) => `<option value="${esc(c)}">挂载至 ${esc(scopeKnownName(c))}</option>`),
           ].join("");
           $("#rcp-pv-routines").innerHTML = routines.map((rt) => {
-            const period = rt.every_seconds ? `每 ${rt.every_seconds}s` : "单次";
-            return `<label class="mil-chk" style="justify-content:flex-start"><input type="checkbox" data-rcp-routine="${esc(rt.id)}" checked><span><strong>${esc(rt.title)}</strong> (${esc(period)}${rt.workspace ? ` · ws:${esc(rt.workspace)}` : ""})</span></label>`;
+            const period = rt.every_seconds ? `每 ${rt.every_seconds} 秒` : "单次";
+            return `<label class="mil-chk" style="justify-content:flex-start"><input type="checkbox" data-rcp-routine="${esc(rt.id)}" checked><span><strong>${esc(rt.title)}</strong> (${esc(period)}${rt.workspace ? ` · 工作区:${esc(rt.workspace)}` : ""})</span></label>`;
           }).join("");
         }
       }
@@ -3451,6 +5438,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     let outData = { items: [], workspaces: [], chats: [], chat_sources: {}, stats: {} };
     let filterChat = "";
     let filterKind = "all";
+    let activeSpace = "all";
+    let filterRole = "";
+    let outLayout = "table";
+    let visibleItems = [];
     let selectedItem = null;
     let curView = "preview";
     let curArtifact = null;
@@ -3464,6 +5455,15 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       workspace_out: "工作区成品",
       workspace_file: "工作区文件",
       conclusion: "结论与出处",
+    };
+
+    const SPACE_HEADINGS = {
+      all: "全部资料",
+      pages: "页面与卡片",
+      images: "图像与海报",
+      docs: "文档与代码",
+      conclusions: "结论与出处",
+      workspaces: "持续工作区",
     };
 
     const MEDIA_LABELS = {
@@ -3481,6 +5481,31 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (v >= 1024) return `${(v / 1024).toFixed(1)} KB`;
       return `${v} B`;
     };
+
+    const fmtRelTime = (ts) => {
+      const n = Number(ts || 0);
+      if (!n) return "—";
+      const diff = Math.max(0, Math.floor(Date.now() / 1000 - n));
+      if (diff < 60) return "刚刚";
+      if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+      if (diff < 2592000) return `${Math.floor(diff / 86400)} 天前`;
+      const d = new Date(n * 1000);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+
+    function fileTypeIcon(mediaKind) {
+      if (mediaKind === "html") {
+        return `<svg class="out-ico out-ico--page" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 6h12" stroke="currentColor" stroke-width="1.4"/></svg>`;
+      }
+      if (mediaKind === "image") {
+        return `<svg class="out-ico out-ico--img" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.5" cy="6" r="1.1" fill="currentColor"/><path d="M3 12l3.4-3.4 2.3 2.2 2-2 2.3 3.2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>`;
+      }
+      if (mediaKind === "conclusion") {
+        return `<svg class="out-ico out-ico--con" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7.5H7.2l-3 2.5V11H2.5z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 6.5h6M5 8.8h4" stroke="currentColor" stroke-width="1.3"/></svg>`;
+      }
+      return `<svg class="out-ico out-ico--doc" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5.5L13 5.5V13.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 8h5M5.5 10.8h4" stroke="currentColor" stroke-width="1.3"/></svg>`;
+    }
 
     const revokeBlob = () => {
       if (activeBlobUrl) {
@@ -3565,15 +5590,27 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
 
     function renderFilterButtons() {
+      $$("[data-out-space]").forEach((b) => b.setAttribute("aria-current", b.dataset.outSpace === activeSpace ? "page" : "false"));
+      $$("[data-out-layout]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.outLayout === outLayout)));
       $$("[data-out-kind]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.outKind === filterKind)));
+      $$("[data-out-role]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.outRole === filterRole)));
       $$("[data-out-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.outView === curView)));
       $$("[data-out-chat]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.outChat === filterChat)));
+    }
+
+    function spaceMatchesItem(item) {
+      if (activeSpace === "pages") return item.media_kind === "html";
+      if (activeSpace === "images") return item.media_kind === "image";
+      if (activeSpace === "docs") return ["markdown", "text", "binary"].includes(item.media_kind);
+      if (activeSpace === "conclusions") return item.kind === "conclusion";
+      return true;
     }
 
     function chatLabel(cid) {
       if (!cid) return "全部会话";
       const s = (outData.chat_sources || {})[cid];
-      return s?.name && s.name !== cid ? `${s.name} (${cid})` : cid;
+      const spec = s?.stream_spec || cid;
+      return s?.name && s.name !== spec ? `${s.name} · ${spec}` : spec;
     }
 
     function renderChatFilter() {
@@ -3586,13 +5623,16 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         ...chats.map((c) => {
           const s = srcs[c] || {};
           const name = s.name || c;
+          const spec = s.stream_spec || "";
           const rawAv = String(s.avatar || "");
           const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
           const mono = (name || c || "?").trim().slice(0, 1).toUpperCase();
-          return `<button type="button" class="mil-key mil-key--sm" data-out-chat="${esc(c)}" style="justify-content:flex-start;gap:7px" title="${esc(c)}">
-            <span class="mil-avatar mil-avatar--sm" aria-hidden="true">${esc(mono)}${safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(safeAv)}')"></span>` : ""}</span>
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span>
-            ${s.platform ? `<span class="mil-tag">${esc(s.platform)}</span>` : ""}
+          return `<button type="button" class="mil-key mil-key--sm ms-chat-chip" data-out-chat="${esc(c)}" title="${esc(spec || c)}">
+            <span class="ms-chat-chip-top">
+              <span class="mil-avatar mil-avatar--sm" aria-hidden="true">${esc(mono)}${safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(safeAv)}')"></span>` : ""}</span>
+              <span class="ms-chat-chip-name">${esc(name)}</span>
+            </span>
+            ${spec || s.platform ? `<span class="ms-chat-chip-spec mono">${esc(spec || s.platform)}</span>` : ""}
           </button>`;
         }),
       ].join("");
@@ -3601,29 +5641,82 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     function renderCatalog() {
       const st = outData.stats || {};
-      $("#out-st-total").textContent = String(st.total || 0);
+      const allItems = outData.items || [];
+      $("#out-st-total").textContent = String(st.total ?? allItems.length);
       $("#out-st-att").textContent = String(st.attachments || 0);
       $("#out-st-wsout").textContent = String(st.workspace_out || 0);
       $("#out-st-ws").textContent = String(st.workspaces || 0);
+      if ($("#out-st-pages")) $("#out-st-pages").textContent = String(st.pages ?? allItems.filter((i) => i.media_kind === "html").length);
+      if ($("#out-st-images")) $("#out-st-images").textContent = String(st.images ?? allItems.filter((i) => i.media_kind === "image").length);
+      if ($("#out-st-docs")) $("#out-st-docs").textContent = String(st.docs ?? allItems.filter((i) => ["markdown", "text", "binary"].includes(i.media_kind)).length);
+      if ($("#out-st-conclusions")) $("#out-st-conclusions").textContent = String(st.conclusions ?? allItems.filter((i) => i.kind === "conclusion").length);
 
-      const items = outData.items || [];
-      $("#out-list").innerHTML = items.length
-        ? items.map((item, idx) => {
+      const recentSource = Array.isArray(outData.recent) && outData.recent.length ? outData.recent : allItems.slice(0, 5);
+      if ($("#out-recent-list")) {
+        $("#out-recent-list").innerHTML = recentSource.length
+          ? recentSource.slice(0, 5).map((item) => `<button type="button" class="out-recent-item" data-recent-id="${esc(item.id)}" title="${esc(item.title || item.name)}">${fileTypeIcon(item.media_kind)}<span class="out-recent-title">${esc(item.title || item.name)}</span></button>`).join("")
+          : `<span class="mil-hint" style="padding:4px 6px">暂无最近文件</span>`;
+      }
+
+      const roles = [...new Set(allItems.map((i) => i.profile).filter(Boolean))];
+      if ($("#out-role-pills")) {
+        $("#out-role-pills").innerHTML = roles.length
+          ? [`<button type="button" class="mil-key mil-key--sm" data-out-role="" aria-pressed="${filterRole === "" ? "true" : "false"}">全部角色</button>`, ...roles.map((r) => `<button type="button" class="mil-key mil-key--sm" data-out-role="${esc(r)}" aria-pressed="${filterRole === r ? "true" : "false"}">${roleFishHtml(r, (outData.profile_fish || {})[r] || "", 16, { still: true })}<span>${esc(r)}</span></button>`)].join("")
+          : "";
+      }
+
+      const inWorkspaces = activeSpace === "workspaces";
+      if ($("#out-catalog-panel")) $("#out-catalog-panel").hidden = inWorkspaces;
+      if ($("#out-ws-panel")) $("#out-ws-panel").style.order = inWorkspaces ? "-1" : "";
+      if ($("#out-space-heading")) $("#out-space-heading").textContent = SPACE_HEADINGS[activeSpace] || "全部资料";
+
+      visibleItems = allItems.filter((item) => spaceMatchesItem(item) && (!filterRole || item.profile === filterRole));
+      if ($("#out-visible-count")) $("#out-visible-count").textContent = `${visibleItems.length} 项`;
+
+      const listEl = $("#out-list");
+      const headEl = $("#out-table-head");
+      if (headEl) headEl.hidden = outLayout === "grid";
+      listEl.className = outLayout === "grid" ? "out-grid" : "out-table";
+      listEl.innerHTML = visibleItems.length
+        ? visibleItems.map((item, idx) => {
             const active = selectedItem && selectedItem.id === item.id;
             const kindTxt = KIND_LABELS[item.kind] || item.kind;
-            return `<button type="button" class="ab-card" data-out-idx="${idx}" aria-current="${active ? "true" : "false"}">
-              <div class="mil-row" style="justify-content:space-between;font-size:11px">
-                <span class="mil-tag">${esc(kindTxt)}</span>
-                <span class="num">${esc(fmtBytes(item.bytes))}</span>
+            const subLine = item.path || item.excerpt || kindTxt;
+            const roleName = item.profile || "agent";
+            const fish = roleFishHtml(roleName, (outData.profile_fish || {})[roleName] || "", 18, { still: true });
+            const relTime = fmtRelTime(item.at);
+            if (outLayout === "grid") {
+              return `<button type="button" class="out-grid-card" data-out-idx="${idx}" aria-current="${active ? "true" : "false"}">
+                <div class="mil-row" style="justify-content:space-between;gap:6px">
+                  <span class="mil-row" style="gap:6px">${fileTypeIcon(item.media_kind)}<span class="mil-tag">${esc(MEDIA_LABELS[item.media_kind] || kindTxt)}</span></span>
+                  <span class="mil-row-meta num" style="font-size:11.5px;color:var(--mil-muted)">${esc(fmtBytes(item.bytes))}</span>
+                </div>
+                <strong style="font-size:13px;overflow-wrap:anywhere">${esc(item.title || item.name)}</strong>
+                <span class="out-row-sub">${esc(subLine)}</span>
+                <div class="mil-row" style="justify-content:space-between;font-size:11.5px;margin-top:auto">
+                  <span class="mil-row" style="gap:5px">${fish}<span>${esc(roleName)}</span></span>
+                  <span style="color:var(--mil-muted)">${esc(relTime)}</span>
+                </div>
+              </button>`;
+            }
+            return `<button type="button" class="out-row" data-out-idx="${idx}" aria-current="${active ? "true" : "false"}">
+              <div class="out-row-name">
+                ${fileTypeIcon(item.media_kind)}
+                <div class="out-row-titles">
+                  <strong>${esc(item.title || item.name)}</strong>
+                  <span class="out-row-sub">${esc(subLine)}</span>
+                </div>
               </div>
-              <strong style="font-size:12.5px;overflow-wrap:anywhere">${esc(item.title || item.name)}</strong>
-              <div class="mil-row" style="justify-content:space-between;font-size:11px;opacity:.85">
-                <span class="mil-row" style="gap:5px">${roleFishHtml(item.profile || "agent", (outData.profile_fish || {})[item.profile || ""] || "", 18, { still: true })}<span>${esc(item.profile || "agent")} · ${esc(chatLabel(item.chat_id))}</span></span>
-                ${item.delivered ? `<span>已回接</span>` : ""}
+              <div class="out-row-src">
+                ${fish}
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(roleName)} · ${esc(chatLabel(item.chat_id))}</span>
+                ${item.delivered ? `<span class="mil-tag mil-tag--ok">已回接</span>` : ""}
               </div>
+              <div class="out-row-meta out-row-size">${esc(fmtBytes(item.bytes))}</div>
+              <div class="out-row-meta">${esc(relTime)}</div>
             </button>`;
           }).join("")
-        : `<p class="mil-hint" style="padding:8px">当前筛选条件下暂无产物条目。</p>`;
+        : `<p class="mil-hint" style="padding:14px 10px">当前筛选条件下暂无资料条目。</p>`;
 
       $("#workspaces").innerHTML = (outData.workspaces || []).map((w) =>
         `<button type="button" class="mil-key mil-key--sm" data-ws="${esc(w.workspace_id)}">
@@ -3680,10 +5773,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           stage.innerHTML = `<pre class="mil-pre">${esc(copyBuffer)}</pre>`;
         } else {
           const linksHtml = (a.links || []).length
-            ? `<div style="margin-top:10px;border-top:2px dashed var(--mil-rule);padding-top:8px"><div class="mil-label" style="margin-bottom:4px">提取的出处链接 (${a.links.length})</div>${a.links.map((u) => `<div class="out-link-item"><span class="mono" style="overflow-wrap:anywhere">${esc(u)}</span></div>`).join("")}</div>`
+            ? `<div style="margin-top:12px;border-top:1px solid var(--mil-rule);padding-top:10px"><div class="mil-label" style="margin-bottom:6px">提取的出处链接 (${a.links.length})</div>${a.links.map((u) => `<div class="out-link-item"><span class="mono" style="overflow-wrap:anywhere">${esc(u)}</span></div>`).join("")}</div>`
             : "";
           const attsHtml = (a.attachments || []).length
-            ? `<div style="margin-top:10px;border-top:2px dashed var(--mil-rule);padding-top:8px"><div class="mil-label" style="margin-bottom:6px">关联附件 (${a.attachments.length})</div><div class="mil-row">${a.attachments.map((att) => `<button type="button" class="mil-key mil-key--sm" data-open-att="${esc(att.handle)}">${esc(att.name)} (${fmtBytes(att.bytes || 0)})</button>`).join("")}</div></div>`
+            ? `<div style="margin-top:12px;border-top:1px solid var(--mil-rule);padding-top:10px"><div class="mil-label" style="margin-bottom:6px">关联附件 (${a.attachments.length})</div><div class="mil-row">${a.attachments.map((att) => `<button type="button" class="mil-key mil-key--sm" data-open-att="${esc(att.handle)}">${esc(att.name)} (${fmtBytes(att.bytes || 0)})</button>`).join("")}</div></div>`
             : "";
           stage.innerHTML = `${renderMarkdown(textAccumulator)}${linksHtml}${attsHtml}`;
         }
@@ -3781,12 +5874,41 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       outData = r;
       renderChatFilter();
       renderCatalog();
-      if (autoOpen && r.items?.length && !selectedItem) {
-        await openItem(r.items[0]);
+      if (autoOpen && visibleItems.length && !selectedItem) {
+        await openItem(visibleItems[0]);
       }
     }
 
     document.addEventListener("click", async (ev) => {
+      const spaceBtn = ev.target.closest("[data-out-space]");
+      if (spaceBtn) {
+        activeSpace = spaceBtn.dataset.outSpace;
+        selectedItem = null;
+        renderCatalog();
+        if (visibleItems.length) await openItem(visibleItems[0]);
+        return;
+      }
+      const layoutBtn = ev.target.closest("[data-out-layout]");
+      if (layoutBtn) {
+        outLayout = layoutBtn.dataset.outLayout;
+        renderCatalog();
+        return;
+      }
+      const roleBtn = ev.target.closest("[data-out-role]");
+      if (roleBtn) {
+        filterRole = roleBtn.dataset.outRole;
+        selectedItem = null;
+        renderCatalog();
+        if (visibleItems.length) await openItem(visibleItems[0]);
+        return;
+      }
+      const recentBtn = ev.target.closest("[data-recent-id]");
+      if (recentBtn) {
+        const rid = recentBtn.dataset.recentId;
+        const hit = (outData.recent || []).concat(outData.items || []).find((x) => x.id === rid);
+        if (hit) await openItem(hit);
+        return;
+      }
       const chatBtn = ev.target.closest("[data-out-chat]");
       if (chatBtn) {
         filterChat = chatBtn.dataset.outChat;
@@ -3811,7 +5933,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const cardBtn = ev.target.closest("[data-out-idx]");
       if (cardBtn) {
         const idx = Number(cardBtn.dataset.outIdx);
-        await openItem((outData.items || [])[idx]);
+        await openItem(visibleItems[idx] || (outData.items || [])[idx]);
         return;
       }
       const attBtn = ev.target.closest("[data-open-att]");
@@ -3895,6 +6017,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     let expectedVersion = 0;
     let memData = { chats: [] };
 
+    const LAYER_BADGES = {
+      memory: "本会话办事约定",
+      journal: "近七天后台经历",
+      heartbeat: "自主探索方向",
+    };
+
     const LAYER_GUIDES = {
       memory: "会话备忘（MEMORY.md）按会话严格隔离，仅记录本会话长期置顶的办事约定；群友印象由宿主 A_Memorix 维护。",
       journal: "近期手账（JOURNAL.md）由系统在公开探索线程完成后自动沉淀近 7 天经历摘要（新装或尚未触发探索时为空属正常现象）；请勿在此写入单会话私密信息。",
@@ -3907,7 +6035,9 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const cid = $("#chat").value;
       $$("[data-chat-chip]").forEach((b) => b.setAttribute("aria-current", String(b.dataset.chatChip === cid)));
       const guide = $("#mem-layer-guide");
-      if (guide) guide.textContent = LAYER_GUIDES[k] || "";
+      if (guide) guide.textContent = LAYER_BADGES[k] || "";
+      const help = $("#mem-layer-help");
+      if (help) help.dataset.help = LAYER_GUIDES[k] || "";
       const hbBtn = $("#insert-heartbeat-example");
       if (hbBtn) hbBtn.hidden = k !== "heartbeat";
     }
@@ -3963,15 +6093,35 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       }
       el.innerHTML = rows.map((x) => {
         if (typeof x === "string") return `<div class="exp-card"><span>${esc(x)}</span></div>`;
+        const body = x.snippet || x.summary || x.text || x.title || x.reason || "";
         return `<div class="exp-card">
           <div class="mil-row" style="justify-content:space-between;font-size:11.5px">
             <strong>${esc(x.profile || x.kind || "记录")}</strong>
             <span class="mono mil-hint">${esc(x.thread_id || x.chat_id || "")}</span>
           </div>
-          <span style="font-size:12.5px">${esc(x.snippet || x.summary || x.text || x.title || JSON.stringify(x))}</span>
+          <span style="font-size:12.5px">${esc(body || "已记录活动条目")}</span>
         </div>`;
       }).join("");
     }
+
+    const MEM_INTENT_KINDS = {
+      routine: "周期安排",
+      proactive: "主动触发",
+      self_reflection: "自我探索",
+      webhook: "外部事件",
+      user_schedule: "定时任务",
+      workflow: "定时任务",
+      reminder: "提醒",
+    };
+    const MEM_INTENT_STATES = {
+      pending: "等待中",
+      scheduled: "已排期",
+      running: "进行中",
+      done: "已完成",
+      completed: "已完成",
+      cancelled: "已取消",
+      failed: "已结束",
+    };
 
     async function loadOverview() {
       const query = $("#search").value.trim();
@@ -3984,7 +6134,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const srcs = r.chat_sources || {};
       const chatLabel = (cid) => {
         const s = srcs[cid];
-        return s?.name && s.name !== cid ? `${s.name} (${cid})` : cid;
+        const spec = s?.stream_spec || cid;
+        return s?.name && s.name !== spec ? `${s.name} · ${spec}` : spec;
       };
       $("#chat").innerHTML = chats.length
         ? chats.map((c) => `<option value="${esc(c)}">${esc(chatLabel(c))}</option>`).join("")
@@ -3993,13 +6144,16 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       $("#chat-chips").innerHTML = chats.map((c) => {
         const s = srcs[c] || {};
         const name = s.name || c;
+        const spec = s.stream_spec || "";
         const rawAv = String(s.avatar || "");
         const safeAv = /^(https?:\/\/|data:image\/)/i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
         const mono = (name || c || "?").trim().slice(0, 1).toUpperCase();
-        return `<button type="button" class="mil-key mil-key--sm" data-chat-chip="${esc(c)}" style="justify-content:flex-start;gap:7px" title="${esc(c)}">
-          <span class="mil-avatar mil-avatar--sm" aria-hidden="true">${esc(mono)}${safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(safeAv)}')"></span>` : ""}</span>
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span>
-          ${s.platform ? `<span class="mil-tag">${esc(s.platform)}</span>` : ""}
+        return `<button type="button" class="mil-key mil-key--sm ms-chat-chip" data-chat-chip="${esc(c)}" title="${esc(spec || c)}">
+          <span class="ms-chat-chip-top">
+            <span class="mil-avatar mil-avatar--sm" aria-hidden="true">${esc(mono)}${safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(safeAv)}')"></span>` : ""}</span>
+            <span class="ms-chat-chip-name">${esc(name)}</span>
+          </span>
+          ${spec || s.platform ? `<span class="ms-chat-chip-spec mono">${esc(spec || s.platform)}</span>` : ""}
         </button>`;
       }).join("") || `<span class="mil-hint">暂无已启用会话</span>`;
       renderLayerBtns();
@@ -4010,16 +6164,39 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     async function loadIntents() {
       const r = await rpc("read", "intents", {});
       if (!r?.success) return;
-      $("#intent-list").innerHTML = (r.intents || []).map((i) =>
-        `<div class="exp-card">
+      const srcs = memData?.chat_sources || {};
+      const targetName = (raw) => {
+        const clean = String(raw || "").replace(/^chat:/, "").trim();
+        const s = srcs[clean];
+        const spec = s?.stream_spec || clean;
+        return s?.name && s.name !== spec ? `${s.name} · ${spec}` : (spec || "自身活动");
+      };
+      $("#intent-list").innerHTML = (r.intents || []).map((i) => {
+        const kindTxt = MEM_INTENT_KINDS[i.kind] || i.kind || "计划";
+        const statusTxt = MEM_INTENT_STATES[i.status] || i.status || "等待中";
+        const srcTxt = MEM_INTENT_KINDS[i.source] || i.source || "系统";
+        return `<div class="exp-card">
           <div class="mil-row" style="justify-content:space-between">
-            <span><span class="mil-tag">${esc(i.kind)}</span> <strong>${esc(i.reason)}</strong></span>
-            ${i.status === "pending" ? `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>` : `<span class="mil-tag">${esc(i.status)}</span>`}
+            <span><span class="mil-tag">${esc(kindTxt)}</span> <strong>${esc(i.reason || "定时执行")}</strong></span>
+            ${i.status === "pending" ? `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>` : `<span class="mil-tag">${esc(statusTxt)}</span>`}
           </div>
-          <span class="mil-hint mono">${esc(i.target)} · 来源 ${esc(i.source)}</span>
-        </div>`
-      ).join("") || `<p class="mil-hint">暂无意图记录</p>`;
-      $("#learning").textContent = (r.learning || []).length ? JSON.stringify(r.learning, null, 2) : "暂无自动笔记回执";
+          <span class="mil-hint">${esc(targetName(i.target))} · ${esc(srcTxt)}</span>
+        </div>`;
+      }).join("") || `<p class="mil-hint">暂无意图记录</p>`;
+
+      const learnRows = Array.isArray(r.learning) ? r.learning : [];
+      $("#learning").innerHTML = learnRows.length
+        ? learnRows.map((entry) => {
+            if (!entry || typeof entry !== "object") return `<div class="ms-receipt-card"><span>${esc(String(entry || ""))}</span></div>`;
+            const title = entry.topic || entry.title || entry.summary || entry.note || entry.content || entry.kind || "笔记回执";
+            const status = MEM_INTENT_STATES[entry.status] || entry.status || "已记录";
+            const metaParts = [entry.chat_id ? targetName(entry.chat_id) : "", entry.profile || "", entry.at || ""].filter(Boolean);
+            return `<div class="ms-receipt-card">
+              <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><span class="mil-tag">${esc(String(status))}</span></div>
+              ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
+            </div>`;
+          }).join("")
+        : `<span class="mil-hint">暂无自动笔记回执</span>`;
     }
 
     document.addEventListener("click", async (ev) => {
@@ -4117,24 +6294,266 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     let curVersion = "";
     let svcVersion = "";
     let whVersion = "";
+    let settingsMode = "general";
+    let knownChats = [];
+    let knownProfiles = [];
+    let whitelistEntries = [];
     const WEB_PRESETS = ["auto", "host", "google_search_plugin", "mcp", "plugin_api"];
+    const INTENT_KIND_LABELS = {
+      routine: "周期安排",
+      proactive: "主动触发",
+      self_reflection: "自我探索",
+      webhook: "外部事件",
+      user_schedule: "定时任务",
+      workflow: "定时任务",
+      reminder: "提醒",
+    };
+    const INTENT_STATUS_LABELS = {
+      pending: "等待中",
+      scheduled: "已排期",
+      running: "进行中",
+      done: "已完成",
+      completed: "已完成",
+      cancelled: "已取消",
+      failed: "已结束",
+    };
+    const PROACTIVE_OPTION_LABELS = {
+      "": "跟随全局分寸",
+      quiet: "安静 · 仅被动响应",
+      care: "平衡 · 适度关心",
+      lively: "活跃 · 空闲时主动",
+    };
 
-    const row = (name, desc, ctl) => `<div class="set-row"><div class="set-row-l"><div class="set-row-t">${name}</div>${desc ? `<div class="set-row-d">${desc}</div>` : ""}</div><div class="set-row-r">${ctl}</div></div>`;
+    const row = (name, desc, ctl, wide = false) => `<div class="set-row${wide ? " set-row--wide" : ""}"><div class="set-row-l"><div class="set-row-t"><span>${name}</span>${helpBtn(desc)}</div></div><div class="set-row-r">${ctl}</div></div>`;
+
+    function findKnownChat(token) {
+      const t = String(token || "").trim();
+      if (!t) return null;
+      return knownChats.find((k) => k.stream_spec === t || k.chat_id === t) || null;
+    }
+
+    function friendlyStreamName(token) {
+      const t = String(token || "").trim();
+      if (!t) return "未命名会话";
+      if (t === "self") return "自身活动";
+      const k = findKnownChat(t);
+      const m = t.match(/^([a-z0-9_-]+):(group|private):(.+)$/i);
+      if (k && k.name && k.name !== t && (!m || k.name !== m[3])) return k.name;
+      if (m) return `${m[1].toUpperCase()} ${m[2].toLowerCase() === "group" ? "群聊" : "私聊"} · ${m[3]}`;
+      return t;
+    }
+
+    function normalizeStreamInput(raw) {
+      const val = String(raw || "").trim();
+      if (!val) return "";
+      if (val === "self") return "self";
+      const m = val.match(/^(?:chat:)?([a-z][a-z0-9_-]*):(group|private):([^\s:]+)$/i);
+      if (m) return `${m[1].toLowerCase()}:${m[2].toLowerCase()}:${m[3].trim()}`;
+      const matched = findKnownChat(val);
+      return matched?.stream_spec || val;
+    }
+
+    function syncWhitelistHidden() {
+      const hidden = $("#set-chats");
+      if (hidden) hidden.value = whitelistEntries.map((e) => e.spec).join(", ");
+    }
+
+    function renderWhitelistBox() {
+      const box = $("#chat-whitelist-box");
+      if (!box) return;
+      const addedSet = new Set(whitelistEntries.map((e) => e.spec));
+      const availableKnown = knownChats.filter((k) => {
+        const spec = String(k.stream_spec || k.chat_id || "").trim();
+        return spec && !addedSet.has(spec);
+      });
+      const rowsHtml = whitelistEntries.length
+        ? whitelistEntries.map((entry, idx) => {
+            const title = friendlyStreamName(entry.spec);
+            const showCode = title !== entry.spec;
+            const opts = Object.entries(PROACTIVE_OPTION_LABELS).map(
+              ([v, lbl]) => `<option value="${v}" ${entry.level === v ? "selected" : ""}>${lbl}</option>`
+            ).join("");
+            return `<div class="ms-entry-row" data-wl-idx="${idx}">
+              <div class="ms-entry-meta">
+                <span class="ms-entry-title">${esc(title)}</span>
+                ${showCode ? `<span class="mil-tag ms-entry-code">${esc(entry.spec)}</span>` : ""}
+              </div>
+              <div class="ms-entry-ctl">
+                <select class="mil-select" data-wl-level="${idx}" aria-label="${esc(title)} 的主动分寸">${opts}</select>
+                <button type="button" class="mil-key mil-key--sm" data-wl-remove="${idx}" aria-label="移除 ${esc(title)}">移除</button>
+              </div>
+            </div>`;
+          }).join("")
+        : `<div class="mil-hint" style="padding:6px 2px">暂未添加允许服务的会话；添加后 Maisya 才会在对应群或私聊生效。</div>`;
+
+      const knownHtml = availableKnown.length
+        ? `<div class="ms-entry-add">
+            <select id="wl-pick-known" class="mil-select" style="flex:1 1 200px" aria-label="从已发现会话选择">
+              <option value="">从已发现会话挑选…</option>
+              ${availableKnown.map((k) => {
+                const spec = k.stream_spec || k.chat_id;
+                const lbl = k.name && k.name !== spec ? `${k.name} · ${spec}` : spec;
+                return `<option value="${esc(spec)}">${esc(lbl)}</option>`;
+              }).join("")}
+            </select>
+            <button type="button" class="mil-key mil-key--sm" id="wl-add-known">+ 添加所选</button>
+          </div>`
+        : "";
+
+      const addHtml = `<div class="ms-entry-add">
+        <select id="wl-add-platform" class="mil-select" aria-label="平台">
+          <option value="qq">QQ</option>
+          <option value="telegram">Telegram</option>
+          <option value="discord">Discord</option>
+          <option value="wechat">微信</option>
+        </select>
+        <select id="wl-add-type" class="mil-select" aria-label="会话类型">
+          <option value="group">群聊</option>
+          <option value="private">私聊</option>
+        </select>
+        <input id="wl-add-id" class="mil-input mono" style="flex:1 1 160px" placeholder="群号或账号，如 12345678" aria-label="群号或账号">
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="wl-add-btn">+ 添加条目</button>
+      </div>`;
+
+      box.innerHTML = `<div class="ms-entry-list">${rowsHtml}</div>${knownHtml}${addHtml}`;
+      syncWhitelistHidden();
+    }
+
+    function syncSleepHidden() {
+      const hidden = $("#set-sleep");
+      const enabled = $("#sleep-enabled")?.checked;
+      const startSel = $("#sleep-start");
+      const endSel = $("#sleep-end");
+      const wrap = $("#sleep-range-wrap");
+      if (wrap) wrap.hidden = !enabled;
+      if (startSel) startSel.disabled = !enabled;
+      if (endSel) endSel.disabled = !enabled;
+      if (hidden) {
+        hidden.value = enabled ? `${startSel?.value || "01"}-${endSel?.value || "08"}` : "";
+      }
+    }
+
+    function populateChatAndProfilePickers() {
+      const curChat = ($("#intent-chat")?.value || "").trim();
+      const chatSel = $("#intent-chat-select");
+      const chatOptions = [
+        `<option value="">手动填写目标会话…</option>`,
+        `<option value="self">自身探索记录 (self)</option>`,
+      ];
+      const seenSpecs = new Set(["self"]);
+      (knownChats || []).forEach((k) => {
+        const spec = String(k.stream_spec || k.chat_id || "").trim();
+        if (!spec || seenSpecs.has(spec)) return;
+        seenSpecs.add(spec);
+        const lbl = k.name && k.name !== spec ? `${k.name} · ${spec}` : spec;
+        chatOptions.push(`<option value="${esc(spec)}">${esc(lbl)}</option>`);
+      });
+      (curSettings?.enabled_chats || []).forEach((c) => {
+        const spec = String(c || "").trim();
+        if (!spec || seenSpecs.has(spec)) return;
+        seenSpecs.add(spec);
+        const lbl = friendlyStreamName(spec);
+        chatOptions.push(`<option value="${esc(spec)}">${esc(lbl !== spec ? `${lbl} · ${spec}` : spec)}</option>`);
+      });
+      if (chatSel) {
+        chatSel.innerHTML = chatOptions.join("");
+        chatSel.value = seenSpecs.has(curChat) ? curChat : "";
+      }
+      $("#intent-chat-list").innerHTML = [...seenSpecs].map((c) => `<option value="${esc(c)}">`).join("");
+
+      const profiles = knownProfiles.length
+        ? knownProfiles
+        : [
+            { id: "scout", title: "探索者", enabled: true },
+            { id: "maker", title: "造物主", enabled: true },
+            { id: "digest", title: "整理官", enabled: true },
+          ];
+      const profileOptions = (val) => {
+        const list = [...profiles];
+        if (val && !list.some((p) => p.id === val)) list.push({ id: val, title: val, enabled: true });
+        return list.map((p) => `<option value="${esc(p.id)}" ${p.id === val ? "selected" : ""}>${esc(p.title && p.title !== p.id ? `${p.title} · ${p.id}` : p.id)}</option>`).join("");
+      };
+      const curProf = ($("#intent-profile")?.value || "scout").trim() || "scout";
+      if ($("#intent-profile-select")) $("#intent-profile-select").innerHTML = profileOptions(curProf);
+      if ($("#wh-b-profile")) $("#wh-b-profile").innerHTML = profileOptions("scout");
+    }
+
+    function setSettingsMode(mode) {
+      settingsMode = mode === "advanced" ? "advanced" : "general";
+      $$("[data-settings-mode]").forEach((b) => {
+        b.setAttribute("aria-pressed", String(b.dataset.settingsMode === settingsMode));
+      });
+      $("#settings-general-view").hidden = settingsMode !== "general";
+      $("#settings-advanced-view").hidden = settingsMode !== "advanced";
+    }
+
+    function syncWebCustomVis() {
+      const sel = $("#web_provider")?.value;
+      const wrap = $("#web-custom-wrap");
+      if (wrap) wrap.hidden = sel !== "custom";
+    }
+
+    function updateSchedSummary() {
+      const pill = $("#sched-summary-pill");
+      const prof = ($("#intent-profile")?.value || "scout").trim() || "scout";
+      const profSel = $("#intent-profile-select");
+      if (profSel && [...profSel.options].some((o) => o.value === prof)) profSel.value = prof;
+      const chatVal = ($("#intent-chat")?.value || "").trim();
+      const chatSel = $("#intent-chat-select");
+      if (chatSel) chatSel.value = [...chatSel.options].some((o) => o.value === chatVal) ? chatVal : "";
+      if (!pill) return;
+      const every = Number($("#intent-every")?.value || 0);
+      const delay = Number($("#intent-in")?.value || 60);
+      const head = every >= 86400 ? `每 ${Math.round(every / 86400)} 天周期` : every >= 3600 ? `每 ${Math.round(every / 3600)} 小时周期` : every > 0 ? `每 ${every} 秒周期` : "单次";
+      pill.textContent = `${head} · ${delay} 秒后由 ${prof} 执行`;
+    }
 
     function renderGeneral() {
       const s = curSettings || {};
       const chats = Array.isArray(s.enabled_chats) ? s.enabled_chats : [];
+      const levels = s.chat_proactive_levels || {};
+      whitelistEntries = [];
+      const seenWl = new Set();
+      chats.forEach((raw) => {
+        const spec = normalizeStreamInput(raw);
+        if (!spec || seenWl.has(spec)) return;
+        seenWl.add(spec);
+        const lv = levels[raw] || levels[spec] || "";
+        whitelistEntries.push({ spec, level: PROACTIVE_OPTION_LABELS[lv] ? lv : "" });
+      });
+
       const web = s.web_provider || "auto";
+      const uiStyle = s.ui_style || "millennium";
       const isPreset = WEB_PRESETS.includes(web);
+      const sleepMatch = String(s.sleep_window || "").trim().match(/^(\d{1,2})-(\d{1,2})$/);
+      const sleepOn = Boolean(sleepMatch);
+      const sleepStart = sleepMatch ? sleepMatch[1].padStart(2, "0") : "01";
+      const sleepEnd = sleepMatch ? sleepMatch[2].padStart(2, "0") : "08";
+      const hourOpts = (sel) => Array.from({ length: 24 }, (_, h) => {
+        const v = String(h).padStart(2, "0");
+        return `<option value="${v}" ${v === sel ? "selected" : ""}>${v}:00</option>`;
+      }).join("");
+
+      const hbList = knownProfiles.length
+        ? knownProfiles
+        : [{ id: "scout", title: "探索者" }, { id: "digest", title: "整理官" }, { id: "maker", title: "造物主" }];
+      const curHb = s.heartbeat_profile || "scout";
+      const hbChoices = hbList.some((p) => p.id === curHb) ? hbList : [...hbList, { id: curHb, title: curHb }];
+      const hbOpts = hbChoices.map((p) => `<option value="${esc(p.id)}" ${p.id === curHb ? "selected" : ""}>${esc(p.title && p.title !== p.id ? `${p.title} · ${p.id}` : p.id)}</option>`).join("");
+
       $("#general-fields").innerHTML = [
+        row("界面设计风格", "默认千禧机械风（协调宿主主题）；也可切换为清朗手账风，或改为自动跟随宿主主题。", `<select id="ui_style" class="mil-select"><option value="millennium" ${uiStyle === "millennium" ? "selected" : ""}>千禧机械风（默认 · 协调宿主）</option><option value="maiwork" ${uiStyle === "maiwork" ? "selected" : ""}>清朗手账风</option><option value="auto" ${uiStyle === "auto" ? "selected" : ""}>自动跟随宿主主题</option></select>`),
         row("启用 Maisya 插件", "开启后在以下启用会话挂载技能、手账备忘与主动脉搏。", `<label class="mil-switch"><input id="set-enabled" type="checkbox" ${s.plugin?.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${s.plugin?.enabled ? "已开启" : "已停用"}</span></label>`),
-        row("启用会话白名单", "填写群号或 chat_id，用逗号分隔；非白名单会话零读取、零打扰。", `<input id="set-chats" class="mil-input mono" value="${esc(chats.join(", "))}" placeholder="群号或 stream_id，逗号分隔">`),
-        row("主动程度", "控制空闲后的事后惦记与冒泡积极性。", `<select id="proactive_level" class="mil-select"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静 (quiet · 仅被动)</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>关怀 (care · 平衡)</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃 (lively · 允许偶遇)</option></select>`),
-        row("全局联网来源", "默认搜索路由；自定义插件/web 别名在右侧输入。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>auto（自动探测）</option><option value="host" ${web === "host" ? "selected" : ""}>host（仅宿主原生）</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>google_search_plugin（第三方联网）</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>mcp（MCP 搜索服务）</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>plugin_api（跨插件 API）</option><option value="custom" ${!isPreset ? "selected" : ""}>自定义标识 / 别名</option></select><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:...">`),
-        row("每日主动搭话上限", "普通闲聊惦记每日最多次数 (0-50)。", `<input id="daily_proactive_limit" class="mil-input mono" style="width:110px" type="number" min="0" max="50" value="${Number(s.daily_proactive_limit ?? 1)}">`),
-        row("心跳间隔与角色", "自身定期探索的间隔分钟与使用角色。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:96px" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}"><input id="heartbeat_profile" class="mil-input mono" style="width:130px" value="${esc(s.heartbeat_profile || "scout")}">`),
-        row("睡眠时段与久违提醒", "如 01-08 期间不打扰；熟人会话安静超过小时数再问候。", `<input id="set-sleep" class="mil-input mono" style="width:100px" value="${esc(s.sleep_window || "")}" placeholder="如 01-08"><input id="set-longing" class="mil-input mono" style="width:100px" type="number" min="12" max="720" value="${Number(s.longing_quiet_hours ?? 72)}">`),
-        row("线程步数 / 超时 / 上下文上限", "单次运行安全上限。", `<input id="set-steps" class="mil-input mono" style="width:76px" type="number" min="1" max="64" value="${Number(s.agent_max_steps ?? 16)}"><input id="set-timeout" class="mil-input mono" style="width:84px" type="number" min="10" max="900" value="${Number(s.agent_timeout ?? 180)}"><input id="set-ctx" class="mil-input mono" style="width:96px" type="number" min="24000" max="256000" value="${Number(s.thread_context_chars ?? 48000)}">`),
+        row("启用会话白名单", "以条目方式管理允许服务的会话（统一格式 平台:类型:id，如 qq:group:12345678）。也可针对单条会话单独设定主动分寸；未加入白名单的会话零读取、零打扰。", `<div id="chat-whitelist-box" class="ms-entry-box"></div><input id="set-chats" type="hidden" value="${esc(whitelistEntries.map((e) => e.spec).join(", "))}">`, true),
+        row("主动分寸与每日上限", "空闲后是否主动惦记，以及普通闲聊每日最多搭话次数 (0-50)。", `<select id="proactive_level" class="mil-select" style="width:auto;flex:1 1 180px"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静（只回应触发）</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>平衡（适度主动关心）</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃（空闲时会主动搭话）</option></select><input id="daily_proactive_limit" class="mil-input mono" style="width:76px;flex:0 0 auto" type="number" min="0" max="50" value="${Number(s.daily_proactive_limit ?? 1)}" aria-label="每日主动搭话上限"><span class="ms-inline-unit">次/天</span>`),
+        row("免打扰时段", "开启后在指定整点时段内保持安静，不发主动问候（如凌晨 01:00 至 08:00）。", `<label class="mil-switch"><input id="sleep-enabled" type="checkbox" ${sleepOn ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${sleepOn ? "已开启" : "未限制"}</span></label><div id="sleep-range-wrap" class="mil-row" style="gap:6px;flex-wrap:nowrap" ${sleepOn ? "" : "hidden"}><select id="sleep-start" class="mil-select" aria-label="免打扰开始时间">${hourOpts(sleepStart)}</select><span class="ms-inline-unit">至</span><select id="sleep-end" class="mil-select" aria-label="免打扰结束时间">${hourOpts(sleepEnd)}</select></div><input id="set-sleep" type="hidden" value="${esc(s.sleep_window || "")}">`),
+        row("联网搜索方式", "默认自动探测宿主或插件联网；选高级自定义可填写专有来源标识。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>自动识别（优先随宿主，其次联网插件）</option><option value="host" ${web === "host" ? "selected" : ""}>仅使用宿主自带联网</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>使用第三方搜索插件</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>使用已配置的 MCP 搜索工具</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>调用其他插件接口</option><option value="custom" ${!isPreset ? "selected" : ""}>高级自定义来源…</option></select><div id="web-custom-wrap" style="width:100%" ${isPreset ? "hidden" : ""}><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:..."></div>`),
+        row("自我探索心跳", "定期自主巡检手账与感兴趣主题的间隔分钟数，以及默认出动角色。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:76px;flex:0 0 auto" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}" aria-label="心跳间隔分钟数"><span class="ms-inline-unit">分钟/次 · 角色</span><select id="heartbeat_profile" class="mil-select" style="width:auto;flex:1 1 160px" aria-label="心跳默认角色">${hbOpts}</select>`),
+      ].join("");
+
+      $("#advanced-runtime-fields").innerHTML = [
+        row("久违问候安静阈值 (小时)", "熟人会话安静超过设定小时数后才可能温柔打招呼 (12-720)。", `<input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="12" max="720" value="${Number(s.longing_quiet_hours ?? 72)}">`),
+        row("线程步数 / 超时 / 上下文上限", "单次后台推理与工具循环的安全保护上限。", `<input id="set-steps" class="mil-input mono" style="width:76px" type="number" min="1" max="64" value="${Number(s.agent_max_steps ?? 16)}" aria-label="最大步数"><input id="set-timeout" class="mil-input mono" style="width:84px" type="number" min="10" max="900" value="${Number(s.agent_timeout ?? 180)}" aria-label="超时秒数"><input id="set-ctx" class="mil-input mono" style="width:96px" type="number" min="24000" max="256000" value="${Number(s.thread_context_chars ?? 48000)}" aria-label="上下文字符上限">`),
       ].join("");
 
       const sb = s.sandbox || {};
@@ -4142,6 +6561,32 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         row("启用 Docker 沙箱", "仅代码运行需要，纯文字/网页卡片渲染无需开启。", `<label class="mil-switch"><input id="sb-enabled" type="checkbox" ${sb.enabled ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${sb.enabled ? "开启" : "关闭"}</span></label>`),
         row("沙箱镜像与配额", "容器镜像、内存上限(MiB)与单次超时(秒)。", `<input id="sb-image" class="mil-input mono" style="width:150px" value="${esc(sb.image || "")}" placeholder="容器镜像"><input id="sb-mem" class="mil-input mono" style="width:88px" type="number" min="128" max="4096" value="${Number(sb.memory_mib ?? 512)}"><input id="sb-timeout" class="mil-input mono" style="width:78px" type="number" min="1" max="180" value="${Number(sb.timeout ?? 60)}">`),
       ].join("");
+
+      renderWhitelistBox();
+      syncSleepHidden();
+      $("#sleep-enabled")?.addEventListener("change", (ev) => {
+        const txt = ev.target.closest(".mil-switch")?.querySelector(".mil-switch-txt");
+        if (txt) txt.textContent = ev.target.checked ? "已开启" : "未限制";
+        syncSleepHidden();
+      });
+      $("#sleep-start")?.addEventListener("change", syncSleepHidden);
+      $("#sleep-end")?.addEventListener("change", syncSleepHidden);
+
+      $("#web_provider")?.addEventListener("change", syncWebCustomVis);
+      $("#ui_style")?.addEventListener("change", () => {
+        manualUiStyle = "";
+        savedUiStyle = $("#ui_style").value || "millennium";
+        applyTheme();
+      });
+      $("#set-enabled")?.addEventListener("change", (ev) => {
+        const txt = ev.target.closest(".mil-switch")?.querySelector(".mil-switch-txt");
+        if (txt) txt.textContent = ev.target.checked ? "已开启" : "已停用";
+      });
+      $("#sb-enabled")?.addEventListener("change", (ev) => {
+        const txt = ev.target.closest(".mil-switch")?.querySelector(".mil-switch-txt");
+        if (txt) txt.textContent = ev.target.checked ? "开启" : "关闭";
+      });
+      syncWebCustomVis();
     }
 
     function renderHandles(handles) {
@@ -4155,10 +6600,15 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (!r?.success) return say(r?.error || "读取设置失败", true);
       curSettings = r.settings;
       curVersion = r.version;
+      knownChats = Array.isArray(r.known_chats) ? r.known_chats : [];
+      knownProfiles = Array.isArray(r.profile_cards)
+        ? r.profile_cards
+        : (Array.isArray(r.profiles) ? r.profiles.map((p) => (typeof p === "string" ? { id: p, title: p } : p)) : []);
       $("#admins").textContent = (r.admins || []).join(", ") || "未配置（继承宿主）";
-      $("#intent-chat-list").innerHTML = ["self", ...(curSettings.enabled_chats || [])].map((c) => `<option value="${esc(c)}">`).join("");
+      populateChatAndProfilePickers();
       renderGeneral();
       renderHandles(r.handles);
+      updateSchedSummary();
     }
 
     async function loadServices() {
@@ -4177,49 +6627,145 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       </div>`;
     }
 
+    function renderWebhookCards(cfg) {
+      const keys = Object.keys(cfg || {});
+      $("#webhook-cards").innerHTML = keys.length
+        ? `<div class="mil-row">${keys.map((k) => {
+            const rawTarget = String(cfg[k]?.target || "");
+            const cleanTarget = rawTarget.replace(/^chat:/, "");
+            return `<span class="mil-tag mil-tag--warn">${esc(k)} → ${esc(friendlyStreamName(cleanTarget))}${cleanTarget ? ` (${esc(cleanTarget)})` : ""}</span>`;
+          }).join("")}</div>`
+        : `<span class="mil-hint">暂无外部事件通道</span>`;
+    }
+
     async function loadWebhooks() {
       const r = await rpc("read", "webhooks", {});
       if (!r?.success) return;
       whVersion = r.version;
       const cfg = r.configuration || {};
       $("#webhook-config").value = JSON.stringify(cfg, null, 2);
-      const keys = Object.keys(cfg);
-      $("#webhook-cards").innerHTML = keys.length
-        ? `<div class="mil-row">${keys.map((k) => `<span class="mil-tag mil-tag--warn">${esc(k)} → ${esc(cfg[k]?.target || "")}</span>`).join("")}</div>`
-        : `<span class="mil-hint">暂无外部事件通道</span>`;
+      renderWebhookCards(cfg);
     }
 
     async function loadHealth() {
       const [h, ir] = await Promise.all([rpc("read", "health", {}), rpc("read", "intents", {})]);
       if (h?.success) {
-        const webLine = `联网来源：${curSettings?.web_provider || "auto"}`;
-        $("#health").textContent = [
-          webLine,
-          `沙箱状态：${h.enabled ? (h.ready ? "已就绪" : `未就绪 (${h.error || "无可用镜像"})`) : "按配置关闭（无容器轻量模式可用）"}`,
-          `活动容器：${h.running || 0} · 隔离目录：${h.quarantined || 0}`,
-          `工作区占用：${((h.bytes || 0) / 1024).toFixed(1)} KB / ${((h.limit || 0) / (1024 * 1024)).toFixed(0)} MB`,
-        ].join("\n");
+        const prov = curSettings?.web_provider || h.web?.provider || "auto";
+        const webEngines = Array.isArray(h.web?.third_party_engines) ? h.web.third_party_engines.filter(Boolean) : [];
+        const webSub = h.web?.third_party_enabled
+          ? `第三方引擎可用：${webEngines.join(" / ") || h.web?.third_party_default || "已就绪"}`
+          : "按当前策略路由联网搜索";
+        const sbVal = h.enabled ? (h.ready ? "Docker 沙箱已就绪" : "Docker 沙箱未就绪") : "无容器轻量模式可用";
+        const sbSub = h.enabled ? (h.error || "隔离执行已启") : "读网与卡片渲染无需容器";
+        const kb = ((h.bytes || 0) / 1024).toFixed(1);
+        const mb = ((h.limit || 0) / (1024 * 1024)).toFixed(0);
+        $("#health").innerHTML = [
+          `<div class="ms-kv-card"><span class="ms-kv-k">联网状态</span><strong class="ms-kv-v">联网来源：${esc(prov)}</strong><span class="ms-kv-sub">${esc(webSub)}</span></div>`,
+          `<div class="ms-kv-card"><span class="ms-kv-k">执行环境</span><strong class="ms-kv-v">${esc(sbVal)}</strong><span class="ms-kv-sub">${esc(sbSub)}</span></div>`,
+          `<div class="ms-kv-card"><span class="ms-kv-k">容器与隔离</span><strong class="ms-kv-v num">运行中 ${h.running || 0} · 隔离目录 ${h.quarantined || 0}</strong><span class="ms-kv-sub">仅代码类任务启用容器</span></div>`,
+          `<div class="ms-kv-card"><span class="ms-kv-k">工作区存储</span><strong class="ms-kv-v num">${kb} KB</strong><span class="ms-kv-sub num">配额上限 ${mb} MB</span></div>`,
+        ].join("");
       }
       if (ir?.success) {
-        $("#intent-list").innerHTML = (ir.intents || []).map((i) =>
-          `<div class="exp-card">
+        $("#intent-list").innerHTML = (ir.intents || []).map((i) => {
+          const kindTxt = INTENT_KIND_LABELS[i.kind] || i.kind || "计划";
+          const statusTxt = INTENT_STATUS_LABELS[i.status] || i.status || "等待中";
+          const rawTarget = String(i.target || "").replace(/^chat:/, "");
+          return `<div class="exp-card">
             <div class="mil-row" style="justify-content:space-between">
-              <span><span class="mil-tag">${esc(i.kind)}</span> <strong>${esc(i.reason)}</strong></span>
-              <span class="mil-tag">${esc(i.status)}</span>
+              <span><span class="mil-tag">${esc(kindTxt)}</span> <strong>${esc(i.reason || "定时执行")}</strong></span>
+              <span class="mil-tag">${esc(statusTxt)}</span>
             </div>
-            <span class="mil-hint mono">${esc(i.target)} · 来源 ${esc(i.source)}</span>
-          </div>`
-        ).join("") || `<p class="mil-hint">暂无意图记录</p>`;
-        $("#learning").textContent = (ir.learning || []).length ? JSON.stringify(ir.learning, null, 2) : "暂无自动笔记回执";
+            <span class="mil-hint">${esc(friendlyStreamName(rawTarget))}${rawTarget ? ` · <span class="mono">${esc(rawTarget)}</span>` : ""} · ${esc(INTENT_KIND_LABELS[i.source] || i.source || "系统")}</span>
+          </div>`;
+        }).join("") || `<p class="mil-hint">暂无意图记录</p>`;
+
+        const learnRows = Array.isArray(ir.learning) ? ir.learning : [];
+        $("#learning").innerHTML = learnRows.length
+          ? learnRows.map((entry) => {
+              if (!entry || typeof entry !== "object") return `<div class="ms-receipt-card"><span>${esc(String(entry || ""))}</span></div>`;
+              const title = entry.topic || entry.title || entry.summary || entry.note || entry.content || entry.kind || "笔记回执";
+              const status = INTENT_STATUS_LABELS[entry.status] || entry.status || "已记录";
+              const chatRaw = String(entry.chat_id || entry.target || "").replace(/^chat:/, "");
+              const metaParts = [chatRaw ? friendlyStreamName(chatRaw) : "", entry.profile || "", entry.at || ""].filter(Boolean);
+              return `<div class="ms-receipt-card">
+                <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><span class="mil-tag">${esc(String(status))}</span></div>
+                ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
+              </div>`;
+            }).join("")
+          : `<span class="mil-hint">暂无自动笔记回执</span>`;
       }
     }
 
+    document.addEventListener("change", (ev) => {
+      const lvSel = ev.target.closest("[data-wl-level]");
+      if (lvSel) {
+        const idx = Number(lvSel.dataset.wlLevel);
+        if (whitelistEntries[idx]) whitelistEntries[idx].level = lvSel.value || "";
+        return;
+      }
+      if (ev.target?.id === "intent-chat-select") {
+        const v = ev.target.value;
+        if (v) $("#intent-chat").value = v;
+        updateSchedSummary();
+        return;
+      }
+      if (ev.target?.id === "intent-profile-select") {
+        const v = ev.target.value;
+        if (v) $("#intent-profile").value = v;
+        updateSchedSummary();
+      }
+    });
+
+    document.addEventListener("keydown", (ev) => {
+      if (ev.target?.id === "wl-add-id" && ev.key === "Enter") {
+        ev.preventDefault();
+        $("#wl-add-btn")?.click();
+      }
+    });
+
     document.addEventListener("click", (ev) => {
-      const secBtn = ev.target.closest("[data-sec-filter]");
-      if (secBtn) {
-        const g = secBtn.dataset.secFilter;
-        $$("[data-sec-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === secBtn)));
-        $$("[data-sec-group]").forEach((p) => { p.hidden = g !== "all" && p.dataset.secGroup !== g; });
+      const modeBtn = ev.target.closest("[data-settings-mode]");
+      if (modeBtn) {
+        setSettingsMode(modeBtn.dataset.settingsMode);
+        return;
+      }
+      if (ev.target?.id === "wl-add-known") {
+        const sel = $("#wl-pick-known");
+        const spec = normalizeStreamInput(sel?.value || "");
+        if (!spec) return say("请先选择一条已发现的会话", true);
+        if (!whitelistEntries.some((e) => e.spec === spec)) {
+          whitelistEntries.push({ spec, level: "" });
+          renderWhitelistBox();
+          say(`已添加会话 ${spec}（记得点击上方「保存设置」）`);
+        }
+        return;
+      }
+      if (ev.target?.id === "wl-add-btn") {
+        const plat = ($("#wl-add-platform")?.value || "qq").trim().toLowerCase();
+        const ctype = ($("#wl-add-type")?.value || "group").trim().toLowerCase();
+        const rawId = ($("#wl-add-id")?.value || "").trim();
+        if (!rawId) return say("请输入群号或用户 ID", true);
+        let spec = "";
+        if (/^(?:chat:)?[a-z][a-z0-9_-]*:(group|private):[^\s:]+$/i.test(rawId) || rawId === "self") {
+          spec = normalizeStreamInput(rawId);
+        } else if (/\s|:/.test(rawId)) {
+          return say("账号中不要包含空格或多余冒号，或直接使用 平台:类型:id 格式", true);
+        } else {
+          spec = `${plat}:${ctype}:${rawId}`;
+        }
+        if (whitelistEntries.some((e) => e.spec === spec)) return say(`会话 ${spec} 已在白名单中`);
+        whitelistEntries.push({ spec, level: "" });
+        renderWhitelistBox();
+        say(`已添加条目 ${spec}（请点击「保存设置」生效）`);
+        return;
+      }
+      const rmBtn = ev.target.closest("[data-wl-remove]");
+      if (rmBtn) {
+        const idx = Number(rmBtn.dataset.wlRemove);
+        const removed = whitelistEntries.splice(idx, 1)[0];
+        renderWhitelistBox();
+        if (removed) say(`已从列表移除 ${removed.spec}（请点击「保存设置」生效）`);
         return;
       }
       const handleBtn = ev.target.closest("[data-pick-handle]");
@@ -4231,9 +6777,9 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const preset = ev.target.closest("[data-sched-preset]");
       if (preset) {
         const k = preset.dataset.schedPreset;
-        if (k === "once") { $("#intent-in").value = "60"; $("#intent-every").value = "0"; }
-        else if (k === "hourly") { $("#intent-in").value = "120"; $("#intent-every").value = "3600"; }
-        else if (k === "daily") { $("#intent-in").value = "3600"; $("#intent-every").value = "86400"; }
+        if (k === "once") { $("#intent-profile").value = "scout"; $("#intent-workspace").value = ""; $("#intent-in").value = "60"; $("#intent-every").value = "0"; }
+        else if (k === "hourly") { $("#intent-profile").value = "scout"; $("#intent-workspace").value = ""; $("#intent-in").value = "120"; $("#intent-every").value = "3600"; }
+        else if (k === "daily") { $("#intent-profile").value = "scout"; $("#intent-workspace").value = ""; $("#intent-in").value = "3600"; $("#intent-every").value = "86400"; }
         else if (k === "digest") {
           $("#intent-profile").value = "digest";
           $("#intent-workspace").value = "digest";
@@ -4244,42 +6790,90 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           }
           say("已填入资讯简报周期模板，确认参数后点「加入计划队列」（需先在能力页开启 digest）。");
         }
+        updateSchedSummary();
       }
     });
 
-    $("#save-settings").onclick = async () => {
+    ["#intent-chat", "#intent-profile", "#intent-in", "#intent-every"].forEach((sel) => {
+      $(sel)?.addEventListener("input", updateSchedSummary);
+    });
+
+    async function saveAllSettings() {
+      syncSleepHidden();
+      syncWhitelistHidden();
       const selWeb = $("#web_provider").value;
-      const customWeb = $("#web_provider_custom").value.trim();
+      const customWeb = ($("#web_provider_custom")?.value || "").trim();
       const webProvider = selWeb === "custom" ? (customWeb || "auto") : selWeb;
+      const chatLevels = {};
+      whitelistEntries.forEach((e) => {
+        if (e.level && ["quiet", "care", "lively"].includes(e.level)) {
+          chatLevels[e.spec] = e.level;
+        }
+      });
       const next = {
         ...curSettings,
+        ui_style: $("#ui_style")?.value || curSettings?.ui_style || "millennium",
         plugin: { ...(curSettings?.plugin || {}), enabled: $("#set-enabled").checked },
-        enabled_chats: $("#set-chats").value.split(/[,，\n]+/).map((x) => x.trim()).filter(Boolean),
+        enabled_chats: whitelistEntries.map((e) => e.spec),
+        chat_proactive_levels: chatLevels,
         proactive_level: $("#proactive_level").value,
         web_provider: webProvider,
         daily_proactive_limit: Number($("#daily_proactive_limit").value),
         heartbeat_interval_minutes: Number($("#heartbeat_interval_minutes").value),
         heartbeat_profile: $("#heartbeat_profile").value.trim() || "scout",
         sleep_window: $("#set-sleep").value.trim(),
-        longing_quiet_hours: Number($("#set-longing").value),
-        agent_max_steps: Number($("#set-steps").value),
-        agent_timeout: Number($("#set-timeout").value),
-        thread_context_chars: Number($("#set-ctx").value),
+        longing_quiet_hours: Number($("#set-longing")?.value ?? curSettings?.longing_quiet_hours ?? 72),
+        agent_max_steps: Number($("#set-steps")?.value ?? curSettings?.agent_max_steps ?? 16),
+        agent_timeout: Number($("#set-timeout")?.value ?? curSettings?.agent_timeout ?? 180),
+        thread_context_chars: Number($("#set-ctx")?.value ?? curSettings?.thread_context_chars ?? 48000),
         sandbox: {
           ...(curSettings?.sandbox || {}),
-          enabled: $("#sb-enabled").checked,
-          image: $("#sb-image").value.trim(),
-          memory_mib: Number($("#sb-mem").value || 512),
-          timeout: Number($("#sb-timeout").value || 60),
+          enabled: $("#sb-enabled")?.checked ?? Boolean(curSettings?.sandbox?.enabled),
+          image: ($("#sb-image")?.value ?? curSettings?.sandbox?.image ?? "").trim(),
+          memory_mib: Number($("#sb-mem")?.value || curSettings?.sandbox?.memory_mib || 512),
+          timeout: Number($("#sb-timeout")?.value || curSettings?.sandbox?.timeout || 60),
         },
       };
       const r = await rpc("write", "settings", { settings: next, expected_version: curVersion });
       if (!r?.success) return say(r?.error || "保存设置失败", true);
       curSettings = r.settings;
       curVersion = r.version;
+      manualUiStyle = "";
+      savedUiStyle = curSettings.ui_style || "millennium";
+      applyTheme();
+      populateChatAndProfilePickers();
+      renderGeneral();
       say("已保存设置。");
       await loadHealth();
-    };
+    }
+    $("#save-settings").onclick = saveAllSettings;
+    if ($("#save-settings-adv")) $("#save-settings-adv").onclick = saveAllSettings;
+    if ($("#wh-b-add")) {
+      $("#wh-b-add").onclick = () => {
+        const name = ($("#wh-b-name")?.value || "").trim();
+        const rawTarget = ($("#wh-b-target")?.value || "").trim();
+        if (!name || !rawTarget) return say("请先填写通道代号和目标会话", true);
+        let cfg = {};
+        try {
+          cfg = JSON.parse($("#webhook-config").value || "{}");
+          if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) cfg = {};
+        } catch (e) {
+          return say(`下方 JSON 存在语法错误，请先修正：${e?.message || ""}`, true);
+        }
+        const normTarget = rawTarget === "self" ? "self" : (rawTarget.startsWith("chat:") ? rawTarget : `chat:${normalizeStreamInput(rawTarget)}`);
+        const entry = {
+          target: normTarget,
+          kind: $("#wh-b-kind")?.value || "proactive",
+          profile: $("#wh-b-profile")?.value || "scout",
+        };
+        const secret = ($("#wh-b-secret")?.value || "").trim();
+        if (secret) entry.secret_handle = secret;
+        cfg[name] = entry;
+        $("#webhook-config").value = JSON.stringify(cfg, null, 2);
+        renderWebhookCards(cfg);
+        say(`已将 ${name} 写入通道配置，点击「保存事件通道」生效。`);
+      };
+    }
 
     $("#save-vault").onclick = async () => {
       const handle = $("#vault-handle").value.trim();

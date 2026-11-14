@@ -37,6 +37,7 @@ class Settings(PluginConfigBase):
         default="auto",
         pattern=WEB_PROVIDER_PATTERN,
     )
+    ui_style: str = Field(default="millennium", pattern=r"^(maiwork|millennium|auto)$")
     sleep_window: str = Field(default="", pattern=r"^$|^\d{1,2}-\d{1,2}$")
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     daily_proactive_limit: int = Field(default=1, ge=0, le=50)

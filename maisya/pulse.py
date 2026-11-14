@@ -2,13 +2,17 @@
 
 import asyncio
 import html
+import inspect
 import json
 import logging
 import re
 import sqlite3
 
+from .bridge import _grant_admin_direct
+from .intents import next_daily_due
 from .memory import MemoryLayers
 from .scout import call_capability
+from .trust import parse_stream_spec
 
 
 def _extract_tokens(text):
@@ -45,6 +49,8 @@ class Pulse:
         plugin_enabled=lambda: True,
         heartbeat_interval=3600,
         heartbeat_profile="scout",
+        chat_aliases=lambda chat_id, platform="": {chat_id},
+        resolve_session=None,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
@@ -63,11 +69,49 @@ class Pulse:
         self.plugin_enabled = plugin_enabled
         self.heartbeat_interval = heartbeat_interval
         self.heartbeat_profile = heartbeat_profile
+        self.chat_aliases = chat_aliases
+        self.resolve_session = resolve_session
         self.task = None
         self.closing = False
 
+    def _runtime_chat_id(self, chat_id, *, allow_unresolved=True):
+        token = str(chat_id or "").strip()
+        if not token or token == "self":
+            return token
+        if callable(self.resolve_session):
+            try:
+                resolved = self.resolve_session(token, allow_unresolved=allow_unresolved)
+            except TypeError:
+                resolved = self.resolve_session(token)
+            if resolved:
+                return resolved
+            if not allow_unresolved:
+                return ""
+        return token
+
+    async def _ensure_runtime_chat_id(self, chat_id):
+        resolved = await asyncio.to_thread(
+            self._runtime_chat_id, chat_id, allow_unresolved=True
+        )
+        parsed = parse_stream_spec(resolved)
+        if parsed is None:
+            return resolved
+        opened_sid = await self._reopen_session_id(resolved)
+        if opened_sid:
+            return opened_sid
+        rechecked = await asyncio.to_thread(
+            self._runtime_chat_id, chat_id, allow_unresolved=False
+        )
+        return rechecked or resolved
+
     def level_for(self, chat_id):
-        return self.chat_proactive_levels.get(chat_id, self.proactive_level)
+        if chat_id in self.chat_proactive_levels:
+            return self.chat_proactive_levels[chat_id]
+        if callable(self.chat_aliases):
+            for alias_id in self.chat_aliases(chat_id):
+                if alias_id in self.chat_proactive_levels:
+                    return self.chat_proactive_levels[alias_id]
+        return self.proactive_level
 
     def _admins(self):
         return self.admins() if callable(self.admins) else (self.admins or ())
@@ -98,13 +142,31 @@ class Pulse:
         await self._heartbeat()
 
     async def _returns(self):
-        batches = await asyncio.to_thread(self.bridge.claim_ready, self.enabled)
+        params = inspect.signature(self.bridge.claim_ready).parameters
+        if "plugin_enabled" in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        ):
+            batches = await asyncio.to_thread(
+                self.bridge.claim_ready,
+                self.enabled,
+                plugin_enabled=self.plugin_enabled,
+            )
+        else:
+            batches = await asyncio.to_thread(self.bridge.claim_ready, self.enabled)
         for chat_id, rows in batches.items():
             rows = await asyncio.to_thread(self.bridge.current, rows, pending=True)
             if not rows:
                 continue
-            if self.closing or not all(
-                self.enabled(chat_id, row["platform"]) for row in rows
+            if (
+                self.closing
+                or not (
+                    self.plugin_enabled() if callable(self.plugin_enabled) else True
+                )
+                or not all(
+                    self.enabled(chat_id, row["platform"])
+                    or _grant_admin_direct(row.get("raw_grant"))
+                    for row in rows
+                )
             ):
                 continue
             facts = html.escape(
@@ -119,6 +181,8 @@ class Pulse:
                 + facts
                 + "</maisya_return>"
             )
+            if not all(self.enabled(chat_id, row["platform"]) for row in rows):
+                await self.bridge.offer(chat_id)
             status = await self._wake(
                 chat_id,
                 intent,
@@ -146,18 +210,28 @@ class Pulse:
                 )
 
     async def _reschedule_recurring(self, row):
-        every = int((row.get("payload") or {}).get("every_seconds") or 0)
-        if every < 300 or self.intents is None:
+        payload = row.get("payload") or {}
+        every = int(payload.get("every_seconds") or 0)
+        daily_at = str(payload.get("daily_at") or "").strip()
+        if (every < 300 and not daily_at) or self.intents is None:
             return
-        next_payload = dict(row["payload"])
+        next_payload = dict(payload)
         next_payload.pop("wait_thread", None)
         next_payload.pop("already_started", None)
+        if daily_at:
+            tz_offset = int(payload.get("tz_offset_minutes", 480))
+            due_at, norm = next_daily_due(self.intents.clock(), daily_at, tz_offset)
+            next_payload["daily_at"] = norm
+            next_payload["tz_offset_minutes"] = tz_offset
+            next_payload["every_seconds"] = 86400
+        else:
+            due_at = self.intents.clock() + every
         await asyncio.to_thread(
             self.intents.schedule,
             kind=row["kind"],
             source=row["source"],
             target=row["target"],
-            due_at=self.intents.clock() + every,
+            due_at=due_at,
             reason=row["reason"],
             thread_id="",
             payload=next_payload,
@@ -166,12 +240,21 @@ class Pulse:
 
     async def _dispatch(self, row):
         target = row["target"]
-        chat_id = target.split(":", 1)[1]
+        raw_chat_id = target.split(":", 1)[1]
         platform = row["payload"].get("platform", "")
+        if not platform and parse_stream_spec(raw_chat_id):
+            platform = parse_stream_spec(raw_chat_id)[0]
         if row["kind"] == "silent":
             await self._silent(row)
             return
-        if not self.enabled(chat_id, platform):
+        chat_id = await self._ensure_runtime_chat_id(raw_chat_id)
+        plugin_ok = (
+            self.plugin_enabled() if callable(self.plugin_enabled) else True
+        )
+        if not (
+            self.enabled(chat_id, platform)
+            or (plugin_ok and bool((row.get("payload") or {}).get("admin_direct")))
+        ):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
         if row["kind"] == "proactive":
@@ -220,9 +303,18 @@ class Pulse:
                 owner="self" if chat_id == "self" else "chat",
                 wait_seconds=5,
                 workspace=row["payload"].get("workspace", ""),
-                grant={"scheduled_admin": True}
-                if row["payload"].get("scheduled_admin")
-                else {},
+                grant={
+                    **(
+                        {"scheduled_admin": True}
+                        if row["payload"].get("scheduled_admin")
+                        else {}
+                    ),
+                    **(
+                        {"admin_direct": True}
+                        if row["payload"].get("admin_direct")
+                        else {}
+                    ),
+                },
             )
             updated_payload = {**row["payload"], "wait_thread": True}
             row = {**row, "thread_id": started["thread_id"], "payload": updated_payload}
@@ -348,7 +440,12 @@ class Pulse:
         if row["payload"].get("already_started"):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
             return
-        target_chat = row["target"].split(":", 1)[1]
+        raw_target_chat = row["target"].split(":", 1)[1]
+        target_chat = (
+            "self"
+            if raw_target_chat == "self"
+            else await self._ensure_runtime_chat_id(raw_target_chat)
+        )
         if (
             row["payload"].get("profile")
             and not row.get("thread_id")
@@ -356,6 +453,8 @@ class Pulse:
             and self.profiles is not None
         ):
             platform = row["payload"].get("platform", "")
+            if not platform and parse_stream_spec(raw_target_chat):
+                platform = parse_stream_spec(raw_target_chat)[0]
             if target_chat != "self" and not self.enabled(target_chat, platform):
                 await asyncio.to_thread(
                     self.intents.finish, row["intent_id"], "deferred"
@@ -482,11 +581,12 @@ class Pulse:
         )
         if not allowed:
             return allowed, reason
-        if not self.intents.acquaintance_allowed(
+        payload = row.get("payload") or {}
+        if not payload.get("scheduled_admin") and not self.intents.acquaintance_allowed(
             chat_id,
             admins=self._admins(),
             acquaintances=self.acquaintance_users,
-            payload=row.get("payload") or {},
+            payload=payload,
         ):
             return False, "unfamiliar_chat"
         return True, ""
@@ -499,7 +599,12 @@ class Pulse:
             return {"scheduled": False}
         admins = self._admins()
         best = None
-        for chat_id in self.enabled_chats():
+        seen_sids = set()
+        for raw_chat_id in self.enabled_chats():
+            chat_id = self._runtime_chat_id(raw_chat_id, allow_unresolved=False)
+            if not chat_id or chat_id in seen_sids:
+                continue
+            seen_sids.add(chat_id)
             if self.level_for(chat_id) != "lively":
                 continue
             platform = self.platform_for(chat_id) if callable(self.platform_for) else ""
@@ -552,7 +657,14 @@ class Pulse:
         now = self.intents.clock()
         threshold = self.longing_quiet_hours * 3600
         admins = self._admins()
-        for chat_id in list(self.enabled_chats()):
+        seen_sids = set()
+        for raw_chat_id in list(self.enabled_chats()):
+            chat_id = await asyncio.to_thread(
+                self._runtime_chat_id, raw_chat_id, allow_unresolved=False
+            )
+            if not chat_id or chat_id in seen_sids:
+                continue
+            seen_sids.add(chat_id)
             if self.level_for(chat_id) == "quiet":
                 continue
             platform = (
@@ -638,26 +750,83 @@ class Pulse:
         except (RuntimeError, OSError, ValueError, TypeError):
             return "uncertain"
 
+    async def _reopen_session_id(self, chat_id):
+        args = None
+        if callable(self.routes):
+            route = await asyncio.to_thread(self.routes, chat_id)
+            if route and route.get("platform"):
+                if route["chat_type"] == "group" and route.get("group_id"):
+                    args = {
+                        "platform": route["platform"],
+                        "chat_type": "group",
+                        "user_id": route.get("user_id", ""),
+                        "group_id": route.get("group_id", ""),
+                    }
+                elif route["chat_type"] == "private" and route.get("user_id"):
+                    args = {
+                        "platform": route["platform"],
+                        "chat_type": "private",
+                        "user_id": route.get("user_id", ""),
+                        "group_id": "",
+                    }
+                if args is not None:
+                    if route.get("account_id"):
+                        args["account_id"] = route["account_id"]
+                    if route.get("scope"):
+                        args["scope"] = route["scope"]
+        if args is None:
+            parsed = parse_stream_spec(chat_id)
+            if parsed is not None:
+                plat, ctype, tid = parsed
+                args = {
+                    "platform": plat,
+                    "chat_type": ctype,
+                    "user_id": tid if ctype == "private" else "",
+                    "group_id": tid if ctype == "group" else "",
+                }
+        if args is None:
+            return ""
+        opened = await call_capability(
+            self.host, "chat.open_session", timeout_ms=15000, **args
+        )
+        if not opened or (isinstance(opened, dict) and not opened.get("success", True)):
+            return ""
+        if isinstance(opened, dict):
+            return str(opened.get("session_id") or opened.get("stream_id") or "").strip()
+        return ""
+
     async def _reopen_session(self, chat_id):
-        if not callable(self.routes):
+        if not callable(self.routes) and parse_stream_spec(chat_id) is None:
             return False
-        route = await asyncio.to_thread(self.routes, chat_id)
-        if not route or not route.get("platform"):
-            return False
-        if route["chat_type"] == "group" and not route.get("group_id"):
-            return False
-        if route["chat_type"] == "private" and not route.get("user_id"):
-            return False
-        args = {
-            "platform": route["platform"],
-            "chat_type": route["chat_type"],
-            "user_id": route.get("user_id", ""),
-            "group_id": route.get("group_id", ""),
-        }
-        if route.get("account_id"):
-            args["account_id"] = route["account_id"]
-        if route.get("scope"):
-            args["scope"] = route["scope"]
+        args = None
+        if callable(self.routes):
+            route = await asyncio.to_thread(self.routes, chat_id)
+            if route and route.get("platform"):
+                if route["chat_type"] == "group" and not route.get("group_id"):
+                    return False
+                if route["chat_type"] == "private" and not route.get("user_id"):
+                    return False
+                args = {
+                    "platform": route["platform"],
+                    "chat_type": route["chat_type"],
+                    "user_id": route.get("user_id", ""),
+                    "group_id": route.get("group_id", ""),
+                }
+                if route.get("account_id"):
+                    args["account_id"] = route["account_id"]
+                if route.get("scope"):
+                    args["scope"] = route["scope"]
+        if args is None:
+            parsed = parse_stream_spec(chat_id)
+            if parsed is None:
+                return False
+            plat, ctype, tid = parsed
+            args = {
+                "platform": plat,
+                "chat_type": ctype,
+                "user_id": tid if ctype == "private" else "",
+                "group_id": tid if ctype == "group" else "",
+            }
         opened = await call_capability(
             self.host, "chat.open_session", timeout_ms=15000, **args
         )

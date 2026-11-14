@@ -108,6 +108,16 @@ class Profile:
     def autonomous(self):
         return self.enabled and self.autonomous_config
 
+    @property
+    def model_list(self) -> tuple[str, ...]:
+        """按优先级去重返回显式分配的模型链（首项为主模型，其余为顺次备选）。"""
+        primary = (self.model_name or self.model or "").strip()
+        candidates = [
+            primary,
+            *(m.strip() for m in self.fallback_models if isinstance(m, str)),
+        ]
+        return tuple(dict.fromkeys(m for m in candidates if m))
+
     def permits(self, chat_id, platform, *, user_id="", is_admin=False):
         if not self.enabled or not self.bound or self.access == "admins" and not is_admin:
             return False
@@ -152,6 +162,7 @@ class Profiles:
             "model",
             "model_name",
             "fallback_models",
+            "model_list",
             "task",
             "max_tokens",
             "temperature",
@@ -212,15 +223,40 @@ class Profiles:
             config.get("allow_users") or config.get("allow_chats")
         ):
             raise ValueError("listed 档案需要指定用户或会话范围")
-        if not isinstance(fallback, list) or not all(
-            isinstance(name, str) for name in fallback
+        if not isinstance(fallback, list) or len(fallback) > 16 or not all(
+            isinstance(name, str) and len(name.strip()) <= 256 for name in fallback
         ):
             raise ValueError("备用模型列表无效")
+        raw_model_list = config.get("model_list")
+        if raw_model_list is not None:
+            if (
+                not isinstance(raw_model_list, list)
+                or len(raw_model_list) > 16
+                or not all(
+                    isinstance(name, str) and 1 <= len(name.strip()) <= 256
+                    for name in raw_model_list
+                )
+            ):
+                raise ValueError("角色模型列表无效")
         if not isinstance(config.get("model", ""), str):
             raise TypeError("模型名称必须是字符串")
         model_name = config.get("model_name", "")
         if not isinstance(model_name, str) or len(model_name) > 256:
             raise ValueError("模型指定名称无效")
+        cleaned_fallback = [name.strip() for name in fallback if name.strip()]
+        if raw_model_list:
+            chain = [name.strip() for name in raw_model_list if name.strip()]
+            if not model_name and not config.get("model") and not cleaned_fallback and chain:
+                model_name = chain[0]
+                cleaned_fallback = chain[1:]
+            else:
+                primary_cur = (model_name or config.get("model", "")).strip()
+                cleaned_fallback = list(
+                    dict.fromkeys(
+                        m for m in (*cleaned_fallback, *chain) if m and m != primary_cur
+                    )
+                )
+        fallback = cleaned_fallback
         max_tokens = config.get("max_tokens")
         if max_tokens is not None and (
             type(max_tokens) is not int or not 1 <= max_tokens <= 1000000

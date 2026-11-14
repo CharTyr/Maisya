@@ -530,6 +530,11 @@ async def test_settings_validation_and_management_health_web_status(tmp_path):
     assert Settings(web_provider="google_search_plugin").web_provider == "google_search_plugin"
     with pytest.raises(ValueError):
         Settings(web_provider="unknown_provider")
+    assert Settings().ui_style == "millennium"
+    assert Settings(ui_style="maiwork").ui_style == "maiwork"
+    assert Settings(ui_style="auto").ui_style == "auto"
+    with pytest.raises(ValueError):
+        Settings(ui_style="neon_invalid")
 
     # Bare SimpleNamespace without call_capability (like loaded() fixture) must still return health safely.
     plugin = await loaded(tmp_path, ["qq:Alice"])

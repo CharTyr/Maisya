@@ -1,0 +1,940 @@
+import html
+import json
+import logging
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+from maibot_sdk.context import PluginPaths
+
+from maisya.intents import next_daily_due
+from maisya.trust import Message
+from plugin import create_plugin
+
+
+async def _boot_plugin(tmp_path, *, permissions=("qq:Alice",), enabled_chats=()):
+    async def get(key, default=None):
+        return list(permissions) if key == "plugin.permission" else default
+
+    plugin = create_plugin()
+    plugin._ctx = SimpleNamespace(
+        config=SimpleNamespace(get=get),
+        paths=PluginPaths(
+            data_dir=tmp_path / "host/data/plugins/chartyr.maisya",
+            runtime_dir=tmp_path / "runtime",
+        ),
+        logger=logging.getLogger("test.maisya.one_shot"),
+    )
+    plugin.set_plugin_config(
+        {
+            "plugin": {"enabled": True, "config_version": "0.1.0"},
+            "enabled_chats": list(enabled_chats),
+        }
+    )
+    await plugin.on_load()
+    return plugin
+
+
+def _group_msg(
+    message_id: str,
+    text: str,
+    *,
+    session_id: str = "c0300b39c80870992aca16d9fcb724c5",
+    group_id: str = "100246809",
+    user_id: str = "Alice",
+    platform: str = "qq",
+    relay: str = "",
+):
+    return {
+        "message_id": message_id,
+        "session_id": session_id,
+        "platform": platform,
+        "timestamp": "1794500000.0",
+        "processed_plain_text": text,
+        "raw_message": [{"type": "text", "data": text}],
+        "message_info": {
+            "user_info": {"user_id": user_id},
+            "group_info": {"group_id": group_id},
+            "additional_config": {"relayed_by_plugin": relay},
+        },
+    }
+
+
+def _private_msg(
+    message_id: str,
+    text: str,
+    *,
+    session_id: str = "priv_admin_md5",
+    user_id: str = "Alice",
+    platform: str = "qq",
+    relay: str = "",
+):
+    return {
+        "message_id": message_id,
+        "session_id": session_id,
+        "platform": platform,
+        "timestamp": "1794500000.0",
+        "processed_plain_text": text,
+        "raw_message": [{"type": "text", "data": text}],
+        "message_info": {
+            "user_info": {"user_id": user_id},
+            "group_info": None,
+            "additional_config": {"relayed_by_plugin": relay},
+        },
+    }
+
+
+def _streams_rpc(calls=None):
+    group_sid = "c0300b39c80870992aca16d9fcb724c5"
+
+    async def capability(name, **arguments):
+        if calls is not None:
+            calls.append((name, arguments))
+        if name == "chat.get_all_streams":
+            return {
+                "success": True,
+                "streams": [
+                    {
+                        "session_id": group_sid,
+                        "platform": "qq",
+                        "is_group_session": True,
+                        "chat_type": "group",
+                        "group_id": "100246809",
+                        "group_name": "独立开发社",
+                    }
+                ],
+            }
+        if name == "llm.get_available_models":
+            return {"success": True, "models": ["claude-sonnet-4-6", "deepseek-v3"]}
+        if name == "statistics.local.models":
+            return {
+                "success": True,
+                "models": [
+                    {"model_name": "claude-sonnet-4-6", "api_provider": "anthropic"},
+                    {"model_name": "deepseek-v3", "api_provider": "deepseek"},
+                ],
+            }
+        if name == "llm.generate_with_tools":
+            return {"success": True, "response": "今日人工智能与二次元游戏早报完成。", "tool_calls": []}
+        if name == "maisaka.proactive.trigger":
+            return {"success": True}
+        if name == "chat.open_session":
+            return {"success": True, "session_id": arguments.get("group_id") or group_sid}
+        return {"success": True}
+
+    return capability
+
+
+@pytest.mark.asyncio
+async def test_chat_alias_matching_and_canonical_resolution(tmp_path):
+    plugin = await _boot_plugin(tmp_path, permissions=["qq:Alice"], enabled_chats=[])
+    group_sid = "c0300b39c80870992aca16d9fcb724c5"
+    try:
+        plugin.ctx.call_capability = _streams_rpc()
+
+        for raw in ("100246809", "qq:100246809", "qq:group:100246809", "独立开发社", group_sid):
+            cid, plat = await plugin.resolve_chat_id(
+                raw, current_chat_id="priv_admin_md5", current_platform="qq"
+            )
+            assert cid == group_sid, (raw, cid)
+            assert plat == "qq"
+
+        cid, plat = await plugin.resolve_chat_id(
+            "current", current_chat_id="priv_admin_md5", current_platform="qq"
+        )
+        assert (cid, plat) == ("priv_admin_md5", "qq")
+
+        # Stream cache seeded session_routes so Pulse._reopen_session works before any group message arrives
+        route = plugin.messages.route_for(group_sid)
+        assert route is not None
+        assert route["platform"] == "qq"
+        assert route["chat_type"] == "group"
+        assert route["group_id"] == "100246809"
+
+        # Even if manual raw ID '100246809' is configured directly, matching works everywhere
+        await plugin.on_config_update(
+            "self",
+            {
+                **plugin.settings.model_dump(),
+                "enabled_chats": ["100246809"],
+                "chat_proactive_levels": {"100246809": "lively"},
+            },
+            0,
+        )
+        assert plugin.enabled_for(group_sid, "qq") is True
+        assert plugin.pulse.level_for(group_sid) == "lively"
+
+        # Profile.allow_chats with raw group_id matches incoming MD5 session_id
+        plugin.memory.write(
+            "profile",
+            'title = "白名单侦察"\naccess = "listed"\nallow_chats = ["100246809"]\ntools = ["web_search"]\n',
+            target="scout",
+            document="profile.toml",
+            expected_version=plugin.memory.read("profile", target="scout", document="profile.toml")["version"],
+            allow_custom=True,
+        )
+        assert plugin._profile_allowed(plugin.profiles.get("scout"), None, group_sid, "qq") is True
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_zero_leakage_admin_bootstrap_and_private_vault(tmp_path):
+    plugin = await _boot_plugin(tmp_path, permissions=["qq:Alice"], enabled_chats=[])
+    try:
+        tools = [
+            {"type": "function", "function": {"name": name}}
+            for name in ["reply", "subagent", "maisya_agent", "maisya_recall", "maisya_later"]
+        ]
+
+        # 1. Non-admin in unlisted group: zero DB writes, all 4 Maisya tools stripped, zero prompt injection
+        bob_msg = _group_msg("m-bob-1", "hi", session_id="unlisted_group", group_id="88888", user_id="Bob")
+        await plugin.after_receive(message=bob_msg)
+        with plugin.messages.path and plugin.threads.connect() as db:
+            rows = db.execute("SELECT * FROM trusted_sources WHERE session_id='unlisted_group'").fetchall()
+            assert rows == []
+        non_admin_hook = await plugin.before_planner(session_id="unlisted_group", items=[], tool_definitions=tools)
+        kept = [(t.get("function") or t).get("name") for t in non_admin_hook["modified_kwargs"]["tool_definitions"]]
+        assert set(kept) == {"reply", "subagent"}
+        assert "items" not in non_admin_hook["modified_kwargs"]
+
+        # 2. Admin in un-enabled private chat: /vault set succeeds without enabled_chats containing private session
+        secret_val = "sk-test-private-admin-vault-9999"
+        vault_ev = _private_msg("m-alice-vault", f"/vault set exa_key {secret_val}")
+        vault_res = await plugin.after_receive(message=vault_ev)
+        assert secret_val not in str(vault_res)
+        assert plugin.vault.handles() == ["exa_key"]
+
+        # 3. Admin normal message in un-enabled private chat bootstraps tools & guide
+        alice_ev = _private_msg("m-alice-boot", "帮我给独立开发社开启 Maisya 并配好每日资讯")
+        await plugin.after_receive(message=alice_ev)
+        boot_hook = await plugin.before_planner(session_id="priv_admin_md5", items=[], tool_definitions=tools)
+        boot_names = [(t.get("function") or t).get("name") for t in boot_hook["modified_kwargs"]["tool_definitions"]]
+        assert "maisya_later" in boot_names
+        assert "maisya_agent" in boot_names
+        boot_text = html.unescape(boot_hook["modified_kwargs"]["items"][-1]["parts"][0]["text"])
+        assert "<maisya_admin_bootstrap>" in boot_text
+        assert "tool_search" in boot_text
+        assert "maisya_shape" in boot_text
+        assert "priv_admin_md5" in boot_text
+        assert "<maisya_disabled_profiles>" in boot_text and "digest" in boot_text
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_single_turn_one_paragraph_full_configuration_and_run(tmp_path):
+    plugin = await _boot_plugin(tmp_path, permissions=["qq:Alice"], enabled_chats=[])
+    calls = []
+    plugin.ctx.call_capability = _streams_rpc(calls)
+    group_sid = "c0300b39c80870992aca16d9fcb724c5"
+    try:
+        plugin.vault.set("demo_secret", "top-secret-never-leak-777")
+        admin_ev = _private_msg(
+            "m-admin-one-shot",
+            "帮我把 100246809（独立开发社）开启 Maisya，打开 digest 用 claude-sonnet-4-6，创建一个 ai-radar 技能绑上，记下关注开源AI与二游，设每天 08:30 和 19:30 推送并试跑一期",
+        )
+        await plugin.after_receive(message=admin_ev)
+        await plugin.before_planner(
+            session_id="priv_admin_md5",
+            items=[],
+            tool_definitions=[
+                {"type": "function", "function": {"name": n}}
+                for n in ("reply", "maisya_agent", "maisya_recall", "maisya_later", "maisya_shape")
+            ],
+        )
+
+        # 1. Overview
+        ov = await plugin.shape_tool(
+            action="read",
+            kind="overview",
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert ov["success"] is True, ov
+        assert "top-secret-never-leak-777" not in json.dumps(ov, ensure_ascii=False)
+        assert "demo_secret" in ov["vault_handles"]
+        assert any(c["chat_id"] == group_sid and c["name"] == "独立开发社" for c in ov["known_chats"])
+        assert any(p["id"] == "digest" and p["enabled"] is False for p in ov["profiles"])
+        assert "claude-sonnet-4-6" in ov["host_models"]["names"]
+
+        # 2. Settings patch + anti-self-lockout + rollback
+        patched = await plugin.shape_tool(
+            action="patch",
+            kind="settings",
+            patch={
+                "add_chats": ["100246809"],
+                "chat_proactive_levels": {"100246809": "lively"},
+                "sleep_window": "01-08",
+                "daily_proactive_limit": 3,
+            },
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert patched["success"] is True, patched
+        assert "qq:group:100246809" in plugin.settings.enabled_chats
+        assert plugin.settings.chat_proactive_levels["qq:group:100246809"] == "lively"
+        assert plugin.enabled_for(group_sid, "qq") is True
+        assert plugin.settings.sleep_window == "01-08"
+        assert plugin.settings.daily_proactive_limit == 3
+        assert plugin.pulse.level_for(group_sid) == "lively"
+
+        lockout = await plugin.shape_tool(
+            action="patch",
+            kind="settings",
+            patch={"plugin": {"enabled": False}},
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert lockout["success"] is False
+        assert "锁死" in lockout["error"]
+
+        # 3. Profile patch (digest)
+        prof_res = await plugin.shape_tool(
+            action="patch",
+            kind="profile",
+            target="digest",
+            patch={
+                "enabled": True,
+                "model_list": ["claude-sonnet-4-6", "deepseek-v3"],
+                "append_instructions": "重点关注开源 AI 与二次元游戏动态。",
+            },
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert prof_res["success"] is True, prof_res
+        digest = plugin.profiles.get("digest")
+        assert digest.enabled is True
+        assert digest.model_list == ("claude-sonnet-4-6", "deepseek-v3")
+        assert "开源 AI 与二次元游戏动态" in digest.instructions
+
+        # 4. Skill create + bind_profiles
+        sk_res = await plugin.shape_tool(
+            action="create",
+            kind="skill",
+            target="ai-radar",
+            content="---\ntitle: AI 雷达\ndescription: 提炼开源仓库重点\n---\n# AI 雷达\n只保留有源码链接的项目。",
+            patch={"bind_profiles": ["digest"]},
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert sk_res["success"] is True, sk_res
+        assert "ai-radar" in plugin.profiles.get("digest").skills
+
+        # 5. Cross-chat group MEMORY.md write by group name
+        mem_res = await plugin.shape_tool(
+            action="patch",
+            kind="memory",
+            target_chat="独立开发社",
+            patch={"append": "群友偏好：主要关注开源 AI 与二游资讯"},
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert mem_res["success"] is True, mem_res
+        assert "二游资讯" in plugin.memory.read("memory", chat_id=group_sid)["content"]
+        assert plugin.memory.read("memory", chat_id="priv_admin_md5")["content"] == ""
+
+        # 6. Schedule two daily wall-clock slots, then replace with one slot
+        sched_res = await plugin.later_tool(
+            action="schedule",
+            target_chat="100246809",
+            profile="digest",
+            workspace="daily_news",
+            daily_at=["08:30", "19:30"],
+            reason="每日早晚资讯简报",
+            prompt="整理今日资讯简报",
+            replace=True,
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert sched_res["success"] is True, sched_res
+        assert len(sched_res["intents"]) == 2
+        assert len(plugin.intents.list(f"chat:{group_sid}")) == 2
+
+        sched_replace = await plugin.later_tool(
+            action="schedule",
+            target_chat="独立开发社",
+            profile="digest",
+            workspace="daily_news",
+            daily_at=["09:00"],
+            reason="改为每日早报",
+            prompt="整理每日早报",
+            replace=True,
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert sched_replace["success"] is True, sched_replace
+        assert len(sched_replace["cancelled_ids"]) == 2
+        pending = plugin.intents.list(f"chat:{group_sid}")
+        assert len(pending) == 1
+        assert pending[0]["payload"]["daily_at"] == "09:00"
+        assert pending[0]["payload"]["scheduled_admin"] is True
+
+        # 7. Immediate cross-chat test run wakes target group (not private chat)
+        run_res = await plugin.agent_tool(
+            action="start",
+            target_chat="100246809",
+            profile="digest",
+            workspace="daily_news",
+            message="先试跑一期今日资讯",
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert run_res["success"] is True, run_res
+        assert run_res["state"] == "active"
+        await plugin.engine.drain()
+        await plugin.pulse.tick()
+        wake_targets = [args["stream_id"] for cap, args in calls if cap == "maisaka.proactive.trigger"]
+        assert group_sid in wake_targets
+        assert "priv_admin_md5" not in wake_targets
+
+        # Rollback settings history check
+        hist = await plugin.shape_tool(
+            action="history",
+            kind="settings",
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert hist["success"] is True and len(hist["history"]) >= 1
+        rb = await plugin.shape_tool(
+            action="rollback",
+            kind="settings",
+            version=0,
+            expected_version=patched["version"],
+            source_msg_id="m-admin-one-shot",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert rb["success"] is True, rb
+        assert plugin.settings.enabled_chats == []
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_wall_clock_drift_free_reschedule_and_admin_workflow_guard(tmp_path):
+    tz_cn = timezone(timedelta(hours=8))
+    # Start clock at 2026-11-15 08:29:00 UTC+8
+    now_dt = datetime(2026, 11, 15, 8, 29, 0, tzinfo=tz_cn)
+    clock_box = [now_dt.timestamp()]
+
+    due_ts, norm_hhmm = next_daily_due(clock_box[0], "8:30", 480)
+    assert norm_hhmm == "08:30"
+    assert due_ts == datetime(2026, 11, 15, 8, 30, 0, tzinfo=tz_cn).timestamp()
+
+    plugin = await _boot_plugin(
+        tmp_path, permissions=["qq:Alice"], enabled_chats=["c0300b39c80870992aca16d9fcb724c5"]
+    )
+    plugin.intents.clock = lambda: clock_box[0]
+    plugin.ctx.call_capability = _streams_rpc()
+    group_sid = "c0300b39c80870992aca16d9fcb724c5"
+    try:
+        alice_ev = _group_msg("m-alice-wf", "每天早上八点半发简报", user_id="Alice")
+        await plugin.after_receive(message=alice_ev)
+        # Enable digest
+        await plugin.manage_write("toggle_profile", json.dumps({"target": "digest", "enabled": True}))
+
+        res = await plugin.later_tool(
+            action="schedule",
+            profile="digest",
+            workspace="daily",
+            daily_at=["08:30"],
+            reason="早报",
+            prompt="生成早报",
+            source_msg_id="m-alice-wf",
+            chat_id=group_sid,
+            platform="qq",
+        )
+        assert res["success"] is True, res
+
+        # Non-admin Bob in group cannot cancel admin workflow
+        bob_ev = _group_msg("m-bob-cancel", "取消早报", user_id="Bob")
+        await plugin.after_receive(message=bob_ev)
+        denied = await plugin.later_tool(
+            action="cancel",
+            intent_id=res["intent_id"],
+            source_msg_id="m-bob-cancel",
+            chat_id=group_sid,
+            platform="qq",
+        )
+        assert denied["success"] is False
+
+        # Trigger 137s after 08:30 -> next day's due_at still anchored at exact 08:30:00 (not 08:32:17!)
+        clock_box[0] = datetime(2026, 11, 15, 8, 32, 17, tzinfo=tz_cn).timestamp()
+        await plugin.pulse._intents()
+        await plugin.engine.drain()
+        # Dispatch wake phase of newly created thread
+        clock_box[0] += 10
+        await plugin.pulse._intents()
+
+        pending = plugin.intents.list(f"chat:{group_sid}")
+        assert len(pending) == 1
+        expected_next = datetime(2026, 11, 16, 8, 30, 0, tzinfo=tz_cn).timestamp()
+        assert pending[0]["due_at"] == expected_next
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_unseen_stream_spec_preconfiguration_and_runtime_match(tmp_path):
+    plugin = await _boot_plugin(tmp_path, permissions=["qq:Alice"], enabled_chats=[])
+    opened_calls = []
+
+    async def rpc(name, **arguments):
+        if name == "chat.get_all_streams":
+            return {"streams": []}
+        if name == "llm.get_available_models":
+            return ["claude-sonnet-4-6"]
+        if name == "chat.open_session":
+            opened_calls.append(dict(arguments))
+            return {"success": True, "session_id": "md5_unseen_88888"}
+        if name == "llm.generate_with_tools":
+            return {"success": True, "response": "88888 群预配置试跑完成。", "tool_calls": []}
+        if name == "maisaka.proactive.trigger":
+            return {"success": True}
+        return {"success": True}
+
+    plugin.ctx.call_capability = rpc
+    try:
+        admin_ev = _private_msg("m-precfg", "给 qq:group:88888 预先开通", user_id="Alice")
+        await plugin.after_receive(message=admin_ev)
+
+        res = await plugin.shape_tool(
+            action="patch",
+            kind="settings",
+            patch={
+                "add_chats": ["qq:group:88888"],
+                "chat_proactive_levels": {"qq:group:88888": "quiet"},
+            },
+            source_msg_id="m-precfg",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert res["success"] is True, res
+        assert plugin.settings.enabled_chats == ["qq:group:88888"]
+        assert plugin.settings.chat_proactive_levels == {"qq:group:88888": "quiet"}
+
+        prof_res = await plugin.shape_tool(
+            action="patch",
+            kind="profile",
+            target="scout",
+            patch={"access": "listed", "add_allow_chats": ["qq:group:88888"]},
+            source_msg_id="m-precfg",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert prof_res["success"] is True, prof_res
+        assert plugin.profiles.get("scout").allow_chats == ("qq:group:88888",)
+
+        # Before any message arrives in 88888, admin schedules via qq:group:88888 -> opens runtime session
+        later = await plugin.later_tool(
+            action="schedule",
+            target_chat="qq:group:88888",
+            profile="scout",
+            workspace="precfg",
+            daily_at=["09:00"],
+            reason="新群早安",
+            prompt="准备新群简报",
+            source_msg_id="m-precfg",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert later["success"] is True, later
+        assert opened_calls and opened_calls[0]["group_id"] == "88888"
+
+        # Now incoming message arrives from MD5 runtime session_id with group_id="88888"
+        group_ev = _group_msg(
+            "m-unseen-hi", "大家好", session_id="md5_unseen_88888", group_id="88888", user_id="Bob"
+        )
+        await plugin.after_receive(message=group_ev)
+        assert plugin.enabled_for("md5_unseen_88888", "qq") is True
+        assert plugin.pulse.level_for("md5_unseen_88888") == "quiet"
+        assert plugin._profile_allowed(
+            plugin.profiles.get("scout"),
+            Message.from_event(group_ev),
+            "md5_unseen_88888",
+            "qq",
+            admin_verified=False,
+        )
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_private_chat_unenabled_admin_full_control(tmp_path, monkeypatch):
+    """未加白名单的管理员私聊也能跨任意消息流全量配置、RSS 源预设、预览试跑、召回、分享推群与个人提醒。"""
+    import maisya.digest as digest_mod
+
+    monkeypatch.setattr(digest_mod, "_validate_public_url", lambda url: None)
+    monkeypatch.setattr(
+        digest_mod,
+        "_sync_fetch_public_bytes",
+        lambda url, timeout, max_bytes: {
+            "body": (
+                b'<?xml version="1.0" encoding="utf-8"?>'
+                b"<rss version='2.0'><channel><title>Tech Feed</title>"
+                b"<item><title>Quantum Preview</title><link>https://news.example.com/q1</link>"
+                b"<description>Quantum report summary</description></item>"
+                b"</channel></rss>"
+            ),
+            "content_type": "application/rss+xml",
+            "status": 200,
+            "url": url,
+            "error": "",
+        },
+    )
+
+    plugin = await _boot_plugin(
+        tmp_path, permissions=("qq:Alice",), enabled_chats=("chat",)
+    )
+    plugin.settings.sandbox.enabled = False
+    hybrid_sends = []
+    proactive_wakes = []
+    open_calls = []
+
+    async def capability(name, **arguments):
+        if name == "chat.get_all_streams":
+            return {"success": True, "streams": []}
+        if name == "chat.open_session":
+            open_calls.append(arguments)
+            return {"success": False}
+        if name == "send.hybrid":
+            hybrid_sends.append(arguments)
+            return {"success": True, "message_id": f"sent-{len(hybrid_sends)}"}
+        if name == "maisaka.proactive.trigger":
+            proactive_wakes.append(arguments)
+            return {"success": True}
+        if name == "maisaka.reply.generate":
+            return {"success": True, "text": "交付结果给你过目。"}
+        if name in {"llm.generate", "llm.generate_with_tools"}:
+            return {
+                "success": True,
+                "response": "量子评测报告完成：https://example.com/report",
+                "tool_calls": [],
+            }
+        return {"success": False}
+
+    plugin.ctx.call_capability = capability
+    try:
+        # 管理员在未加白名单的私聊（priv_admin_md5 / qq:private:Alice）发话
+        priv_ev = _private_msg(
+            "m-priv-1",
+            "在私聊把未启用新群 qq:group:77777 的记忆、RSS 与任务都安排好并试跑给我看",
+            session_id="priv_admin_md5",
+            user_id="Alice",
+        )
+        await plugin.after_receive(message=priv_ev)
+        assert plugin.enabled_for("priv_admin_md5", "qq") is False
+
+        # before_planner 仍向未启用私聊里的管理员暴露引导与全量工具
+        plan_res = await plugin.before_planner(
+            session_id="priv_admin_md5",
+            tool_definitions=[
+                {"name": "maisya_agent"},
+                {"name": "maisya_recall"},
+                {"name": "maisya_shape"},
+                {"name": "maisya_later"},
+            ],
+            items=[],
+        )
+        boot_text = "\n".join(
+            p["text"]
+            for it in plan_res["modified_kwargs"]["items"]
+            for p in it.get("parts", [])
+        )
+        assert "<maisya_admin_bootstrap>" in boot_text
+        assert "qq:private:Alice" in boot_text
+        assert "deliver_to" in boot_text
+
+        # 1. 不按先后顺序：目标群 qq:group:77777 还没加入 enabled_chats，先写该群手账与 RSS 源
+        mem_res = await plugin.shape_tool(
+            action="write",
+            kind="memory",
+            target_chat="qq:group:77777",
+            content="量子前沿论文追踪清单，少发纯营销号。",
+            expected_version=0,
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert mem_res["success"] is True, mem_res
+
+        rss_res = await plugin.shape_tool(
+            action="patch",
+            kind="digest_sources",
+            target_chat="qq:group:77777",
+            patch={
+                "add_urls": [
+                    {"url": "https://news.example.com/rss.xml", "title": "Tech Feed"}
+                ]
+            },
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert rss_res["success"] is True, rss_res
+        assert len(rss_res["feeds"]) == 1
+        assert rss_res["feeds"][0]["url"] == "https://news.example.com/rss.xml"
+
+        ov = await plugin.shape_tool(
+            action="read",
+            kind="overview",
+            target_chat="qq:group:77777",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert ov["success"] is True, ov
+        assert "target_stream" in ov
+        assert "量子前沿论文追踪清单" in ov["target_stream"]["memory"]["content"]
+        assert len(ov["target_stream"]["digest_sources"]["feeds"]) == 1
+
+        # 2. 目标群尚未进白名单：直接从私聊用 deliver_to="current" 试跑预览，只回私聊不建目标群待办
+        preview_run = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            target_chat="qq:group:77777",
+            deliver_to="current",
+            message="先帮我看一轮量子前沿链接",
+            wait_seconds=10,
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert preview_run["success"] is True, preview_run
+        assert preview_run["state"] == "idle"
+        assert "delivery_intent_id" not in preview_run
+        tid = preview_run["thread_id"]
+
+        # 模拟 after_planner 记录本轮私聊预览计划 + before_replyer 向未启用私聊投递 <maisya_result>
+        await plugin.after_planner(
+            session_id="priv_admin_md5",
+            output_items=[
+                {
+                    "tool_call": {
+                        "func_name": "maisya_agent",
+                        "args": {
+                            "action": "start",
+                            "target_chat": "qq:group:77777",
+                            "deliver_to": "current",
+                            "source_msg_id": "m-priv-1",
+                            "wait_seconds": 10,
+                        },
+                    }
+                }
+            ],
+        )
+        assert plugin.bridge.has_pending_for("priv_admin_md5") is True
+        rep = await plugin.before_replyer(
+            session_id="priv_admin_md5",
+            request_type="maisaka.replyer",
+            attempt=1,
+            reply_tool_args={},
+        )
+        assert "modified_kwargs" in rep
+        extra_prompt = rep["modified_kwargs"]["extra_prompt"]
+        assert "<maisya_result>" in extra_prompt
+        assert "https://example.com/report" in extra_prompt
+        assert "<maisya_memory>" not in extra_prompt
+
+        # 3. 管理员仅传 thread_id（不传 target_chat）在私聊续接与停止跨群线程
+        cont_res = await plugin.agent_tool(
+            action="send",
+            thread_id=tid,
+            deliver_to="current",
+            message="补充核对一条出处",
+            wait_seconds=10,
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert cont_res["success"] is True, cont_res
+        stop_other = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            target_chat="qq:group:77777",
+            deliver_to="none",
+            message="单独建一个待停线程",
+            wait_seconds=10,
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert stop_other["success"] is True, stop_other
+        stopped = await plugin.agent_tool(
+            action="stop",
+            thread_id=stop_other["thread_id"],
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert stopped["success"] is True and stopped["state"] == "closed", stopped
+
+        # 4. 从未启用私聊执行跨群检索（指定 target_chat 与 target_chat="all"）
+        rec_one = await plugin.recall_tool(
+            query="量子",
+            target_chat="qq:group:77777",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert rec_one["success"] is True, rec_one
+        assert rec_one["memories"] and rec_one["threads"]
+        assert rec_one["threads"][0]["stream_spec"] == "qq:group:77777"
+
+        rec_all = await plugin.recall_tool(
+            query="",
+            target_chat="all",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert rec_all["success"] is True, rec_all
+        assert any(t["thread_id"] == tid for t in rec_all["threads"])
+
+        # 5. 先在未启用私聊 share 预览该线程（带链接），确认不阻塞随后正式推往目标群
+        priv_share = await plugin.agent_tool(
+            action="share",
+            thread_id=tid,
+            message="先私聊发我一份",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert priv_share["success"] is True, priv_share
+        assert hybrid_sends and hybrid_sends[-1]["stream_id"] == "priv_admin_md5"
+
+        # 开启 qq:group:77777 白名单并模拟真群 MD5 session 连线
+        enable_res = await plugin.shape_tool(
+            action="patch",
+            kind="settings",
+            patch={"add_chats": ["qq:group:77777"]},
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert enable_res["success"] is True, enable_res
+
+        grp_ev = _group_msg(
+            "m-77777-hi",
+            "新群来消息了",
+            session_id="md5_group_77777",
+            group_id="77777",
+            user_id="Bob",
+        )
+        await plugin.after_receive(message=grp_ev)
+
+        # 验证事先配好的手账与 RSS 工作区自动对齐到 md5_group_77777
+        assert "量子前沿论文追踪清单" in plugin.memory.context("md5_group_77777")["memory"]
+        read_rss_after = await plugin.shape_tool(
+            action="read",
+            kind="digest_sources",
+            target_chat="qq:group:77777",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert read_rss_after["success"] is True
+        assert len(read_rss_after["feeds"]) == 1
+
+        # 再将同一个 tid 通过 share 正式推往目标群：不应被之前私聊预览的 delivery 拦截
+        grp_share = await plugin.agent_tool(
+            action="share",
+            thread_id=tid,
+            target_chat="qq:group:77777",
+            message="正式推送到群里",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert grp_share["success"] is True and not grp_share.get("already_handled"), grp_share
+        assert hybrid_sends[-1]["stream_id"] == "md5_group_77777"
+
+        # 6. 在未启用私聊给管理员自己设一条个人提醒（admin_direct=True），到点由 Pulse 正常唤醒
+        later_personal = await plugin.later_tool(
+            action="schedule",
+            in_seconds=30,
+            reason="提醒我晚上看一眼日志",
+            source_msg_id="m-priv-1",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert later_personal["success"] is True, later_personal
+        assert later_personal["payload"].get("admin_direct") is True
+
+        base_now = later_personal["due_at"] + 1
+        plugin.intents.clock = lambda: base_now
+        await plugin.pulse.tick()
+        assert proactive_wakes and proactive_wakes[-1]["stream_id"] == "priv_admin_md5"
+        assert "<maisya_reminder>" in proactive_wakes[-1]["intent"]
+
+        # 7. 未启用私聊里的非管理员仍然零落盘、零工具暴露、直接调用全拒绝
+        stranger_ev = _private_msg(
+            "m-stranger-1",
+            "帮我改设置或看看别的群",
+            session_id="priv_stranger_md5",
+            user_id="Stranger",
+        )
+        await plugin.after_receive(message=stranger_ev)
+        stranger_plan = await plugin.before_planner(
+            session_id="priv_stranger_md5",
+            tool_definitions=[
+                {"name": "maisya_agent"},
+                {"name": "maisya_recall"},
+                {"name": "maisya_shape"},
+                {"name": "maisya_later"},
+            ],
+            items=[],
+        )
+        assert stranger_plan["modified_kwargs"]["tool_definitions"] == []
+        for fn in (
+            plugin.recall_tool(
+                query="量子",
+                target_chat="qq:group:77777",
+                source_msg_id="m-stranger-1",
+                chat_id="priv_stranger_md5",
+                platform="qq",
+            ),
+            plugin.agent_tool(
+                action="start",
+                target_chat="qq:group:77777",
+                deliver_to="current",
+                message="越权",
+                source_msg_id="m-stranger-1",
+                chat_id="priv_stranger_md5",
+                platform="qq",
+            ),
+            plugin.later_tool(
+                action="schedule",
+                in_seconds=60,
+                reason="越权提醒",
+                source_msg_id="m-stranger-1",
+                chat_id="priv_stranger_md5",
+                platform="qq",
+            ),
+        ):
+            res = await fn
+            assert res["success"] is False
+
+        with plugin.threads.connect() as db:
+            stranger_src = db.execute(
+                "SELECT COUNT(*) FROM trusted_sources WHERE session_id='priv_stranger_md5'"
+            ).fetchone()[0]
+            stranger_rt = db.execute(
+                "SELECT COUNT(*) FROM session_routes WHERE session_id='priv_stranger_md5'"
+            ).fetchone()[0]
+        assert stranger_src == 0
+        assert stranger_rt == 0
+    finally:
+        await plugin.on_unload()
+

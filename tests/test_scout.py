@@ -185,3 +185,99 @@ async def test_real_sdk_unwraps_message_and_memory_results():
         await scout.call("memory_read", {"query": "knowledge"}, context)
         == "scoped knowledge"
     )
+
+
+@pytest.mark.asyncio
+async def test_profile_model_list_and_three_step_fallback(tmp_path):
+    from maisya.abilities import Profile, Profiles
+
+    profiles = Profiles(tmp_path / "profiles")
+    (tmp_path / "profiles" / "scout" / "profile.toml").write_text(
+        'title = "探索者"\nmodel_list = ["primary-m", "backup-a", "backup-b"]\n'
+    )
+    loaded_profile = profiles.get("scout")
+    assert loaded_profile.model_list == ("primary-m", "backup-a", "backup-b")
+    assert loaded_profile.model_name == "primary-m"
+    assert loaded_profile.fallback_models == ("backup-a", "backup-b")
+
+    host = Host()
+    tried = []
+
+    async def generate(name, **arguments):
+        tried.append(arguments.get("model_name"))
+        if len(tried) == 1:
+            return {"success": False, "error": "rate_limit"}
+        if len(tried) == 2:
+            return {"success": True, "response": "", "tool_calls": []}
+        return {"success": True, "response": "Third backup ok", "tool_calls": []}
+
+    host.call_capability = generate
+    result = await Scout(host).step(
+        Profile(id="scout", model_name="primary-m", fallback_models=("backup-a", "backup-b")),
+        [{"role": "user", "content": "check fallback"}],
+    )
+    assert tried == ["primary-m", "backup-a", "backup-b"]
+    assert result["response"] == "Third backup ok"
+    assert result["used_model"] == "backup-b"
+
+
+@pytest.mark.asyncio
+async def test_host_model_config_broadcast_sanitizes_secrets_and_feeds_abilities(tmp_path):
+    from test_foundation import loaded
+
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    try:
+        async def capability(name, **arguments):
+            if name == "llm.get_available_models":
+                return {"success": True, "models": ["planner", "utils"]}
+            if name == "statistics.local.models":
+                return {
+                    "success": True,
+                    "models": [{"model_name": "stat-model-x"}],
+                }
+            return {"success": True}
+
+        plugin.ctx.call_capability = capability
+        await plugin.on_config_update(
+            "model",
+            {
+                "models": [
+                    {
+                        "name": "step-5-preview",
+                        "model_identifier": "stepfun/step-5",
+                        "api_provider": "StepFun",
+                    },
+                    {
+                        "name": "glm-5",
+                        "model_identifier": "zhipu/glm-5",
+                        "api_provider": "Zhipu",
+                    },
+                ],
+                "model_task_config": {
+                    "planner": {"model_list": ["step-5-preview", "glm-5"]}
+                },
+                "api_providers": [
+                    {
+                        "name": "StepFun",
+                        "api_key": "sk-secret-do-not-leak",
+                        "base_url": "https://secret.example/v1",
+                    }
+                ],
+            },
+            2,
+        )
+        disc = await plugin.manage_read("discovery", "{}")
+        assert disc["success"]
+        abilities = await plugin.manage_read("abilities", "{}")
+        assert abilities["success"]
+        for expected in ("step-5-preview", "glm-5", "stat-model-x"):
+            assert expected in abilities["available_models"]
+        serialized = (
+            str(disc)
+            + str(abilities)
+            + (plugin.data_root / "host_models.json").read_text()
+        )
+        assert "sk-secret-do-not-leak" not in serialized
+        assert "secret.example" not in serialized
+    finally:
+        await plugin.on_unload()

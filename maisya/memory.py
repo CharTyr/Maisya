@@ -274,6 +274,7 @@ class MemoryLayers:
             vault,
             clock,
         )
+        self.chat_aliases = None
         with store.connect() as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS memory_versions (asset TEXT,version INTEGER,kind TEXT,target TEXT,chat_id TEXT,document TEXT,content TEXT,author TEXT,updated REAL,PRIMARY KEY(asset,version))"
@@ -338,6 +339,45 @@ class MemoryLayers:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
+    def _has_memory_data(self, chat_id: str) -> bool:
+        if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
+            return False
+        target = hashlib.sha256(chat_id.encode()).hexdigest()[:32]
+        path = self.root / "memory/chats" / target / "MEMORY.md"
+        if path.is_file() and not path.is_symlink():
+            try:
+                if path.stat().st_size > 0:
+                    return True
+            except OSError:
+                pass
+        asset = f"memory:{target}:MEMORY.md"
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT content FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
+                (asset,),
+            ).fetchone()
+        return bool(row and str(row["content"] or ""))
+
+    def _resolve_memory_chat_id(self, chat_id: str) -> str:
+        if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
+            return chat_id
+        if self._has_memory_data(chat_id):
+            return chat_id
+        if callable(self.chat_aliases):
+            try:
+                aliases = sorted(set(self.chat_aliases(chat_id)) - {chat_id})
+            except (TypeError, ValueError):
+                aliases = []
+            for alias in aliases:
+                if (
+                    isinstance(alias, str)
+                    and alias
+                    and len(alias) <= 256
+                    and self._has_memory_data(alias)
+                ):
+                    return alias
+        return chat_id
+
     def _locate(self, kind, target="", chat_id="", document=""):
         if kind in {"profile", "notes", "skill"}:
             if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
@@ -360,6 +400,7 @@ class MemoryLayers:
         elif kind == "memory":
             if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
                 raise ValueError("会话记忆需要原会话")
+            chat_id = self._resolve_memory_chat_id(chat_id)
             target = hashlib.sha256(chat_id.encode()).hexdigest()[:32]
             directory, document = self.root / "memory/chats" / target, "MEMORY.md"
         elif kind in {"journal", "heartbeat"}:
@@ -466,6 +507,8 @@ class MemoryLayers:
         db.execute("INSERT INTO memory_search VALUES (?,?)", (asset, content))
 
     def _sync(self, db, kind, target, chat_id, document, *, allow_custom=False):
+        if kind == "memory" and isinstance(chat_id, str) and chat_id:
+            chat_id = self._resolve_memory_chat_id(chat_id)
         asset, path, document, target = self._locate(kind, target, chat_id, document)
         content = self._bytes(path).decode("utf-8")
         old = db.execute(
@@ -1087,6 +1130,8 @@ class MemoryLayers:
         author="admin",
         allow_custom=False,
     ):
+        if kind == "memory" and isinstance(chat_id, str) and chat_id:
+            chat_id = self._resolve_memory_chat_id(chat_id)
         if kind == "journal" and content and not content.startswith("## "):
             content = (
                 "## "
@@ -1219,7 +1264,17 @@ class MemoryLayers:
             pieces.append(content)
         return "\n\n".join(pieces)[:16000]
 
-    def search(self, query, chat_id, *, kind="all", scope="available", limit=5):
+    def search(
+        self,
+        query,
+        chat_id,
+        *,
+        kind="all",
+        scope="available",
+        limit=5,
+        all_chats=False,
+        chat_ids=None,
+    ):
         if (
             kind not in {"all", "memory", "journal"}
             or scope not in {"chat", "self", "available"}
@@ -1229,16 +1284,44 @@ class MemoryLayers:
             or not 1 <= limit <= 10
         ):
             raise ValueError("记忆检索参数无效")
-        self.context(chat_id)
+        self.context("" if all_chats else chat_id)
         tokens = re.findall(r"\w+", query)[:12]
         if query and not tokens:
             return []
         match = " AND ".join('"' + token + '"*' for token in tokens)
+        alias_ids: list[str] = []
+        if not all_chats:
+            raw_candidates = [chat_id, *(chat_ids or ())]
+            if callable(self.chat_aliases) and chat_id:
+                try:
+                    raw_candidates.extend(self.chat_aliases(chat_id))
+                except (TypeError, ValueError):
+                    pass
+            alias_ids = sorted(
+                {str(cid) for cid in raw_candidates if isinstance(cid, str) and cid}
+            )
+            for cid in alias_ids:
+                if cid != chat_id:
+                    resolved = self._resolve_memory_chat_id(cid)
+                    if resolved == cid and self._has_memory_data(cid):
+                        self.read("memory", chat_id=cid, allow_custom=True)
         with self.store.connect() as db:
-            rows = db.execute(
-                'SELECT v.* FROM memory_versions v JOIN (SELECT asset,MAX(version) AS version FROM memory_versions GROUP BY asset) latest ON v.asset=latest.asset AND v.version=latest.version WHERE (v.kind="memory" AND v.chat_id=? OR v.kind="journal") ORDER BY v.updated DESC',
-                (chat_id,),
-            ).fetchall()
+            if all_chats:
+                rows = db.execute(
+                    'SELECT v.* FROM memory_versions v JOIN (SELECT asset,MAX(version) AS version FROM memory_versions GROUP BY asset) latest ON v.asset=latest.asset AND v.version=latest.version WHERE (v.kind="memory" OR v.kind="journal") ORDER BY v.updated DESC'
+                ).fetchall()
+            elif len(alias_ids) > 1:
+                placeholders = ",".join("?" for _ in alias_ids)
+                rows = db.execute(
+                    f'SELECT v.* FROM memory_versions v JOIN (SELECT asset,MAX(version) AS version FROM memory_versions GROUP BY asset) latest ON v.asset=latest.asset AND v.version=latest.version WHERE (v.kind="memory" AND v.chat_id IN ({placeholders}) OR v.kind="journal") ORDER BY v.updated DESC',
+                    alias_ids,
+                ).fetchall()
+            else:
+                target_cid = alias_ids[0] if alias_ids else chat_id
+                rows = db.execute(
+                    'SELECT v.* FROM memory_versions v JOIN (SELECT asset,MAX(version) AS version FROM memory_versions GROUP BY asset) latest ON v.asset=latest.asset AND v.version=latest.version WHERE (v.kind="memory" AND v.chat_id=? OR v.kind="journal") ORDER BY v.updated DESC',
+                    (target_cid,),
+                ).fetchall()
             matches = (
                 {
                     row["asset"]
@@ -1269,13 +1352,14 @@ class MemoryLayers:
                 and not all(token.casefold() in content.casefold() for token in tokens)
             ):
                 continue
-            found.append(
-                {
-                    "kind": row["kind"],
-                    "content": content[:2200],
-                    "version": row["version"],
-                }
-            )
+            entry = {
+                "kind": row["kind"],
+                "content": content[:2200],
+                "version": row["version"],
+            }
+            if row["kind"] == "memory" and row["chat_id"]:
+                entry["chat_id"] = row["chat_id"]
+            found.append(entry)
         return found[:limit]
 
     def experience(self, row):
