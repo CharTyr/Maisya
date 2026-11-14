@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import json
 import re
 import sqlite3
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from .config import Settings
 from .digest import DigestWorkspace
+from .intents import next_daily_due
 from .memory import MemoryLayers, parse_skill_meta
 from .recipes import build_recipe_draft, serialize_profile_toml
 from .scout import call_capability
@@ -26,6 +28,50 @@ _CURRENT_CHAT_ALIASES = {"", "current", "here", "this", "当前", "本群", "当
 _LOCKOUT_MESSAGE = (
     "拒绝在聊天内关闭总开关（plugin.enabled=false 会锁死所有管理入口，请前往 WebUI「设置」操作）"
 )
+DEFAULT_DIGEST_SCHEDULE_PROMPT = (
+    "结合本群 MEMORY.md 中记录的关注主题、已订阅资讯源与读者反馈，"
+    "完成新一期公开资讯搜集、硬条件筛选、五维精选打分并生成天光简报卡交付。"
+)
+_DIGEST_WORKSPACE_ALIASES = frozenset(
+    {"", "digest", "digest-feeds", "digest_feeds", "digest-news", "digest-daily", "digest_feed"}
+)
+_SLEEP_WINDOW_RE = re.compile(
+    r"^(\d{1,2})(?:\s*[:：]\s*(\d{2}))?\s*(?:-|–|—|~|～|至|到)\s*(\d{1,2})(?:\s*[:：]\s*(\d{2}))?$"
+)
+
+
+def normalize_sleep_window(raw: object) -> str:
+    """将常见睡眠安静时段写法（如 1:00-8:00 / 23:30-7:00 / off）规范为 HH-HH 或空字符串。"""
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError("sleep_window 必须是字符串（如 01-08 或 off）")
+    text = raw.strip()
+    if text.lower() in {"", "off", "none", "disable", "disabled", "关闭", "不限制", "无"}:
+        return ""
+    match = _SLEEP_WINDOW_RE.fullmatch(text)
+    if match is None:
+        raise ValueError("sleep_window 格式应为 HH-HH 或 H:MM-H:MM（如 01-08），关闭请传 off")
+    start_h = int(match.group(1))
+    start_m = int(match.group(2) or 0)
+    end_h = int(match.group(3))
+    end_m = int(match.group(4) or 0)
+    if start_h == 24 and start_m == 0:
+        start_h = 0
+    if end_h == 24 and end_m == 0:
+        end_h = 0
+    if not (0 <= start_h <= 23 and 0 <= end_h <= 23 and 0 <= start_m <= 59 and 0 <= end_m <= 59):
+        raise ValueError("sleep_window 小时范围应在 0 到 23 之间")
+    return f"{start_h:02d}-{end_h:02d}"
+
+
+def normalize_profile_workspace(profile_id: str, workspace: str) -> str:
+    """把 digest 角色的常见工作区别名统一收敛到 digest，防止资讯源状态机分裂。"""
+    pid = str(profile_id or "").strip()
+    ws = str(workspace or "").strip()
+    if pid == "digest" and ws.lower() in _DIGEST_WORKSPACE_ALIASES:
+        return "digest"
+    return ws
 _PROFILE_TOML_KEYS = {
     "title",
     "model",
@@ -799,6 +845,8 @@ async def patch_settings(
     _assert_no_secret(plugin, patch, "设置修改内容")
 
     working_patch = copy.deepcopy(patch)
+    if "sleep_window" in working_patch:
+        working_patch["sleep_window"] = normalize_sleep_window(working_patch["sleep_window"])
     add_chats = (
         _clean_str_list(working_patch.pop("add_chats"), label="add_chats")
         if "add_chats" in working_patch
@@ -979,6 +1027,8 @@ async def write_settings(
     _assert_no_secret(plugin, settings_data, "设置")
     _check_no_lockout(settings_data)
     normalized = copy.deepcopy(settings_data)
+    if "sleep_window" in normalized:
+        normalized["sleep_window"] = normalize_sleep_window(normalized["sleep_window"])
     if isinstance(normalized.get("enabled_chats"), (list, tuple, set)):
         norm_chats: list[str] = []
         for raw in _clean_str_list(normalized["enabled_chats"], label="enabled_chats"):
@@ -1041,11 +1091,13 @@ async def rollback_settings(
 
 def profile_summary(plugin, profile_id: str) -> dict:
     p = plugin.profiles.get(profile_id)
+    effective_model = p.model_name or p.model
     return {
         "id": p.id,
         "title": p.title,
         "enabled": p.enabled,
-        "model_name": p.model_name,
+        "model": effective_model,
+        "model_name": effective_model,
         "fallback_models": list(p.fallback_models),
         "model_list": list(p.model_list),
         "task": p.task,
@@ -1631,6 +1683,86 @@ async def handle_recipe(
     return preview
 
 
+def _find_digest_workspace_binding(
+    plugin,
+    effective_chat_id: str,
+    effective_platform: str,
+    ws_name: str,
+) -> dict | None:
+    alias_candidates = {effective_chat_id}
+    if hasattr(plugin, "chat_aliases_for"):
+        alias_candidates.update(
+            plugin.chat_aliases_for(effective_chat_id, effective_platform)
+        )
+    with plugin.threads.connect() as db:
+        placeholders = ",".join("?" for _ in alias_candidates)
+        row = db.execute(
+            f"SELECT w.*, t.state FROM agent_workspaces w LEFT JOIN agent_threads t ON t.thread_id=w.thread_id "
+            f"WHERE w.owner='chat' AND w.name=? AND w.chat_id IN ({placeholders}) "
+            "ORDER BY CASE WHEN w.chat_id=? THEN 0 ELSE 1 END LIMIT 1",
+            [ws_name, *sorted(alias_candidates), effective_chat_id],
+        ).fetchone()
+        return dict(row) if row else None
+
+
+async def _run_in_digest_workspace(
+    plugin,
+    effective_chat_id: str,
+    effective_platform: str,
+    ws_name: str,
+    binding: dict | None,
+    worker,
+):
+    created_helper = False
+    if binding is not None and binding.get("state") not in (None, "closed"):
+        target_row = await completed_thread(
+            plugin.threads.get,
+            binding["thread_id"],
+            binding["chat_id"],
+            allow_any_chat=True,
+        )
+    else:
+        digest_profile = await completed_thread(plugin.profiles.get, "digest")
+        target_row = await completed_thread(
+            lambda: plugin.threads.create(
+                digest_profile,
+                "管理员配置资讯源",
+                chat_id=effective_chat_id,
+                platform=effective_platform or "qq",
+                user_id="",
+                owner="chat",
+                workspace=ws_name,
+                grant={"scheduled_admin": True},
+            )
+        )
+        created_helper = True
+
+    activity_cm = plugin.runtime.files.activity(target_row)
+    work = await completed_thread(activity_cm.__enter__)
+    try:
+        dw = DigestWorkspace(work)
+        result = await worker(dw)
+    except BaseException as exc:
+        await completed_thread(activity_cm.__exit__, type(exc), exc, exc.__traceback__)
+        if created_helper:
+            try:
+                await completed_thread(
+                    plugin.threads.stop, target_row["thread_id"], target_row["chat_id"]
+                )
+            except (ValueError, PermissionError, sqlite3.Error):
+                pass
+        raise
+    await completed_thread(activity_cm.__exit__, None, None, None)
+    if created_helper:
+        try:
+            await completed_thread(
+                plugin.threads.stop, target_row["thread_id"], target_row["chat_id"]
+            )
+        except (ValueError, PermissionError, sqlite3.Error):
+            pass
+    return result
+
+
 async def handle_digest_sources(
     plugin,
     *,
@@ -1644,7 +1776,8 @@ async def handle_digest_sources(
     if action not in {"read", "patch", "write"}:
         raise ValueError(f"digest_sources 仅支持 read / patch / write，不支持 {action}")
     opts = dict(patch or {}) if isinstance(patch, dict) else {}
-    ws_name = str(target or opts.get("workspace") or "digest").strip() or "digest"
+    raw_ws = str(target or opts.get("workspace") or "digest").strip() or "digest"
+    ws_name = normalize_profile_workspace("digest", raw_ws)
     if not re.fullmatch(r"[\w-]{1,64}", ws_name):
         raise ValueError("工作区名称只能含文字、数字、下划线或横线")
     if target_chat and str(target_chat).strip():
@@ -1664,24 +1797,13 @@ async def handle_digest_sources(
         else ""
     ) or effective_chat_id
 
-    alias_candidates = {effective_chat_id}
-    if hasattr(plugin, "chat_aliases_for"):
-        alias_candidates.update(
-            plugin.chat_aliases_for(effective_chat_id, effective_platform)
-        )
-
-    def _find_binding():
-        with plugin.threads.connect() as db:
-            placeholders = ",".join("?" for _ in alias_candidates)
-            row = db.execute(
-                f"SELECT w.*, t.state FROM agent_workspaces w LEFT JOIN agent_threads t ON t.thread_id=w.thread_id "
-                f"WHERE w.owner='chat' AND w.name=? AND w.chat_id IN ({placeholders}) "
-                "ORDER BY CASE WHEN w.chat_id=? THEN 0 ELSE 1 END LIMIT 1",
-                [ws_name, *sorted(alias_candidates), effective_chat_id],
-            ).fetchone()
-            return dict(row) if row else None
-
-    binding = await completed_thread(_find_binding)
+    binding = await completed_thread(
+        _find_digest_workspace_binding,
+        plugin,
+        effective_chat_id,
+        effective_platform,
+        ws_name,
+    )
     if action == "read":
         if binding is None:
             return {
@@ -1738,38 +1860,11 @@ async def handle_digest_sources(
         raise ValueError("add_urls / discover_urls / unsubscribe_ids 必须是列表")
 
     auto_default = bool(opts.get("auto", False))
-    created_helper = False
-    target_row: dict
-    if binding is not None and binding.get("state") not in (None, "closed"):
-        target_row = await completed_thread(
-            plugin.threads.get,
-            binding["thread_id"],
-            binding["chat_id"],
-            allow_any_chat=True,
-        )
-    else:
-        digest_profile = await completed_thread(plugin.profiles.get, "digest")
-        target_row = await completed_thread(
-            lambda: plugin.threads.create(
-                digest_profile,
-                "管理员配置资讯源",
-                chat_id=effective_chat_id,
-                platform=effective_platform or "qq",
-                user_id="",
-                owner="chat",
-                workspace=ws_name,
-                grant={"scheduled_admin": True},
-            )
-        )
-        created_helper = True
 
-    added: list[dict] = []
-    discovered: list[dict] = []
-    unsubscribed: list[dict] = []
-    activity_cm = plugin.runtime.files.activity(target_row)
-    work = await completed_thread(activity_cm.__enter__)
-    try:
-        dw = DigestWorkspace(work)
+    async def _mutate(dw: DigestWorkspace) -> dict:
+        added: list[dict] = []
+        discovered: list[dict] = []
+        unsubscribed: list[dict] = []
         for item in add_raw:
             if isinstance(item, dict):
                 url = str(item.get("url") or "").strip()
@@ -1801,39 +1896,22 @@ async def handle_digest_sources(
                 unsubscribed.append(dw.unsubscribe(fid, reason="管理员退订"))
         cur_sources = dw._load_sources()
         cur_history = dw._load_history()
-    except BaseException as exc:
-        await completed_thread(activity_cm.__exit__, type(exc), exc, exc.__traceback__)
-        if created_helper:
-            try:
-                await completed_thread(
-                    plugin.threads.stop, target_row["thread_id"], target_row["chat_id"]
-                )
-            except (ValueError, PermissionError, sqlite3.Error):
-                pass
-        raise
-    else:
-        await completed_thread(activity_cm.__exit__, None, None, None)
+        return {
+            "kind": "digest_sources",
+            "chat_id": effective_chat_id,
+            "stream_spec": stream_spec,
+            "workspace": ws_name,
+            "added": added,
+            "discovered": discovered,
+            "unsubscribed": unsubscribed,
+            "feeds": list(cur_sources.get("feeds", [])),
+            "rejected": list(cur_sources.get("rejected", [])),
+            "history_count": len(cur_history.get("items", [])),
+        }
 
-    if created_helper:
-        try:
-            await completed_thread(
-                plugin.threads.stop, target_row["thread_id"], target_row["chat_id"]
-            )
-        except (ValueError, PermissionError, sqlite3.Error):
-            pass
-
-    return {
-        "kind": "digest_sources",
-        "chat_id": effective_chat_id,
-        "stream_spec": stream_spec,
-        "workspace": ws_name,
-        "added": added,
-        "discovered": discovered,
-        "unsubscribed": unsubscribed,
-        "feeds": list(cur_sources.get("feeds", [])),
-        "rejected": list(cur_sources.get("rejected", [])),
-        "history_count": len(cur_history.get("items", [])),
-    }
+    return await _run_in_digest_workspace(
+        plugin, effective_chat_id, effective_platform, ws_name, binding, _mutate
+    )
 
 
 async def build_overview(
@@ -1988,6 +2066,927 @@ async def build_overview(
     return _redact(plugin, payload)
 
 
+_SETUP_CHAT_FIELDS = frozenset(
+    {
+        "preferences",
+        "memory",
+        "append_memory",
+        "replace_memory",
+        "daily_at",
+        "schedules",
+        "rss_urls",
+        "add_urls",
+        "discover_urls",
+        "unsubscribe_ids",
+        "topics",
+        "auto_seed_sources",
+        "run_now",
+        "chat_proactive_level",
+        "enable_profiles",
+        "profiles",
+        "profile",
+    }
+)
+
+
+def _coerce_setup_opts(plugin, patch: dict | None, content: str) -> dict:
+    if isinstance(patch, dict):
+        opts = copy.deepcopy(patch)
+    elif isinstance(content, str) and content.strip():
+        try:
+            parsed = json.loads(content)
+        except ValueError as exc:
+            raise ValueError(f"setup content 不是合法 JSON：{exc}") from None
+        if not isinstance(parsed, dict):
+            raise ValueError("setup 参数必须是 JSON 对象")
+        opts = copy.deepcopy(parsed)
+    else:
+        opts = {}
+    if opts.get("enabled") is False or (
+        isinstance(opts.get("plugin"), dict) and opts["plugin"].get("enabled") is False
+    ):
+        raise ValueError(_LOCKOUT_MESSAGE)
+    _assert_no_secret(plugin, opts, "一键配置")
+    return opts
+
+
+async def _resolve_setup_target(
+    plugin, raw_target_chat: str, current_chat_id: str, current_platform: str
+) -> tuple[str, str, str]:
+    raw_tc = str(raw_target_chat or "").strip()
+    cur_plat = str(current_platform or "").strip().lower() or "qq"
+    if raw_tc:
+        effective_chat_id, effective_platform = await resolve_chat_target(
+            plugin,
+            raw_tc,
+            current_chat_id=current_chat_id,
+            current_platform=cur_plat,
+            allow_unknown_ascii=True,
+        )
+    else:
+        if not current_chat_id:
+            raise ValueError("请指定目标会话 target_chat")
+        effective_chat_id, effective_platform = current_chat_id, cur_plat
+
+    parsed = parse_stream_spec(raw_tc) if raw_tc else None
+    canon = (
+        plugin.canonical_stream_spec(effective_chat_id, effective_platform)
+        if hasattr(plugin, "canonical_stream_spec")
+        else ""
+    )
+    if canon:
+        stream_spec = canon
+    elif parsed is not None:
+        stream_spec = format_stream_spec(*parsed)
+    else:
+        stream_spec = await resolve_stream_spec(
+            plugin,
+            raw_tc or effective_chat_id,
+            current_chat_id=current_chat_id,
+            current_platform=effective_platform,
+            allow_unknown_ascii=True,
+        )
+    return effective_chat_id, effective_platform, stream_spec
+
+
+async def _apply_setup_settings(
+    plugin,
+    opts: dict,
+    *,
+    has_explicit_target: bool,
+    effective_chat_id: str,
+    effective_platform: str,
+    stream_spec: str,
+    author: str,
+) -> dict | None:
+    enable_chat = opts.get("enable_chat")
+    if enable_chat is not None and type(enable_chat) is not bool:
+        raise ValueError("enable_chat 必须是布尔值")
+    should_enable = (enable_chat is True) or (
+        enable_chat is None
+        and (has_explicit_target or any(key in opts for key in _SETUP_CHAT_FIELDS))
+    )
+    settings_patch: dict = {}
+    if should_enable:
+        settings_patch["add_chats"] = [stream_spec]
+    if "remove_chats" in opts:
+        settings_patch["remove_chats"] = opts["remove_chats"]
+    if "sleep_window" in opts:
+        settings_patch["sleep_window"] = normalize_sleep_window(opts["sleep_window"])
+    if "proactive_level" in opts and opts["proactive_level"] is not None:
+        settings_patch["proactive_level"] = str(opts["proactive_level"]).strip()
+    if "daily_proactive_limit" in opts and opts["daily_proactive_limit"] is not None:
+        settings_patch["daily_proactive_limit"] = int(opts["daily_proactive_limit"])
+    if isinstance(opts.get("chat_proactive_levels"), dict):
+        settings_patch["chat_proactive_levels"] = dict(opts["chat_proactive_levels"])
+    if "chat_proactive_level" in opts:
+        levels = dict(settings_patch.get("chat_proactive_levels") or {})
+        levels[stream_spec] = opts["chat_proactive_level"]
+        settings_patch["chat_proactive_levels"] = levels
+    if not settings_patch:
+        return None
+    res = await patch_settings(
+        plugin,
+        settings_patch,
+        current_chat_id=effective_chat_id,
+        current_platform=effective_platform,
+        author=author,
+        reason="一段话完成配置",
+    )
+    applied_settings = res.get("settings") or {}
+    return {
+        "enabled_chat": stream_spec if should_enable else "",
+        "enabled_chats": list(applied_settings.get("enabled_chats") or ()),
+        "sleep_window": applied_settings.get("sleep_window", ""),
+        "proactive_level": applied_settings.get("proactive_level", ""),
+        "chat_proactive_level": (applied_settings.get("chat_proactive_levels") or {}).get(
+            stream_spec, ""
+        ),
+        "version": res.get("version"),
+    }
+
+
+def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
+    if "digest" in profile_patches:
+        return profile_patches["digest"].get("enabled") is not False
+    if any(
+        opts.get(key)
+        for key in (
+            "rss_urls",
+            "add_urls",
+            "discover_urls",
+            "unsubscribe_ids",
+            "topics",
+        )
+    ) or opts.get("auto_seed_sources") is True:
+        return True
+    for item in opts.get("schedules") or ():
+        if isinstance(item, dict) and str(item.get("profile") or "").strip() == "digest":
+            return True
+    single_prof = str(opts.get("profile") or opts.get("trial_profile") or "").strip()
+    if opts.get("daily_at") and single_prof in {"", "digest"}:
+        return True
+    if opts.get("run_now") and single_prof in {"", "digest"}:
+        return True
+    return False
+
+
+async def _apply_setup_profiles(
+    plugin,
+    opts: dict,
+    *,
+    effective_chat_id: str,
+    effective_platform: str,
+    author: str,
+) -> dict[str, dict]:
+    profile_patches: dict[str, dict] = {}
+    raw_enable = opts.get("enable_profiles")
+    if isinstance(raw_enable, str) and raw_enable.strip():
+        raw_enable = [raw_enable.strip()]
+    if raw_enable is not None:
+        if not isinstance(raw_enable, (list, tuple)):
+            raise ValueError("enable_profiles 必须是角色名称列表")
+        for item in raw_enable:
+            pid = str(item or "").strip()
+            if pid:
+                profile_patches.setdefault(pid, {})["enabled"] = True
+
+    raw_profiles = opts.get("profiles")
+    if raw_profiles is not None:
+        if not isinstance(raw_profiles, dict):
+            raise ValueError("profiles 必须是 {profile_id: {...}} 对象")
+        for raw_pid, cfg in raw_profiles.items():
+            pid = str(raw_pid or "").strip()
+            if not pid:
+                continue
+            if isinstance(cfg, bool):
+                profile_patches.setdefault(pid, {})["enabled"] = cfg
+            elif isinstance(cfg, dict):
+                target_dict = profile_patches.setdefault(pid, {})
+                target_dict.update(copy.deepcopy(cfg))
+                target_dict.setdefault("enabled", True)
+            else:
+                raise ValueError(f"profiles[{pid}] 必须是配置对象或布尔值")
+
+    single_pid = str(opts.get("profile") or "").strip()
+    single_overrides = {
+        key: copy.deepcopy(opts[key])
+        for key in (
+            "model_list",
+            "model_name",
+            "model",
+            "fallback_models",
+            "network",
+            "max_steps",
+            "web_provider",
+            "allow_chats",
+            "add_allow_chats",
+        )
+        if key in opts
+    }
+    if single_pid:
+        target_dict = profile_patches.setdefault(single_pid, {})
+        target_dict.update(single_overrides)
+        target_dict.setdefault("enabled", True)
+    elif single_overrides:
+        target_pid = (
+            next(iter(profile_patches))
+            if len(profile_patches) == 1
+            else ("digest" if _digest_is_involved(opts, profile_patches) else "")
+        )
+        if not target_pid:
+            raise ValueError("传入 model_list / model_name 时请指定 profile 或 enable_profiles")
+        profile_patches.setdefault(target_pid, {}).update(single_overrides)
+
+    if _digest_is_involved(opts, profile_patches):
+        digest_patch = profile_patches.setdefault("digest", {})
+        if digest_patch.get("enabled") is not False:
+            digest_patch.setdefault("enabled", True)
+            existing = await completed_thread(plugin.profiles.get, "digest")
+            if "network" not in digest_patch and existing.network == "none":
+                digest_patch["network"] = "public"
+            if "max_steps" not in digest_patch and (
+                existing.max_steps is None or existing.max_steps < 20
+            ):
+                digest_patch["max_steps"] = 20
+
+    applied: dict[str, dict] = {}
+    for pid, p_patch in profile_patches.items():
+        if not p_patch:
+            continue
+        res = await patch_profile(
+            plugin,
+            pid,
+            p_patch,
+            current_chat_id=effective_chat_id,
+            current_platform=effective_platform,
+            author=author,
+        )
+        applied[pid] = res.get("profile") or profile_summary(plugin, pid)
+    return applied
+
+
+def _format_memory_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        lines = []
+        for item in value:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lines.append(text if text.startswith(("-", "*", "•")) else f"- {text}")
+        return "\n".join(lines)
+    raise ValueError("偏好或记忆内容必须是字符串或条目列表")
+
+
+async def _apply_setup_memory(
+    plugin,
+    opts: dict,
+    *,
+    effective_chat_id: str,
+    author: str,
+) -> dict | None:
+    replace_raw = opts.get("replace_memory")
+    replace_flag = replace_raw is True
+    parts: list[str] = []
+    if isinstance(replace_raw, str):
+        replace_flag = True
+        if replace_raw.strip():
+            parts.append(replace_raw.strip())
+    for key in ("preferences", "memory", "append_memory"):
+        if key in opts and opts[key] is not None:
+            formatted = _format_memory_text(opts[key])
+            if formatted and formatted not in parts:
+                parts.append(formatted)
+    joined = "\n".join(parts).strip()
+    if not replace_flag and not joined:
+        return None
+    mem_patch = {"content": joined} if replace_flag else {"append": joined}
+    res = await patch_memory_doc(
+        plugin,
+        kind="memory",
+        chat_id=effective_chat_id,
+        patch=mem_patch,
+        author=author,
+    )
+    return {
+        "chat_id": res.get("target") or effective_chat_id,
+        "version": res.get("version"),
+        "chars": len(res.get("content") or ""),
+        "mode": "replace" if replace_flag else "append",
+    }
+
+
+def _clean_setup_items(raw: object, label: str) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    raise ValueError(f"{label} 必须是字符串或列表")
+
+
+async def _apply_setup_digest_sources(
+    plugin,
+    opts: dict,
+    *,
+    effective_chat_id: str,
+    effective_platform: str,
+    digest_involved: bool,
+    warnings: list[str],
+) -> dict | None:
+    rss_raw = _clean_setup_items(
+        opts.get("rss_urls") if "rss_urls" in opts else opts.get("add_urls"), "rss_urls"
+    )
+    discover_raw = _clean_setup_items(opts.get("discover_urls"), "discover_urls")
+    unsub_raw = _clean_setup_items(opts.get("unsubscribe_ids"), "unsubscribe_ids")
+    topics_raw = [
+        str(t).strip()
+        for t in _clean_setup_items(opts.get("topics"), "topics")
+        if str(t).strip()
+    ]
+    auto_seed = opts.get("auto_seed_sources")
+    if auto_seed is not None and type(auto_seed) is not bool:
+        raise ValueError("auto_seed_sources 必须是布尔值")
+
+    ws_name = normalize_profile_workspace("digest", str(opts.get("workspace") or "digest"))
+    has_explicit_ops = bool(rss_raw or discover_raw or unsub_raw)
+    should_seed_check = digest_involved and auto_seed is not False
+    if not has_explicit_ops and not (
+        should_seed_check and (topics_raw or auto_seed is True or digest_involved)
+    ):
+        return None
+
+    binding = await completed_thread(
+        _find_digest_workspace_binding,
+        plugin,
+        effective_chat_id,
+        effective_platform,
+        ws_name,
+    )
+
+    async def _configure_sources(dw: DigestWorkspace) -> dict:
+        added_count = 0
+        discovered_count = 0
+        unsubscribed_count = 0
+        seeded_count = 0
+
+        for item in rss_raw:
+            if isinstance(item, dict):
+                url = str(item.get("url") or "").strip()
+                title = str(item.get("title") or "").strip()
+                auto_flag = bool(item.get("auto", False))
+            else:
+                url = str(item or "").strip()
+                title = ""
+                auto_flag = False
+            if not url:
+                continue
+            try:
+                res = await dw.add_feed(url, title=title, auto=auto_flag, origin="admin")
+                if res.get("ok"):
+                    added_count += 1
+                else:
+                    warnings.append(
+                        f"RSS 源 {url} 未订阅成功：{res.get('reason') or '未知原因'}"
+                    )
+            except (OSError, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
+                warnings.append(f"RSS 源 {url} 订阅异常：{exc}")
+
+        for item in discover_raw:
+            url = str(item or "").strip()
+            if not url:
+                continue
+            try:
+                res = await dw.discover(url, origin="admin")
+                if res.get("ok"):
+                    discovered_count += 1
+                else:
+                    warnings.append(
+                        f"主页嗅探 {url} 未发现可用订阅：{res.get('reason') or '未知原因'}"
+                    )
+            except (OSError, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
+                warnings.append(f"主页嗅探 {url} 异常：{exc}")
+
+        if unsub_raw:
+            snap = dw._load_sources()
+            by_url = {
+                str(f.get("url") or "").strip(): str(f.get("id") or "")
+                for f in snap.get("feeds", [])
+            }
+            for item in unsub_raw:
+                token = str(item or "").strip()
+                if not token:
+                    continue
+                try:
+                    res = dw.unsubscribe(by_url.get(token, token), reason="管理员退订")
+                    if res.get("ok"):
+                        unsubscribed_count += 1
+                    else:
+                        warnings.append(f"退订 {token} 未生效：{res.get('reason') or '未找到'}")
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    warnings.append(f"退订 {token} 异常：{exc}")
+
+        cur_sources = dw._load_sources()
+        cur_feeds = list(cur_sources.get("feeds") or ())
+        seed_fn = getattr(dw, "seed_starter_feeds", None)
+        if (
+            should_seed_check
+            and callable(seed_fn)
+            and (topics_raw or auto_seed is True or len(cur_feeds) == 0)
+        ):
+            try:
+                sig = inspect.signature(seed_fn)
+                seed_kwargs: dict = {}
+                if "topics" in sig.parameters:
+                    seed_kwargs["topics"] = topics_raw
+                elif "topics_or_text" in sig.parameters:
+                    seed_kwargs["topics_or_text"] = " ".join(topics_raw)
+                if "broad" in sig.parameters and "broad" in opts:
+                    seed_kwargs["broad"] = bool(opts["broad"])
+                if seed_kwargs:
+                    seed_res = seed_fn(**seed_kwargs)
+                elif topics_raw and any(
+                    p.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                    for p in sig.parameters.values()
+                ):
+                    first_param = next(
+                        p
+                        for p in sig.parameters.values()
+                        if p.kind
+                        in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        )
+                    )
+                    arg_val = (
+                        " ".join(topics_raw)
+                        if "text" in first_param.name or first_param.annotation is str
+                        else topics_raw
+                    )
+                    seed_res = seed_fn(arg_val)
+                else:
+                    seed_res = seed_fn()
+                if inspect.isawaitable(seed_res):
+                    seed_res = await seed_res
+                if isinstance(seed_res, dict):
+                    seeded_items = (
+                        seed_res.get("added")
+                        if seed_res.get("added") is not None
+                        else seed_res.get("seeded")
+                    )
+                    if isinstance(seeded_items, (list, tuple, set)):
+                        seeded_count = len(seeded_items)
+                    elif seeded_items is not None:
+                        seeded_count = int(seeded_items or 0)
+                    else:
+                        seeded_count = int(seed_res.get("seeded_count") or 0)
+                    for key in ("warnings", "errors"):
+                        for w in seed_res.get(key) or ():
+                            if str(w).strip():
+                                warnings.append(str(w).strip())
+                    if seed_res.get("ok") is False and seed_res.get("reason"):
+                        warnings.append(f"冷启动试订提示：{seed_res['reason']}")
+                cur_sources = dw._load_sources()
+            except (OSError, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
+                warnings.append(f"初期试订源冷启动异常：{exc}")
+
+        feeds_after = list(cur_sources.get("feeds") or ())
+        return {
+            "workspace": ws_name,
+            "added_count": added_count,
+            "discovered_count": discovered_count,
+            "unsubscribed_count": unsubscribed_count,
+            "seeded_count": seeded_count,
+            "feeds_total": len(feeds_after),
+            "feed_titles": [
+                str(f.get("title") or f.get("url") or "") for f in feeds_after[:10]
+            ],
+        }
+
+    return await _run_in_digest_workspace(
+        plugin, effective_chat_id, effective_platform, ws_name, binding, _configure_sources
+    )
+
+
+async def _apply_setup_schedules(
+    plugin,
+    opts: dict,
+    *,
+    effective_chat_id: str,
+    effective_platform: str,
+    default_profile: str,
+) -> tuple[list[dict], list[str]]:
+    raw_schedules = opts.get("schedules")
+    raw_daily = opts.get("daily_at")
+    if raw_schedules is None and raw_daily is None:
+        return [], []
+    if plugin.intents is None:
+        raise PermissionError("Maisya 调度组件尚未就绪")
+
+    default_tz = opts.get("tz_offset_minutes", 480)
+    if type(default_tz) is not int:
+        raise ValueError("tz_offset_minutes 必须是整数")
+    replace_sched = opts.get("replace_schedules", True)
+    if type(replace_sched) is not bool:
+        raise ValueError("replace_schedules 必须是布尔值")
+
+    requests: list[dict] = []
+    if raw_daily is not None:
+        slots = [raw_daily] if isinstance(raw_daily, str) else list(raw_daily)
+        if not isinstance(raw_daily, (str, list, tuple)):
+            raise ValueError("daily_at 必须是 HH:MM 字符串或列表")
+        requests.append(
+            {
+                "daily_at": slots,
+                "profile": str(opts.get("schedule_profile") or opts.get("profile") or default_profile).strip(),
+                "workspace": str(opts.get("workspace") or "").strip(),
+                "prompt": str(opts.get("schedule_prompt") or opts.get("prompt") or "").strip(),
+                "tz_offset_minutes": default_tz,
+                "reason": str(opts.get("schedule_reason") or "").strip(),
+            }
+        )
+    if raw_schedules is not None:
+        if not isinstance(raw_schedules, (list, tuple)):
+            raise ValueError("schedules 必须是计划列表")
+        for item in raw_schedules:
+            if not isinstance(item, dict):
+                raise ValueError("schedules 中的每一项都必须是对象")
+            item_daily = item.get("daily_at")
+            if isinstance(item_daily, str):
+                item_slots = [item_daily]
+            elif isinstance(item_daily, (list, tuple)):
+                item_slots = list(item_daily)
+            elif item_daily is None:
+                item_slots = []
+            else:
+                raise ValueError("schedules[].daily_at 必须是字符串或列表")
+            tz_val = item.get("tz_offset_minutes", default_tz)
+            if type(tz_val) is not int:
+                raise ValueError("schedules[].tz_offset_minutes 必须是整数")
+            requests.append(
+                {
+                    "daily_at": item_slots,
+                    "profile": str(item.get("profile") or default_profile).strip(),
+                    "workspace": str(item.get("workspace") or opts.get("workspace") or "").strip(),
+                    "prompt": str(item.get("prompt") or "").strip(),
+                    "tz_offset_minutes": tz_val,
+                    "reason": str(item.get("reason") or "").strip(),
+                }
+            )
+
+    normalized_items: list[dict] = []
+    seen_slots: set[tuple[str, str, str]] = set()
+    now_ts = plugin.intents.clock()
+    profiles_checked: dict[str, object] = {}
+    for req in requests:
+        pid = req["profile"] or default_profile or "digest"
+        if pid not in profiles_checked:
+            ability = await completed_thread(plugin.profiles.get, pid)
+            plugin.runtime.available(ability)
+            profiles_checked[pid] = ability
+        ws = normalize_profile_workspace(
+            pid, req["workspace"] or ("digest" if pid == "digest" else "")
+        )
+        prompt = req["prompt"]
+        if not prompt and pid == "digest":
+            prompt = DEFAULT_DIGEST_SCHEDULE_PROMPT
+        for raw_slot in req["daily_at"]:
+            slot_text = str(raw_slot or "").strip()
+            if not slot_text:
+                continue
+            due_ts, norm_hhmm = next_daily_due(now_ts, slot_text, req["tz_offset_minutes"])
+            dedup_key = (pid, ws, norm_hhmm)
+            if dedup_key in seen_slots:
+                continue
+            seen_slots.add(dedup_key)
+            normalized_items.append(
+                {
+                    "profile": pid,
+                    "workspace": ws,
+                    "prompt": prompt,
+                    "daily_at": norm_hhmm,
+                    "tz_offset_minutes": req["tz_offset_minutes"],
+                    "due_ts": due_ts,
+                    "reason": req["reason"] or f"每日 {norm_hhmm} {pid}",
+                }
+            )
+
+    cancelled_ids: list[str] = []
+    if replace_sched and normalized_items:
+        alias_ids = {effective_chat_id}
+        if hasattr(plugin, "chat_aliases_for"):
+            alias_ids.update(plugin.chat_aliases_for(effective_chat_id, effective_platform))
+        for pid in dict.fromkeys(item["profile"] for item in normalized_items):
+            for aid in sorted(alias_ids):
+                cancelled = await completed_thread(
+                    plugin.intents.cancel_matching_workflows,
+                    "chat:" + aid,
+                    profile=pid,
+                    workspace="",
+                )
+                for cid in cancelled:
+                    if cid not in cancelled_ids:
+                        cancelled_ids.append(cid)
+
+    created_schedules: list[dict] = []
+    for item in normalized_items:
+        payload = {
+            "platform": effective_platform,
+            "every_seconds": 86400,
+            "daily_at": item["daily_at"],
+            "tz_offset_minutes": item["tz_offset_minutes"],
+            "profile": item["profile"],
+            "scheduled_admin": True,
+        }
+        if item["workspace"]:
+            payload["workspace"] = item["workspace"]
+        if item["prompt"]:
+            payload["prompt"] = item["prompt"]
+        row = await completed_thread(
+            lambda it=item, pl=payload: plugin.intents.schedule(
+                kind="return",
+                source="workflow",
+                target="chat:" + effective_chat_id,
+                due_at=it["due_ts"],
+                reason=it["reason"][:500],
+                payload=pl,
+                bypass_limits=True,
+            )
+        )
+        created_schedules.append(
+            {
+                "intent_id": row["intent_id"],
+                "target": row["target"],
+                "daily_at": item["daily_at"],
+                "profile": item["profile"],
+                "workspace": item["workspace"],
+                "tz_offset_minutes": item["tz_offset_minutes"],
+                "due_at": row["due_at"],
+            }
+        )
+    return created_schedules, cancelled_ids
+
+
+async def _apply_setup_trial(
+    plugin,
+    opts: dict,
+    *,
+    effective_chat_id: str,
+    effective_platform: str,
+    current_chat_id: str,
+    current_platform: str,
+    source_msg_id: str,
+    default_profile: str,
+) -> dict | None:
+    if not opts.get("run_now"):
+        return None
+    if plugin.engine is None:
+        raise PermissionError("Maisya Agent 引擎尚未就绪")
+
+    deliver_to = str(opts.get("deliver_to") or "target").strip()
+    if deliver_to not in {"auto", "target", "current", "none"}:
+        raise ValueError("deliver_to 必须是 auto / target / current / none")
+    trial_profile = str(
+        opts.get("trial_profile") or opts.get("profile") or default_profile or "digest"
+    ).strip()
+    trial_ws = normalize_profile_workspace(
+        trial_profile,
+        str(opts.get("workspace") or ("digest" if trial_profile == "digest" else "")).strip(),
+    )
+    trial_prompt = str(opts.get("trial_prompt") or opts.get("prompt") or "").strip()
+    if not trial_prompt:
+        trial_prompt = (
+            DEFAULT_DIGEST_SCHEDULE_PROMPT
+            if trial_profile == "digest"
+            else f"立即为当前会话试跑一次 {trial_profile} 工作流。"
+        )
+    ability = await completed_thread(plugin.profiles.get, trial_profile)
+    plugin.runtime.available(ability)
+
+    cross_chat = bool(current_chat_id and effective_chat_id != current_chat_id)
+    if deliver_to == "none":
+        delivery_mode = "none"
+    elif not cross_chat or deliver_to == "current":
+        delivery_mode = "current"
+    else:
+        delivery_mode = "target"
+
+    if (
+        cross_chat
+        and delivery_mode == "target"
+        and hasattr(plugin, "enabled_for")
+        and not plugin.enabled_for(effective_chat_id, effective_platform)
+    ):
+        raise PermissionError(
+            "目标会话未加入 enabled_chats，无法向其投递试跑结果；请开启 enable_chat 或传 deliver_to='current'"
+        )
+
+    wait_seconds = 0
+    if opts.get("wait_seconds") is not None:
+        wait_seconds = int(opts["wait_seconds"])
+    route = (
+        await plugin.bridge.route(current_chat_id, source_msg_id, wait_seconds)
+        if delivery_mode == "current" and current_chat_id and hasattr(plugin, "bridge")
+        else None
+    )
+    grant = {
+        "source_msg_id": source_msg_id,
+        "source_chat_id": current_chat_id,
+        "source_platform": current_platform,
+        **({"scheduled_admin": True} if cross_chat else {}),
+        **({"admin_direct": True} if cross_chat and delivery_mode == "current" else {}),
+    }
+    started = await plugin.engine.start(
+        ability,
+        trial_prompt,
+        chat_id=effective_chat_id,
+        platform=effective_platform,
+        user_id="",
+        owner="chat",
+        wait_seconds=wait_seconds if delivery_mode == "current" else 0,
+        return_route=route,
+        workspace=trial_ws,
+        grant=grant,
+    )
+    delivery_intent_id = ""
+    if cross_chat and delivery_mode == "target" and getattr(plugin, "intents", None) is not None:
+        delivery = await plugin.schedule_cross_chat_delivery(
+            effective_chat_id,
+            effective_platform,
+            started["thread_id"],
+            trial_prompt,
+            "一键配置试跑交付",
+            is_admin_caller=True,
+        )
+        delivery_intent_id = str(delivery.get("intent_id") or "")
+    return {
+        "thread_id": started["thread_id"],
+        "state": started.get("state", ""),
+        "profile": trial_profile,
+        "workspace": trial_ws,
+        "deliver_to": delivery_mode,
+        "delivery_intent_id": delivery_intent_id,
+    }
+
+
+def _build_setup_summary(
+    stream_spec: str,
+    applied: dict,
+    schedules: list[dict],
+    trial_info: dict | None,
+    warnings: list[str],
+) -> str:
+    clauses: list[str] = []
+    settings_info = applied.get("settings")
+    if settings_info:
+        if settings_info.get("enabled_chat"):
+            clauses.append("已加入白名单")
+        if "sleep_window" in settings_info and settings_info.get("sleep_window"):
+            clauses.append(f"安静时段 {settings_info['sleep_window']}")
+        if settings_info.get("chat_proactive_level"):
+            clauses.append(f"本群主动度 {settings_info['chat_proactive_level']}")
+    profiles_info = applied.get("profiles") or {}
+    if profiles_info:
+        clauses.append("已配置角色 " + "、".join(profiles_info.keys()))
+    if applied.get("memory"):
+        clauses.append("已更新本群关注偏好")
+    sources_info = applied.get("digest_sources")
+    if sources_info:
+        clauses.append(f"工作区 {sources_info['workspace']} 现有 {sources_info['feeds_total']} 个资讯源")
+    if schedules:
+        slots = "、".join(f"{s['daily_at']}({s['profile']})" for s in schedules)
+        clauses.append(f"已安排每日定时 {slots}")
+    if trial_info:
+        clauses.append(f"已发起立即试跑({trial_info['thread_id']})")
+    if warnings:
+        clauses.append(f"含 {len(warnings)} 条提醒")
+    body = "，".join(clauses) if clauses else "未检测到需要变更的配置项"
+    return f"已为 {stream_spec} 完成配置：{body}。"
+
+
+async def handle_setup(
+    plugin,
+    *,
+    target_chat: str = "",
+    patch: dict | None = None,
+    content: str = "",
+    current_chat_id: str = "",
+    current_platform: str = "",
+    source_msg_id: str = "",
+    author: str = "maisya_shape",
+) -> dict:
+    """在单次调用中组合完成会话白名单、安静时段、角色/模型、群偏好、资讯源、定时计划与试跑。"""
+    opts = _coerce_setup_opts(plugin, patch, content)
+    raw_tc = str(target_chat or opts.pop("target_chat", "") or "").strip()
+    effective_chat_id, effective_platform, stream_spec = await _resolve_setup_target(
+        plugin, raw_tc, current_chat_id, current_platform
+    )
+
+    warnings: list[str] = []
+    applied: dict = {}
+
+    settings_res = await _apply_setup_settings(
+        plugin,
+        opts,
+        has_explicit_target=bool(raw_tc),
+        effective_chat_id=effective_chat_id,
+        effective_platform=effective_platform,
+        stream_spec=stream_spec,
+        author=author,
+    )
+    if settings_res is not None:
+        applied["settings"] = settings_res
+
+    profiles_res = await _apply_setup_profiles(
+        plugin,
+        opts,
+        effective_chat_id=effective_chat_id,
+        effective_platform=effective_platform,
+        author=author,
+    )
+    if profiles_res:
+        applied["profiles"] = profiles_res
+
+    memory_res = await _apply_setup_memory(
+        plugin,
+        opts,
+        effective_chat_id=effective_chat_id,
+        author=author,
+    )
+    if memory_res is not None:
+        applied["memory"] = memory_res
+
+    default_profile = str(opts.get("profile") or "").strip()
+    if not default_profile:
+        default_profile = next(iter(profiles_res), "digest")
+    digest_involved = (
+        "digest" in profiles_res
+        or default_profile == "digest"
+        or any(
+            isinstance(item, dict) and str(item.get("profile") or "").strip() == "digest"
+            for item in (opts.get("schedules") or ())
+        )
+    )
+
+    sources_res = await _apply_setup_digest_sources(
+        plugin,
+        opts,
+        effective_chat_id=effective_chat_id,
+        effective_platform=effective_platform,
+        digest_involved=digest_involved,
+        warnings=warnings,
+    )
+    if sources_res is not None:
+        applied["digest_sources"] = sources_res
+
+    schedules, cancelled_schedules = await _apply_setup_schedules(
+        plugin,
+        opts,
+        effective_chat_id=effective_chat_id,
+        effective_platform=effective_platform,
+        default_profile=default_profile,
+    )
+    if schedules or cancelled_schedules:
+        applied["schedules"] = {"count": len(schedules), "cancelled": len(cancelled_schedules)}
+
+    trial_info = await _apply_setup_trial(
+        plugin,
+        opts,
+        effective_chat_id=effective_chat_id,
+        effective_platform=effective_platform,
+        current_chat_id=current_chat_id,
+        current_platform=current_platform,
+        source_msg_id=source_msg_id,
+        default_profile=default_profile,
+    )
+    if trial_info is not None:
+        applied["trial_run"] = trial_info
+
+    trial_thread_id = trial_info["thread_id"] if trial_info else ""
+    delivery_intent_id = trial_info.get("delivery_intent_id", "") if trial_info else ""
+    summary = _build_setup_summary(stream_spec, applied, schedules, trial_info, warnings)
+    return {
+        "kind": "setup",
+        "chat_id": effective_chat_id,
+        "platform": effective_platform,
+        "stream_spec": stream_spec,
+        "applied": applied,
+        "warnings": warnings,
+        "schedules": schedules,
+        "cancelled_schedules": cancelled_schedules,
+        "trial_thread_id": trial_thread_id,
+        **({"delivery_intent_id": delivery_intent_id} if delivery_intent_id else {}),
+        "summary": summary,
+    }
+
+
 async def execute_shape(
     plugin,
     *,
@@ -2005,8 +3004,24 @@ async def execute_shape(
     preview_token: str = "",
     current_chat_id: str = "",
     current_platform: str = "",
+    source_msg_id: str = "",
     author: str = "maisya_shape",
 ) -> dict:
+    if action == "setup" or kind == "setup":
+        return _redact(
+            plugin,
+            await handle_setup(
+                plugin,
+                target_chat=target_chat,
+                patch=patch,
+                content=content,
+                current_chat_id=current_chat_id,
+                current_platform=current_platform,
+                source_msg_id=source_msg_id,
+                author=author,
+            ),
+        )
+
     if kind == "overview":
         if action != "read":
             raise ValueError("overview 仅支持 action='read'")

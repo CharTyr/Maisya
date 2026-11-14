@@ -1,6 +1,7 @@
 """角色的加载与只读能力边界。"""
 
 import io
+import json
 import re
 import shutil
 import tempfile
@@ -9,7 +10,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .vault import private_directory
+from .vault import atomic_private_write, private_directory
 
 READONLY_TOOLS = frozenset(
     {
@@ -21,7 +22,23 @@ READONLY_TOOLS = frozenset(
         "image_read",
     }
 )
-WORKSPACE_TOOLS = frozenset({"workspace_file", "html_render", "result_attach", "digest_feed"})
+WORKSPACE_TOOLS = frozenset(
+    {"workspace_file", "html_render", "render_report", "result_attach", "digest_feed"}
+)
+_LEGACY_MAKER_DEFAULT_TOOLS = (
+    "web_search",
+    "web_fetch",
+    "chat_read",
+    "message_read",
+    "memory_read",
+    "person_read",
+    "recall_read",
+    "image_read",
+    "workspace_file",
+    "html_render",
+    "sandbox_exec",
+    "result_attach",
+)
 HOST_TOOLS = (
     READONLY_TOOLS
     | WORKSPACE_TOOLS
@@ -133,6 +150,68 @@ class Profile:
         return self.access != "listed" or bool(self.allow_users or self.allow_chats)
 
 
+def _format_profile_toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_format_profile_toml_value(item) for item in value) + "]"
+    raise TypeError(f"不支持的角色 TOML 值类型: {type(value)!r}")
+
+
+def _serialize_profile_dict(config: dict) -> str:
+    lines = []
+    for key, value in config.items():
+        if value is None:
+            continue
+        if key == "fish_seed" and value == "":
+            continue
+        lines.append(f"{key} = {_format_profile_toml_value(value)}")
+    return "\n".join(lines) + "\n"
+
+
+def _upgrade_existing_profile_toml(profile_id: str, destination: Path) -> None:
+    if profile_id not in {"maker", "digest"}:
+        return
+    if destination.is_symlink() or not destination.is_file():
+        return
+    try:
+        config = tomllib.loads(destination.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return
+    if not isinstance(config, dict):
+        return
+
+    changed = False
+    if profile_id == "maker":
+        tools = config.get("tools")
+        if (
+            isinstance(tools, list)
+            and "render_report" not in tools
+            and len(tools) == len(_LEGACY_MAKER_DEFAULT_TOOLS)
+            and set(tools) == set(_LEGACY_MAKER_DEFAULT_TOOLS)
+        ):
+            config["tools"] = [*tools, "render_report"]
+            skills = config.get("skills")
+            if not isinstance(skills, list) or not skills:
+                config["skills"] = ["research-report"]
+            elif "research-report" not in skills:
+                config["skills"] = [*skills, "research-report"]
+            changed = True
+    elif profile_id == "digest":
+        if type(config.get("max_steps")) is int and config.get("max_steps") == 12:
+            config["max_steps"] = 20
+            changed = True
+
+    if changed:
+        atomic_private_write(destination, _serialize_profile_dict(config).encode("utf-8"))
+
+
 class Profiles:
     def __init__(self, path: Path, *, contains_secret=lambda content: False):
         self.path = private_directory(path)
@@ -142,12 +221,16 @@ class Profiles:
             presets = (
                 Path(__file__).resolve().parents[1] / "presets/profiles" / profile_id
             )
+            toml_path = target / "profile.toml"
+            had_existing_toml = toml_path.exists() or toml_path.is_symlink()
             for name in ("PROFILE.md", "profile.toml"):
                 destination = target / name
                 if destination.exists() or destination.is_symlink():
                     continue
                 with destination.open("x", encoding="utf-8") as output:
                     output.write((presets / name).read_text(encoding="utf-8"))
+            if had_existing_toml:
+                _upgrade_existing_profile_toml(profile_id, toml_path)
 
     def get(self, profile_id: str) -> Profile:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id):
@@ -406,12 +489,16 @@ class Profiles:
                 if self.contains_secret(content):
                     raise ValueError("档案资产含已知凭据，禁止导出")
                 archive.writestr(relative.as_posix(), content)
-            from .memory import MemoryLayers
+            from .memory import PRESETS_DIR, MemoryLayers
 
             for skill in profile.skills:
                 skill_dir = self.path.parent / "skills" / skill
                 if not (skill_dir / "SKILL.md").exists():
                     skill_dir = directory / "preset/skills" / skill
+                if not (skill_dir / "SKILL.md").exists():
+                    preset_skill = PRESETS_DIR / "skills" / skill
+                    if (preset_skill / "SKILL.md").exists():
+                        skill_dir = preset_skill
                 source = skill_dir / "SKILL.md"
                 if any(parent.is_symlink() for parent in source.parents):
                     raise ValueError("技能路径不能经过链接")

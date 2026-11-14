@@ -26,7 +26,12 @@ if __package__:
     from .maisya.pathsafe import path_is_link_like
     from .maisya.pulse import Pulse
     from .maisya.scout import call_capability
-    from .maisya.shaping import execute_shape, resolve_chat_target
+    from .maisya.shaping import (
+        DEFAULT_DIGEST_SCHEDULE_PROMPT,
+        execute_shape,
+        normalize_profile_workspace,
+        resolve_chat_target,
+    )
     from .maisya.share import Share
     from .maisya.threads import ThreadEngine, ThreadStore
     from .maisya.trust import (
@@ -62,7 +67,12 @@ else:
     from maisya.pathsafe import path_is_link_like
     from maisya.pulse import Pulse
     from maisya.scout import call_capability
-    from maisya.shaping import execute_shape, resolve_chat_target
+    from maisya.shaping import (
+        DEFAULT_DIGEST_SCHEDULE_PROMPT,
+        execute_shape,
+        normalize_profile_workspace,
+        resolve_chat_target,
+    )
     from maisya.share import Share
     from maisya.threads import ThreadEngine, ThreadStore
     from maisya.trust import (
@@ -108,7 +118,7 @@ def _profile_capabilities(profile: Profile, mode: str) -> list[str]:
         caps.append("web")
     if profile.uses_workspace:
         caps.append("workspace")
-    for key in ("html_render", "sandbox_exec", "result_attach", "digest_feed"):
+    for key in ("html_render", "render_report", "sandbox_exec", "result_attach", "digest_feed"):
         if key in active_tools:
             caps.append(key)
     if profile.mcp:
@@ -1124,7 +1134,7 @@ class MaisyaPlugin(MaiBotPlugin):
             return await self._vault_input(message, identity, text)
         return {"action": "continue"}
 
-    async def _schedule_cross_chat_delivery(
+    async def schedule_cross_chat_delivery(
         self,
         chat_id: str,
         platform: str,
@@ -1155,6 +1165,25 @@ class MaisyaPlugin(MaiBotPlugin):
                 "scheduled_admin": bool(is_admin_caller),
             },
             bypass_limits=True,
+        )
+
+    async def _schedule_cross_chat_delivery(
+        self,
+        chat_id: str,
+        platform: str,
+        thread_id: str,
+        message: str,
+        default_reason: str,
+        *,
+        is_admin_caller: bool,
+    ) -> dict:
+        return await self.schedule_cross_chat_delivery(
+            chat_id,
+            platform,
+            thread_id,
+            message,
+            default_reason,
+            is_admin_caller=is_admin_caller,
         )
 
     @Tool(
@@ -1443,6 +1472,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     if owner == "chat" and delivery_mode == "current"
                     else None
                 )
+                workspace = normalize_profile_workspace(profile, workspace)
                 result = await self.engine.start(
                     ability,
                     message,
@@ -1479,7 +1509,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     and delivery_mode == "target"
                     and self.intents is not None
                 ):
-                    delivery = await self._schedule_cross_chat_delivery(
+                    delivery = await self.schedule_cross_chat_delivery(
                         effective_chat_id,
                         effective_platform,
                         result["thread_id"],
@@ -1631,7 +1661,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         and delivery_mode == "target"
                         and self.intents is not None
                     ):
-                        delivery = await self._schedule_cross_chat_delivery(
+                        delivery = await self.schedule_cross_chat_delivery(
                             row_chat,
                             row["platform"] or effective_platform,
                             result["thread_id"],
@@ -1903,18 +1933,19 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_shape",
-        description="管理员统一配置、读取或回滚 Maisya 全部能力。overview(可带 target_chat) 读取全部会话/角色/可用模型、工作区与待办；settings/profile/skill/memory/digest_sources/notes/journal/heartbeat/services/webhooks/recipe 均支持 read/patch/write/history/rollback/create（其中 digest_sources 管理某会话的 RSS 源订退与状态；所有消息流配置统一使用 平台:类型:id 格式如 qq:group:12345678，target_chat 也兼容群号/群名/current，且 settings/profile/skill 支持局部 patch 并禁止从对话内关闭总开关）。",
+        description="管理员统一配置、读取或回滚 Maisya 全部能力。setup（action='setup', kind='setup'）支持一段话一次完成白名单、sleep_window、角色启用/模型、会话偏好 memory/preferences、rss_urls/topics、daily_at 定时与 run_now 试跑；overview 读取现状与待办；settings/profile/skill/memory/digest_sources/notes/journal/heartbeat/services/webhooks/recipe 均支持局部 read/patch/write/history/rollback/create（流标识统一 平台:类型:id 如 qq:group:12345678，禁从聊天关总开关）。",
         parameters={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "patch", "write", "history", "rollback", "create", "delete"],
+                    "enum": ["read", "patch", "write", "history", "rollback", "create", "delete", "setup"],
                 },
                 "kind": {
                     "type": "string",
                     "enum": [
                         "overview",
+                        "setup",
                         "settings",
                         "profile",
                         "notes",
@@ -1942,7 +1973,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 "content": {"type": "string", "maxLength": 65536},
                 "patch": {
                     "type": "object",
-                    "description": "局部修改对象：如 settings 的 add_chats/chat_proactive_levels/sleep_window，profile 的 enabled/model_list/append_instructions，skill 的 bind_profiles，memory 的 append/replace 等。",
+                    "description": "配置对象：setup 支持 enable_chat/sleep_window/chat_proactive_level/enable_profiles/profiles/profile/model_list/model_name/preferences/memory/rss_urls/discover_urls/topics/auto_seed_sources/daily_at/schedules/run_now/deliver_to/trial_prompt；单项 patch 也支持 settings/profile/skill/memory/digest_sources。",
                 },
                 "source_msg_id": {"type": "string"},
                 "expected_version": {"type": "integer", "minimum": 0},
@@ -2004,6 +2035,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 preview_token=preview_token,
                 current_chat_id=chat_id,
                 current_platform=platform,
+                source_msg_id=source_msg_id,
                 author="admin:" + source_msg_id,
             )
             redacted = self.vault.redact(result)
@@ -2243,6 +2275,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 if identity is None or identity.is_plugin_relayed:
                     raise PermissionError("本次调用的来源消息无法核验")
             scheduled_admin = bool(is_admin_caller)
+            workspace = normalize_profile_workspace(profile, workspace)
+            if profile == "digest" and not str(prompt or "").strip():
+                prompt = DEFAULT_DIGEST_SCHEDULE_PROMPT
             if profile:
                 ability = await asyncio.to_thread(self.profiles.get, profile)
                 self.runtime.available(ability)
@@ -2279,7 +2314,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.intents.cancel_matching_workflows,
                     target,
                     profile=profile,
-                    workspace=workspace,
+                    workspace="" if profile == "digest" else workspace,
                 )
 
             if profile or source == "workflow":
@@ -2560,17 +2595,19 @@ class MaisyaPlugin(MaiBotPlugin):
         admin_lines: list[str] = []
         if is_admin:
             admin_lines.append(
-                "管理员在任意会话（含未加白名单的私聊）均可通过 maisya_shape（传入真实 source_msg_id）跨会话读取与配置 Maisya 全部能力："
-                "先 read(kind='overview', target_chat=...) 查看 known_chats/profiles/host_models/workspaces/记忆分布/RSS 源；"
-                "可按任意顺序 patch settings（加减白名单与各群配置）、profile、skill、memory、digest_sources（管理某群 RSS 源订退）；"
-                "所有消息流统一使用 平台:类型:id 格式如 qq:group:12345678；"
-                "并用 maisya_recall(target_chat=.../'all') 跨群回查、maisya_later(daily_at=..., replace=True, target_chat=...) 设每日定点计划、"
-                "maisya_agent(target_chat=..., deliver_to='current') 私聊试跑预览或 deliver_to='target' 推往目标会话。"
+                "管理员在任意会话（含未加白名单私聊）均可用 maisya_shape（传入真实 source_msg_id）跨会话读取与配置全部能力。"
             )
             if not has_shape:
                 admin_lines.append(
-                    "当前上下文尚未展开 maisya_shape（默认延迟加载），如需配置请先调用 tool_search(query=\"maisya_shape\") 再执行调用。"
+                    '当前上下文尚未展开 maisya_shape（默认延迟加载），如需配置请先调一次 tool_search(query="maisya_shape")。'
                 )
+            admin_lines.extend(
+                [
+                    "遇到「给某群配好某功能/定时/偏好并试跑」的一段话需求，优先用一通 maisya_shape(action=\"setup\", kind=\"setup\", target_chat=..., source_msg_id=..., patch={...}) 一次到位（支持 enable_chat、sleep_window、enable_profiles/model_name、preferences、rss_urls/topics、daily_at、run_now、deliver_to），不必拆 6 步。",
+                    "所有流标识统一用 平台:类型:id（如 qq:group:12345678，target_chat 也兼容群号/群名/current）；如需盘点先 read(kind='overview', target_chat=...)，局部微调仍支持 settings/profile/skill/memory/digest_sources。",
+                    "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(daily_at=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
+                ]
+            )
 
         if not enabled and is_admin:
             latest_source = sources[-1] if sources else ""

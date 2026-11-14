@@ -536,6 +536,7 @@ async def test_self_thread_serendipity_routes_to_lively_chat_with_temperament(tm
     c2 = event("hi", user="Bob", platform="qq", group=True)
     c2["session_id"] = "chat-care"
     c2["message_id"] = "c2-msg"
+    c2["message_info"]["group_info"]["group_id"] = "group-care"
     plugin.messages.record(Message.from_event(c2))
 
     # Reject kind=serendipity from a chat thread (verified via agent_tool + thread_later below)
