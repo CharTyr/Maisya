@@ -1,108 +1,113 @@
-# Maisya Repository Map (`codemap.md`)
+# Maisya 代码地图（Codemap）
 
-## 顶层目录职责
+> 描述 `Maisya` 插件仓的真实文件布局、职责边界、Tool / API / Hook 入口与 SQLite 数据表映射。
 
-仓库根目录就是插件根目录，可直接支持 MaiBot 官方后台填写仓库地址安装和点按钮更新。运行期用户资产全部存放在插件目录外的 `<宿主根>/data/maisya/`。
+---
 
-当前架构与实现已对齐产品设计期望：插件生命周期、外部数据目录与 `settings.base.json` 三路配置合并（`chat_proactive_levels` 等用户键映射整份原子替换）、可信消息与 `session_routes`（含 `human_count` / `last_human_at` 活跃统计）、管理员验身与 `@全体成员` 过滤、保险箱与输入/出站脱敏；`scout`/`maker`/`digest` 角色（`profile`，开箱内置 `source-checking` / `ongoing-workspace` / `news-digest` 技能、`person_read` / `recall_read` 内置检索能力与 `HEARTBEAT.md` 脾性）、未开容器时 `maker` 自动降级为无容器轻量工作区模式（`light_workspace`：保留 `workspace_file` / `html_render` / `result_attach` 及联网工具，容器就绪后自动恢复 `sandbox_exec`）、按角色覆盖 `model_name` / `max_tokens` / `temperature` / `max_steps` / `web_provider` / `sandbox_targets`、管理员可写 MCP / 跨插件 `@API` / 自定义模板、完整 `SKILL.md` 生命周期与 `1 + 2` Grok 式能力配方模板分享（`recipes.py`：草稿隐私体检、本地 `.zip`/`.tar.gz`/包文本与后端防 SSRF 公开链接拉取预览、缺件对齐、平滑升级与回滚、推荐例行任务挂载）、`web_provider` 多源自由映射、`call_capability` 显式超时与 `RPCError` 归一化；持久工作区、`from_threads` 全量接力（同步导入上游结论 `in/previous-<tid>-result.md`、已声明附件与工作区 `out/*` 成品）、gVisor/Docker 沙箱与并发控制（`max_concurrent`）；分层记忆、版本回滚、可配置 `heartbeat_interval_minutes` / `heartbeat_profile` 定期探索与恢复后短方法学习；`bridge.py` / `share.py` 原生回接（将 `planner` 的 `message` 作为 `<planner_intent>` 传入 `maisaka.reply.generate`，`file` 附件独立拆条 `send.hybrid` 跟发）；`intents.py` / `pulse.py`（`maisya_later` 可见工具支持自然语言安排单次提醒与周期工作流、`<maisya_workflow>` 唤醒与无附件含链接结果自动 `bridge.stage` 预装载、`daily_proactive_limit`、`chat_proactive_levels`、`acquaintance_users`、`longing_quiet_hours`、`serendipity`、规则化 `_longing`）；`incoming.py`；以及五页玻璃盒管理台。
+## 1. 仓库顶层结构
 
-```text
+```
 Maisya/
-├── __init__.py                     # 只导出 create_plugin
-├── _manifest.json                  # 插件清单 chartyr.maisya（含 23 项宿主能力：discovery、person.*、render.html2png 等）
-├── webui.json                      # MaiBot WebUI v2 扩展声明（含 note 可选 thread_id、profile/chat_id/workspace 与 steer）
-├── plugin.py                       # 宿主入口：生命周期、三路配置合并、Hook（before_planner 含 summary/autonomous 与条件提示）、@Tool、@API 胶水层
-├── config.example.toml             # 默认关闭的配置示例（含 web_provider / chat_proactive_levels / acquaintance_users / longing_quiet_hours 等）
-├── maisya/
-│   ├── config.py                   # SDK 配置模型、web_provider/per-chat 主动级别/熟人/久违静默阈值校验与外部数据初始化
-│   ├── abilities.py                # scout/maker/digest 角色（profile，含 enabled 开关与可选 fish_seed 头像种子）、apis 只读接口字段、task 槽位白名单、热加载、克隆与安全角色包
-│   ├── digest.py                   # SSRF/XXE 防护 RSS 试订/退订状态机、硬过滤与五维打分精选、离线天光简报卡 HTML 生成与 digest_feed 工具
-│   ├── maker.py                    # 在原线程内组合工作区、沙箱、输入实体、只读技能伴随文件（in/skills/<id>/）、附件、联网路由、MCP/模板/跨插件 API 与 planner 路由
-│   ├── workspaces.py               # 安全文件访问、串行写入、原子检查点、配额与不可变附件
-│   ├── sandbox.py                  # 专用 Docker/gVisor、max_concurrent 信号量、出站规则、资源参数、取消与清理恢复
-│   ├── services.py                 # 按线程隔离的 stdio MCP 池、私有固定模板、跨插件只读 @API 与 services.json["web"] 只读联网绑定
-│   ├── mcp_worker.py               # MCP 独立子进程的资源限制、cgroup 与降权
-│   ├── memory.py                   # 分层文件、parse_skill_meta()、预设技能与 HEARTBEAT.md 释放（create_skill/reset_skill）、技能压缩包导入导出与伴随文件管理（.zip/.skill/.tar.*）、heartbeat_parts() 解析、版本/回滚与 FTS5
-│   ├── learning.py                 # 同一工具失败后恢复时提炼短方法，状态轨迹输入与有界后台调用
-│   ├── recipes.py                  # Grok 式能力配方模板（草稿与隐私/凭据体检、公开 GitHub/归档链接防 SSRF 拉取、预览缺件对齐、平滑升级与例行任务挂载，携带并保护本地 fish_seed）
-│   ├── management.py               # 五页管理 API（含产物检视、profile_fish 映射与 set_profile_fish 头像保存、技能包分块导入导出、能力配方 draft/package/preview/import、服务、健康与事件通道）
-│   ├── incoming.py                 # 宿主认证入口的 HMAC 校验、并发锁去重、可选 profile+workspace 线程启动与 Intent 转换
-│   ├── share.py                    # 原生表达（含非管理员全员艾特过滤）与链接/图片发送、file 附件独立拆条 send.hybrid 交付
-│   ├── scout.py                    # 宿主能力 RPC 包装（显式 timeout_ms 与非标准异常归一化）、WebRouter 委托、plugin_api 与 thread_later 定义
-│   ├── web.py                      # 统一联网路由：宿主 web.search/fetch 预设优先，未启用时自动兼容 services.web 与第三方搜索插件（SSRF 防护+单次脱敏）
-│   ├── threads.py                  # 线程状态、输入队列、边界转向、serendipity 提议、异常防无限重拉兜底与 FTS5
-│   ├── bridge.py                   # 结果事件引用、回接组、意图认领、Replyer 事实与重试
-│   ├── intents.py                  # 意图存储：return/proactive/silent、社交闸、acquaintance_allowed、longing_ready、事件去重与延期延迟
-│   ├── pulse.py                    # 统一意图分发：return、per-chat 主动级别与熟人边界、serendipity、_longing、wait_thread、HEARTBEAT
-│   ├── trust.py                    # 有界可信消息与持久化 session_routes（含 human_count / last_human_at）、真实发言人验证与凭据识别
-│   ├── vault.py                    # Fernet 加密保险箱、原子写入与已知凭据脱敏
-│   └── console.py                  # 玻璃盒 @API：五段上下文统计（system/memory/user/assistant/tool）、scheduled_intents、游标事件回读
-├── presets/
-│   ├── profiles/                   # scout（utils）、maker（planner）与默认关闭的 digest（资讯简报），首次加载释放后保留用户修改
-│   ├── skills/                     # 开箱方法技能（source-checking / ongoing-workspace / news-digest）
-│   └── memory/                     # HEARTBEAT.md（含脾性基线与空白自主探索区）与 JOURNAL.md 模板
-├── sandbox/
-│   ├── Dockerfile                  # maisya-sandbox:py313 可复现镜像定义（Python 3.13 + Node 22 + 非 root 用户）
-│   └── build_image.sh              # 默认 dry-run、--execute 构建沙箱镜像脚本
-├── webui/
-│   ├── now.html                      # 现场：线程、流向图/线程流/检视器角色小鱼头像、五段上下文条、待唤醒意图、步骤流、勾选立即转向引导与停止
-│   ├── outputs.html                  # 产物：已声明附件与图片预览、工作区成品安全阅读、结论出处与角色小鱼标识、持续工作区目录树
-│   ├── abilities.html                # 能力：画廊优先技能库（双列卡片/筛选/角色小鱼芯片/拖拽压缩包导入，点击进入技能工作台编辑与伴随文件预览）、角色名册/工作台小鱼定制与随机换鱼、能力配方分享
-│   ├── memory.html                   # 手账：会话备忘、近期手账、探索节奏与意图回执
-│   ├── settings.html                 # 设置：会话、按会话主动级别、熟识账号、久违阈值、沙箱、凭据、MCP/API 与事件通道
-│   ├── fish.js                       # 程序化内联 SVG 角色小鱼头像与游动动画（12 鱼种 × 18 配色 × 11 眼神），由 build.py 注入五个页面
-│   ├── management.html.in            # 四个管理页共用的内联脚本（含 data-type="map" 解析）与样式源码
-│   ├── fragments/                    # 四个管理页各自的正文源码
-│   └── build.py                      # 无依赖生成自包含 HTML，--check 检查产物
-├── docs/
-│   ├── 00-开发入门.md
-│   ├── 01-架构蓝图.md
-│   ├── 02-开发里程碑.md
-│   ├── 03-M3执行方案.md             # 执行决策、资源预算、实施记录与运行时验收状态
-│   ├── 04-管理台与接入.md           # 五页使用、三路配置合并、自身活动、范围权限、跨插件 API、平台文件与签名事件协议
-│   └── 06-宿主接口事实.md           # 基于 MaiCore 1.3.20 / SDK 2.21.0 的源码核查与实测契约
-├── tests/                          # 本地单测、架构对齐回归与 Playwright Chromium UI 测试
-├── tests_host/                     # 真实宿主 venv 隔离契约（test_contract.py）与实模联网冒烟（run_live_smoke.py）
-├── tests_sandbox/                  # 独立 Docker/runsc 运行时验收，执行需当次线上授权
-├── AGENTS.md                       # 开发规则、线上红线与设计中心
-├── HANDOFF.md                      # 交接状态、验收结果与上线前核查清单
-└── README.md                       # 用户向项目简介
+├── __init__.py                   # 插件包导出
+├── _manifest.json                # 宿主 manifest v1：chartyr.maisya、24 项 capabilities、依赖 jsonschema/cryptography
+├── plugin.py                     # 宿主装配根（3293 行）：生命周期、4 个 Tool、5 个 Hook、1 个 Command、7 个 API
+├── webui.json                    # 宿主 WebUI v2 声明：5 个工作区自定义页面（now/outputs/abilities/memory/settings）
+├── config.example.toml           # 默认配置模板（enabled=false、enabled_chats=[]、sandbox.enabled=false）
+├── LICENSE                       # GNU GPL v3 开源协议
+├── logo.svg                      # 插件矢量图标（千禧机械边框 + 小鱼剪影）
+├── README.md                     # 给用户看的项目主页与极速上手
+├── AGENTS.md                     # 工程红线与 10 条架构不变式
+├── HANDOFF.md                    # 当前交付快照、验收基线与接手核查项
+├── codemap.md                    # 本代码地图
+├── maisya/                       # 24 个核心运行时模块
+├── presets/                      # 预置灵魂、角色、技能与心跳模板
+├── sandbox/                      # 容器镜像定义（Dockerfile、build_image.sh）
+├── webui/                        # 双主题五页 WebUI 源码模板与编译产物
+├── docs/                         # 工程文档（00~06）、用户手册（guide/）与脱敏演示截图（images/）
+├── tests/                        # 35 个本地单元与 Playwright Chromium UI 测试套件（236 项用例）
+├── tests_host/                   # 独立隔离目录宿主 SDK 契约（22 项）与真实工具冒烟脚本
+└── tests_sandbox/                # Docker + gVisor (runsc) 运行时体检与隔离验收脚本
 ```
 
-## 模块关系
+---
 
-```text
-plugin.py
-  ├── trust.py        # 每条宿主事件确认会话路由、真实发言人与输出脱敏/全员艾特过滤
-  ├── abilities.py    # 提供可调度角色（profile）与合法 task 槽位
-  ├── threads.py      # 用角色（profile）运行 Agent 线程并兜底异常防重拉
-  ├── bridge.py       # 把线程结果交回 MaiBot
-  ├── intents.py      # 意图、睡眠时段与社交分寸状态
-  ├── pulse.py        # 处理意图、chat.open_session 唤醒与 HEARTBEAT 探索
-  └── console.py      # 给玻璃盒读取事件和执行管理操作
-```
+## 2. `plugin.py` 宿主挂载面（实核）
 
-## 运行期外部数据目录
+- **生命周期与配置联动**：
+  - `MaisyaPlugin.on_load()`：初始化 SQLite 存储、工作区、手账、保险箱、权限信任、服务/Webhook、`Bridge`/`Share`/`Pulse` 与 `Scout`/`Maker` 引擎，并同步宿主 `[[models]]` 脱敏清单至 `host_models.json`。
+  - `MaisyaPlugin.on_config_update()`：响应 `("bot", "model")` 等宿主配置热更新。
+  - `MaisyaPlugin.on_unload()`：有序排空线程、清理有界管理员引导缓存并关闭资源。
+- **Planner 工具（仅 3 个可见 + 1 个延迟）**：
+  - `maisya_agent`（`visibility="visible"`）：`start` / `send` / `stop` / `share`，支持并行 `wait_seconds=0`、接力 `from_threads`、管理员跨会话 `target_chat` 与投递方式 `deliver_to`。
+  - `maisya_recall`（`visibility="visible"`）：按 `scope` 与 `kind` 检索过往线程、后台经历、`MEMORY.md` 与 `JOURNAL.md`，支持管理员 `target_chat="all"` 跨全部会话。
+  - `maisya_later`（`visibility="visible"`）：`schedule` / `list` / `cancel`，支持 `kind=later|proactive|silent`、`daily_at`（HH:MM 不漂移）、`replace` 覆盖与管理员跨会话 `target_chat`。
+  - `maisya_shape`（**无 `visibility` 标记，保持延迟工具**）：管理员一站式配置中心（`overview`/`settings`/`profile`/`skill`/`memory`/`digest_sources`/`notes`/`journal`/`heartbeat`/`services`/`webhooks`/`recipe` 的读/局部改/全写/历史/回滚/新建/删除）。
+- **宿主 Hooks & Command**：
+  - `chat.receive.after_process`（`maisya_receive`）：只读记录可信消息、`new_input`、`note_received`；未启用会话的已核验管理员写入 300s 内存缓存。
+  - `maisaka.planner.before_request`（`maisya_planner`）：剔除内置 `subagent*`，按启用态与管理员权限裁剪档案/工具、提示延迟展开 `maisya_shape`、注入线程索引与手账快照。
+  - `maisaka.planner.after_response`（`maisya_planner_observe`）：关联本轮启动/补充调用到回接组并收尾权限快照。
+  - `maisaka.replyer.before_request`（`maisya_replyer`）：单次垫入已核实线程结果，或因已由 `share` 精确投递而抑制重复回复。
+  - `send_service.before_send`（`maisya_redact`）：出站凭据与私密路径脱敏，非管理员消息剥离全体提及。
+  - `@Command("vault")`（`^/vault(?:\s|$)`）：私聊录入/删除凭据句柄。
+- **管理台与外部 `@API`（共 7 个）**：
+  - 实时现场：`maisya_now`、`maisya_event`、`maisya_note`、`maisya_stop`
+  - 后台管理：`maisya_manage_read`、`maisya_manage_write`
+  - 外部接入：`maisya_incoming_event`（`public=True`，HMAC 验签 Webhook）
 
-```text
-<宿主根>/data/maisya/
-├── maisya.db                      # 含 threads/intents/trusted_messages/session_routes 等表
-├── settings.json                  # 管理页持久配置
-├── settings.base.json             # 上次同步的 config.toml 基线，用于重启与配置更新三路合并
-├── webhooks.json                  # 事件通道固定目标与签名密钥句柄
-├── vault/
-├── abilities/
-│   ├── profiles/<profile_id>/
-│   ├── skills/<skill_id>/
-│   └── services.json              # 管理员登记的程序/模板；凭据只保存句柄绑定
-├── memory/
-│   ├── self/HEARTBEAT.md
-│   ├── self/JOURNAL.md
-│   └── chats/<会话哈希>/MEMORY.md   # SHA-256 前 32 位，SQLite 保留原会话归属
-└── workspaces/
-    ├── ws_<内部编号>/             # SQLite 记录所属会话/自身、名称和线程绑定
-    │   ├── current.json
-    │   └── v_<版本编号>/          # project/in/out 的普通文件
-    ├── runtime/                   # 活动期间的 tmpfs 工作副本；清理未确认则保留隔离
-    └── attachments/               # 不可变 att_ 文件
-```
+---
+
+## 3. `maisya/` 模块职责表（24 个文件）
+
+| 模块 | 职责与核心类/函数 |
+|---|---|
+| [config.py](maisya/config.py) | `PluginSettings`、`Settings`（默认 `ui_style="millennium"`、`proactive_level="care"`）、三路合并（默认 < 文件 < 管理台已保存覆盖）与抗自锁死校验 |
+| [trust.py](maisya/trust.py) | 可信来源消息 `Message` 校验、`session_routes` 双向映射、`<platform>:<group\|private>:<id>` <-> MD5 `session_id` 解析、群/私聊白名单与管理员鉴权 |
+| [abilities.py](maisya/abilities.py) | `Profile` / `Profiles`（支持 `model_name` + `fallback_models` 顺序回退链、`allowed_chats`、技能与工具挂载边界）与 `Skills` 校验管理 |
+| [memory.py](maisya/memory.py) | `MemoryLayers`：全局技能、别名感知的会话 `MEMORY.md`、自视角 `JOURNAL.md`、`HEARTBEAT.md`、`memory_versions` 版本历史/回滚，以及 `learning_receipts`/`experience_receipts` |
+| [threads.py](maisya/threads.py) | `ThreadStore`、`agent_threads` / `thread_events` / `agent_workspaces` / `thread_context`；支持 `chat_aliases` 与预策划冷流工作区无缝接管 |
+| [workspaces.py](maisya/workspaces.py) | `Workspaces` / `WorkingCopy`：隔离临时拷贝 -> 验证后原子提交至 `in/`、`project/`、`out/`，附件清单（`attachments`）与防穿越文件打开 |
+| [scout.py](maisya/scout.py) | `Scout` 只读侦察与规划循环、`model_list` 多模型异常顺次 fallback、`web.search` / `google-search-plugin` 自适应与阶段限步 |
+| [maker.py](maisya/maker.py) | `Maker` 创作与多工具步进（整合文件编辑、HTML 出图、附件声明、自定义 `services`、`sandbox_exec` 与 `digest_feed`） |
+| [digest.py](maisya/digest.py) | `DigestWorkspace`、`parse_feed_xml`、`run_digest_tool`：RSS/Atom 自动探测与 14 天试订/转正/退订、五维打分与近重复过滤 |
+| [sandbox.py](maisya/sandbox.py) | Docker + `runsc` (gVisor) 容器执行、`executions`/`execution_resources`、`secrets` 单次只读挂载，无容器自动降级 `light_workspace` |
+| [services.py](maisya/services.py) | 联网源绑定校验（`validate_web_bindings`）、公网目标校验（`validate_endpoint_targets`、防 SSRF）与跨插件/动态模板调用 |
+| [vault.py](maisya/vault.py) | 宿主加密保险箱，生成与管理不落明文的凭据句柄，全链路输出脱敏 `redact()` |
+| [incoming.py](maisya/incoming.py) | `Incoming`：Webhook 验签、幂等去重（`incoming_events`）与 `<platform>:<group\|private>:<id>` 路由投递 |
+| [bridge.py](maisya/bridge.py) | `Bridge`：`return_groups` / `return_members` / `return_intents` / `result_deliveries`；支持 `return_chat_id` 与同轮超时后自动转后台交付 |
+| [share.py](maisya/share.py) | `Share`：使用宿主 `maisaka.reply.generate` 与 `send.hybrid` 将准确链接、文件、图片或管理员私聊预览一次精准发出 |
+| [intents.py](maisya/intents.py) | `Intent` 队列与 `social_state`：克制唤醒（睡眠免打扰、未回不连戳、熟人、每日额度）、`daily_at` 不漂移周期排班与 `scheduled_admin` 保护 |
+| [pulse.py](maisya/pulse.py) | `Pulse`：后台到期扫描、`Bridge` 回接认领（含 `inspect.signature` 兼容与 `admin_direct`）、`<maisya_workflow>` 唤醒目标会话 `planner` |
+| [learning.py](maisya/learning.py) | `Learning._learn()`：对复杂成功轨迹做异步经验提炼并回执，不阻断对话 |
+| [shaping.py](maisya/shaping.py) | `execute_shape`、`build_overview`、`resolve_chat_target`、`handle_digest_sources`、`patch_settings`/`patch_profile`：管理员对话式全量配置与回滚引擎 |
+| [recipes.py](maisya/recipes.py) | `1 + 2` 能力配方导入导出、隐私与凭据体检、公开 HTTPS 防 SSRF 拉取预览、缺件对齐、平滑升级与推荐例行任务一键挂载 |
+| [management.py](maisya/management.py) | `Management`：五页控制台统一读写门面，驱动 `产物` 资料空间分类、角色名册模型与回退配置、手账读写、一般/高级设置、`ui_style` 切换、发现与健康检查 |
+| [console.py](maisya/console.py) | `snapshot()` / `read_event()`：`现场` 单路游标快照、`01→04 FLOW` 拓扑、上下文分布、`TREND` 示波器读数及事件原文分页 |
+| [web.py](maisya/web.py) | 多源联网搜索与抓取抽象，兼容宿主内置能力及第三方搜索插件（如 `google-search-plugin` EXA） |
+| [mcp_worker.py](maisya/mcp_worker.py) | 独立子进程封装与超时受控调用高风险/外部 MCP 工具 |
+
+---
+
+## 4. `presets/`、`webui/` 与测试矩阵
+
+- **预置资产（`presets/`）**：
+  - 角色：`scout`（联网搜源与事实核对）、`maker`（创作、HTML 图卡与隔离沙箱计算）、`digest`（资讯简报，默认停用）。
+  - 技能：`source-checking`、`ongoing-workspace`、`news-digest`。
+  - 心跳模板：`presets/memory/HEARTBEAT.md`（默认留空等待启用）。
+- **WebUI 双主题模板体系（`webui/`）**：
+  - 源码模板：`now.html.in`、`management.html.in`、`fragments/{outputs,abilities,memory,settings}.html`、`millennium.css`、`fish.js`。
+  - 编译器：`python3 webui/build.py` 生成最终单页包 `webui/{now,outputs,abilities,memory,settings}.html`（零 `<img>`、零 `<iframe>`、零 `transition: all`、零 `localStorage`）。
+  - 主题：`millennium`（默认，协调宿主千禧机械风）、`maiwork`（清朗手账风）与 `auto`（随 `ui_style` 持久化）。
+- **测试目录**：
+  - `tests/`：35 个模块共 **236 项**本地与 Chromium Playwright 端到端测试。
+  - `tests_host/`：`run_contract.py`（**22 项**隔离实例宿主 SDK 契约）与 `run_live_smoke.py`（真模型+联网冒烟）。
+  - `tests_sandbox/`：`check_runtime.py` 与 `run_isolated.py`（`runsc` 沙箱实测）。
+
+---
+
+## 5. SQLite 表结构汇总（均存 `data/maisya/maisya.db`）
+
+- **对话与身份路线**：`trusted_sources`（`trust.py`）、`session_routes`（`trust.py` / `intents.py`）
+- **线程与工作区**：`agent_threads`、`thread_events`、`agent_workspaces`、`thread_context`（`threads.py`）、`attachments`（`workspaces.py`）
+- **手账与回执**：`memory_versions`、`learning_receipts`、`experience_receipts`（`memory.py`）
+- **沙箱与资源**：`executions`、`execution_resources`（`sandbox.py`）
+- **回接、交付与意图**：`return_groups`、`return_members`、`return_intents`、`result_deliveries`（`bridge.py`）、`intents`、`social_state`、`incoming_events`（`intents.py`）

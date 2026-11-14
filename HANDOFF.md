@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证方式与上线前待办；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md) 与 [docs/](docs/01-架构蓝图.md)。
 
-最后更新：2026-11-13。已完成 M0–M6 全量架构落地、工作流自由化、MaiBot 千禧机械风 × Aisya 实时流 **五页玻璃盒管理台**（`现场 | 产物 | 能力 | 手账 | 设置`）、**角色（`profile`）启停开关 + 角色专属程序化内联 SVG 小鱼头像（12 鱼种 × 18 色 × 11 眼神，支持定制与随机换鱼，`webui/fish.js`）+ 默认关闭的 `digest` 资讯简报预设工作流**、**围绕 `SKILL.md` 的画廊优先工作台与 `.zip`/`.skill`/`.tar.*` 技能包导入导出**、**`planner` 多 Agent 编排与灵魂缝合（无容器轻量创作降级、`from_threads` 结论+成品全量接力、`Share` `<planner_intent>` 语境传达、闲聊精简注入、`maisya_later` 自然语言周期工作流）**，以及 **`1 + 2` Grok 式能力配方模板分享（本地 `.zip`/`.tar.gz`/包文本 + 后端防 SSRF 公开链接安全拉取预览、草稿隐私体检、本机环境缺件对齐与平滑升级回滚）**；当前累计通过 **227 项**本地与 Playwright Chromium UI 测试、**22 项**真实宿主 SDK 隔离契约（`host_unchanged: true`）、隔离实模 + EXA 第三方联网冒烟与独立 Docker/`runsc` gVisor 运行时验收。
+最后更新：2026-11-14。已完成 M0–M6 全量架构落地、工作流自由化、Maisya × MaiWork **双主题五页工作台**（`现场 | 产物 | 能力 | 手账 | 设置`，默认协调 MaiBot 宿主的原味千禧机械风 `millennium` + 可选清朗手账风 `maiwork`，支持顶栏即时切换与 `ui_style` 配置持久化；移除全部口号并把说明文字收进 `?` 帮助图标弹窗；完整保留 `现场` `FLOW → STATUS/TELEMETRY → CONTEXT → ACTIVITY/LIVE → 折叠唤醒` 架构并将 FLOW `02` 列更正为 `02 主脑调度 · MaiBot Planner`；`产物` 升级为统一 `资料空间` 分类导航/列表网格/最近 5 项视图；`设置` 与角色面板区分「一般设置 / 高级设置」，角色支持宿主机密脱敏后的多模型顺次分配与回退 `model_name + fallback_models`）、**全系统消息流统一 `<platform>:<group|private>:<id>` 格式与普通用户产品化体验**（所有配置、白名单、角色作用域、定时/Webhook 与五页 WebUI 统一显示及提交如 `qq:group:12345678`，后台双向兼容解析 MaiBot 32 位哈希 `session_id`；`设置` 白名单改为条目卡片 + 每条会话独立分寸选择器 + 「从已发现会话挑选 / 平台·类型·群号账号」三段式添加；免打扰改为整点时间段开关；心跳角色与定时目标改为下拉选择；`运行状态速览` / `宿主探测` / `自动笔记回执` / `现场` 动态步骤均由原始 JSON 与内部代号改为结构化中文卡片）、**管理员一段话对话式全量配置与跨群定时工作流（`maisya/shaping.py`：`maisya_shape` 支持 `overview` 一览及配置/角色/技能/手账/服务/Webhook 增改、版本回滚、防明文与防自锁死；群号/群名/MD5 `session_id` 别名互通与预置冷群路由；未启用会话管理员有界内存引导与私聊 `/vault set`；`maisya_later` `daily_at` 不漂移每日钟点、`replace` 覆盖去重与 `scheduled_admin` 保护；`maisya_agent` `target_chat` 跨群试跑投递唤醒）**、**角色（`profile`）启停开关 + 角色专属程序化内联 SVG 小鱼头像（12 鱼种 × 18 色 × 11 眼神，支持定制与随机换鱼，`webui/fish.js`）+ 默认关闭的 `digest` 资讯简报预设工作流**、**围绕 `SKILL.md` 的画廊优先工作台与 `.zip`/`.skill`/`.tar.*` 技能包导入导出**、**`planner` 多 Agent 编排与灵魂缝合（无容器轻量创作降级、`from_threads` 结论+成品全量接力、`Share` `<planner_intent>` 语境传达、闲聊精简注入、`maisya_later` 自然语言周期工作流）**，以及 **`1 + 2` Grok 式能力配方模板分享（本地 `.zip`/`.tar.gz`/包文本 + 后端防 SSRF 公开链接安全拉取预览、草稿隐私体检、本机环境缺件对齐与平滑升级回滚）**；当前累计通过 **236 项**本地与 Playwright Chromium UI 测试、**22 项**真实宿主 SDK 隔离契约（`host_unchanged: true`）、隔离实模 + EXA 第三方联网冒烟与独立 Docker/`runsc` gVisor 运行时验收。
 
 ## 1. 一句话定位与核心不变式
 
@@ -14,7 +14,7 @@
   4. **手账与方法（`Memory Layers`）**：
      - 宿主 `A_Memorix` 负责群友印象与长期聊天记忆（线程内按需只读检索 `memory_read`）；
      - Maisya「手账」只存本会话办事约定（`MEMORY.md`）、近 7 天自身经历（`JOURNAL.md`）、探索脾性与方向（`HEARTBEAT.md`）以及 `SKILL.md` / `NOTES.md`。
-- **planner 工具边界**：可见工具为 `maisya_agent`、`maisya_recall`、`maisya_later`（支持自然语言安排单次提醒与周期角色工作流）；延迟工具为 `maisya_shape`（管理员核验）。
+- **planner 工具边界**：可见工具为 `maisya_agent`（支持已核验管理员 `target_chat` 跨群触发、`deliver_to='current'` 私聊回传预览、仅传 `thread_id` 跨群续接/停止与 `share` 预览后推群）、`maisya_recall`（支持管理员 `target_chat=.../'all'` 跨全部会话召回）、`maisya_later`（支持自然语言安排单次提醒、跨群 `daily_at` 不漂移每日工作流与 `replace` 去重，以及未启用管理员私聊个人提醒）；延迟工具为 `maisya_shape`（管理员核验，支持先 `tool_search` 展开后读取 `overview(target_chat=...)` 及在任意未加白名单私聊按任意顺序修改/回滚配置、角色、技能、跨群手账、`digest_sources` RSS 源订退、服务与配方）；未启用会话仅对已核验管理员开放有界内存引导、跨群操作与个人直达投递，非服务群与非管理员维持零落盘。
 - **无容器轻量工作区降级**：当 `sandbox.enabled = false` 或容器运行时未就绪时，不含私有凭据/受限出站/固定凭据模板的创作角色（如预设 `maker`）自动降级为 `light_workspace` 模式可用（保留 `workspace_file`、`html_render`、`result_attach` 及宿主/联网工具，仅隐去并拦截 `sandbox_exec`；容器就绪后自动恢复完整沙箱能力）；含 `secrets`、`network = "restricted"` 或 `sandbox_targets` 的严格沙箱角色仍强制要求容器就绪。
 - **WebUI 与预设硬约束**：
   - 严禁把「现场」做成工单/派单视角（底部「唤醒能力」为折叠抽屉，主操作为线程实时流 +「引导」/`steer`）。
@@ -27,13 +27,13 @@
 
 | 范围 | 状态 | 依据 |
 |---|---|---|
-| M0 基座 / M1 线程 / M2 回接 | 已实现、加固并验证 | **227 项**本地与 UI 测试 + **22 项**宿主 SDK 隔离契约（含 `web_provider` 多源映射、`send.hybrid` `file` 拆条、`Share` `<planner_intent>` 语境传达、`from_threads` 结论+`out/*`+附件全量接力与闲聊精简 `before_planner`） |
+| M0 基座 / M1 线程 / M2 回接 | 已实现、加固并验证 | **236 项**本地与 UI 测试 + **22 项**宿主 SDK 隔离契约（含 `web_provider` 多源映射、`send.hybrid` `file` 拆条、`Share` `<planner_intent>` 语境传达、`from_threads` 结论+`out/*`+附件全量接力、闲聊精简 `before_planner`、角色多模型顺次 fallback、统一 `<platform>:<group|private>:<id>` 消息流格式与 `session_id` 双向别名映射、以及未启用会话管理员内存自助引导） |
 | M3 `maker` + 工作区 + 沙箱 + `@API` | **真实 `runsc` 验收通过；无容器自动降级可用** | `tests_sandbox/run_isolated.py --execute` 全绿（`host_unchanged` / `backup_cleaned`）；`maker` 未开容器时自动以 `light_workspace` 模式保留 `workspace_file`/`html_render`/`result_attach`，开启容器自动恢复 `sandbox_exec`；支持管理员可写 MCP/跨插件 `@API`/自定义模板与 `sandbox_targets` |
-| M4 手账 / Skill 画廊 / 配方分享 / 塑形 | 已实现并验证 | 画廊优先 `能力` 工作台；技能包分块导入导出与伴随文件挂载；`maisya/recipes.py` `1 + 2` 能力配方模板分享（草稿资产勾选与隐私/凭据体检、公开 GitHub/归档链接防 SSRF 拉取预览、对照宿主 `discovery`/保险箱/服务/沙箱缺件对齐、平滑升级保留白名单/启停/工作区并可回滚、推荐例行任务一键挂载）；`Learning._learn` 真实 LLM 冒烟 `applied` |
-| M5 意图 / `Pulse` / 克制主动性 / `digest` 预设 | 已实现并验证 | `maisya_later` 自然语言周期工作流、`Pulse` `<maisya_workflow>` 唤醒与纯链接/正文自动 `bridge.stage` 预装载；`daily_proactive_limit`、`chat_proactive_levels`、`acquaintance_users`、`longing_quiet_hours`、`serendipity`；默认关闭的 `digest` 角色 + `news-digest` 技能 + `digest_feed` |
-| M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | `现场`（跨平台会话头像/名称、FLOW 拓扑与角色小鱼、五段上下文、引导 `steer`）、`产物`（交付物/图片预览/持续工作区与角色小鱼）、`能力`（Skill 画廊/工作台 + 角色名册/小鱼定制与配方分享导入面板）、`手账`（分册指引 + 公开探索示例 + `A_Memorix` 边界清晰）、`设置`（按会话主动度、快捷调度预设） |
+| M4 手账 / Skill 画廊 / 配方分享 / 塑形 | 已实现并验证 | 画廊优先 `能力` 工作台；技能包分块导入导出与伴随文件挂载；`maisya/shaping.py` 对话式全量塑形（`overview`、配置抗自锁死与历史回滚、角色/技能/跨群手账/服务/Webhook、`Vault` 凭据句柄与防明文拦截）；`maisya/recipes.py` `1 + 2` 能力配方模板分享（草稿资产勾选与隐私/凭据体检、公开 GitHub/归档链接防 SSRF 拉取预览、对照宿主 `discovery`/保险箱/服务/沙箱缺件对齐、平滑升级保留白名单/启停/工作区并可回滚、推荐例行任务一键挂载）；`Learning._learn` 真实 LLM 冒烟 `applied` |
+| M5 意图 / `Pulse` / 克制主动性 / `digest` 预设 | 已实现并验证 | `maisya_later` `daily_at` 钟点不漂移每日工作流、`replace` 覆盖去重与 `scheduled_admin` 非管理员取消保护；跨群预先建流 `session_routes` 与试跑投递唤醒；`Pulse` `<maisya_workflow>` 唤醒与纯链接/正文自动 `bridge.stage` 预装载；`daily_proactive_limit`、`chat_proactive_levels`、`acquaintance_users`、`longing_quiet_hours`、`serendipity`；默认关闭的 `digest` 角色 + `news-digest` 技能 + `digest_feed` |
+| M6 五页玻璃盒 WebUI 与三路配置合并 | 已实现并验证 | 双主题体系（`millennium` 默认协调 MaiBot 宿主的 0px 质感千禧机械主题 + `maiwork` 可选清朗手账主题，顶栏 `#ui-style-toggle` 即时切换与 `ui_style` 持久化）；全页零口号并用 `?` 帮助弹窗收纳说明文字；`现场`（顶部 `01→04 FLOW` 拓扑、状态与读数条、上下文窗口+示波器趋势、近期活动+活动现场引导、底部折叠唤醒抽屉）、`产物`（交付物/图片预览/持续工作区与角色小鱼）、`能力`（Skill 画廊/工作台 + 角色名册与默认折叠高级覆盖字段 + 配方分享导入面板）、`手账`（分册徽章与 `?` 指引 + 直达意图队列与自动笔记回执 + `A_Memorix` 边界）、`设置`（一般设置 vs 高级设置分级、预设快捷调度、动态自定义联网展开） |
 | 真实模型 + 第三方搜索插件 / EXA 冒烟 | **隔离全链通过** | `tests_host/run_live_smoke.py --execute`（独立 `MAIBOT_INSTANCE_DIR`，未开宿主 `web_search`）：`scout` 自动兼容 `google-search-plugin`（EXA）返回真实来源链接、`web_fetch` 成功、`maker` 走 `planner` 槽位、`Learning._learn` 回执 `applied` |
-| **部署到线上 `plugins/` 与真群联调** | **唯一未执行（红线保护）** | `plugins/`、`src/`、`config/`、`data/` 零改动；需下一会话取得用户当次部署授权并指定测试群 |
+| **部署到线上 `plugins/` 与热重载验证** | **已部署上线并验证激活（保留安全静默开关）** | 已备份 `maisya-deploy-20261114-111739` 至 `/root/backups/` 并原子同步 57 个运行时文件（保留线上 `config.toml`）；实机日志 `chartyr.maisya v0.0.1 加载成功 / 注册完成`（`on_load=0.131s`，`loaded=15 failed=0`，`errors=[]`，`A_Memorix` 正常，`host_unchanged=true`）；线上保持 `enabled = true`、`enabled_chats = []`、`sandbox.enabled = false` 等待按需开群启用 |
 
 ## 3. 本地与隔离验证命令
 
@@ -41,7 +41,7 @@
 # 1. WebUI 构建一致性检查
 python3 webui/build.py --check
 
-# 2. 全量本地与 Chromium UI 测试（当前 227 passed）
+# 2. 全量本地与 Chromium UI 测试（当前 236 passed）
 PYTHONPATH=.:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider
 
 # 3. 真实宿主 venv 隔离契约（22 tests，自动校验 host_unchanged）
@@ -60,20 +60,20 @@ python3 tests_sandbox/run_isolated.py --execute
 若 `.local-checks/deps` 未就绪：
 `python -m pip install --target .local-checks/deps 'cryptography>=46,<51' 'jsonschema>=4.23,<5'`
 
-## 4. 下一会话接手与上线前核查清单
+## 4. 接手维护、线上核查与真群开群前指引
 
-按线上红线，**当前本地已无需再补核心功能**，下一会话重点是**线上部署前核查与真群联调**：
+截至 2026-11-14，最新代码已部署至线上插件目录并完成干净热重载；后续维护与按需开群请遵循以下核查项：
 
-1. **读取本地隐私配置**：先读取未入库的本地 `AGENTS.local.md` 获取 SSH 连接方式、宿主根目录路径与用户指定测试群（**绝不将 IP、路径或密钥写入受 Git 跟踪的文件或聊天输出**）。
-2. **取得用户当次授权再动线上**：每次往线上 `plugins/` 放入/更新代码会触发全插件热重载；执行前先向用户确认部署授权与本次测试群号，并将旧插件与相关数据库备份至 `/root/backups/`。
-3. **核查线上运行条件**：
-   - **联网回退**：当前宿主 `web_search` 未分配模型时，Maisya 默认 `web_provider = "auto"` 会自动复用线上 `xxxxx7258.google-search-plugin`（EXA 等多引擎链）；若宿主后续开启统一联网，`auto` 会自动切回。
-   - **宿主 `utils` 首选模型顺序**：先前实模冒烟曾观测到 `[model_task_config.utils]` 首选 `gpt-6-luna` 同时带 `function tools` 与 `reasoning_effort` 会触发 `400 BadRequestError` 并回退下一模型；上线前建议核查宿主 `utils` 模型顺序，避免每步多一次 400 重试延迟。
-   - **沙箱镜像**：仅当开启 `sandbox.enabled = true` 时，确认宿主已就绪 `maisya-sandbox:py313`（必要时运行 `./sandbox/build_image.sh --execute`）。
-4. **部署后与真群端到端验收**：
-   - 确认热重载后宿主其他插件与 `A_Memorix` 工作正常，无报错卡死；
-   - 在用户指定的测试群中逐项实测：日常闲聊/RP 是否原味不受干扰、`scout` 同步返回与异步回接、含链接/图片/群文件的 `share` 拆条交付（`send.hybrid`）、`Pulse` 社交分寸闸表现，以及真实宿主控制台打开 5 个自定义页面是否正常；
-   - 测试收尾后按要求清理测试状态并回读确认。
+1. **本地隐私文件仅留本地**：`AGENTS.local.md`、`config.toml` 与 `.local-checks/` 已在 `.gitignore` 屏蔽（绝不将服务器 IP、SSH 路径、密钥或真实群号写入受 Git 跟踪的文件或聊天输出）。
+2. **线上默认安全开关与核查点**：
+   - **默认静默待命**：线上保持 `enabled = true`、`enabled_chats = []`、`[sandbox] enabled = false`；五页管理台已可用且不主动读取或接入任何未启用群。
+   - **联网回退**：当宿主统一 `web_search` 未开启或未配模型时，`web_provider = "auto"` 会自动复用宿主侧已加载的第三方搜索插件或已登记服务；若宿主后续开启统一联网，`auto` 会自动优先切换。
+   - **宿主 `utils` 槽位提示**：此前隔离实模冒烟曾观测到若宿主某模型槽位首选模型不支持 `tools + reasoning_effort`，会触发一次 400 回退延迟；建议在 `能力 -> 角色管理` 为常用角色显式配好 `model_name` + `fallback_models` 顺序链。
+   - **沙箱镜像**：仅当准备开启 `[sandbox] enabled = true` 时，才需在宿主构建 `maisya-sandbox:py313`（`./sandbox/build_image.sh --execute`）；未开启时 `maker` 与 `digest` 默认以 `light_workspace` 模式完成持久工作区、HTML 渲染与文件交付。
+3. **正式拉入真群与每日资讯启用方式**：
+   - 在 Maisya 管理台 `设置 -> 一般设置 -> 启用会话白名单` 用条目添加目标流（如 `qq:group:12345678`），或由管理员在私聊发一段话经 `maisya_shape` 一站式开启；
+   - 启用「每日资讯」可直接在私聊交代启用 `digest`、配好 `digest_sources`、用 `maisya_later(daily_at=..., target_chat=...)` 挂每日排班，并可用 `deliver_to="current"` 在私聊试跑验收后再推往目标群。
+4. **若需再次同步线上插件**：必须先取得用户当次明确授权，将旧插件与活数据（SQLite 必须用只读 `.backup()`）归档到 `/root/backups/`，再原子更新 `plugins/CharTyr_Maisya/` 并保留线上 `config.toml`，严禁改动宿主代码或重启线上服务。
 
 ## 5. 工作方式红线（摘自 `AGENTS.md`）
 

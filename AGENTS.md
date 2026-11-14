@@ -31,15 +31,15 @@ MaiBot 插件 `chartyr.maisya`：不改 MaiBot 宿主源码，为 MaiBot 提供�
 ## 设计红线
 
 1. **对话节奏归 MaiBot。** `chat.receive.after_process` 永远返回 `continue`，只做可信消息记录与会话状态更新。日常聊天、接梗、常识与情绪交流由 `planner` 直接调用原生 `reply`。
-2. **planner 工具保持极少且稳定。** 可见工具只注册 `maisya_agent`、`maisya_recall`、`maisya_later`；延迟工具只注册 `maisya_shape`。启用会话只剔除宿主内置 `subagent*`，保留宿主原生工具与其他插件 `@Tool`。慢执行、搜索、MCP 和沙箱工具只进入 Agent 线程。
-3. **线程是唯一的 Agent 活动单位。** 启动、补充、转向、回答线程问题、续聊、管理台引导，都落到同一个线程的消息流；停止使用 `stop`。持久工作区按线程消息顺序串行写入。
-4. **结果按内容需要回到对话。** 线程结果先交给 `planner`；纯文字由原生 `reply` 表达，并通过 `maisaka.replyer.before_request` 单次垫入核实结果；需要准确链接、媒体、文件或旧消息锚点时，由 `planner` 调用 `maisya_agent(action="share")`，使用宿主原生表达能力生成 MaiBot 口吻并一次发出。
+2. **planner 工具保持极少且稳定。** 可见工具只注册 `maisya_agent`、`maisya_recall`、`maisya_later`；延迟工具只注册 `maisya_shape`（保持延迟、严禁加 `visibility` 标记，管理员轮次引导先经宿主 `tool_search` 展开，支持跨会话 `overview` / 局部 `patch` / `rollback` / `digest_sources` 与抗自锁死）。启用会话只剔除宿主内置 `subagent*`，保留宿主原生工具与其他插件 `@Tool`。慢执行、搜索、MCP 和沙箱工具只进入 Agent 线程；未启用会话的普通聊天保持零注入与零落盘，仅已核验管理员可使用有界内存缓存（300 秒过期）完成私聊 `/vault` 或跨会话配置引导。
+3. **线程是唯一的 Agent 活动单位。** 启动、补充、转向、回答线程问题、续聊、管理台引导，都落到同一个线程的消息流；停止使用 `stop`。持久工作区按线程消息顺序串行写入；各角色按 `profile.toml` 中的 `model_name` + `fallback_models` 顺序执行并支持向后回退，未配置时回落 `default_task_slot`。
+4. **结果按内容需要回到对话。** 线程结果先交给 `planner`；纯文字由原生 `reply` 表达，并通过 `maisaka.replyer.before_request` 单次垫入核实结果；需要准确链接、媒体、文件或旧消息锚点时，由 `planner` 调用 `maisya_agent(action="share")`，使用宿主原生表达能力生成 MaiBot 口吻并一次发出。管理员跨会话调度可通过 `target_chat` 与 `deliver_to`（`auto`/`target`/`current`/`none`）控制回传目标或私聊预览。
 5. **纯文字结果是一等结果。** 文件和媒体只在线程主动声明附件时检查：路径存在、位于允许目录、非 0 字节；同一结果最多提示一次修正。
-6. **主动性由意图驱动。** 所有异步唤醒都先成为 Intent，再由 Pulse 统一过闸并调用目标会话 `planner`。回接用户请求的线程结果绕过主动搭话限制；无事搭话受睡眠免打扰、按会话「未回不连戳」、熟人边界、主动度和每日额度约束。
-7. **记忆按层隔离。** 全局技能只写跨会话通用的方法；具体群的称呼、规则、偏好、资产代号进入该会话 `MEMORY.md`；MaiBot 自身视角的近况进入 `JOURNAL.md` 与自身线程；活动过程留在线程和工作区。
-8. **权限按真实发言人判断。** 普通只读能力允许 MaiBot 自主调用，无需用户消息。管理员能力与受限档案在请求前隐藏，并在执行时按 `source_msg_id` 反查真实发言人，排除插件代投消息；宿主攒批后的 `context.user_id` 不能授予权限。凡显式提供的来源都必须核验，失败时拒绝调用。
-9. **凭据与高权服务只交给核验边界。** 群友共享的带 Key 能力由宿主机只读 MCP / 跨插件只读 `@API` 持有凭据；`access = "admins"` 的能力档案在核验管理员身份（群聊真实 `source_msg_id`、控制台或管理员定时任务）后，允许绑定可写 MCP / 可写跨插件 `@API`、自定义 `services.templates`（含公网 `targets`）与沙箱 `sandbox_targets` + `secrets`（单次挂载 `/run/secrets/<handle>`，输出强制脱敏）。
-10. **玻璃盒零额外端口。** 管理台使用宿主 `webui.json` v2 自定义工作区页面和静态 `@API`，页面自包含，遵守 `connect-src 'none'`、每插件 `inflight <= 2` 与 `10s` 超时；实时页使用单路游标轮询。
+6. **主动性由意图驱动。** 所有异步唤醒都先成为 Intent，再由 Pulse 统一过闸并调用目标会话 `planner`；所有消息流标识在配置与管理界面统一使用 `<platform>:<group|private>:<id>`，并与宿主 32 位十六进制 MD5 `session_id` 通过 `session_routes` 及 `enabled_for` 冷匹配双向打通。回接用户请求的线程结果绕过主动搭话限制（含管理员私聊 `admin_direct` 直达回传）；无事搭话受睡眠免打扰、按会话「未回不连戳」、熟人边界、主动度和每日额度约束。
+7. **记忆按层隔离。** 全局技能只写跨会话通用的方法；具体群的称呼、规则、偏好、资产代号进入该会话 `MEMORY.md`（未启用但已预配流的群会通过别名一致接管）；MaiBot 自身视角的近况进入 `JOURNAL.md` 与自身线程；活动过程留在线程和工作区。
+8. **权限按真实发言人判断。** 普通只读能力允许 MaiBot 自主调用，无需用户消息。管理员能力与受限档案在请求前隐藏，并在执行时按 `source_msg_id` 反查真实发言人，排除插件代投消息；宿主攒批后的 `context.user_id` 不能授予权限。凡显式提供的来源都必须核验，失败时拒绝调用；管理员排定的 `scheduled_admin` 定时工作流受保护，非管理员不可取消。
+9. **凭据与高权服务只交给核验边界。** 群友共享的带 Key 能力由宿主机只读 MCP / 跨插件只读 `@API` 持有凭据；`access = "admins"` 的能力档案在核验管理员身份（群聊或私聊真实 `source_msg_id`、控制台或管理员定时任务）后，允许绑定可写 MCP / 可写跨插件 `@API`、自定义 `services.templates`（含公网 `targets`）与沙箱 `sandbox_targets` + `secrets`（单次挂载 `/run/secrets/<handle>`，输出强制脱敏）。宿主可用模型清单只提取模型名、标识与提供商，绝不持久化或暴露宿主的 `api_key`、`base_url` 或 `api_providers`。
+10. **玻璃盒零额外端口与双主题边界。** 管理台使用宿主 `webui.json` v2 自定义工作区页面（`现场 | 产物 | 能力 | 手账 | 设置`）与静态 `@API`，页面自包含，遵守 `connect-src 'none'`、每插件 `inflight <= 2` 与 `10s` 超时；`现场` FLOW 固定突出 `02 主脑调度 (MaiBot Planner)`（`Pulse` 退居节律子带），`产物` 提供统一资料空间与预览，默认以「千禧机械（`millennium`）」启动并支持切换「清朗手账（`maiwork`）」与「自动（`auto`）」，页面零口号、说明收进 `?` 气泡、设置区分一般与高级且消息流白名单使用条目增删控件；所有前端修改仅编辑源模板并执行 `python3 webui/build.py` 重编。
 
 ## 行为边界
 
@@ -54,8 +54,9 @@ MaiBot 插件 `chartyr.maisya`：不改 MaiBot 宿主源码，为 MaiBot 提供�
 
 - **宿主行为不靠猜**：先查 `docs/06-宿主接口事实.md`，没写到的只读查宿主源码，查实后补进 `06`，未实测的明确标「待实测」。
 - **测试先行（TDD）**：先写能失败的测试再写实现；测试入口找不到插件或依赖时必须直接报错，禁止 skip 造假绿。
-- **契约必跑**：改了 `_manifest.json`、`webui.json`、插件生命周期或组件注册，必须在服务器隔离目录跑真实宿主 venv 契约测试（`tests_host/`）。
-- **小步提交、文档同步**：现状文档只写当前真实设计与行为；做不到或未实测的事直说。
+- **WebUI 与契约必跑**：改了 `webui/` 模板或 CSS 后运行 `python3 webui/build.py && python3 webui/build.py --check`；改了 `_manifest.json`、`webui.json`、插件生命周期或组件注册，必须在独立隔离目录跑真实宿主 venv 契约测试（`tests_host/run_contract.py`）。
+- **零泄密与小步提交**：现状文档与测试夹具禁止出现服务器 IP、密钥、宿主路径或真实群号（统一用虚拟演示标识如 `100246809`）；显式指定路径 `git add`，禁止 `git add .` 或向公网仓库提交 `.trellis/` 与本地环境配置。
+- **线上部署红线**：未经用户当次授权严禁覆盖线上 `plugins/`；部署前必须将线上插件及运行时数据（SQLite 用只读 `.backup()`）备份到 `/root/backups/`，原子同步运行时文件并保留线上 `config.toml`；严禁修改 MaiBot 宿主核心代码或重启宿主服务。
 
 ## 汇报风格
 
@@ -68,3 +69,24 @@ MaiBot 插件 `chartyr.maisya`：不改 MaiBot 宿主源码，为 MaiBot 提供�
 ## Repository Map
 
 开发前先读根目录 `codemap.md` 了解模块边界与目录职责。
+<!-- TRELLIS:START -->
+# Trellis Instructions
+
+These instructions are for AI assistants working in this project.
+
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
+
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
+
+If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
+- `.agents/skills/` — reusable Trellis skills
+- `.codex/agents/` — optional custom subagents
+
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+
+<!-- TRELLIS:END -->
