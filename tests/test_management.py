@@ -520,3 +520,404 @@ async def test_skill_archive_zip_tar_multi_bundle_companions_and_security(tmp_pa
             plugin.memory.import_skill_archive(sec_zip.getvalue(), filename="sec.zip")
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_management_proactive_quota_and_intent_metadata(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        settings_res = await plugin.manage_read("settings")
+        memory_res = await plugin.manage_read("memory")
+        assert settings_res["proactive_quota"] == {"used": 0, "limit": 1, "remaining": 1}
+        assert memory_res["proactive_quota"] == {"used": 0, "limit": 1, "remaining": 1}
+
+        now = plugin.intents.clock()
+        active_intent = plugin.intents.schedule(
+            kind="proactive",
+            source="later",
+            target="chat:100246809",
+            due_at=now + 60,
+            reason="稍后提醒一下",
+        )
+        cancelled_intent = plugin.intents.schedule(
+            kind="proactive",
+            source="afterglow",
+            target="chat:100246809",
+            due_at=now + 120,
+            reason="被取消的事后惦记",
+            bypass_limits=True,
+        )
+        plugin.intents.cancel(cancelled_intent["intent_id"], "chat:100246809")
+
+        settings_after = await plugin.manage_read("settings")
+        memory_after = await plugin.manage_read("memory")
+        assert settings_after["proactive_quota"] == {"used": 1, "limit": 1, "remaining": 0}
+        assert memory_after["proactive_quota"] == {"used": 1, "limit": 1, "remaining": 0}
+
+        new_cfg = dict(settings_after["settings"])
+        new_cfg["daily_proactive_limit"] = 3
+        saved_cfg = await plugin.manage_write(
+            "settings",
+            json.dumps({"settings": new_cfg, "expected_version": settings_after["version"]}),
+        )
+        assert saved_cfg["success"]
+        assert saved_cfg["proactive_quota"] == {"used": 1, "limit": 3, "remaining": 2}
+
+        zero_cfg = dict(saved_cfg["settings"])
+        zero_cfg["daily_proactive_limit"] = 0
+        saved_zero = await plugin.manage_write(
+            "settings",
+            json.dumps({"settings": zero_cfg, "expected_version": saved_cfg["version"]}),
+        )
+        assert saved_zero["success"]
+        assert saved_zero["proactive_quota"] == {"used": 1, "limit": 0, "remaining": 0}
+
+        scheduled = await plugin.manage_write(
+            "schedule_intent",
+            json.dumps(
+                {
+                    "chat_id": "100246809",
+                    "platform": "qq",
+                    "prompt": "定时整理近况",
+                    "in_seconds": 60,
+                    "every_seconds": 600,
+                }
+            ),
+        )
+        assert scheduled["success"], scheduled
+        admin_id = scheduled["intent"]["intent_id"]
+
+        silent_intent = plugin.intents.schedule(
+            kind="silent",
+            source="thread",
+            target="chat:self",
+            due_at=now + 180,
+            reason="后台探索记录",
+            bypass_limits=True,
+        )
+
+        intents_res = await plugin.manage_read("intents")
+        assert intents_res["success"]
+        by_id = {row["intent_id"]: row for row in intents_res["intents"]}
+
+        assert by_id[admin_id]["protected"] is True
+        assert by_id[active_intent["intent_id"]]["protected"] is False
+        assert by_id[silent_intent["intent_id"]]["protected"] is False
+
+        banned_terms = ("scheduled_admin", "A_Memorix", "只进不出", "default_task_slot")
+        for row in intents_res["intents"]:
+            label = row.get("kind_label", "")
+            assert isinstance(label, str) and label.strip()
+            for term in banned_terms:
+                assert term not in label
+
+        assert by_id[admin_id]["kind_label"] != by_id[active_intent["intent_id"]]["kind_label"]
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_management_set_profile_models(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        toml_cur = await plugin.manage_read(
+            "asset", json.dumps({"kind": "profile", "target": "scout", "document": "profile.toml"})
+        )
+        res = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps(
+                {
+                    "profile_id": "scout",
+                    "models": ["gpt-5", "claude-4", "gpt-5"],
+                    "fallback_slot": "planner",
+                    "expected_version": toml_cur["version"],
+                }
+            ),
+        )
+        assert res["success"], res
+        assert res["profile_id"] == "scout"
+        assert res["models"] == ["gpt-5", "claude-4"]
+        assert res["model_name"] == "gpt-5"
+        assert res["fallback_models"] == ["claude-4"]
+        assert res["fallback_slot"] == "planner"
+        assert res["version"] > toml_cur["version"]
+
+        prof = plugin.profiles.get("scout")
+        assert prof.model_name == "gpt-5"
+        assert prof.fallback_models == ("claude-4",)
+        assert prof.model_list == ("gpt-5", "claude-4")
+        assert prof.task == "planner"
+
+        stale = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps(
+                {
+                    "profile_id": "scout",
+                    "models": ["stale-model"],
+                    "expected_version": toml_cur["version"],
+                }
+            ),
+        )
+        assert not stale["success"]
+
+        reordered = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps({"profile_id": "scout", "models": ["claude-4", "gpt-5"]}),
+        )
+        assert reordered["success"], reordered
+        assert reordered["models"] == ["claude-4", "gpt-5"]
+        assert plugin.profiles.get("scout").model_name == "claude-4"
+        assert plugin.profiles.get("scout").fallback_models == ("gpt-5",)
+
+        bad_slot = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps({"profile_id": "scout", "models": ["claude-4"], "fallback_slot": "bad slot!"}),
+        )
+        assert not bad_slot["success"]
+
+        bad_models = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps({"profile_id": "scout", "models": [""]}),
+        )
+        assert not bad_models["success"]
+
+        cleared = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps({"profile_id": "scout", "models": []}),
+        )
+        assert cleared["success"], cleared
+        assert cleared["models"] == []
+        assert plugin.profiles.get("scout").model_list == ()
+        assert plugin.profiles.get("scout").task == "planner"
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_management_upsert_and_delete_service_item_and_webhook(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        stored_secret = await plugin.manage_write(
+            "vault", json.dumps({"handle": "svc_key", "value": "secret-service-value-99"})
+        )
+        assert stored_secret["success"]
+
+        svc0 = await plugin.manage_read("services")
+        mcp_add = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "mcp",
+                    "item": {
+                        "name": "weather",
+                        "command": ["/usr/bin/python3", "/opt/mcp/weather.py"],
+                        "tools": ["forecast"],
+                        "credentials": {"WEATHER_KEY": "svc_key"},
+                        "readonly": True,
+                        "access": "everyone",
+                    },
+                    "expected_version": svc0["version"],
+                }
+            ),
+        )
+        assert mcp_add["success"], mcp_add
+        assert mcp_add["kind"] == "mcp"
+        assert mcp_add["name"] == "weather"
+        assert "name" not in mcp_add["configuration"]["servers"]["weather"]
+
+        stale_add = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "mcp",
+                    "item": {
+                        "name": "weather2",
+                        "command": ["/usr/bin/python3", "/opt/mcp/w2.py"],
+                        "tools": ["ping"],
+                    },
+                    "expected_version": svc0["version"],
+                }
+            ),
+        )
+        assert not stale_add["success"]
+
+        ssrf_tpl = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "template",
+                    "item": {
+                        "id": "bad_tpl",
+                        "argv": ["/bin/echo", "hi"],
+                        "targets": ["127.0.0.1:8080"],
+                    },
+                }
+            ),
+        )
+        assert not ssrf_tpl["success"]
+
+        tpl_add = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "template",
+                    "item": {
+                        "id": "fetch_doc",
+                        "argv": ["/bin/echo", "{doc}"],
+                        "schema": {"type": "object", "properties": {"doc": {"type": "string"}}},
+                        "secrets": ["svc_key"],
+                        "targets": ["93.184.216.34:443"],
+                        "access": "admins",
+                    },
+                }
+            ),
+        )
+        assert tpl_add["success"], tpl_add
+        assert "fetch_doc" in plugin.runtime.services.load()["templates"]
+
+        stale_del = await plugin.manage_write(
+            "delete_service_item",
+            json.dumps(
+                {"kind": "mcp", "name": "weather", "expected_version": svc0["version"]}
+            ),
+        )
+        assert not stale_del["success"]
+
+        del_mcp = await plugin.manage_write(
+            "delete_service_item",
+            json.dumps(
+                {"kind": "mcp", "name": "weather", "expected_version": tpl_add["version"]}
+            ),
+        )
+        assert del_mcp["success"], del_mcp
+        assert "weather" not in plugin.runtime.services.load()["servers"]
+
+        del_tpl = await plugin.manage_write(
+            "delete_service_item",
+            json.dumps({"kind": "template", "id": "fetch_doc"}),
+        )
+        assert del_tpl["success"], del_tpl
+        assert "fetch_doc" not in plugin.runtime.services.load()["templates"]
+
+        missing_del = await plugin.manage_write(
+            "delete_service_item",
+            json.dumps({"kind": "template", "name": "nonexistent"}),
+        )
+        assert not missing_del["success"]
+
+        # Webhooks item deletion (by id, by index, and version conflict)
+        wh0 = await plugin.manage_read("webhooks")
+        wh_cfg = {
+            "alpha": {
+                "target": "qq:group:100246809",
+                "kind": "silent",
+                "secret_handle": "svc_key",
+                "profile": "scout",
+                "enabled": True,
+            },
+            "beta": {
+                "target": "qq:group:100246810",
+                "kind": "silent",
+                "secret_handle": "svc_key",
+                "profile": "scout",
+                "enabled": True,
+            },
+        }
+        wh_saved = await plugin.manage_write(
+            "webhooks",
+            json.dumps({"configuration": wh_cfg, "expected_version": wh0["version"]}),
+        )
+        assert wh_saved["success"], wh_saved
+
+        stale_wh_del = await plugin.manage_write(
+            "delete_webhook_item",
+            json.dumps({"id": "alpha", "expected_version": wh0["version"]}),
+        )
+        assert not stale_wh_del["success"]
+
+        del_alpha = await plugin.manage_write(
+            "delete_webhook_item",
+            json.dumps({"id": "alpha", "expected_version": wh_saved["version"]}),
+        )
+        assert del_alpha["success"], del_alpha
+        assert del_alpha["name"] == "alpha"
+        assert list(plugin.incoming.load().keys()) == ["beta"]
+
+        del_beta = await plugin.manage_write(
+            "delete_webhook_item",
+            json.dumps({"index": 0}),
+        )
+        assert del_beta["success"], del_beta
+        assert del_beta["name"] == "beta"
+        assert plugin.incoming.load() == {}
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_management_undo_learning_note(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        v1 = plugin.memory.write("notes", "方法一：先核对来源。", target="scout", author="admin")
+        v2 = plugin.memory.write(
+            "notes",
+            "方法一：先核对来源。\n\n遇到限流先等待后重试。",
+            target="scout",
+            expected_version=v1["version"],
+            author="thread:t-learn-1",
+        )
+
+        stale = await plugin.manage_write(
+            "undo_learning_note",
+            json.dumps({"profile_id": "scout", "expected_version": v1["version"]}),
+        )
+        assert not stale["success"]
+
+        undone = await plugin.manage_write(
+            "undo_learning_note",
+            json.dumps({"profile_id": "scout", "expected_version": v2["version"]}),
+        )
+        assert undone["success"], undone
+        assert undone["profile_id"] == "scout"
+        assert undone["content"] == "方法一：先核对来源。"
+        assert undone["restored_from"] == v1["version"]
+        assert plugin.memory.read("notes", target="scout")["content"] == "方法一：先核对来源。"
+
+        v4 = plugin.memory.write(
+            "notes",
+            "方法一：先核对来源。\n\n二次自动学习补充。",
+            target="scout",
+            expected_version=undone["version"],
+            author="thread:t-learn-2",
+        )
+        undone_by_thread = await plugin.manage_write(
+            "undo_learning_note",
+            json.dumps({"profile_id": "scout", "history_id": "t-learn-2"}),
+        )
+        assert undone_by_thread["success"], undone_by_thread
+        assert undone_by_thread["content"] == "方法一：先核对来源。"
+
+        undone_by_ver = await plugin.manage_write(
+            "undo_learning_note",
+            json.dumps({"profile_id": "scout", "history_id": f"v{v4['version']}"}),
+        )
+        assert undone_by_ver["success"], undone_by_ver
+        assert "二次自动学习补充" in undone_by_ver["content"]
+
+        # Undoing the very first auto-learned note clears back to empty
+        maker_v1 = plugin.memory.write(
+            "notes",
+            "初次自动记录的经验。",
+            target="maker",
+            author="thread:t-maker-1",
+        )
+        maker_undone = await plugin.manage_write(
+            "undo_learning_note",
+            json.dumps({"profile_id": "maker", "expected_version": maker_v1["version"]}),
+        )
+        assert maker_undone["success"], maker_undone
+        assert maker_undone["content"] == ""
+        assert maker_undone["restored_from"] == 0
+        assert plugin.memory.read("notes", target="maker")["content"] == ""
+    finally:
+        await plugin.on_unload()

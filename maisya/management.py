@@ -2,17 +2,19 @@
 
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 import os
 import re
 import time
+import tomllib
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
-from .abilities import FISH_SEED_RE
+from .abilities import FISH_SEED_RE, TASK_RE
 from .config import Settings
 from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
 from .pathsafe import is_absolute_program_path
@@ -23,6 +25,7 @@ from .recipes import (
     export_recipe_archive,
     fetch_public_recipe_bytes,
     import_recipe_archive,
+    serialize_profile_toml,
 )
 from .scout import call_capability
 from .share import links_in
@@ -315,6 +318,291 @@ class Management:
             "version": saved["version"],
         }
 
+    @staticmethod
+    def _require_expected_version(
+        options: dict, current_version, *, message: str, require_int: bool = False
+    ) -> None:
+        if "expected_version" not in options or options["expected_version"] is None:
+            return
+        expected = options["expected_version"]
+        if require_int and type(expected) is not int:
+            raise ValueError(message)
+        if expected != current_version:
+            raise ValueError(message)
+
+    def _set_profile_models(self, options: dict) -> dict:
+        profile_id = str(
+            options.get("profile_id")
+            or options.get("profile")
+            or options.get("target")
+            or ""
+        ).strip()
+        if not profile_id:
+            raise ValueError("请指定要更新模型配置的角色")
+        raw_models = options.get("models")
+        if not isinstance(raw_models, list) or len(raw_models) > 16:
+            raise ValueError("模型列表必须为最多 16 项的列表")
+        cleaned: list[str] = []
+        for entry in raw_models:
+            if not isinstance(entry, str) or any(ch in entry for ch in ("\r", "\n", "\x00")):
+                raise ValueError("模型名称格式无效")
+            name = entry.strip()
+            if not name or len(name) > 256:
+                raise ValueError("模型名称不能为空且不超过 256 个字符")
+            if self.plugin.vault.contains_secret(name.encode()):
+                raise ValueError("模型名称不能包含凭据明文")
+            if name not in cleaned:
+                cleaned.append(name)
+        slot: str | None = None
+        if "fallback_slot" in options and options["fallback_slot"] is not None:
+            raw_slot = options["fallback_slot"]
+            if not isinstance(raw_slot, str):
+                raise ValueError("默认回落模型类别格式无效")
+            slot = raw_slot.strip()
+            if not TASK_RE.fullmatch(slot) or self.plugin.vault.contains_secret(
+                slot.encode()
+            ):
+                raise ValueError("默认回落模型类别格式无效")
+
+        self.plugin.profiles.get(profile_id)
+        toml_doc = self.plugin.memory.read(
+            "profile", target=profile_id, document="profile.toml", allow_custom=True
+        )
+        self._require_expected_version(
+            options,
+            toml_doc["version"],
+            message="角色配置版本已变化，请刷新后再保存",
+            require_int=True,
+        )
+        cfg = tomllib.loads(toml_doc["content"]) if toml_doc["content"].strip() else {}
+        cfg.pop("model", None)
+        cfg.pop("model_list", None)
+        if cleaned:
+            cfg["model_name"] = cleaned[0]
+            cfg["fallback_models"] = cleaned[1:]
+        else:
+            cfg["model_name"] = ""
+            cfg["fallback_models"] = []
+        if slot is not None:
+            cfg["task"] = slot
+        rendered = serialize_profile_toml(cfg)
+        saved = self.plugin.memory.write(
+            "profile",
+            rendered,
+            target=profile_id,
+            document="profile.toml",
+            expected_version=toml_doc["version"],
+            allow_custom=True,
+        )
+        try:
+            updated = self.plugin.profiles.get(profile_id)
+        except Exception:
+            self.plugin.memory.write(
+                "profile",
+                toml_doc["content"],
+                target=profile_id,
+                document="profile.toml",
+                expected_version=saved["version"],
+                allow_custom=True,
+            )
+            raise
+        models_out = list(updated.model_list)
+        return {
+            "profile_id": updated.id,
+            "models": models_out,
+            "model_list": models_out,
+            "model_name": updated.model_name,
+            "fallback_models": list(updated.fallback_models),
+            "fallback_slot": updated.task,
+            "task": updated.task,
+            "version": saved["version"],
+        }
+
+    @staticmethod
+    def _service_bucket(raw_kind) -> tuple[str, str]:
+        kind = str(raw_kind or "").strip().lower()
+        if kind == "mcp":
+            return "mcp", "servers"
+        if kind == "template":
+            return "template", "templates"
+        raise ValueError("服务类型仅支持 mcp 或 template")
+
+    def _upsert_service_item_sync(self, options: dict) -> dict:
+        kind, bucket = self._service_bucket(options.get("kind"))
+        raw_item = options.get("item")
+        if not isinstance(raw_item, dict):
+            raise ValueError("服务项必须为结构化配置对象")
+        name = str(
+            options.get("name") or raw_item.get("name") or raw_item.get("id") or ""
+        ).strip()
+        self.plugin.vault._validate_handle(name)
+        spec = {k: v for k, v in raw_item.items() if k not in {"name", "id"}}
+        if isinstance(raw_item.get("spec"), dict) and set(spec) == {"spec"}:
+            spec = dict(raw_item["spec"])
+
+        current = self.plugin.runtime.services.load()
+        self._require_expected_version(
+            options,
+            self._version(current),
+            message="服务登记已变化，请刷新后重试",
+        )
+        next_config = copy.deepcopy(current)
+        next_config.setdefault("servers", {})
+        next_config.setdefault("templates", {})
+        next_config[bucket][name] = spec
+        self._validate_services(next_config)
+        content = json.dumps(next_config, ensure_ascii=False).encode()
+        atomic_private_write(self.plugin.runtime.services.path, content)
+        return {
+            "kind": kind,
+            "name": name,
+            "item": spec,
+            "configuration": next_config,
+            "version": self._version(next_config),
+        }
+
+    def _delete_service_item_sync(self, options: dict) -> dict:
+        kind, bucket = self._service_bucket(options.get("kind"))
+        name = str(options.get("name") or options.get("id") or "").strip()
+        if not name:
+            raise ValueError("请指定要删除的服务名称")
+        current = self.plugin.runtime.services.load()
+        self._require_expected_version(
+            options,
+            self._version(current),
+            message="服务登记已变化，请刷新后重试",
+        )
+        next_config = copy.deepcopy(current)
+        entries = next_config.setdefault(bucket, {})
+        if name not in entries:
+            raise ValueError("指定的服务项不存在")
+        entries.pop(name)
+        self._validate_services(next_config)
+        content = json.dumps(next_config, ensure_ascii=False).encode()
+        atomic_private_write(self.plugin.runtime.services.path, content)
+        return {
+            "kind": kind,
+            "name": name,
+            "deleted": True,
+            "configuration": next_config,
+            "version": self._version(next_config),
+        }
+
+    def _delete_webhook_item_sync(self, options: dict) -> dict:
+        current = self.plugin.incoming.load()
+        self._require_expected_version(
+            options,
+            self._version(current),
+            message="事件通道已变化，请刷新后重试",
+        )
+        target_name = str(options.get("name") or options.get("id") or "").strip()
+        if target_name:
+            if target_name not in current:
+                raise ValueError("指定的事件通道不存在")
+        elif "index" in options and options["index"] is not None:
+            idx = options["index"]
+            keys = list(current.keys())
+            if type(idx) is not int or not (0 <= idx < len(keys)):
+                raise ValueError("事件通道序号无效")
+            target_name = keys[idx]
+        else:
+            raise ValueError("请指定要删除的事件通道名称或序号")
+
+        next_config = {
+            k: copy.deepcopy(v) for k, v in current.items() if k != target_name
+        }
+        self.plugin.incoming.validate(next_config, strict_enabled=True)
+        content = json.dumps(next_config, ensure_ascii=False).encode()
+        if self.plugin.vault.contains_secret(content) or len(content) > 48000:
+            raise ValueError("事件通道只保存凭据句柄")
+        atomic_private_write(self.plugin.incoming.path, content)
+        return {
+            "name": target_name,
+            "id": target_name,
+            "deleted": True,
+            "configuration": next_config,
+            "version": self._version(next_config),
+        }
+
+    def _undo_learning_note(self, options: dict) -> dict:
+        profile_id = str(
+            options.get("profile_id")
+            or options.get("target")
+            or options.get("profile")
+            or ""
+        ).strip()
+        if not profile_id:
+            raise ValueError("请指定要撤回笔记的角色")
+        self.plugin.profiles.get(profile_id)
+        current = self.plugin.memory.read("notes", target=profile_id)
+        self._require_expected_version(
+            options,
+            current["version"],
+            message="角色方法笔记版本已变化，请刷新后重试",
+            require_int=True,
+        )
+        history = self.plugin.memory.history("notes", target=profile_id)
+        raw_hid = options.get("history_id")
+        hid = str(raw_hid).strip() if raw_hid is not None else ""
+
+        restore_version: int | None = None
+        if hid:
+            ver_match = re.fullmatch(r"v?(\d+)", hid, re.IGNORECASE)
+            if ver_match:
+                ver = int(ver_match.group(1))
+                if ver not in {h["version"] for h in history}:
+                    raise ValueError("未找到指定的笔记历史版本")
+                if ver == current["version"]:
+                    raise ValueError("当前已是该历史版本，请选择更早的版本")
+                restore_version = ver
+            else:
+                matched_idx = next(
+                    (
+                        i
+                        for i, h in enumerate(history)
+                        if h["author"] in {hid, f"thread:{hid}"}
+                    ),
+                    None,
+                )
+                if matched_idx is None:
+                    raise ValueError("未找到对应的学习笔记记录")
+                if matched_idx + 1 < len(history):
+                    restore_version = history[matched_idx + 1]["version"]
+                elif history[matched_idx]["author"].startswith("thread:"):
+                    restore_version = 0
+                else:
+                    raise ValueError("没有更早的笔记版本可撤回")
+        elif len(history) >= 2:
+            restore_version = history[1]["version"]
+        elif len(history) == 1 and history[0]["author"].startswith("thread:"):
+            restore_version = 0
+        else:
+            raise ValueError("没有可撤回的笔记历史版本")
+
+        if restore_version == 0:
+            saved = self.plugin.memory.write(
+                "notes",
+                "",
+                target=profile_id,
+                expected_version=current["version"],
+                author="rollback",
+            )
+        else:
+            saved = self.plugin.memory.rollback(
+                "notes",
+                restore_version,
+                target=profile_id,
+                expected_version=current["version"],
+            )
+        return {
+            "profile_id": profile_id,
+            "target": profile_id,
+            "content": saved["content"],
+            "version": saved["version"],
+            "restored_from": restore_version,
+            "history": self.plugin.memory.history("notes", target=profile_id),
+        }
+
     def _profile_fish_map(self) -> dict[str, str]:
         mapping: dict[str, str] = {}
         root = getattr(getattr(self.plugin, "profiles", None), "path", None)
@@ -436,6 +724,51 @@ class Management:
                     return raw
         return sid
 
+    def _proactive_quota(self) -> dict[str, int]:
+        limit = max(0, int(self.plugin.settings.daily_proactive_limit))
+        used = 0
+        intents = getattr(self.plugin, "intents", None)
+        if intents is not None:
+            now = intents.clock()
+            start, end = intents._day_bounds(now)
+            with intents.store.connect() as db:
+                row = db.execute(
+                    "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
+                    "AND source IN ('afterglow','serendipity','longing','later') "
+                    "AND created>=? AND created<? AND status!='cancelled'",
+                    (start, end),
+                ).fetchone()
+                used = int(row["count"] if row else 0)
+        return {
+            "used": used,
+            "limit": limit,
+            "remaining": max(0, limit - used),
+        }
+
+    @staticmethod
+    def _intent_kind_label(
+        kind: str, source: str, *, protected: bool, payload: dict
+    ) -> str:
+        is_recurring = bool(payload.get("every_seconds") or payload.get("daily_at"))
+        if protected:
+            return "管理员周期计划" if is_recurring else "管理员定时计划"
+        source_labels = {
+            "afterglow": "事后惦记",
+            "serendipity": "冲浪偶遇",
+            "longing": "久违问候",
+            "later": "稍后提醒",
+            "webhook": "外部事件",
+            "workflow": "周期计划" if is_recurring else "定时任务",
+            "thread": "线程回接" if kind == "return" else "线程跟进",
+        }
+        if source in source_labels:
+            return source_labels[source]
+        return {
+            "return": "定时回接",
+            "proactive": "主动关怀",
+            "silent": "静默探索",
+        }.get(kind, "待处理计划")
+
     def _settings(self):
         settings = self.plugin.settings.model_dump()
         return {
@@ -443,6 +776,7 @@ class Management:
             "version": self._version(settings),
             "admins": sorted(self.plugin.admins),
             "handles": self.plugin.vault.handles(),
+            "proactive_quota": self._proactive_quota(),
         }
 
     def _memory(self, options):
@@ -486,17 +820,38 @@ class Management:
                 options.get("query", ""), chat_id, scope="self"
             ),
             "workspaces": workspaces,
+            "proactive_quota": self._proactive_quota(),
         }
 
     def _intents(self):
         with self.plugin.threads.connect() as db:
+            intents = []
+            for row in db.execute(
+                "SELECT intent_id,kind,source,target,due_at,reason,payload,status,wake_status FROM intents ORDER BY created DESC LIMIT 60"
+            ):
+                item = dict(row)
+                raw_payload = item.pop("payload", None)
+                payload_obj: dict = {}
+                if isinstance(raw_payload, str) and raw_payload.strip():
+                    try:
+                        parsed = json.loads(raw_payload)
+                        if isinstance(parsed, dict):
+                            payload_obj = parsed
+                    except json.JSONDecodeError:
+                        payload_obj = {}
+                elif isinstance(raw_payload, dict):
+                    payload_obj = raw_payload
+                protected = bool(payload_obj.get("scheduled_admin") is True)
+                item["protected"] = protected
+                item["kind_label"] = self._intent_kind_label(
+                    str(item.get("kind") or ""),
+                    str(item.get("source") or ""),
+                    protected=protected,
+                    payload=payload_obj,
+                )
+                intents.append(item)
             return {
-                "intents": [
-                    dict(row)
-                    for row in db.execute(
-                        "SELECT intent_id,kind,source,target,due_at,reason,status,wake_status FROM intents ORDER BY created DESC LIMIT 60"
-                    )
-                ],
+                "intents": intents,
                 "learning": [
                     dict(row)
                     for row in db.execute(
@@ -1764,10 +2119,22 @@ class Management:
             target = str(options.get("target") or options.get("profile") or "").strip()
             raw_seed = options.get("fish_seed", "")
             if not target or not isinstance(raw_seed, str):
-                raise ValueError("set_profile_fish 需要提供 target 与字符串 fish_seed")
+                raise ValueError("需要提供角色标识与有效的头像种子")
             result = await completed_thread(
                 self._set_profile_fish, target, raw_seed.strip()
             )
+        elif action == "set_profile_models":
+            result = await completed_thread(self._set_profile_models, options)
+        elif action == "upsert_service_item":
+            result = await completed_thread(self._upsert_service_item_sync, options)
+            await plugin.runtime.services.close_sessions()
+        elif action == "delete_service_item":
+            result = await completed_thread(self._delete_service_item_sync, options)
+            await plugin.runtime.services.close_sessions()
+        elif action == "delete_webhook_item":
+            result = await completed_thread(self._delete_webhook_item_sync, options)
+        elif action == "undo_learning_note":
+            result = await completed_thread(self._undo_learning_note, options)
         elif action == "import_skill":
             result = await completed_thread(self._upload_skill, options)
         elif action == "recipe_preview":
