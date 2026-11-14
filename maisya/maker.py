@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -494,14 +495,34 @@ class AgentRuntime(Scout):
             profile.access == "admins" or live_restricted
         ) and not await completed_thread(self.authorized, context):
             raise PermissionError("本次活动的管理员授权已失效")
-        if name in {"workspace_file", "html_render", "result_attach", "digest_feed"}:
+        if name in {
+            "workspace_file",
+            "html_render",
+            "result_attach",
+            "digest_feed",
+            "render_report",
+        }:
             if not profile.uses_workspace:
                 raise PermissionError("当前角色未启用工作区工具")
             work = await self._work(context)
             if name == "digest_feed":
                 from .digest import run_digest_tool
 
-                return await run_digest_tool(work, arguments)
+                params = inspect.signature(run_digest_tool).parameters
+                accepts_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in params.values()
+                )
+                extra_kwargs = {}
+                if accepts_kwargs or "web" in params:
+                    extra_kwargs["web"] = self.web
+                if accepts_kwargs or "context" in params:
+                    extra_kwargs["context"] = context
+                return await run_digest_tool(work, arguments, **extra_kwargs)
+            if name == "render_report":
+                from .report import render_report_artifact
+
+                return await completed_thread(render_report_artifact, work, arguments)
             if name == "workspace_file":
                 action = arguments["action"]
                 if action == "list":
