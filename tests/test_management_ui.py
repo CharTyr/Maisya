@@ -416,7 +416,12 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                         await expect(
                             page.locator('[data-kind-tab="memory"]')
                         ).to_contain_text("会话备忘")
-                        await expect(page.locator("aside")).to_contain_text("A_Memorix")
+                        await expect(page.locator("aside")).not_to_contain_text(
+                            "A_Memorix"
+                        )
+                        await expect(page.locator("aside")).to_contain_text(
+                            "本会话长期置顶的办事约定"
+                        )
                         await expect(page.locator("#intent-list")).to_be_visible()
                         await page.locator("#chat").select_option("chat")
                         await expect(page.locator("#content")).to_be_enabled()
@@ -691,17 +696,20 @@ model_list = ["tavily"]
                 await page.locator("#nav-roles").click()
                 await page.locator('[data-doc-tab="config"]').click()
 
-                await expect(page.locator("#cfg-host-models-list")).to_contain_text(
-                    "deepseek-r1-standby"
+                assert await page.locator("[data-add-host-model]").count() == 0
+                assert (
+                    await page.locator("#cfg-host-models-list button").count() == 0
                 )
                 await expect(page.locator("#cfg-model-picker")).to_contain_text(
                     "deepseek-r1-standby"
                 )
-                await expect(page.locator("#cfg-host-models-list")).not_to_contain_text(
+                await expect(page.locator("#cfg-model-picker")).not_to_contain_text(
                     "tavily"
                 )
 
-                await page.locator('[data-add-host-model="deepseek-r1-standby"]').click()
+                await page.locator("#cfg-model-picker").select_option(
+                    "deepseek-r1-standby"
+                )
                 await expect(page.locator("#cfg-model-chain")).to_contain_text(
                     "deepseek-r1-standby"
                 )
@@ -712,7 +720,7 @@ model_list = ["tavily"]
                     encoding="utf-8",
                 )
                 await page.locator("#cfg-model-sync").click()
-                await expect(page.locator("#cfg-host-models-list")).to_contain_text(
+                await expect(page.locator("#cfg-model-picker")).to_contain_text(
                     "qwen-coder-unused"
                 )
                 await page.locator("#save").click()
