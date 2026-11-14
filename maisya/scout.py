@@ -354,6 +354,7 @@ def validate_arguments(name, arguments):
 
 _MODEL_COOLDOWN_SECONDS = 300.0
 _MODEL_COOLDOWN_MAX = 64
+_NO_TEMP_TTL_SECONDS = 3600.0
 _MODEL_UNAVAILABLE_MARKERS = (
     "does not exist",
     "model_not_found",
@@ -364,6 +365,13 @@ _MODEL_UNAVAILABLE_MARKERS = (
     "已下线",
     "不可用",
     "未找到模型",
+)
+_TEMP_UNSUPPORTED_MARKERS = (
+    "unsupported parameter",
+    "not supported",
+    "不支持",
+    "unknown parameter",
+    "only the default",
 )
 
 
@@ -386,6 +394,38 @@ def _error_detail(result, redact=None, *, limit: int = 200) -> str:
 def _is_model_unavailable_error(exc: Exception) -> bool:
     lower = str(exc or "").lower()
     return any(marker in lower for marker in _MODEL_UNAVAILABLE_MARKERS)
+
+
+def _is_temperature_unsupported_error(exc: Exception) -> bool:
+    """判断异常是否为模型拒绝自定义 temperature 参数所致。"""
+    lower = str(exc or "").lower()
+    return "temperature" in lower and any(
+        marker in lower for marker in _TEMP_UNSUPPORTED_MARKERS
+    )
+
+
+def _prune_ttl_map(mapping: dict[str, float], now: float) -> None:
+    for name, until in list(mapping.items()):
+        if until <= now:
+            mapping.pop(name, None)
+
+
+def _mark_ttl_map(
+    mapping: dict[str, float],
+    key: str,
+    now: float,
+    ttl: float,
+    *,
+    max_entries: int = _MODEL_COOLDOWN_MAX,
+) -> None:
+    if not key:
+        return
+    _prune_ttl_map(mapping, now)
+    mapping.pop(key, None)
+    while len(mapping) >= max_entries:
+        oldest = min(mapping, key=mapping.__getitem__)
+        mapping.pop(oldest, None)
+    mapping[key] = now + ttl
 
 
 def checked(result, field=None, *, redact=None):
@@ -458,21 +498,19 @@ class Scout:
         self.web = web
         self.recall = recall
         self._model_cooldown: dict[str, float] = {}
+        self._no_temperature_models: dict[str, float] = {}
 
     def _prune_model_cooldown(self, now: float) -> None:
-        for name, until in list(self._model_cooldown.items()):
-            if until <= now:
-                self._model_cooldown.pop(name, None)
+        _prune_ttl_map(self._model_cooldown, now)
 
     def _mark_model_cooldown(self, model: str, now: float) -> None:
-        if not model:
-            return
-        self._prune_model_cooldown(now)
-        self._model_cooldown.pop(model, None)
-        while len(self._model_cooldown) >= _MODEL_COOLDOWN_MAX:
-            oldest = min(self._model_cooldown, key=self._model_cooldown.__getitem__)
-            self._model_cooldown.pop(oldest, None)
-        self._model_cooldown[model] = now + _MODEL_COOLDOWN_SECONDS
+        _mark_ttl_map(self._model_cooldown, model, now, _MODEL_COOLDOWN_SECONDS)
+
+    def _prune_no_temperature_models(self, now: float) -> None:
+        _prune_ttl_map(self._no_temperature_models, now)
+
+    def _mark_no_temperature_model(self, model: str, now: float) -> None:
+        _mark_ttl_map(self._no_temperature_models, model, now, _NO_TEMP_TTL_SECONDS)
 
     async def step(self, profile: Profile, history, *, max_steps=None):
         now_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
@@ -485,6 +523,7 @@ class Scout:
         candidates = list(profile.model_list) or [""]
         now = time.monotonic()
         self._prune_model_cooldown(now)
+        self._prune_no_temperature_models(now)
         if len(candidates) > 1:
             candidates = [
                 m for m in candidates if self._model_cooldown.get(m, 0.0) <= now
@@ -492,38 +531,58 @@ class Scout:
                 m for m in candidates if self._model_cooldown.get(m, 0.0) > now
             ]
         max_tokens = profile.max_tokens if profile.max_tokens is not None else 4096
-        extra = (
-            {"temperature": profile.temperature}
-            if profile.temperature is not None
-            else {}
-        )
+        tools = [
+            TOOL_DEFINITIONS[name]
+            for name in (
+                *profile.tools,
+                "thread_read",
+                "ask_user",
+                "thread_later",
+            )
+        ]
+
+        async def _invoke_once(model_name: str, extra_kwargs: dict) -> dict:
+            result = await call_capability(
+                self.host,
+                "llm.generate_with_tools",
+                timeout_ms=90000,
+                prompt=prompt,
+                tools=tools,
+                task_name=profile.task,
+                model_name=model_name,
+                max_tokens=max_tokens,
+                **extra_kwargs,
+            )
+            checked(result, redact=self.redact)
+            if not isinstance(result, dict):
+                raise TypeError("模型响应格式无效")
+            if not result.get("response") and not result.get("tool_calls"):
+                raise RuntimeError("模型没有返回文字或工具调用")
+            return result
+
         last_error: Exception | None = None
         for model in candidates:
+            step_now = time.monotonic()
+            self._prune_no_temperature_models(step_now)
+            skip_temp = bool(
+                model and self._no_temperature_models.get(model, 0.0) > step_now
+            )
+            model_extra = (
+                {"temperature": profile.temperature}
+                if profile.temperature is not None and not skip_temp
+                else {}
+            )
             try:
-                result = await call_capability(
-                    self.host,
-                    "llm.generate_with_tools",
-                    timeout_ms=90000,
-                    prompt=prompt,
-                    tools=[
-                        TOOL_DEFINITIONS[name]
-                        for name in (
-                            *profile.tools,
-                            "thread_read",
-                            "ask_user",
-                            "thread_later",
-                        )
-                    ],
-                    task_name=profile.task,
-                    model_name=model,
-                    max_tokens=max_tokens,
-                    **extra,
-                )
-                checked(result, redact=self.redact)
-                if not isinstance(result, dict):
-                    raise TypeError("模型响应格式无效")
-                if not result.get("response") and not result.get("tool_calls"):
-                    raise RuntimeError("模型没有返回文字或工具调用")
+                try:
+                    result = await _invoke_once(model, model_extra)
+                except (RuntimeError, ValueError) as exc:
+                    if "temperature" in model_extra and _is_temperature_unsupported_error(exc):
+                        if model:
+                            self._mark_no_temperature_model(model, time.monotonic())
+                        model_extra.pop("temperature", None)
+                        result = await _invoke_once(model, model_extra)
+                    else:
+                        raise
                 redacted = self.redact(result)
                 if isinstance(redacted, dict) and model and "used_model" not in redacted:
                     redacted = {**redacted, "used_model": model}

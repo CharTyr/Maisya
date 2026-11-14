@@ -461,3 +461,104 @@ model_list = ["tavily"]
         assert "glm-4-air-unused" in ab_reloaded["available_models"]
     finally:
         await reloaded.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_scout_retries_same_model_without_unsupported_temperature_and_caches(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr("maisya.scout.time.monotonic", lambda: clock[0])
+
+    calls = []
+
+    async def call_capability(name, **arguments):
+        calls.append(dict(arguments))
+        if arguments.get("model_name") == "gpt-6-luna" and "temperature" in arguments:
+            return {
+                "success": False,
+                "error": "HTTP 400: Unsupported parameter: 'temperature' is not supported with this model.",
+            }
+        return {"success": True, "response": "luna answer", "tool_calls": []}
+
+    scout = Scout(SimpleNamespace(call_capability=call_capability))
+    profile = Profile(
+        id="scout",
+        model_name="gpt-6-luna",
+        fallback_models=("backup-m",),
+        temperature=0.7,
+    )
+
+    # First step: fails on temperature -> immediately retries same model without temperature
+    res1 = await scout.step(profile, [{"role": "user", "content": "q1"}])
+    assert res1["response"] == "luna answer"
+    assert res1["used_model"] == "gpt-6-luna"
+    assert len(calls) == 2
+    assert calls[0]["model_name"] == "gpt-6-luna" and calls[0]["temperature"] == 0.7
+    assert calls[1]["model_name"] == "gpt-6-luna" and "temperature" not in calls[1]
+    assert "gpt-6-luna" in scout._no_temperature_models
+    assert "gpt-6-luna" not in scout._model_cooldown
+
+    # Second step within 3600s TTL: skips temperature on the first try
+    calls.clear()
+    clock[0] = 2000.0
+    res2 = await scout.step(profile, [{"role": "user", "content": "q2"}])
+    assert res2["used_model"] == "gpt-6-luna"
+    assert len(calls) == 1
+    assert "temperature" not in calls[0]
+
+    # After 3600s TTL expires: sends temperature again, handles raised RuntimeError too
+    calls.clear()
+    clock[0] = 4601.0
+
+    async def raise_temp_error(name, **arguments):
+        calls.append(dict(arguments))
+        if "temperature" in arguments:
+            raise RuntimeError("400 Bad Request: temperature 不支持自定义值，only the default is supported")
+        return {"success": True, "response": "ok after ttl", "tool_calls": []}
+
+    scout.host = SimpleNamespace(call_capability=raise_temp_error)
+    res3 = await scout.step(profile, [{"role": "user", "content": "q3"}])
+    assert res3["response"] == "ok after ttl"
+    assert len(calls) == 2
+    assert calls[0]["temperature"] == 0.7
+    assert "temperature" not in calls[1]
+
+
+@pytest.mark.asyncio
+async def test_scout_temperature_retry_failure_falls_back_without_temp_cooldown(monkeypatch):
+    clock = [500.0]
+    monkeypatch.setattr("maisya.scout.time.monotonic", lambda: clock[0])
+
+    calls = []
+
+    async def call_capability(name, **arguments):
+        calls.append(dict(arguments))
+        model = arguments.get("model_name")
+        if model == "gpt-6-luna":
+            if "temperature" in arguments:
+                raise ValueError("HTTP 400: unknown parameter 'temperature'")
+            return {"success": False, "error": "429 rate limit"}
+        return {"success": True, "response": "backup ok", "tool_calls": []}
+
+    scout = Scout(SimpleNamespace(call_capability=call_capability))
+    profile = Profile(
+        id="scout",
+        model_name="gpt-6-luna",
+        fallback_models=("backup-m",),
+        temperature=0.5,
+    )
+
+    res = await scout.step(profile, [{"role": "user", "content": "fallback check"}])
+    assert res["used_model"] == "backup-m"
+    assert res["response"] == "backup ok"
+    assert [(c["model_name"], "temperature" in c) for c in calls] == [
+        ("gpt-6-luna", True),
+        ("gpt-6-luna", False),
+        ("backup-m", True),
+    ]
+    assert "gpt-6-luna" in scout._no_temperature_models
+    assert "gpt-6-luna" not in scout._model_cooldown
+
+    # Verify bounded size (_MODEL_COOLDOWN_MAX = 64) for _no_temperature_models
+    for idx in range(80):
+        scout._mark_no_temperature_model(f"m-{idx}", 500.0 + idx)
+    assert len(scout._no_temperature_models) <= 64
