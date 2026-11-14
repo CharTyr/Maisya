@@ -3,9 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Maisya · 现场</title>
+<title>Maisya · {{TITLE}}</title>
 <style>
 {{MILLENNIUM_CSS}}
+
+{{MGMT_CSS}}
 
 /* ───────────── 现场页专用布局与交互样式 ───────────── */
 
@@ -772,9 +774,28 @@
     transition: none;
   }
 }
+
+.ms-view {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+:root[data-ui-style="millennium"] .ms-view {
+  gap: 18px;
+}
+@media (max-width: 720px) {
+  .ms-view {
+    gap: 16px;
+  }
+}
+.ms-view[hidden],
+.mil-led-pill[hidden],
+.mil-key[hidden] {
+  display: none;
+}
 </style>
 </head>
-<body>
+<body data-page="{{PAGE_ID}}" data-default-page="{{PAGE_ID}}">
 <div class="mil-shell">
 
   <!-- 顶部导航条 -->
@@ -784,24 +805,36 @@
         <span class="mil-spectrum" aria-hidden="true"><i></i><i></i><i></i></span>
         <span class="mil-nameplate">MAISYA</span>
       </div>
-      <h1 class="mil-page-title">现场</h1>
+      <h1 class="mil-page-title" id="ms-page-title">{{TITLE}}</h1>
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
-        <button type="button" class="mil-key mil-key--sm" aria-current="page" data-nav="now">现场</button>
-        <button type="button" class="mil-key mil-key--sm" data-nav="outputs">产物</button>
-        <button type="button" class="mil-key mil-key--sm" data-nav="abilities">能力</button>
-        <button type="button" class="mil-key mil-key--sm" data-nav="memory">手账</button>
-        <button type="button" class="mil-key mil-key--sm" data-nav="settings">设置</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_NOW_CURRENT}} data-nav="now">现场</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_OUTPUTS_CURRENT}} data-nav="outputs">产物</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_ABILITIES_CURRENT}} data-nav="abilities">能力</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_MEMORY_CURRENT}} data-nav="memory">手账</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_SETTINGS_CURRENT}} data-nav="settings">设置</button>
       </nav>
     </div>
     <div class="mil-top-right">
-      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换千禧机械风 / 清朗手账风">千禧机械</button>
-      <div class="mil-led-pill" id="top-led-pill">
+      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 清朗手账）">千禧机械</button>
+      <div class="mil-led-pill" id="top-led-pill"{{NOW_HIDDEN}}>
         <span class="mil-led" id="top-led"></span>
         <span id="top-state-text">待命</span>
       </div>
-      <button type="button" class="mil-key" id="open-launch">唤醒角色</button>
+      <button type="button" class="mil-key" id="open-launch"{{NOW_HIDDEN}}>唤醒角色</button>
+      <div class="mil-led-pill" id="mgmt-led-pill"{{MGMT_HIDDEN}}>
+        <span class="mil-led" id="mgmt-led"></span>
+        <span>管理台</span>
+      </div>
     </div>
   </header>
+
+  <div id="ms-mgmt-view-wrap" class="ms-view"{{MGMT_HIDDEN}}>
+    <div class="mil-feedback" id="{{MGMT_FEEDBACK_ID}}" data-feedback-slot="mgmt" aria-live="polite"></div>
+    <div id="ms-mgmt-view" class="ms-view">{{MGMT_DEFAULT_BODY}}</div>
+  </div>
+
+  <div id="ms-now-view" class="ms-view"{{NOW_HIDDEN}}>
+<!-- ==NOW_BODY_START== -->
 
   <!-- 1. 处理流向 (FLOW：会话来源 → 脉搏闸门 → 角色 → 活动与产出) -->
   <section class="mil-panel" id="flow-panel" aria-label="处理流向">
@@ -988,7 +1021,7 @@
             <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
           </div>
         </div>
-        <div class="mil-feedback" id="feedback" aria-live="polite"></div>
+        <div class="mil-feedback" id="feedback" data-feedback-slot="now" aria-live="polite"></div>
       </div>
     </div>
   </section>
@@ -1034,6 +1067,8 @@
       <div class="mil-feedback" id="launch-feedback" style="margin-top:10px" aria-live="polite"></div>
     </div>
   </details>
+<!-- ==NOW_BODY_END== -->
+  </div>
 
 </div>
 
@@ -1061,7 +1096,16 @@
 (() => {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
   const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => [...document.querySelectorAll(sel)];
   {{FISH_JS}}
+
+  const PAGES = { now: "现场", outputs: "产物", abilities: "能力", memory: "手账", settings: "设置" };
+  const MGMT_FRAGMENTS = {{MGMT_FRAGMENTS_JSON}};
+  const defaultPage = document.body.dataset.defaultPage || "now";
+  let activePage = defaultPage;
+  let mgmtAbort = null;
+  let userNavigated = false;
+  let bootStarted = false;
 
   function snapFishSeed(snap, roleId) {
     const cards = Array.isArray(snap?.profile_cards) ? snap.profile_cards : [];
@@ -1102,17 +1146,73 @@
   let lastTriggerTarget = null;
   let lastSnapshotAt = 0;
 
-  // 严格保证 query <= 1 并发、总请求 <= 2 并发
+  // 全局严格保证 query <= 1 并发、总请求 <= 2 并发（避免触及宿主 inflight 上限）
+  let inflight = 0;
+  const waiters = [];
+  async function acquire() {
+    if (inflight >= 2) await new Promise((res) => waiters.push(res));
+    inflight++;
+  }
+  function release() {
+    inflight--;
+    if (waiters.length) waiters.shift()();
+  }
+  async function withSlot(fn) {
+    await acquire();
+    try { return await fn(); }
+    finally { release(); }
+  }
   const enqueueQuery = (fn) => {
-    const p = queryQueue.then(fn, fn);
+    const p = queryQueue.then(() => withSlot(fn), () => withSlot(fn));
     queryQueue = p.catch(() => {});
     return p;
   };
   const enqueueAction = (fn) => {
-    const p = actionQueue.then(fn, fn);
+    const p = actionQueue.then(() => withSlot(fn), () => withSlot(fn));
     actionQueue = p.catch(() => {});
     return p;
   };
+  async function hostRpc(op, key, body) {
+    return withSlot(async () => {
+      const arg = op === "read"
+        ? { section: key, payload: JSON.stringify(body || {}) }
+        : { action: key, payload: JSON.stringify(body || {}) };
+      const res = op === "read" ? await window.maibot.query("read", arg) : await window.maibot.action("write", arg);
+      if (res?.ui_style) {
+        savedUiStyle = res.ui_style;
+        applyTheme();
+      }
+      return res;
+    });
+  }
+  function hostSay(text, isErr = false) {
+    const fb = $('[data-feedback-slot="mgmt"]');
+    if (!fb) return;
+    fb.textContent = text || "";
+    fb.className = `mil-feedback${!text ? "" : isErr ? " mil-feedback--err" : " mil-feedback--ok"}`;
+    const led = $("#mgmt-led");
+    if (led) led.className = `mil-led${isErr ? " mil-led--bad" : ""}`;
+  }
+  function setNowFeedback(text, cls = "mil-feedback") {
+    const fb = $('[data-feedback-slot="now"]');
+    if (!fb) return;
+    fb.textContent = text || "";
+    fb.className = cls;
+  }
+  function setDirty(flag) {
+    const tag = $("#dirty-tag");
+    if (tag) tag.hidden = !flag;
+  }
+  function versionHistory(history, current) {
+    const sel = $("#history");
+    if (!sel) return;
+    const list = (history || []).slice().reverse();
+    sel.innerHTML = list.map((h) => `<option value="${esc(h.version)}">v${esc(h.version)} · ${esc(h.source || "manual")}</option>`).join("");
+    if (current !== undefined) sel.value = String(current);
+  }
+  function helpBtn(text, label = "查看说明") {
+    return text ? `<button type="button" class="mil-help" data-help="${esc(text)}" aria-label="${esc(label)}" aria-expanded="false">?</button>` : "";
+  }
 
   let savedUiStyle = "millennium";
   let manualUiStyle = "";
@@ -1143,7 +1243,7 @@
     const cur = document.documentElement.getAttribute("data-ui-style") || "millennium";
     manualUiStyle = cur === "millennium" ? "maiwork" : "millennium";
     applyTheme();
-    drawFlowLines();
+    if (activePage === "now") drawFlowLines();
   });
 
   const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
@@ -1186,6 +1286,7 @@
   let flightRaf = 0;
 
   function drawFlowLines() {
+    if (activePage !== "now") return;
     const box = $("#flow");
     const svg = box?.querySelector(":scope > .fl-svg");
     if (!box || !svg) return;
@@ -1245,7 +1346,7 @@
   }
 
   function emitFlightPackets() {
-    if (calm() || document.hidden || window.innerWidth <= 960) return;
+    if (activePage !== "now" || calm() || document.hidden || window.innerWidth <= 960) return;
     const box = $("#flow");
     if (!box) return;
     const wires = [...box.querySelectorAll(".fl-svg path.on")];
@@ -1927,8 +2028,7 @@
             offset: nextOffset,
           });
           if (!r?.success) {
-            $("#feedback").textContent = r?.error || "读取完整步骤失败";
-            $("#feedback").className = "mil-feedback mil-feedback--err";
+            setNowFeedback(r?.error || "读取完整步骤失败", "mil-feedback mil-feedback--err");
             return;
           }
           fullText += r.text || "";
@@ -1966,17 +2066,19 @@
 
   function switchThread(nextId) {
     const prevId = state.threadId;
-    if (prevId) localDrafts[prevId] = $("#message").value;
+    const msgEl = $("#message");
+    if (prevId && msgEl) localDrafts[prevId] = msgEl.value;
     state.threadId = nextId || "";
     state.cursor = 0;
     state.events = [];
-    $("#events").innerHTML = `<p class="mil-hint">正在读取步骤…</p>`;
-    $("#message").value = localDrafts[state.threadId] || "";
-    $("#feedback").textContent = "";
-    $("#feedback").className = "mil-feedback";
+    const evEl = $("#events");
+    if (evEl) evEl.innerHTML = `<p class="mil-hint">正在读取步骤…</p>`;
+    if (msgEl) msgEl.value = localDrafts[state.threadId] || "";
+    setNowFeedback("", "mil-feedback");
   }
 
   async function refresh(reset = false) {
+    if (activePage !== "now") return;
     const reqThread = state.threadId;
     const reqChat = state.chatFilter;
     const reqCursor = reset ? 0 : state.cursor;
@@ -1985,9 +2087,9 @@
       chat_id: reqChat,
       cursor: reqCursor,
     }));
+    if (activePage !== "now") return;
     if (!snap?.success) {
-      $("#feedback").textContent = snap?.error || "现场快照读取失败";
-      $("#feedback").className = "mil-feedback mil-feedback--err";
+      setNowFeedback(snap?.error || "现场快照读取失败", "mil-feedback mil-feedback--err");
       return;
     }
     if (snap.ui_style) {
@@ -1999,11 +2101,13 @@
     const firstId = snap.threads?.[0]?.thread_id || "";
     if (!state.threadId && firstId) {
       switchThread(firstId);
-      return refresh(true);
+      if (activePage === "now") return refresh(true);
+      return;
     }
     if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
       switchThread(firstId);
-      return refresh(true);
+      if (activePage === "now") return refresh(true);
+      return;
     }
     if (typeof snap.cursor === "number") state.cursor = snap.cursor;
     if (snap.events?.length) {
@@ -2026,9 +2130,11 @@
     const navBtn = ev.target.closest("[data-nav]");
     if (navBtn) {
       const p = navBtn.dataset.nav;
-      if (p !== "now" && window.maibot?.navigate) window.maibot.navigate(p);
-      return;
+      if (Object.prototype.hasOwnProperty.call(PAGES, p)) switchWorkspaceTab(p);
     }
+  });
+
+  $("#ms-now-view").addEventListener("click", (ev) => {
     const flowChat = ev.target.closest("[data-flow-chat]");
     if (flowChat) {
       const cid = flowChat.dataset.flowChat;
@@ -2115,136 +2221,189 @@
     }
   });
 
-  $("#ctx-board").addEventListener("mousemove", (ev) => {
-    const tile = ev.target.closest(".cm-tile");
-    const cell = ev.target.closest(".cm-cell");
-    if (tile) {
-      const it = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
-      if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
-    } else if (cell) {
-      const idx = Number(cell.dataset.cellIdx);
-      const it = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
-      if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
-    } else {
-      hideCtxTip();
+  function bootNowTab() {
+    const ctxBoard = $("#ctx-board");
+    if (!ctxBoard) return;
+    document.querySelectorAll("[data-th-filter]").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.thFilter === state.thFilter));
+    });
+    document.querySelectorAll("[data-ctx-view]").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.ctxView === state.ctxView));
+    });
+
+    ctxBoard.addEventListener("mousemove", (ev) => {
+      const tile = ev.target.closest(".cm-tile");
+      const cell = ev.target.closest(".cm-cell");
+      if (tile) {
+        const it = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
+        if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
+      } else if (cell) {
+        const idx = Number(cell.dataset.cellIdx);
+        const it = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
+        if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
+      } else {
+        hideCtxTip();
+      }
+    });
+    ctxBoard.addEventListener("mouseleave", hideCtxTip);
+
+    const msgEl = $("#message");
+    if (msgEl) {
+      msgEl.value = state.threadId ? (localDrafts[state.threadId] || "") : "";
+      msgEl.addEventListener("input", () => {
+        if (state.threadId) localDrafts[state.threadId] = msgEl.value;
+      });
+      msgEl.addEventListener("keydown", (ev) => {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+          ev.preventDefault();
+          $("#send-note")?.click();
+        }
+      });
     }
-  });
-  $("#ctx-board").addEventListener("mouseleave", hideCtxTip);
+    const launchPrompt = $("#launch-prompt");
+    if (launchPrompt) {
+      launchPrompt.addEventListener("keydown", (ev) => {
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+          ev.preventDefault();
+          $("#launch-run")?.click();
+        }
+      });
+    }
+
+    const sendBtn = $("#send-note");
+    if (sendBtn) sendBtn.onclick = () => enqueueAction(async () => {
+      const fb = $('[data-feedback-slot="now"]');
+      if (!fb) return;
+      if (!state.threadId) {
+        fb.textContent = "请先选择一条线程。";
+        fb.className = "mil-feedback mil-feedback--err";
+        return;
+      }
+      const curMsg = $("#message");
+      const text = (curMsg?.value || "").trim();
+      if (!text) {
+        fb.textContent = "请填写要递给线程的内容。";
+        fb.className = "mil-feedback mil-feedback--err";
+        return;
+      }
+      const r = await window.maibot.action("note", {
+        thread_id: state.threadId,
+        message: text,
+        steer: Boolean($("#steer")?.checked),
+      });
+      if (activePage !== "now") return;
+      const nowFb = $('[data-feedback-slot="now"]');
+      if (!r?.success) {
+        if (nowFb) {
+          nowFb.textContent = r?.error || "引导失败";
+          nowFb.className = "mil-feedback mil-feedback--err";
+        }
+        return;
+      }
+      localDrafts[state.threadId] = "";
+      if ($("#message")) $("#message").value = "";
+      if (nowFb) {
+        nowFb.textContent = "引导已送达原活动。";
+        nowFb.className = "mil-feedback mil-feedback--ok";
+      }
+      refresh(false);
+    });
+
+    const stopBtn = $("#stop");
+    if (stopBtn) stopBtn.onclick = () => enqueueAction(async () => {
+      if (!state.threadId) return;
+      const r = await window.maibot.action("stop", { thread_id: state.threadId });
+      if (activePage !== "now") return;
+      const fb = $('[data-feedback-slot="now"]');
+      if (!r?.success) {
+        if (fb) {
+          fb.textContent = r?.error || "停止失败";
+          fb.className = "mil-feedback mil-feedback--err";
+        }
+        return;
+      }
+      if (fb) {
+        fb.textContent = "线程已停止。";
+        fb.className = "mil-feedback mil-feedback--ok";
+      }
+      refresh(false);
+    });
+
+    const launchBtn = $("#launch-run");
+    if (launchBtn) launchBtn.onclick = () => enqueueAction(async () => {
+      const fb = $("#launch-feedback");
+      if (!fb) return;
+      const profile = ($("#launch-profile")?.value || "").trim() || "scout";
+      const chatId = ($("#launch-chat")?.value || "").trim();
+      const workspace = ($("#launch-workspace")?.value || "").trim();
+      const message = ($("#launch-prompt")?.value || "").trim();
+      if (!chatId || !message) {
+        fb.textContent = "请填写目标会话与任务提示词。";
+        fb.className = "mil-feedback mil-feedback--err";
+        return;
+      }
+      const r = await window.maibot.action("note", {
+        thread_id: "",
+        message,
+        profile,
+        chat_id: chatId,
+        workspace,
+        steer: false,
+      });
+      if (activePage !== "now") return;
+      const nowLaunchFb = $("#launch-feedback");
+      if (!r?.success) {
+        if (nowLaunchFb) {
+          nowLaunchFb.textContent = r?.error || "工作流发起失败";
+          nowLaunchFb.className = "mil-feedback mil-feedback--err";
+        }
+        return;
+      }
+      if ($("#launch-prompt")) $("#launch-prompt").value = "";
+      if (nowLaunchFb) {
+        nowLaunchFb.textContent = "工作流线程已发起。";
+        nowLaunchFb.className = "mil-feedback mil-feedback--ok";
+      }
+      if (r.thread_id) switchThread(r.thread_id);
+      refresh(true);
+    });
+  }
 
   $("#ctx-modal-close").onclick = closeCtxModal;
   $("#ctx-scrim").addEventListener("click", (ev) => {
     if (ev.target === $("#ctx-scrim")) closeCtxModal();
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !$("#ctx-scrim").hidden) closeCtxModal();
+    if (ev.key === "Escape" && activePage === "now" && !$("#ctx-scrim").hidden) closeCtxModal();
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      if (activePage === "settings") {
+        ev.preventDefault();
+        $("#save-settings")?.click();
+      } else if (activePage === "abilities" || activePage === "memory") {
+        ev.preventDefault();
+        $("#save")?.click();
+      }
+    }
   });
 
   $("#open-launch").onclick = () => {
+    if (activePage !== "now") return;
     const panel = $("#launch-panel");
+    if (!panel) return;
     panel.open = true;
     panel.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "center" });
-    $("#launch-prompt").focus();
+    $("#launch-prompt")?.focus();
   };
 
-  $("#message").addEventListener("input", () => {
-    if (state.threadId) localDrafts[state.threadId] = $("#message").value;
-  });
-  $("#message").addEventListener("keydown", (ev) => {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
-      ev.preventDefault();
-      $("#send-note").click();
-    }
-  });
-  $("#launch-prompt").addEventListener("keydown", (ev) => {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
-      ev.preventDefault();
-      $("#launch-run").click();
-    }
-  });
-
-  $("#send-note").onclick = () => enqueueAction(async () => {
-    const fb = $("#feedback");
-    if (!state.threadId) {
-      fb.textContent = "请先选择一条线程。";
-      fb.className = "mil-feedback mil-feedback--err";
-      return;
-    }
-    const text = $("#message").value.trim();
-    if (!text) {
-      fb.textContent = "请填写要递给线程的内容。";
-      fb.className = "mil-feedback mil-feedback--err";
-      return;
-    }
-    const r = await window.maibot.action("note", {
-      thread_id: state.threadId,
-      message: text,
-      steer: Boolean($("#steer").checked),
-    });
-    if (!r?.success) {
-      fb.textContent = r?.error || "引导失败";
-      fb.className = "mil-feedback mil-feedback--err";
-      return;
-    }
-    localDrafts[state.threadId] = "";
-    $("#message").value = "";
-    fb.textContent = "引导已送达原活动。";
-    fb.className = "mil-feedback mil-feedback--ok";
-    refresh(false);
-  });
-
-  $("#stop").onclick = () => enqueueAction(async () => {
-    const fb = $("#feedback");
-    if (!state.threadId) return;
-    const r = await window.maibot.action("stop", { thread_id: state.threadId });
-    if (!r?.success) {
-      fb.textContent = r?.error || "停止失败";
-      fb.className = "mil-feedback mil-feedback--err";
-      return;
-    }
-    fb.textContent = "线程已停止。";
-    fb.className = "mil-feedback mil-feedback--ok";
-    refresh(false);
-  });
-
-  $("#launch-run").onclick = () => enqueueAction(async () => {
-    const fb = $("#launch-feedback");
-    const profile = $("#launch-profile").value.trim() || "scout";
-    const chatId = $("#launch-chat").value.trim();
-    const workspace = $("#launch-workspace").value.trim();
-    const message = $("#launch-prompt").value.trim();
-    if (!chatId || !message) {
-      fb.textContent = "请填写目标会话与任务提示词。";
-      fb.className = "mil-feedback mil-feedback--err";
-      return;
-    }
-    const r = await window.maibot.action("note", {
-      thread_id: "",
-      message,
-      profile,
-      chat_id: chatId,
-      workspace,
-      steer: false,
-    });
-    if (!r?.success) {
-      fb.textContent = r?.error || "工作流发起失败";
-      fb.className = "mil-feedback mil-feedback--err";
-      return;
-    }
-    $("#launch-prompt").value = "";
-    fb.textContent = "工作流线程已发起。";
-    fb.className = "mil-feedback mil-feedback--ok";
-    if (r.thread_id) switchThread(r.thread_id);
-    refresh(true);
-  });
-
   window.addEventListener("resize", () => {
+    if (activePage !== "now") return;
     drawFlowLines();
     if (state.lastSnap && state.ctxView === "map") renderContext(state.lastSnap);
   });
 
   function initHelpPopovers() {
     const pop = $("#mil-help-pop");
-    if (!pop) return;
+    if (!pop) return () => {};
     let activeBtn = null;
     let pinnedBtn = null;
     const closePop = () => {
@@ -2305,14 +2464,127 @@
       else closePop();
     }, { passive: true });
     window.addEventListener("resize", closePop);
+    return closePop;
   }
 
-  initHelpPopovers();
+{{MGMT_BOOT_JS}}
+
+  const closeHelpPop = initHelpPopovers();
+
+  function syncShellToPage(targetPage, { remountMgmt = true, remountNow = true } = {}) {
+    const prevPage = activePage;
+    const isNow = targetPage === "now";
+    const nowView = $("#ms-now-view");
+    const mgmtWrap = $("#ms-mgmt-view-wrap");
+    const mgmtView = $("#ms-mgmt-view");
+
+    if (prevPage === "now" && !isNow && state.threadId) {
+      const msgEl = $("#message");
+      if (msgEl) localDrafts[state.threadId] = msgEl.value;
+    }
+
+    activePage = targetPage;
+    document.body.dataset.page = targetPage;
+    document.title = `Maisya · ${PAGES[targetPage] || "现场"}`;
+    const titleEl = $("#ms-page-title");
+    if (titleEl) titleEl.textContent = PAGES[targetPage] || "现场";
+    $$("[data-nav]").forEach((btn) => {
+      if (btn.dataset.nav === targetPage) btn.setAttribute("aria-current", "page");
+      else btn.removeAttribute("aria-current");
+    });
+    if (nowView) nowView.hidden = !isNow;
+    if (mgmtWrap) mgmtWrap.hidden = isNow;
+    const topLedPill = $("#top-led-pill");
+    const openLaunch = $("#open-launch");
+    const mgmtLedPill = $("#mgmt-led-pill");
+    if (topLedPill) topLedPill.hidden = !isNow;
+    if (openLaunch) openLaunch.hidden = !isNow;
+    if (mgmtLedPill) mgmtLedPill.hidden = isNow;
+    const mled = $("#mgmt-led");
+    if (mled) mled.className = "mil-led";
+
+    closeHelpPop?.();
+    hideCtxTip();
+    if (!isNow && !$("#ctx-scrim")?.hidden) closeCtxModal();
+
+    if (isNow) {
+      if (mgmtView) mgmtView.innerHTML = "";
+      if (remountNow && nowView) nowView.innerHTML = MGMT_FRAGMENTS.now || "";
+    } else {
+      if (nowView) nowView.innerHTML = "";
+      if (remountMgmt && mgmtView) mgmtView.innerHTML = MGMT_FRAGMENTS[targetPage] || "";
+    }
+
+    const nowFb = $('[data-feedback-slot="now"]');
+    const mgmtFb = $('[data-feedback-slot="mgmt"]');
+    if (isNow) {
+      if (mgmtFb) mgmtFb.id = "mgmt-feedback";
+      if (nowFb) nowFb.id = "feedback";
+    } else {
+      if (nowFb) nowFb.id = "now-feedback";
+      if (mgmtFb) {
+        mgmtFb.id = "feedback";
+        mgmtFb.textContent = "";
+        mgmtFb.className = "mil-feedback";
+      }
+    }
+  }
+
+  function switchWorkspaceTab(targetPage, opts = {}) {
+    if (!Object.prototype.hasOwnProperty.call(PAGES, targetPage)) return;
+    const forceBoot = Boolean(opts.forceBoot);
+    if (targetPage === activePage && !forceBoot) return;
+    if (!opts.system) userNavigated = true;
+    if (mgmtAbort) {
+      mgmtAbort.abort();
+      mgmtAbort = null;
+    }
+    syncShellToPage(targetPage, { remountMgmt: opts.remountMgmt !== false, remountNow: opts.remountNow !== false });
+    if (targetPage === "now") {
+      bootNowTab();
+      applyTheme();
+      state.cursor = 0;
+      state.events = [];
+      if (state.lastSnap) {
+        renderEventsAppend([]);
+        renderFlow(state.lastSnap);
+        renderStrip(state.lastSnap);
+        renderContext(state.lastSnap);
+        renderThreads(state.lastSnap);
+        renderInspector(state.lastSnap);
+        renderLaunchAssist(state.lastSnap);
+      }
+      if (bootStarted) {
+        refresh(true);
+      }
+      requestAnimationFrame(() => { if (activePage === "now") drawFlowLines(); });
+    } else {
+      mgmtAbort = new AbortController();
+      bootManagementTab(targetPage, mgmtAbort.signal);
+      applyTheme();
+    }
+  }
+
+  const initHostTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
+  if (initHostTab && Object.prototype.hasOwnProperty.call(PAGES, initHostTab) && initHostTab !== activePage) {
+    switchWorkspaceTab(initHostTab, { system: true, forceBoot: true });
+  } else if (activePage !== "now") {
+    switchWorkspaceTab(activePage, { system: true, forceBoot: true, remountMgmt: false });
+  } else {
+    switchWorkspaceTab("now", { system: true, forceBoot: true, remountNow: false });
+  }
 
   Promise.resolve(window.maibot?.ready).then(() => {
-    applyTheme();
-    refresh(true);
+    bootStarted = true;
+    const readyHostTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
+    if (!userNavigated && readyHostTab && Object.prototype.hasOwnProperty.call(PAGES, readyHostTab) && readyHostTab !== activePage) {
+      switchWorkspaceTab(readyHostTab, { system: true, forceBoot: true });
+    } else if (activePage === "now") {
+      applyTheme();
+      refresh(true);
+    }
     timer = setInterval(() => {
+      if (activePage !== "now") return;
       if (!document.hidden && Date.now() - lastSnapshotAt >= 1800) refresh(false);
     }, 2400);
   });

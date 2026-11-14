@@ -9,6 +9,7 @@ import socket
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -268,26 +269,31 @@ class HostContract(unittest.TestCase):
         self.assertEqual(validator.warnings, [])
 
     def test_webui(self):
-        extension = load_webui_extension(str(PLUGIN_DIR))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UserWarning)
+            extension = load_webui_extension(str(PLUGIN_DIR))
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        self.assertEqual(user_warnings, [])
         self.assertEqual(extension.schema_version, 2)
-        self.assertEqual(len(extension.pages), 5)
-        self.assertEqual(
-            {page.id for page in extension.pages},
-            {"now", "outputs", "abilities", "memory", "settings"},
-        )
-        for workspace in extension.pages[1:]:
-            self.assertEqual(workspace.queries["read"].api, "maisya_manage_read")
-            self.assertEqual(workspace.actions["write"].api, "maisya_manage_write")
-            workspace.actions["write"].validate_args(
-                {"action": "asset", "payload": "{}"}
-            )
-        self.assertEqual(extension.pages[0].mode, "custom")
-        self.assertIn(extension.pages[0].placement, {"workspace", "sidebar"})
-        self.assertIn("Maisya", extension.pages[0].document)
+        self.assertEqual(len(extension.pages), 1)
         page = extension.pages[0]
+        self.assertEqual(page.id, "now")
+        self.assertEqual(page.title, "Maisya")
+        self.assertEqual(page.icon, "puzzle")
+        self.assertEqual(page.mode, "custom")
+        self.assertEqual(page.placement, "sidebar")
+        self.assertIn("Maisya", page.document)
+        self.assertEqual(set(page.queries), {"event", "snapshot", "read"})
+        self.assertEqual(set(page.actions), {"note", "stop", "write", "incoming_event"})
+        self.assertEqual(page.queries["event"].api, "maisya_event")
         self.assertEqual(page.queries["snapshot"].api, "maisya_now")
+        self.assertEqual(page.queries["read"].api, "maisya_manage_read")
         self.assertEqual(page.actions["note"].api, "maisya_note")
+        self.assertEqual(page.actions["stop"].api, "maisya_stop")
+        self.assertEqual(page.actions["write"].api, "maisya_manage_write")
+        self.assertEqual(page.actions["incoming_event"].api, "maisya_incoming_event")
         page.queries["snapshot"].validate_args({"thread_id": "", "cursor": 0})
+        page.actions["write"].validate_args({"action": "asset", "payload": "{}"})
         page.actions["note"].validate_args(
             {"thread_id": "thread", "message": "补充方向"}
         )

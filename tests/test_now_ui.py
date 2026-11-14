@@ -196,3 +196,161 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
     finally:
         gate.set()
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_now_unified_single_page_in_place_tabs_and_state_boot(tmp_path):
+    plugin = await loaded(tmp_path)
+
+    async def capability(name, **arguments):
+        return {"success": True, "response": "已完成产物总结", "tool_calls": []}
+
+    plugin.ctx.call_capability = capability
+    first = await plugin.agent_tool(
+        action="start",
+        message="探索单页五标签页联调",
+        chat_id="chat",
+        platform="qq",
+    )
+    requests, peak = 0, 0
+
+    async def query(name, arguments):
+        nonlocal requests, peak
+        requests += 1
+        peak = max(peak, requests)
+        try:
+            if name == "read":
+                return await plugin.manage_read(**arguments)
+            if name == "event":
+                return await plugin.console_event(**arguments)
+            return await plugin.console_query(**arguments)
+        finally:
+            requests -= 1
+
+    async def action(name, arguments):
+        nonlocal requests, peak
+        requests += 1
+        peak = max(peak, requests)
+        try:
+            if name == "write":
+                return await plugin.manage_write(**arguments)
+            if name == "note":
+                return await plugin.console_send(**arguments)
+            return await plugin.console_stop(**arguments)
+        finally:
+            requests -= 1
+
+    try:
+        raw_doc = Path("webui/now.html").read_text(encoding="utf-8")
+        csp_doc = raw_doc.replace(
+            "<head>",
+            "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:\">",
+        )
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                page = await browser.new_page(viewport={"width": 1280, "height": 900})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                await page.expose_function("queryBackend", query)
+                await page.expose_function("actionBackend", action)
+                await page.evaluate(
+                    """window.maibot={
+                        ready:Promise.resolve(),
+                        context:{theme:'light'},
+                        page:{state:{}},
+                        query:(name,args)=>window.queryBackend(name,args),
+                        action:(name,args)=>window.actionBackend(name,args),
+                        navigate:(target)=>{throw new Error('should not navigate out of single page: '+target);}
+                    }"""
+                )
+                await page.set_content(csp_doc)
+                await expect(page.locator("h1")).to_have_text("现场")
+                await expect(page.locator("h2")).to_have_text("探索单页五标签页联调")
+                assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
+                await page.locator("#ui-style-toggle").click()
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+
+                # 现场 -> 产物
+                await page.locator('[data-nav="outputs"]').click()
+                await expect(page.locator("h1")).to_have_text("产物")
+                await expect(page.locator("#ms-now-view")).to_be_hidden()
+                assert await page.locator("#ms-now-view").inner_html() == ""
+                await expect(page.locator("#out-list")).to_be_visible()
+                await expect(page.locator("#out-goto-now")).to_be_visible()
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+
+                # 产物 -> 能力
+                await page.locator('[data-nav="abilities"]').click()
+                await expect(page.locator("h1")).to_have_text("能力")
+                await expect(page.locator("#skills-roster")).to_be_visible()
+                assert await page.locator("#out-list").count() == 0
+                await page.locator('[data-ab-nav="roles"]').click()
+                await expect(page.locator("#profiles")).to_be_visible()
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+
+                # 能力 -> 手账
+                await page.locator('[data-nav="memory"]').click()
+                await expect(page.locator("h1")).to_have_text("手账")
+                await expect(page.locator("#intent-list")).to_be_visible()
+                await expect(page.locator("#learning")).to_be_visible()
+                await expect(page.locator("#ms-mgmt-view")).to_contain_text("A_Memorix")
+                assert await page.locator("#content").count() == 1
+                assert await page.locator("#feedback").count() == 1
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+
+                # 手账 -> 设置
+                await page.locator('[data-nav="settings"]').click()
+                await expect(page.locator("h1")).to_have_text("设置")
+                await expect(page.locator("#health")).to_contain_text("联网来源：")
+                await page.locator('[data-settings-mode="advanced"]').click()
+                await expect(page.locator("#vault-handle")).to_be_visible()
+                await expect(page.locator("#service-config")).to_be_visible()
+                await expect(page.locator("#webhook-config")).to_be_visible()
+                assert await page.locator("#content").count() == 0
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+
+                # 设置 -> 现场（点击顶栏导航）
+                await page.locator('[data-nav="now"]').click()
+                await expect(page.locator("h1")).to_have_text("现场")
+                await expect(page.locator("#ms-now-view")).to_be_visible()
+                await expect(page.locator("h2")).to_have_text("探索单页五标签页联调")
+                assert await page.locator("#ms-mgmt-view").inner_html() == ""
+                assert await page.locator("#feedback").count() == 1
+                assert await page.locator("html").get_attribute("data-ui-style") == "maiwork"
+
+                # 现场 -> 产物 -> 点击 #out-goto-now 原地回现场
+                await page.locator('[data-nav="outputs"]').click()
+                await expect(page.locator("h1")).to_have_text("产物")
+                await page.locator("#out-goto-now").click()
+                await expect(page.locator("h1")).to_have_text("现场")
+                await expect(page.locator("#ms-now-view")).to_be_visible()
+                assert await page.locator("#ms-mgmt-view").inner_html() == ""
+
+                # 验证 window.maibot.page.state.tab 启动直达对应标签
+                state_page = await browser.new_page(viewport={"width": 1280, "height": 900})
+                state_page.on("pageerror", lambda error: errors.append(str(error)))
+                await state_page.expose_function("queryBackend", query)
+                await state_page.expose_function("actionBackend", action)
+                await state_page.evaluate(
+                    """window.maibot={
+                        ready:Promise.resolve(),
+                        context:{theme:'light'},
+                        page:{state:{tab:'memory'}},
+                        query:(name,args)=>window.queryBackend(name,args),
+                        action:(name,args)=>window.actionBackend(name,args),
+                        navigate:(target)=>{throw new Error('should not navigate out of single page: '+target);}
+                    }"""
+                )
+                await state_page.set_content(csp_doc)
+                await expect(state_page.locator("h1")).to_have_text("手账")
+                await expect(state_page.locator("#intent-list")).to_be_visible()
+                await expect(state_page.locator("#ms-now-view")).to_be_hidden()
+                assert await state_page.locator("#ms-now-view").inner_html() == ""
+
+                assert not errors
+                assert peak <= 2
+            finally:
+                await browser.close()
+    finally:
+        await plugin.on_unload()
