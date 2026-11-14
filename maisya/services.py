@@ -585,7 +585,7 @@ class Services:
                 {
                     "protocolVersion": "2025-11-25",
                     "capabilities": {},
-                    "clientInfo": {"name": "maisya", "version": "0.0.1"},
+                    "clientInfo": {"name": "maisya", "version": "0.1.0"},
                 },
             )
             if response.get("protocolVersion") not in {

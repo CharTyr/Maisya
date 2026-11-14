@@ -930,8 +930,8 @@ async def test_outputs_preview_multichunk_card_and_styled_svg_html_under_concurr
                 await expect(jump_btn).to_contain_text("预览 digest-card.png")
 
                 await jump_btn.click()
-                assert first_outputs_rejected is True
                 await expect(frame.locator("#out-st-total")).to_have_text("3")
+                assert first_outputs_rejected is True
 
                 img_stage = frame.locator(".out-img-stage")
                 await expect(img_stage).to_be_visible()
