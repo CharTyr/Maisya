@@ -149,6 +149,11 @@ def _merge_settings_dict(base: dict, saved: dict, file_cfg: dict) -> dict:
     return merged
 
 
+def _is_mai_replier_model(value: str) -> bool:
+    norm = str(value or "").strip().lower().replace("_", "-")
+    return "mai-replier" in norm or norm in {"v2p1-contract", "v2p1-raw"}
+
+
 def _sanitize_host_model_catalog(config_data: dict) -> dict:
     """从宿主 model 配置广播或配置文件仅提取公开模型名与任务分配（严禁保存密钥/URL）。"""
     tasks: dict[str, list[str]] = {}
@@ -240,6 +245,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self.incoming = None
         self._pending_sources = {}
         self._turn_sources = {}
+        self._turn_ops_receipts: dict[str, dict] = {}
         self._bootstrap_messages = {}
         self._bootstrap_platforms = {}
         self._stream_cache = {"expires": 0.0, "streams": {}}
@@ -412,6 +418,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self.incoming = None
         self._pending_sources.clear()
         self._turn_sources.clear()
+        self._turn_ops_receipts.clear()
         self._bootstrap_messages.clear()
         self._bootstrap_platforms.clear()
         self.messages = None
@@ -617,6 +624,150 @@ class MaisyaPlugin(MaiBotPlugin):
         ):
             return False
 
+    _OPS_RECEIPT_TTL = 300.0
+
+    def _prune_ops_receipts(self, now: float | None = None) -> None:
+        if not self._turn_ops_receipts:
+            return
+        cutoff = (time.monotonic() if now is None else now) - self._OPS_RECEIPT_TTL
+        for sid in [
+            key
+            for key, entry in self._turn_ops_receipts.items()
+            if float(entry.get("at", 0.0)) < cutoff
+        ]:
+            self._turn_ops_receipts.pop(sid, None)
+
+    def _record_ops_receipt(self, chat_id: str, kind: str) -> None:
+        """记录本轮刚成功执行的管理员配置/排班/调度回执。"""
+        sid = str(chat_id or "").strip()
+        if not sid:
+            return
+        now = time.monotonic()
+        self._prune_ops_receipts(now)
+        existing = self._turn_ops_receipts.get(sid)
+        if existing and not existing.get("consumed"):
+            kinds = existing.setdefault("kinds", [])
+            if kind not in kinds:
+                kinds.append(kind)
+            existing["at"] = now
+            return
+        self._turn_ops_receipts[sid] = {
+            "at": now,
+            "kinds": [kind],
+            "used_calls": set(),
+            "consumed": False,
+            "token": uuid.uuid4().hex,
+        }
+
+    def _match_ops_receipt(
+        self,
+        chat_id: str,
+        *,
+        attempt: int = 1,
+        call_key: str = "",
+        token: str = "",
+        consume: bool = False,
+    ) -> dict | None:
+        sid = str(chat_id or "").strip()
+        if not sid:
+            return None
+        self._prune_ops_receipts()
+        entry = self._turn_ops_receipts.get(sid)
+        if not entry:
+            return None
+        if type(attempt) is not int or attempt <= 1:
+            if entry.get("consumed"):
+                return None
+            if consume:
+                entry["consumed"] = True
+                if call_key:
+                    entry.setdefault("used_calls", set()).add(call_key)
+            return entry
+        matched = bool(
+            (token and token == entry.get("token"))
+            or (call_key and call_key in entry.get("used_calls", ()))
+        )
+        if not matched:
+            return None
+        if consume and call_key:
+            entry.setdefault("used_calls", set()).add(call_key)
+        return entry
+
+    def _select_ops_replyer_model(self, requested_model: str = "") -> str:
+        """存在交付事实或 ops 回执时，将 replyer 从闲聊型 mai_replier 引向常规任务模型。"""
+        catalog = (
+            self._host_model_catalog
+            if isinstance(self._host_model_catalog, dict)
+            else {}
+        )
+        if not catalog.get("models") and not catalog.get("tasks"):
+            self.refresh_host_model_catalog()
+            catalog = (
+                self._host_model_catalog
+                if isinstance(self._host_model_catalog, dict)
+                else {}
+            )
+        raw_models = [m for m in (catalog.get("models") or []) if isinstance(m, dict)]
+        raw_tasks = (
+            catalog.get("tasks") if isinstance(catalog.get("tasks"), dict) else {}
+        )
+        models_by_name = {
+            str(m.get("name") or "").strip(): m
+            for m in raw_models
+            if str(m.get("name") or "").strip()
+        }
+
+        def entry_is_mai(name: str, entry: dict | None) -> bool:
+            if _is_mai_replier_model(name):
+                return True
+            if isinstance(entry, dict):
+                return _is_mai_replier_model(
+                    entry.get("name", "")
+                ) or _is_mai_replier_model(entry.get("identifier", ""))
+            return False
+
+        req = str(requested_model or "").strip()
+        if req and not entry_is_mai(req, models_by_name.get(req)):
+            return ""
+
+        def task_candidates(task_name: str) -> list[tuple[str, dict | None]]:
+            ordered: list[tuple[str, dict | None]] = []
+            seen: set[str] = set()
+            task_list = raw_tasks.get(task_name)
+            if isinstance(task_list, list):
+                for item in task_list:
+                    name = str(item or "").strip()
+                    if name and name not in seen:
+                        seen.add(name)
+                        ordered.append((name, models_by_name.get(name)))
+            for entry in raw_models:
+                name = str(entry.get("name") or "").strip()
+                if not name or name in seen:
+                    continue
+                tags = entry.get("assigned_tasks")
+                if not isinstance(tags, list):
+                    tags = entry.get("tasks")
+                if isinstance(tags, list) and task_name in tags:
+                    seen.add(name)
+                    ordered.append((name, entry))
+            return ordered
+
+        replyer_candidates = task_candidates("replyer")
+        req_is_mai = bool(req) and entry_is_mai(req, models_by_name.get(req))
+        if not req_is_mai and not any(
+            entry_is_mai(name, entry) for name, entry in replyer_candidates
+        ):
+            return ""
+        for candidates in (
+            replyer_candidates,
+            task_candidates("planner"),
+            task_candidates("utils"),
+        ):
+            for name, entry in candidates:
+                if not entry_is_mai(name, entry):
+                    return name
+        return ""
+
     async def on_config_update(self, scope, config_data, version):
         if scope == "bot":
             await self._refresh_admins()
@@ -643,6 +794,7 @@ class MaisyaPlugin(MaiBotPlugin):
             if not self.settings.plugin.enabled:
                 self._bootstrap_messages.clear()
                 self._bootstrap_platforms.clear()
+                self._turn_ops_receipts.clear()
             if self.engine:
                 self.engine.idle_seconds = settings.thread_idle_seconds
                 self.engine.max_steps = settings.agent_max_steps
@@ -1317,6 +1469,19 @@ class MaisyaPlugin(MaiBotPlugin):
             cross_chat = effective_chat_id != chat_id
             if cross_chat and not is_admin_caller:
                 raise PermissionError("跨会话调度需要真实管理员消息授权")
+            admin_direct_share = bool(
+                action == "share"
+                and not cross_chat
+                and not is_admin_caller
+                and not source_msg_id
+                and not self.enabled_for(effective_chat_id, effective_platform)
+                and thread_id
+                and self.bridge
+                and await asyncio.to_thread(
+                    self.bridge.has_admin_direct_for, chat_id, thread_id
+                )
+            )
+            effective_admin = is_admin_caller or admin_direct_share
             if deliver_to == "none":
                 delivery_mode = "none"
             elif not cross_chat or deliver_to == "current":
@@ -1336,7 +1501,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     )
             elif not (
                 self.enabled_for(effective_chat_id, effective_platform)
-                or is_admin_caller
+                or effective_admin
             ):
                 raise PermissionError("当前会话没有启用 Maisya")
             if owner not in {"chat", "self"}:
@@ -1524,7 +1689,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     thread_id,
                     effective_chat_id,
                     allow_self=True,
-                    allow_any_chat=is_admin_caller,
+                    allow_any_chat=effective_admin,
                 )
                 row_chat = row["chat_id"]
                 if row["owner"] == "self":
@@ -1541,12 +1706,12 @@ class MaisyaPlugin(MaiBotPlugin):
                     )
                 check_chat = (
                     row_chat
-                    if is_admin_caller and row["owner"] == "chat"
+                    if effective_admin and row["owner"] == "chat"
                     else effective_chat_id
                 )
                 check_plat = (
                     (row["platform"] or effective_platform)
-                    if is_admin_caller and row["owner"] == "chat"
+                    if effective_admin and row["owner"] == "chat"
                     else effective_platform
                 )
                 if not all(
@@ -1555,7 +1720,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         identity,
                         check_chat,
                         check_plat,
-                        admin_verified=is_admin_caller,
+                        admin_verified=effective_admin,
                     )
                     for candidate in (
                         Profile(**row["profile_snapshot"]),
@@ -1582,9 +1747,9 @@ class MaisyaPlugin(MaiBotPlugin):
                             else None
                         ),
                         target_platform=effective_platform,
-                        is_admin=is_admin_caller,
+                        is_admin=effective_admin,
                         allow_admin_destination=bool(
-                            is_admin_caller and effective_chat_id == chat_id
+                            effective_admin and effective_chat_id == chat_id
                         ),
                     )
                 elif action == "stop":
@@ -1674,6 +1839,16 @@ class MaisyaPlugin(MaiBotPlugin):
                 raise ValueError("未知的线程动作")
             if route and result["state"] in {"idle", "waiting"}:
                 await self.bridge.inline(result["thread_id"], chat_id)
+            if action in {"start", "send", "stop"} and (
+                is_admin_caller
+                or await asyncio.to_thread(
+                    lambda: any(
+                        self.authorize_admin_source(src, chat_id, platform)
+                        for src in self._turn_sources.get(chat_id, [])
+                    )
+                )
+            ):
+                self._record_ops_receipt(chat_id, f"agent:{action}")
             result = self.vault.redact(result)
             return {
                 "success": True,
@@ -1933,7 +2108,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_shape",
-        description="管理员统一配置、读取或回滚 Maisya 全部能力。setup（action='setup', kind='setup'）支持一段话一次完成白名单、sleep_window、角色启用/模型、会话偏好 memory/preferences、rss_urls/topics、daily_at 定时与 run_now 试跑；overview 读取现状与待办；settings/profile/skill/memory/digest_sources/notes/journal/heartbeat/services/webhooks/recipe 均支持局部 read/patch/write/history/rollback/create（流标识统一 平台:类型:id 如 qq:group:12345678，禁从聊天关总开关）。",
+        description="管理员统一配置、读取或回滚 Maisya 全部能力。setup（action='setup', kind='setup'）支持一段话一次完成白名单、sleep_window、角色启用/模型、会话偏好 memory/preferences、rss_urls/topics、daily_at 定时与 run_now 试跑（支持 deliver_to='current' 预览回传）；overview 读取现状与待办；settings/profile/skill/memory/digest_sources/notes/journal/heartbeat/services/webhooks/recipe 均支持局部 read/patch/write/history/rollback/create（流标识统一 平台:类型:id 如 qq:group:12345678，禁从聊天关总开关）。",
         parameters={
             "type": "object",
             "properties": {
@@ -2038,6 +2213,14 @@ class MaisyaPlugin(MaiBotPlugin):
                 source_msg_id=source_msg_id,
                 author="admin:" + source_msg_id,
             )
+            norm_action = str(action or "").strip().lower()
+            norm_kind = str(kind or "").strip().lower()
+            if (
+                norm_action in {"setup", "write", "patch", "create", "rollback", "delete"}
+                or norm_kind == "setup"
+                or (norm_kind == "digest_sources" and norm_action != "read")
+            ):
+                self._record_ops_receipt(chat_id, f"shape:{norm_kind or norm_action}")
             redacted = self.vault.redact(result)
             if isinstance(redacted, dict) and "content" not in redacted:
                 redacted = {
@@ -2235,6 +2418,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 result = await asyncio.to_thread(
                     self.intents.cancel, intent_id, cancel_target
                 )
+                self._record_ops_receipt(chat_id, "later:cancel")
                 return {"success": True, **result}
             if action != "schedule":
                 raise ValueError("未知的意图动作")
@@ -2383,6 +2567,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "intents": created_rows,
                     "cancelled_ids": cancelled_ids,
                 }
+                self._record_ops_receipt(chat_id, "later:schedule")
                 return {
                     "success": True,
                     **created_rows[0],
@@ -2430,6 +2615,7 @@ class MaisyaPlugin(MaiBotPlugin):
             result = self.vault.redact(row)
             if cancelled_ids:
                 result["cancelled_ids"] = cancelled_ids
+            self._record_ops_receipt(chat_id, "later:schedule")
             return {
                 "success": True,
                 **result,
@@ -2481,8 +2667,13 @@ class MaisyaPlugin(MaiBotPlugin):
                     ],
                 },
             }
-        if self._pending_sources.get(chat_id):
+        has_pending_sources = bool(self._pending_sources.get(chat_id))
+        self._prune_ops_receipts()
+        if has_pending_sources:
             self._turn_sources[chat_id] = self._pending_sources.pop(chat_id)
+            self._turn_ops_receipts.pop(chat_id, None)
+        elif self._turn_ops_receipts.get(chat_id, {}).get("consumed"):
+            self._turn_ops_receipts.pop(chat_id, None)
         sources = self._turn_sources.get(chat_id, [])
         is_admin = await asyncio.to_thread(
             lambda: any(
@@ -2491,6 +2682,49 @@ class MaisyaPlugin(MaiBotPlugin):
         )
         enabled = self.enabled_for(chat_id, platform)
         if not enabled and not is_admin:
+            has_admin_direct = bool(
+                self.bridge
+                and await asyncio.to_thread(self.bridge.has_admin_direct_for, chat_id)
+            )
+            if has_admin_direct:
+                returned = await self.bridge.offer(chat_id)
+                if returned:
+                    kept_tools = [
+                        item
+                        for item in tools
+                        if names(item) not in {"maisya_shape", "maisya_later"}
+                    ]
+                    if any(names(item) == "maisya_agent" for item in kept_tools):
+                        kept_tools = [
+                            item
+                            for item in kept_tools
+                            if names(item)
+                            not in {"subagent", "subagent_status", "subagent_stop"}
+                        ]
+                    return_item = {
+                        "item_type": "UserMessageItem",
+                        "meta": {
+                            "item_id": str(uuid.uuid4()),
+                            "logical_turn_id": None,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        },
+                        "parts": [
+                            {
+                                "type": "text",
+                                "text": "当前管理员私聊存在待交付的后台试跑预览结果；含图片/文件附件或精确链接的结果请直接调用 maisya_agent(action='share', thread_id=...) 发送后结束本轮，纯文字结论可直接调用 reply 回复（reply_style='长回复'）。\n<maisya_returns>"
+                                + html.escape(json.dumps(returned, ensure_ascii=False))
+                                + "</maisya_returns>",
+                            }
+                        ],
+                    }
+                    return {
+                        "action": "continue",
+                        "modified_kwargs": {
+                            "tool_definitions": kept_tools,
+                            "items": [*kwargs.get("items", []), return_item],
+                            "item_schema_version": kwargs.get("item_schema_version", 1),
+                        },
+                    }
             return {
                 "action": "continue",
                 "modified_kwargs": {
@@ -2603,7 +2837,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             admin_lines.extend(
                 [
-                    "遇到「给某群配好某功能/定时/偏好并试跑」的一段话需求，优先用一通 maisya_shape(action=\"setup\", kind=\"setup\", target_chat=..., source_msg_id=..., patch={...}) 一次到位（支持 enable_chat、sleep_window、enable_profiles/model_name、preferences、rss_urls/topics、daily_at、run_now、deliver_to），不必拆 6 步。",
+                    "遇到「给某群配好某功能/定时/偏好并试跑」的一段话需求，优先单次调用 maisya_shape(action=\"setup\", kind=\"setup\", target_chat=..., source_msg_id=..., patch={..., \"run_now\": true, \"deliver_to\": \"current\"}) 一次到位（支持 enable_chat、sleep_window、enable_profiles/model_name、preferences、rss_urls/topics、daily_at、run_now、deliver_to），不必拆成多步；向管理员汇报配置或任务进展时直接调用 reply(chat_anlyze=..., reply_style=\"长回复\")。",
                     "所有流标识统一用 平台:类型:id（如 qq:group:12345678，target_chat 也兼容群号/群名/current）；如需盘点先 read(kind='overview', target_chat=...)，局部微调仍支持 settings/profile/skill/memory/digest_sources。",
                     "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(daily_at=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
                 ]
@@ -2816,6 +3050,8 @@ class MaisyaPlugin(MaiBotPlugin):
                         )
             if call.get("func_name") in {"stop", "wait"}:
                 self._turn_sources.pop(chat_id, None)
+                if not has_reply:
+                    self._turn_ops_receipts.pop(chat_id, None)
                 if self.bridge and not has_reply:
                     await self.bridge.end_turn(chat_id)
         if calls and self.bridge and self.settings.plugin.enabled:
@@ -2846,19 +3082,42 @@ class MaisyaPlugin(MaiBotPlugin):
             return {"action": "continue"}
         platform = await asyncio.to_thread(self._platform_for, chat_id)
         enabled = self.enabled_for(chat_id, platform)
-        if not enabled and not self.bridge.has_pending_for(chat_id):
+        arguments = kwargs.get("reply_tool_args") or {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        attempt = kwargs.get("attempt", 1)
+        call_key = str(kwargs.get("call_id") or kwargs.get("reply_message_id") or "")
+        ops_token = str(arguments.get("_maisya_ops_token") or "")
+        ops_active = self._match_ops_receipt(
+            chat_id,
+            attempt=attempt,
+            call_key=call_key,
+            token=ops_token,
+            consume=False,
+        )
+        if (
+            not enabled
+            and not await asyncio.to_thread(self.bridge.has_pending_for, chat_id)
+            and not ops_active
+        ):
             return {"action": "continue"}
         if await self.bridge.suppress_reply(chat_id):
             return {
                 "action": "abort",
                 "reason": "本轮准确载荷已由 share 处理，请结束本轮，避免重复交付。",
             }
-        arguments = kwargs.get("reply_tool_args") or {}
-        if not isinstance(arguments, dict):
-            arguments = {}
-        facts, receipt = await self.bridge.reply_material(
-            chat_id, kwargs.get("attempt", 1), arguments
+        ops_entry = self._match_ops_receipt(
+            chat_id,
+            attempt=attempt,
+            call_key=call_key,
+            token=ops_token,
+            consume=True,
         )
+        facts, receipt = await self.bridge.reply_material(chat_id, attempt, arguments)
+        has_delivery_or_ops = bool(facts or ops_entry)
+        if ops_entry:
+            ops_tag = "<maisya_ops_receipt>本轮刚执行完管理员委托的 Maisya 配置或排班操作。请保持你自然的日常口吻，但务必把对话局面与关键事实中的已完成配置项、异常提醒（如有）与试跑进展清晰完整地传达给对方，不要遗漏关键结果或只回复无关闲聊。</maisya_ops_receipt>"
+            facts = f"{facts}\n{ops_tag}" if facts else ops_tag
         if enabled:
             layers = await asyncio.to_thread(self.memory.context, chat_id)
             context = {key: layers[key] for key in ("memory", "journal") if layers[key]}
@@ -2873,15 +3132,26 @@ class MaisyaPlugin(MaiBotPlugin):
         if not facts:
             return {"action": "continue"}
         extra_prompt = str(kwargs.get("extra_prompt") or "") + "\n" + facts
+        reply_tool_args = dict(arguments)
+        if receipt:
+            reply_tool_args["_maisya_receipt"] = receipt
+        if ops_entry:
+            reply_tool_args["_maisya_ops_token"] = ops_entry["token"]
+            if not str(reply_tool_args.get("reply_style") or "").strip():
+                reply_tool_args["reply_style"] = "长回复"
+        modified_kwargs = {
+            "extra_prompt": extra_prompt,
+            "reply_tool_args": reply_tool_args,
+        }
+        if has_delivery_or_ops:
+            override_model = await asyncio.to_thread(
+                self._select_ops_replyer_model, str(kwargs.get("model_name") or "")
+            )
+            if override_model:
+                modified_kwargs["model_name"] = override_model
         return {
             "action": "continue",
-            "modified_kwargs": {
-                "extra_prompt": extra_prompt,
-                "reply_tool_args": {
-                    **arguments,
-                    **({"_maisya_receipt": receipt} if receipt else {}),
-                },
-            },
+            "modified_kwargs": modified_kwargs,
         }
 
     @staticmethod
@@ -3506,6 +3776,8 @@ class MaisyaPlugin(MaiBotPlugin):
             or (message.get("session_id") if isinstance(message, dict) else "")
             or ""
         )
+        if session_id and self._turn_ops_receipts:
+            self._turn_ops_receipts.pop(session_id, None)
         platform = str(
             kwargs.get("platform")
             or (message.get("platform") if isinstance(message, dict) else "")
