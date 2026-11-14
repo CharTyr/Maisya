@@ -21,7 +21,7 @@ SOURCES = {
     "workflow",
 }
 CHAT_TARGET = re.compile(
-    r"^chat:(?:[^\s:]{1,256}|[a-z][a-z0-9_-]{0,31}:(?:group|private):[^\s:]{1,200})$"
+    r"^chat:(?:[^\s:][^\s]{0,255}|[a-z][a-z0-9_-]{0,31}:(?:group|private):[^\s:][^\s]{0,199})$"
 )
 DAILY_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 

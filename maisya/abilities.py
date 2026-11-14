@@ -123,10 +123,13 @@ class Profile:
             return False
         if self.allow_chats and chat_id not in self.allow_chats:
             return False
-        if self.allow_users and (
-            not user_id or platform + ":" + user_id not in self.allow_users
-        ):
-            return False
+        if self.allow_users:
+            plat = str(platform or "").strip().lower()
+            if not user_id or not plat or (
+                f"{plat}:{user_id}" not in self.allow_users
+                and f"{plat}:private:{user_id}" not in self.allow_users
+            ):
+                return False
         return self.access != "listed" or bool(self.allow_users or self.allow_chats)
 
 
@@ -143,8 +146,8 @@ class Profiles:
                 destination = target / name
                 if destination.exists() or destination.is_symlink():
                     continue
-                with destination.open("x") as output:
-                    output.write((presets / name).read_text())
+                with destination.open("x", encoding="utf-8") as output:
+                    output.write((presets / name).read_text(encoding="utf-8"))
 
     def get(self, profile_id: str) -> Profile:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id):
@@ -156,7 +159,7 @@ class Profiles:
             path = directory / name
             if path.is_symlink() or path.stat().st_size > 65536:
                 raise ValueError("角色文件无效或过大")
-        config = tomllib.loads((directory / "profile.toml").read_text())
+        config = tomllib.loads((directory / "profile.toml").read_text(encoding="utf-8"))
         if set(config) - {
             "title",
             "model",
@@ -215,7 +218,10 @@ class Profiles:
             ):
                 raise ValueError("档案可用范围列表无效")
         if any(
-            not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}:[^\s:]{1,200}", value)
+            not re.fullmatch(
+                r"[a-z][a-z0-9_-]{0,31}:(?:private:[^\s:]|(?!private:$)[^\s:])[^\s]{0,199}",
+                value,
+            )
             for value in config.get("allow_users", [])
         ):
             raise ValueError("指定用户使用 platform:user_id 格式")
@@ -324,7 +330,7 @@ class Profiles:
             task=task,
             tools=tuple(tools),
             access=config.get("access", "everyone"),
-            instructions=(directory / "PROFILE.md").read_text(),
+            instructions=(directory / "PROFILE.md").read_text(encoding="utf-8"),
             environment=environment,
             network=network,
             mcp=tuple(config.get("mcp", [])),
@@ -491,7 +497,7 @@ class Profiles:
                         if self.contains_secret(content):
                             raise ValueError("档案资产含已知凭据，禁止导入")
                         output.write(content)
-            config = tomllib.loads((stage / "profile.toml").read_text())
+            config = tomllib.loads((stage / "profile.toml").read_text(encoding="utf-8"))
             if (
                 config.get("mcp")
                 or config.get("apis")
@@ -502,11 +508,13 @@ class Profiles:
             ):
                 lines = [
                     line
-                    for line in (stage / "profile.toml").read_text().splitlines()
+                    for line in (stage / "profile.toml")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
                     if not re.match(r"\s*bound\s*=", line)
                 ]
                 (stage / "profile.toml").write_text(
-                    "bound = false\n" + "\n".join(lines) + "\n"
+                    "bound = false\n" + "\n".join(lines) + "\n", encoding="utf-8"
                 )
             stage.rename(target)
             try:

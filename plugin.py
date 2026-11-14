@@ -340,6 +340,7 @@ class MaisyaPlugin(MaiBotPlugin):
             self.ctx,
             self.enabled_for,
             files=self.runtime.files,
+            routes=self.messages.route_for,
         )
         await self.sharing.recover()
         self.management = Management(self)
@@ -592,7 +593,7 @@ class MaisyaPlugin(MaiBotPlugin):
             and not identity.is_plugin_relayed
             and (
                 identity.is_local_operator
-                or f"{identity.platform}:{identity.user_id}" in self.admins
+                or f"{str(identity.platform or '').strip().lower()}:{identity.user_id}" in self.admins
             )
         )
 

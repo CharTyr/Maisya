@@ -7,7 +7,7 @@ import json
 import re
 
 from .scout import call_capability, checked, safe_url
-from .trust import strip_mention_all
+from .trust import parse_stream_spec, strip_mention_all
 
 URL = re.compile(r"https?://[^\s<>\"'`]+")
 
@@ -36,11 +36,147 @@ def links_in(result):
 
 
 class Share:
-    def __init__(self, store, bridge, host, enabled, files=None):
+    _SHAPE_ERROR_MARKERS = (
+        "unexpected keyword argument",
+        "missing",
+        "required positional argument",
+        "extra_forbidden",
+        "field required",
+        "unexpected keyword",
+    )
+    _NETWORK_OR_TIMEOUT_MARKERS = (
+        "timeout",
+        "timed out",
+        "超时",
+        "network",
+        "connection",
+        "断连",
+    )
+
+    def __init__(self, store, bridge, host, enabled, files=None, *, routes=None):
         self.store, self.bridge, self.host, self.enabled = store, bridge, host, enabled
         self.files = files
+        self.routes = routes
         self.closing = False
         self._active = {}
+
+    def _extract_error(
+        self, payload, *, keys=("error", "message")
+    ) -> str:
+        if isinstance(payload, dict):
+            raw = ""
+            for key in keys:
+                val = payload.get(key)
+                if val not in (None, "") and str(val).strip():
+                    raw = str(val)
+                    break
+            if not raw:
+                return ""
+        elif payload in (None, ""):
+            return ""
+        else:
+            raw = str(payload)
+        redacted = str(self.bridge.redact(raw))
+        return " ".join(redacted.split())[:200]
+
+    async def _resolve_qq_group_id(self, chat_id: str) -> tuple[str, str]:
+        parsed = parse_stream_spec(chat_id)
+        if parsed is not None:
+            plat, kind, tid = parsed
+            return plat, tid if kind == "group" else ""
+        if callable(self.routes):
+            route = await asyncio.to_thread(self.routes, chat_id)
+            if isinstance(route, dict):
+                plat = str(route.get("platform") or "").strip().lower()
+                ctype = str(route.get("chat_type") or "").strip().lower()
+                gid = str(route.get("group_id") or "").strip()
+                if (not ctype or ctype == "group") and gid:
+                    return plat, gid
+                return plat, ""
+        return "", ""
+
+    @staticmethod
+    def _napcat_result_ok(res) -> bool:
+        if res is True:
+            return True
+        if not isinstance(res, dict):
+            return False
+        if res.get("success") is False or res.get("ok") is False:
+            return False
+        if res.get("error"):
+            return False
+        status_val = str(res.get("status") or "").strip().lower()
+        if status_val in {"failed", "error"}:
+            return False
+        if "retcode" in res and res.get("retcode") not in (0, None):
+            return False
+        return True
+
+    @classmethod
+    def _is_arg_shape_error(cls, err_text: str) -> bool:
+        lower = err_text.lower()
+        if any(tok in lower for tok in cls._NETWORK_OR_TIMEOUT_MARKERS):
+            return False
+        return any(tok in lower for tok in cls._SHAPE_ERROR_MARKERS)
+
+    async def _napcat_group_file_fallback(
+        self, chat_id: str, clean_seg: dict, file_name: str
+    ) -> tuple[bool, str]:
+        plat, group_id = await self._resolve_qq_group_id(chat_id)
+        data = clean_seg.get("data") if isinstance(clean_seg, dict) else None
+        b64 = data.get("base64") if isinstance(data, dict) else None
+        if plat != "qq" or not group_id.isdigit() or not isinstance(b64, str) or not b64:
+            return False, ""
+        file_uri = b64 if b64.startswith("base64://") else f"base64://{b64}"
+        flat_args = {
+            "group_id": str(group_id),
+            "file": file_uri,
+            "name": file_name,
+        }
+        retry_flat = False
+        err_msg = ""
+        try:
+            res = await call_capability(
+                self.host,
+                "api.call",
+                timeout_ms=60000,
+                api_name="adapter.napcat.file.upload_group_file",
+                version="1",
+                args={"params": dict(flat_args)},
+            )
+            if self._napcat_result_ok(res):
+                return True, ""
+            err_msg = self._extract_error(
+                res, keys=("error", "message", "msg", "wording", "detail")
+            )
+            if err_msg and self._is_arg_shape_error(err_msg):
+                retry_flat = True
+        except (TimeoutError, OSError) as exc:
+            return False, self._extract_error(exc)
+        except (RuntimeError, ValueError, TypeError) as exc:
+            err_msg = self._extract_error(exc)
+            if self._is_arg_shape_error(str(exc)):
+                retry_flat = True
+            else:
+                return False, err_msg
+        if not retry_flat:
+            return False, err_msg
+        try:
+            res2 = await call_capability(
+                self.host,
+                "api.call",
+                timeout_ms=60000,
+                api_name="adapter.napcat.file.upload_group_file",
+                version="1",
+                args=flat_args,
+            )
+            if self._napcat_result_ok(res2):
+                return True, ""
+            return False, self._extract_error(
+                res2, keys=("error", "message", "msg", "wording", "detail")
+            )
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
+            return False, self._extract_error(exc)
 
     async def recover(self):
         def recover():
@@ -249,6 +385,7 @@ class Share:
             text = strip_mention_all(text)
             segments = strip_mention_all(segments)
         status, message_id = "uncertain", ""
+        last_send_error = ""
         await asyncio.to_thread(
             self.bridge.finish_delivery,
             thread_id,
@@ -273,6 +410,12 @@ class Share:
                 not isinstance(sent, dict)
                 or sent.get("sent", sent.get("success", False))
             )
+            if not success or (isinstance(sent, dict) and sent.get("error")):
+                err = self._extract_error(sent)
+                if err:
+                    last_send_error = err
+            if success:
+                last_send_error = ""
             status = "sent" if success else "failed"
             message_id = (
                 str(sent.get("message_id") or "") if isinstance(sent, dict) else ""
@@ -304,10 +447,24 @@ class Share:
                         or file_sent.get("sent", file_sent.get("success", False))
                     )
                     if not file_ok:
+                        err = self._extract_error(file_sent)
+                        if err:
+                            last_send_error = err
+                        file_ok, fallback_err = await self._napcat_group_file_fallback(
+                            chat_id, clean_seg, file_name
+                        )
+                        if not file_ok and not last_send_error and fallback_err:
+                            last_send_error = fallback_err
+                    if file_ok:
+                        last_send_error = ""
+                    else:
                         status = "failed"
                         break
-        except (RuntimeError, OSError, ValueError, TypeError):
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
             status = "uncertain"
+            err = self._extract_error(exc)
+            if err:
+                last_send_error = err
         await asyncio.to_thread(
             self.bridge.finish_delivery,
             thread_id,
@@ -316,7 +473,7 @@ class Share:
             message_id,
             destination=chat_id,
         )
-        return {
+        result = {
             "route": "share",
             "status": status,
             "sent": status == "sent",
@@ -324,6 +481,9 @@ class Share:
             "end_turn": True,
             "instruction": "本次交付已处理，请结束本轮，不再重复调用 reply 或 share。",
         }
+        if status != "sent" and last_send_error:
+            result["error"] = last_send_error
+        return result
 
     async def _segments(self, chat_id, handles, refs):
         messages = {}
