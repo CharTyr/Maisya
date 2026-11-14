@@ -1082,3 +1082,561 @@ async def test_multi_session_id_disambiguation_and_empty_account_upgrade(tmp_pat
     finally:
         await plugin.on_unload()
 
+
+@pytest.mark.asyncio
+async def test_reused_workspace_thread_admin_direct_preview_wake_and_isolation(
+    tmp_path, monkeypatch
+):
+    """复用已有 digest 工作区线程时，admin_direct grant 须按 revision 更新，支持后台唤醒并允许在未启用私聊 share 预览图而不泄漏。"""
+    import asyncio
+    import maisya.digest as digest_mod
+
+    monkeypatch.setattr(digest_mod, "_validate_public_url", lambda url: None)
+
+    clock = [1794500000.0]
+    plugin = await _boot_plugin(
+        tmp_path, permissions=("qq:Alice",), enabled_chats=("qq:group:100246809",)
+    )
+    plugin.settings.sandbox.enabled = False
+    plugin.bridge.clock = lambda: clock[0]
+    plugin.pulse.clock = lambda: clock[0]
+
+    png_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    llm_phase = {"step": 0, "emit_card": False}
+    hybrid_sends = []
+    proactive_wakes = []
+
+    async def capability(name, **arguments):
+        if name == "chat.get_all_streams":
+            return {"success": True, "streams": []}
+        if name == "chat.open_session":
+            return {"success": False}
+        if name == "render.html2png":
+            return {
+                "success": True,
+                "result": {
+                    "image_base64": png_b64,
+                    "mime_type": "image/png",
+                    "width": 1,
+                    "height": 1,
+                },
+            }
+        if name == "send.hybrid":
+            hybrid_sends.append(arguments)
+            return {"success": True, "sent": True, "message_id": f"sent-{len(hybrid_sends)}"}
+        if name == "maisaka.proactive.trigger":
+            proactive_wakes.append(arguments)
+            return {"success": True}
+        if name == "maisaka.reply.generate":
+            return {"success": True, "text": "试跑简报卡片已备好。"}
+        if name in {"llm.generate", "llm.generate_with_tools"}:
+            llm_phase["step"] += 1
+            if llm_phase["emit_card"] and llm_phase["step"] == 1:
+                return {
+                    "success": True,
+                    "response": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_render",
+                            "type": "function",
+                            "function": {
+                                "name": "html_render",
+                                "arguments": json.dumps(
+                                    {"html": "<div>digest card</div>", "output_path": "out/card.png"}
+                                ),
+                            },
+                        }
+                    ],
+                }
+            if llm_phase["emit_card"] and llm_phase["step"] == 2:
+                return {
+                    "success": True,
+                    "response": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_attach",
+                            "type": "function",
+                            "function": {
+                                "name": "result_attach",
+                                "arguments": json.dumps({"paths": ["out/card.png"]}),
+                            },
+                        }
+                    ],
+                }
+            return {
+                "success": True,
+                "response": "资讯预览图已生成，请查收。" if llm_phase["emit_card"] else "群常规简报已完成。",
+                "tool_calls": [],
+            }
+        return {"success": False}
+
+    plugin.ctx.call_capability = capability
+    try:
+        # 1. 先在白名单群以常规非预览身份建好 digest 工作区绑定线程（无 admin_direct）
+        group_sid = "sid_group_digest"
+        plugin.messages.upsert_route(
+            group_sid,
+            platform="qq",
+            chat_type="group",
+            group_id="100246809",
+        )
+        setup_ev = _private_msg(
+            "m-enable-digest",
+            "开启 digest 角色",
+            session_id="priv_admin_md5",
+            user_id="Alice",
+        )
+        await plugin.after_receive(message=setup_ev)
+        en = await plugin.shape_tool(
+            action="patch",
+            kind="profile",
+            target="digest",
+            patch={"enabled": True, "network": "public", "max_steps": 20},
+            source_msg_id="m-enable-digest",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert en["success"] is True, en
+
+        grp_ev = _group_msg(
+            "m-grp-1",
+            "生成常规群简报",
+            session_id=group_sid,
+            group_id="100246809",
+            user_id="Bob",
+        )
+        await plugin.after_receive(message=grp_ev)
+        initial = await plugin.agent_tool(
+            action="start",
+            profile="digest",
+            workspace="digest",
+            message="先建好 digest 工作区常规线程",
+            source_msg_id="m-grp-1",
+            wait_seconds=10,
+            chat_id=group_sid,
+            platform="qq",
+        )
+        assert initial["success"] is True, initial
+        assert initial["state"] == "idle"
+        shared_tid = initial["thread_id"]
+        assert plugin.threads.get(shared_tid, group_sid)["grant"].get("admin_direct") is not True
+
+        # 2. 在未加白名单的管理员私聊执行 setup(run_now=True, deliver_to="current") 复用同一 digest 工作区线程
+        admin_ev = _private_msg(
+            "m-priv-preview",
+            "配置并试跑群 100246809 的 digest 卡片发我预览",
+            session_id="priv_admin_md5",
+            user_id="Alice",
+        )
+        await plugin.after_receive(message=admin_ev)
+        assert plugin.enabled_for("priv_admin_md5", "qq") is False
+
+        llm_phase["step"] = 0
+        llm_phase["emit_card"] = True
+        setup_res = await plugin.shape_tool(
+            action="setup",
+            kind="setup",
+            target_chat="qq:group:100246809",
+            patch={
+                "enable_profiles": ["digest"],
+                "run_now": True,
+                "deliver_to": "current",
+                "run_options": {"profile": "digest", "workspace": "digest", "wait_seconds": 0},
+            },
+            source_msg_id="m-priv-preview",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert setup_res["success"] is True, setup_res
+        assert setup_res["trial_thread_id"] == shared_tid
+
+        # 等待后台 revision=2 产图完成
+        for _ in range(100):
+            row_after = plugin.threads.get(shared_tid, "priv_admin_md5", allow_any_chat=True)
+            if row_after["state"] == "idle" and row_after["completed_revision"] >= 2:
+                break
+            await asyncio.sleep(0.01)
+        assert row_after["state"] == "idle"
+        assert row_after["completed_revision"] == 2
+        assert row_after["grant"].get("admin_direct") is True
+        assert row_after["result"].get("attachments")
+
+        # 推进时钟 900 秒（>10 分钟，仍在 admin_direct 30 分钟窗口内），Pulse._returns 应唤醒私聊
+        clock[0] += 900.0
+        await plugin.pulse._returns()
+        assert len(proactive_wakes) == 1
+        assert proactive_wakes[0]["stream_id"] == "priv_admin_md5"
+        assert proactive_wakes[0]["reason"] == "maisya:return"
+
+        # 模拟后台主动唤醒进入 before_planner（此时无实时管理员消息来源）
+        plugin._turn_sources.pop("priv_admin_md5", None)
+        plugin._pending_sources.pop("priv_admin_md5", None)
+        plan_res = await plugin.before_planner(
+            session_id="priv_admin_md5",
+            tool_definitions=[
+                {"name": "maisya_agent"},
+                {"name": "maisya_recall"},
+                {"name": "maisya_shape"},
+                {"name": "maisya_later"},
+                {"name": "subagent"},
+            ],
+            items=[],
+            item_schema_version=2,
+        )
+        kept_names = [t["name"] for t in plan_res["modified_kwargs"]["tool_definitions"]]
+        assert "maisya_agent" in kept_names
+        assert "maisya_shape" not in kept_names
+        assert "maisya_later" not in kept_names
+        assert "subagent" not in kept_names
+        assert plan_res["modified_kwargs"]["item_schema_version"] == 2
+        injected_text = "\n".join(
+            p["text"]
+            for it in plan_res["modified_kwargs"]["items"]
+            for p in it.get("parts", [])
+        )
+        assert "<maisya_returns>" in injected_text
+        assert shared_tid in injected_text
+
+        # Planner 在未启用私聊调用 maisya_agent(action="share") 发出预览图卡片
+        att_handle = row_after["result"]["attachments"][0]["handle"]
+        share_res = await plugin.agent_tool(
+            action="share",
+            thread_id=shared_tid,
+            message="这是刚跑出来的预览简报",
+            attachment_handles=[att_handle],
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert share_res["success"] is True, share_res
+        assert share_res["sent"] is True
+        assert len(hybrid_sends) == 1
+        assert hybrid_sends[0]["stream_id"] == "priv_admin_md5"
+        assert any(seg["type"] == "image" for seg in hybrid_sends[0]["segments"])
+
+        # 已消费后再次进入无源 before_planner 应重新剥离全部 maisya 工具；陌生未启用会话同样零授权
+        after_consume = await plugin.before_planner(
+            session_id="priv_admin_md5",
+            tool_definitions=[
+                {"name": "maisya_agent"},
+                {"name": "maisya_recall"},
+                {"name": "maisya_shape"},
+                {"name": "maisya_later"},
+            ],
+            items=[],
+        )
+        assert after_consume["modified_kwargs"]["tool_definitions"] == []
+        stranger = await plugin.agent_tool(
+            action="share",
+            thread_id=shared_tid,
+            chat_id="priv_stranger_md5",
+            platform="qq",
+        )
+        assert stranger["success"] is False
+
+        # 后续同一复用工作区线程开启非预览新修订版，不得继承陈旧的 admin_direct grant
+        clock[0] += 10.0
+        grp_ev2 = _group_msg(
+            "m-grp-2",
+            "继续在原工作区生成常规群简报",
+            session_id=group_sid,
+            group_id="100246809",
+            user_id="Bob",
+        )
+        await plugin.after_receive(message=grp_ev2)
+        llm_phase["step"] = 0
+        llm_phase["emit_card"] = False
+        followup = await plugin.agent_tool(
+            action="start",
+            profile="digest",
+            workspace="digest",
+            message="再次生成群内常规简报",
+            source_msg_id="m-grp-2",
+            wait_seconds=10,
+            chat_id=group_sid,
+            platform="qq",
+        )
+        assert followup["success"] is True, followup
+        assert followup["thread_id"] == shared_tid
+        row_rev3 = plugin.threads.get(shared_tid, group_sid)
+        assert row_rev3["revision"] == 3
+        assert row_rev3["grant"].get("admin_direct") is not True
+    finally:
+        await plugin.on_unload()
+
+
+def _write_host_model_config(tmp_path, toml_body: str):
+    cfg = tmp_path / "host/config/model_config.toml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(toml_body, encoding="utf-8")
+    return cfg
+
+
+@pytest.mark.asyncio
+async def test_replyer_ops_and_delivery_steering_away_from_mai_replier(
+    tmp_path, monkeypatch
+):
+    """Scheme A：配置/排班 ops 回执与 bridge 交付事实避开 mai_replier，普通闲聊不被改写模型。"""
+    import maisya.digest as digest_mod
+
+    monkeypatch.setattr(digest_mod, "_validate_public_url", lambda url: None)
+    _write_host_model_config(
+        tmp_path,
+        "\n".join(
+            [
+                "[[models]]",
+                'name = "mai_replier_today"',
+                'model_identifier = "mai_replier_today"',
+                'api_provider = "test"',
+                "",
+                "[[models]]",
+                'name = "gemini-3.8-flash"',
+                'model_identifier = "gemini-3.8-flash"',
+                'api_provider = "test"',
+                "",
+                "[model_task_config.replyer]",
+                'model_list = ["mai_replier_today", "gemini-3.8-flash"]',
+                "",
+                "[model_task_config.planner]",
+                'model_list = ["gemini-3.8-flash"]',
+            ]
+        ),
+    )
+
+    plugin = await _boot_plugin(
+        tmp_path, permissions=("qq:Alice",), enabled_chats=("qq:group:100246809",)
+    )
+    plugin.settings.sandbox.enabled = False
+
+    async def capability(name, **arguments):
+        if name == "chat.get_all_streams":
+            return {"success": True, "streams": []}
+        if name == "chat.open_session":
+            return {"success": False}
+        if name in {"llm.generate", "llm.generate_with_tools"}:
+            return {"success": True, "response": "群内调查结果如下。", "tool_calls": []}
+        return {"success": False}
+
+    plugin.ctx.call_capability = capability
+    try:
+        # 1. 普通白名单群闲聊（即使带 <maisya_memory>，无 ops 回执且无 bridge 交付）不改写 replyer 模型
+        group_sid = "sid_enabled_group"
+        plugin.messages.upsert_route(
+            group_sid, platform="qq", chat_type="group", group_id="100246809"
+        )
+        plugin.memory.write(
+            "memory",
+            "讨论软件工程与开源工具。",
+            chat_id=group_sid,
+            expected_version=0,
+        )
+        casual = await plugin.before_replyer(
+            session_id=group_sid,
+            request_type="maisaka.replyer",
+            attempt=1,
+            model_name="mai_replier_today",
+            reply_tool_args={"reply_style": "简短"},
+        )
+        assert casual["action"] == "continue"
+        assert "<maisya_memory>" in casual["modified_kwargs"]["extra_prompt"]
+        assert "<maisya_ops_receipt>" not in casual["modified_kwargs"]["extra_prompt"]
+        assert "model_name" not in casual["modified_kwargs"]
+
+        # 2. 未加白名单管理员私聊执行 maisya_shape(action="setup") -> before_replyer 强制纠偏并默认长回复
+        admin_ev = _private_msg(
+            "m-ops-setup",
+            "帮我把群 100246809 加入配置并设好安静时段",
+            session_id="priv_admin_md5",
+            user_id="Alice",
+        )
+        await plugin.after_receive(message=admin_ev)
+        await plugin.before_planner(
+            session_id="priv_admin_md5",
+            tool_definitions=[{"name": "maisya_shape"}],
+            items=[],
+        )
+        shape_ok = await plugin.shape_tool(
+            action="setup",
+            kind="setup",
+            target_chat="qq:group:100246809",
+            patch={"sleep_window": "00:00-07:30"},
+            source_msg_id="m-ops-setup",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert shape_ok["success"] is True
+
+        rep1 = await plugin.before_replyer(
+            session_id="priv_admin_md5",
+            request_type="maisaka.replyer",
+            attempt=1,
+            model_name="mai_replier_today",
+            reply_tool_args={},
+        )
+        mod1 = rep1["modified_kwargs"]
+        assert mod1["model_name"] == "gemini-3.8-flash"
+        assert mod1["reply_tool_args"]["reply_style"] == "长回复"
+        assert "<maisya_ops_receipt>" in mod1["extra_prompt"]
+
+        # 同一 reply 重试（attempt=2 携带 _maisya_ops_token）保持相同引导与模型选择
+        rep_retry = await plugin.before_replyer(
+            session_id="priv_admin_md5",
+            request_type="maisaka.replyer",
+            attempt=2,
+            model_name="mai_replier_today",
+            reply_tool_args=mod1["reply_tool_args"],
+        )
+        assert rep_retry["modified_kwargs"]["model_name"] == "gemini-3.8-flash"
+        assert rep_retry["modified_kwargs"]["reply_tool_args"]["reply_style"] == "长回复"
+        assert "<maisya_ops_receipt>" in rep_retry["modified_kwargs"]["extra_prompt"]
+
+        # 发出后（before_send）及后续普通轮次不再误触发 ops 纠偏
+        await plugin.before_send(session_id="priv_admin_md5", message="好呀，已经配好了。")
+        rep_next = await plugin.before_replyer(
+            session_id="priv_admin_md5",
+            request_type="maisaka.replyer",
+            attempt=1,
+            model_name="mai_replier_today",
+            reply_tool_args={},
+        )
+        assert rep_next == {"action": "continue"}
+
+        # 只读调用（overview / later list）不记录 ops 回执；schedule / cancel 才记录
+        read_res = await plugin.shape_tool(
+            action="read",
+            kind="overview",
+            target_chat="qq:group:100246809",
+            source_msg_id="m-ops-setup",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert read_res["success"] is True
+        assert (
+            await plugin.before_replyer(
+                session_id="priv_admin_md5",
+                request_type="maisaka.replyer",
+                attempt=1,
+                model_name="mai_replier_today",
+                reply_tool_args={},
+            )
+            == {"action": "continue"}
+        )
+
+        later_res = await plugin.later_tool(
+            action="schedule",
+            in_seconds=120,
+            reason="提醒检查配置",
+            target_chat="qq:group:100246809",
+            source_msg_id="m-ops-setup",
+            chat_id="priv_admin_md5",
+            platform="qq",
+        )
+        assert later_res["success"] is True
+        rep_later = await plugin.before_replyer(
+            session_id="priv_admin_md5",
+            request_type="maisaka.replyer",
+            attempt=1,
+            model_name="mai_replier_today",
+            reply_tool_args={"reply_style": "逐条"},
+        )
+        assert rep_later["modified_kwargs"]["model_name"] == "gemini-3.8-flash"
+        assert rep_later["modified_kwargs"]["reply_tool_args"]["reply_style"] == "逐条"
+
+        # 3. 已启用群有 bridge.reply_material 线程交付事实时，也会避开 mai_replier
+        grp_ev = _group_msg(
+            "m-grp-bridge",
+            "查一下问题",
+            session_id=group_sid,
+            group_id="100246809",
+            user_id="Bob",
+        )
+        await plugin.after_receive(message=grp_ev)
+        run_res = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            message="核查一个事实",
+            source_msg_id="m-grp-bridge",
+            wait_seconds=10,
+            chat_id=group_sid,
+            platform="qq",
+        )
+        assert run_res["success"] is True
+        await plugin.after_planner(
+            session_id=group_sid,
+            output_items=[
+                {
+                    "tool_call": {
+                        "func_name": "maisya_agent",
+                        "args": {"action": "start", "source_msg_id": "m-grp-bridge", "wait_seconds": 10},
+                    }
+                }
+            ],
+        )
+        bridge_rep = await plugin.before_replyer(
+            session_id=group_sid,
+            request_type="maisaka.replyer",
+            attempt=1,
+            model_name="mai_replier_today",
+            reply_tool_args={},
+        )
+        assert "群内调查结果如下" in html.unescape(bridge_rep["modified_kwargs"]["extra_prompt"])
+        assert bridge_rep["modified_kwargs"]["model_name"] == "gemini-3.8-flash"
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_replyer_model_steering_fallback_and_non_mai_skip(tmp_path):
+    """replyer 全是 mai_replier 时回退 planner/utils；显式非 mai_replier 或无 mai_replier 不改写。"""
+    plugin = await _boot_plugin(
+        tmp_path, permissions=("qq:Alice",), enabled_chats=("qq:group:100246809",)
+    )
+    try:
+        # 1. replyer 全是 v2p1_contract / mai_replier -> 回退到 planner 模型
+        _write_host_model_config(
+            tmp_path,
+            "\n".join(
+                [
+                    "[[models]]",
+                    'name = "replier-alias"',
+                    'model_identifier = "v2p1_contract"',
+                    "",
+                    "[[models]]",
+                    'name = "gpt-5.4"',
+                    'model_identifier = "gpt-5.4"',
+                    "",
+                    "[model_task_config.replyer]",
+                    'model_list = ["replier-alias"]',
+                    "",
+                    "[model_task_config.planner]",
+                    'model_list = ["gpt-5.4"]',
+                ]
+            ),
+        )
+        assert plugin.refresh_host_model_catalog() is True
+        assert plugin._select_ops_replyer_model("") == "gpt-5.4"
+        assert plugin._select_ops_replyer_model("replier-alias") == "gpt-5.4"
+        # 请求已是常规非 mai_replier 模型 -> 不改写
+        assert plugin._select_ops_replyer_model("gpt-5.4") == ""
+
+        # 2. replyer 列表里不含任何 mai_replier 模型 -> 不做多余覆盖
+        _write_host_model_config(
+            tmp_path,
+            "\n".join(
+                [
+                    "[[models]]",
+                    'name = "gemini-3.8-flash"',
+                    'model_identifier = "gemini-3.8-flash"',
+                    "",
+                    "[model_task_config.replyer]",
+                    'model_list = ["gemini-3.8-flash"]',
+                ]
+            ),
+        )
+        plugin._host_model_mtime = None
+        assert plugin.refresh_host_model_catalog() is True
+        assert plugin._select_ops_replyer_model("") == ""
+    finally:
+        await plugin.on_unload()
+

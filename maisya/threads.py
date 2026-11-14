@@ -229,6 +229,10 @@ class ThreadStore:
                             "UPDATE agent_threads SET profile_snapshot=? WHERE thread_id=?",
                             (encode(updated), binding["thread_id"]),
                         )
+                        db.execute(
+                            "UPDATE thread_context SET grant=? WHERE thread_id=?",
+                            (encode(grant or {}), binding["thread_id"]),
+                        )
                         db.commit()
                         return self.get(
                             binding["thread_id"],
@@ -324,6 +328,15 @@ class ThreadStore:
                 ),
             )
             payload = {"text": message, "context": input_context or {}}
+            if (
+                isinstance(input_context, dict)
+                and "grant" in input_context
+                and isinstance(input_context["grant"], dict)
+            ):
+                db.execute(
+                    "UPDATE thread_context SET grant=? WHERE thread_id=?",
+                    (encode(input_context["grant"]), thread_id),
+                )
             if return_route:
                 payload["return_route"] = return_route
                 db.execute(

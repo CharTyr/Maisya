@@ -169,6 +169,23 @@ class Bridge:
     def new_input(self, chat_id):
         self._blocked.discard(chat_id)
 
+    def has_admin_direct_for(self, chat_id: str, thread_id: str = "") -> bool:
+        if not chat_id:
+            return False
+        target_thread = thread_id or None
+        with self.store.connect() as db:
+            rows = self._rows(db, chat_id, thread_id=target_thread)
+            offered_ids = self._offered.get(chat_id)
+            if offered_ids:
+                rows.extend(
+                    self._rows(db, chat_id, offered_ids, thread_id=target_thread)
+                )
+        return any(
+            row.get("return_chat_id") == chat_id
+            and _grant_admin_direct(row.get("raw_grant"))
+            for row in rows
+        )
+
     def has_pending_for(self, chat_id: str) -> bool:
         return bool(
             chat_id
@@ -177,6 +194,7 @@ class Bridge:
                 or self._offered.get(chat_id)
                 or self._manual.get(chat_id)
                 or any(v[0] == chat_id for v in self._retries.values())
+                or self.has_admin_direct_for(chat_id)
             )
         )
 
@@ -248,7 +266,8 @@ class Bridge:
         await asyncio.to_thread(settle)
 
     def _rows(self, db, chat_id=None, ids=None, *, group_id=None, thread_id=None):
-        parameters = [self.clock() - 600]
+        now = self.clock()
+        parameters = [now - 1800]
         where = ""
         if chat_id is not None:
             where += " AND COALESCE(g.chat_id, t.chat_id)=?"
@@ -275,7 +294,38 @@ class Bridge:
             + " ORDER BY i.event_seq LIMIT 64",
             parameters,
         ).fetchall()
-        return [dict(row) | {"result": json.loads(row["payload"])} for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            input_row = db.execute(
+                "SELECT payload FROM thread_events WHERE thread_id=? AND kind='input' AND revision=? ORDER BY seq DESC LIMIT 1",
+                (item["thread_id"], item["revision"]),
+            ).fetchone()
+            if input_row:
+                try:
+                    input_payload = json.loads(input_row["payload"])
+                except (TypeError, ValueError):
+                    input_payload = {}
+                input_ctx = (
+                    input_payload.get("context")
+                    if isinstance(input_payload, dict)
+                    else None
+                )
+                if isinstance(input_ctx, dict) and isinstance(
+                    input_ctx.get("grant"), dict
+                ):
+                    item["raw_grant"] = json.dumps(
+                        input_ctx["grant"], ensure_ascii=False, sort_keys=True
+                    )
+            if (
+                ids is None
+                and not _grant_admin_direct(item.get("raw_grant"))
+                and (item.get("available_at") or 0) < now - 600
+            ):
+                continue
+            item["result"] = json.loads(item["payload"])
+            items.append(item)
+        return items
 
     @staticmethod
     def material(rows):
@@ -454,7 +504,7 @@ class Bridge:
                 "AND i.available_at BETWEEN ? AND ? AND t.revision=i.revision "
                 "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting')) "
                 "ORDER BY g.deadline LIMIT 64",
-                (now, now, now - 600, now),
+                (now, now, now - 1800, now),
             ).fetchall()
             for group in groups:
                 if group["remaining"] and now < group["deadline"]:
