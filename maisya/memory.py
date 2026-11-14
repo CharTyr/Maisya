@@ -316,8 +316,38 @@ class MemoryLayers:
                     continue
                 destination_dir = private_directory(root / "abilities/skills" / source_dir.name)
                 destination = destination_dir / "SKILL.md"
+                preset_bytes = skill_file.read_bytes()
                 if not destination.exists() and not path_is_link_like(destination):
-                    atomic_private_write(destination, skill_file.read_bytes())
+                    atomic_private_write(destination, preset_bytes)
+                elif (
+                    source_dir.name == "news-digest"
+                    and destination.is_file()
+                    and not path_is_link_like(destination)
+                ):
+                    asset = "skill:news-digest:SKILL.md"
+                    with store.connect() as db:
+                        edited = db.execute(
+                            "SELECT 1 FROM memory_versions WHERE asset=? AND version >= 1 LIMIT 1",
+                            (asset,),
+                        ).fetchone()
+                    if not edited and self._bytes(destination) != preset_bytes:
+                        atomic_private_write(destination, preset_bytes)
+                        preset_text = preset_bytes.decode("utf-8", errors="replace")
+                        with store.connect() as db, db:
+                            has_v0 = db.execute(
+                                "SELECT 1 FROM memory_versions WHERE asset=? AND version=0 LIMIT 1",
+                                (asset,),
+                            ).fetchone()
+                            if has_v0 is not None:
+                                db.execute(
+                                    "UPDATE memory_versions SET content=?, updated=? WHERE asset=? AND version=0",
+                                    (preset_text, self.clock(), asset),
+                                )
+                                db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
+                                db.execute(
+                                    "INSERT INTO memory_search VALUES (?,?)",
+                                    (asset, preset_text),
+                                )
 
     @staticmethod
     def heartbeat_parts(content: str) -> tuple[str, str]:
@@ -343,11 +373,14 @@ class MemoryLayers:
         with file_lock(self.root / ".memory.lock"):
             yield
 
-    def _has_memory_data(self, chat_id: str) -> bool:
+    def _memory_path_for(self, chat_id: str) -> tuple[str, Path]:
+        target = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()[:32]
+        return target, self.root / "memory/chats" / target / "MEMORY.md"
+
+    def _has_memory_data(self, chat_id: str, *, db=None) -> bool:
         if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
             return False
-        target = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()[:32]
-        path = self.root / "memory/chats" / target / "MEMORY.md"
+        target, path = self._memory_path_for(chat_id)
         if path.is_file() and not path_is_link_like(path):
             try:
                 if path.stat().st_size > 0:
@@ -355,34 +388,69 @@ class MemoryLayers:
             except OSError:
                 pass
         asset = f"memory:{target}:MEMORY.md"
-        with self.store.connect() as db:
+        if db is not None:
             row = db.execute(
                 "SELECT content FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
                 (asset,),
             ).fetchone()
+        else:
+            with self.store.connect() as conn:
+                row = conn.execute(
+                    "SELECT content FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
+                    (asset,),
+                ).fetchone()
         return bool(row and str(row["content"] or ""))
 
-    def _resolve_memory_chat_id(self, chat_id: str) -> str:
+    def _resolve_memory_chat_id(self, chat_id: str, *, db=None) -> str:
         if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
             return chat_id
-        if self._has_memory_data(chat_id):
-            return chat_id
+        candidates = [chat_id]
         if callable(self.chat_aliases):
             try:
                 aliases = sorted(set(self.chat_aliases(chat_id)) - {chat_id})
             except (TypeError, ValueError):
                 aliases = []
             for alias in aliases:
-                if (
-                    isinstance(alias, str)
-                    and alias
-                    and len(alias) <= 256
-                    and self._has_memory_data(alias)
-                ):
-                    return alias
-        return chat_id
+                if isinstance(alias, str) and alias and len(alias) <= 256:
+                    candidates.append(alias)
+        existing = [cid for cid in candidates if self._has_memory_data(cid, db=db)]
+        if not existing:
+            return chat_id
+        if len(existing) == 1:
+            return existing[0]
 
-    def _locate(self, kind, target="", chat_id="", document=""):
+        asset_to_cid: dict[str, str] = {}
+        for cid in existing:
+            target, _ = self._memory_path_for(cid)
+            asset_to_cid.setdefault(f"memory:{target}:MEMORY.md", cid)
+        assets = list(asset_to_cid.keys())
+        placeholders = ",".join("?" for _ in assets)
+        sql = (
+            "SELECT asset FROM memory_versions "
+            f"WHERE kind='memory' AND asset IN ({placeholders}) "
+            "ORDER BY updated DESC, version DESC LIMIT 1"
+        )
+        if db is not None:
+            row = db.execute(sql, assets).fetchone()
+        else:
+            with self.store.connect() as conn:
+                row = conn.execute(sql, assets).fetchone()
+        if row is not None and row["asset"] in asset_to_cid:
+            return asset_to_cid[row["asset"]]
+
+        def _mtime_key(cid: str) -> tuple[int, int]:
+            _, path = self._memory_path_for(cid)
+            mtime_ns = -1
+            if path.is_file() and not path_is_link_like(path):
+                try:
+                    mtime_ns = path.stat().st_mtime_ns
+                except OSError:
+                    mtime_ns = -1
+            return (mtime_ns, 1 if cid == chat_id else 0)
+
+        return max(existing, key=_mtime_key)
+
+    def _locate(self, kind, target="", chat_id="", document="", *, db=None):
         if kind in {"profile", "notes", "skill"}:
             if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
                 raise ValueError("角色或技能编号无效")
@@ -404,7 +472,7 @@ class MemoryLayers:
         elif kind == "memory":
             if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
                 raise ValueError("会话记忆需要原会话")
-            chat_id = self._resolve_memory_chat_id(chat_id)
+            chat_id = self._resolve_memory_chat_id(chat_id, db=db)
             target = hashlib.sha256(chat_id.encode()).hexdigest()[:32]
             directory, document = self.root / "memory/chats" / target, "MEMORY.md"
         elif kind in {"journal", "heartbeat"}:
@@ -526,8 +594,10 @@ class MemoryLayers:
 
     def _sync(self, db, kind, target, chat_id, document, *, allow_custom=False):
         if kind == "memory" and isinstance(chat_id, str) and chat_id:
-            chat_id = self._resolve_memory_chat_id(chat_id)
-        asset, path, document, target = self._locate(kind, target, chat_id, document)
+            chat_id = self._resolve_memory_chat_id(chat_id, db=db)
+        asset, path, document, target = self._locate(
+            kind, target, chat_id, document, db=db
+        )
         content = self._bytes(path).decode("utf-8")
         old = db.execute(
             "SELECT * FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
