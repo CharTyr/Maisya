@@ -12,7 +12,7 @@ async def test_listed_profile_uses_verified_speaker_and_chat_scope(tmp_path):
         return {"response": "done", "tool_calls": []}
 
     plugin.ctx.call_capability = capability
-    settings = plugin.profiles.path / "scout/profile.toml"
+    settings = plugin.profiles.path / "default/profile.toml"
     settings.write_text(
         settings.read_text(encoding="utf-8").replace('access = "everyone"', 'access = "listed"')
         + '\nallow_users=["qq:Alice"]\nallow_chats=["chat"]\n',
@@ -61,7 +61,7 @@ async def test_chat_only_profile_allows_autonomy_inside_its_scope(tmp_path):
         return {"response": "done", "tool_calls": []}
 
     plugin.ctx.call_capability = capability
-    settings = plugin.profiles.path / "scout/profile.toml"
+    settings = plugin.profiles.path / "default/profile.toml"
     settings.write_text(
         settings.read_text(encoding="utf-8").replace('access = "everyone"', 'access = "listed"')
         + '\nallow_chats=["chat"]\n',
