@@ -874,3 +874,158 @@ async def test_management_profiles_zip_fs_vault_models_and_settings(tmp_path: Pa
             assert sec_res["success"] is True, f"read section {section} failed: {sec_res}"
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_wave2_cross_branch_rpc_alignment_fixes(tmp_path: Path) -> None:
+    plugin = await _load_plugin(
+        tmp_path,
+        host_config={"plugin": {"permission": ["100001"]}},
+        plugin_config={"enabled_chats": [], "admins": []},
+        write_model_toml=True,
+    )
+    try:
+        # Record a recent DM so recent_dms & known_chats are populated
+        dm_msg = _dm_message("100246809", "hello dm", msg_id="dm-align-1", session_id="dm_align_1")
+        await plugin.after_receive(message=dm_msg)
+
+        # 1) Profile create/update compatibility: connectors, allowed_chats, access="chats", session_mode="thread"
+        created = await plugin.manage_write(
+            "profile_create",
+            json.dumps(
+                {
+                    "profile_id": "ui-compat-role",
+                    "name": "UI Compat Role",
+                    "access": "chats",
+                    "session_mode": "thread",
+                    "allowed_chats": [f"qq:group:{TEST_GROUP_ID}"],
+                    "connectors": ["github_ro"],
+                    "instructions": "Compat profile body",
+                }
+            ),
+        )
+        assert created["success"] is True, created
+        prof_data = created["profile"]
+        assert prof_data["access"] == "listed"
+        assert prof_data["session_mode"] == "ephemeral"
+        assert prof_data["mcp_servers"] == ["github_ro"]
+        assert prof_data["mcp"] == ["github_ro"]
+        assert "github_ro" in prof_data["connectors"]
+        assert prof_data["allow_chats"] == [f"qq:group:{TEST_GROUP_ID}"]
+        assert prof_data["enabled_chats"] == [f"qq:group:{TEST_GROUP_ID}"]
+        assert prof_data["allowed_chats"] == [f"qq:group:{TEST_GROUP_ID}"]
+
+        # 2) Onboarding alignment: top-level run_id/sequence, target_step, onboarding wrapper, sandbox_enabled
+        ob = await plugin.manage_read("onboarding", "{}")
+        assert ob["success"] is True
+        assert ob["run_id"]
+        assert isinstance(ob["sequence"], int)
+        assert "100001" in "".join(ob["host_admins"])
+        assert isinstance(ob["recent_dms"], list) and len(ob["recent_dms"]) >= 1
+        assert isinstance(ob["known_chats"], list)
+        assert "sandbox_enabled" in ob
+
+        snap = await plugin.console_query()
+        assert snap["chat_meta"] == snap["chat_sources"]
+        assert "sandbox_enabled" in snap
+        assert snap["onboarding"]["run_id"] == ob["run_id"]
+
+        adv1 = await plugin.manage_write(
+            "onboarding_advance",
+            json.dumps(
+                {
+                    "step": "hello",
+                    "target_step": "admins",
+                    "run_id": ob["run_id"],
+                    "sequence": ob["sequence"],
+                    "data": {},
+                }
+            ),
+        )
+        assert adv1["success"] is True
+        assert adv1["current_step"] == "admins"
+        assert adv1["onboarding"]["current_step"] == "admins"
+
+        adv_runtime = await plugin.manage_write(
+            "onboarding_advance",
+            json.dumps(
+                {
+                    "step": "runtime",
+                    "target_step": "done",
+                    "run_id": ob["run_id"],
+                    "sequence": adv1["sequence"],
+                    "data": {
+                        "default_model": "main-chat-model",
+                        "permission_mode": "ask_risky",
+                        "sandbox_enabled": True,
+                    },
+                }
+            ),
+        )
+        assert adv_runtime["success"] is True
+        assert adv_runtime["current_step"] == "done"
+        assert adv_runtime["sandbox_enabled"] is True
+        assert adv_runtime["onboarding"]["sandbox_enabled"] is True
+
+        settings_after_onb = await plugin.manage_read("settings", "{}")
+        assert settings_after_onb["sandbox_enabled"] is True
+        assert settings_after_onb["settings"]["sandbox"]["enabled"] is True
+
+        # Top-level settings_update with sandbox_enabled=False
+        upd_sb = await plugin.manage_write(
+            "settings_update", json.dumps({"sandbox_enabled": False})
+        )
+        assert upd_sb["success"] is True
+        assert upd_sb["sandbox_enabled"] is False
+        assert upd_sb["settings"]["sandbox"]["enabled"] is False
+
+        # Stale probe ticket is rejected cleanly without mutating newer run_id
+        stale_verify = await plugin.manage_write(
+            "onboarding_verify_model",
+            json.dumps({"run_id": "stale-run-id", "sequence": 0, "probe_sequence": 7}),
+        )
+        assert stale_verify["success"] is True
+        assert stale_verify["stale"] is True
+        assert stale_verify["onboarding"]["stale"] is True
+
+        # 3) _artifact accepts kind="workspace_out" and infers kind when omitted
+        prof = plugin.profiles.get("default")
+        trow = plugin.threads.create(
+            prof,
+            "整理总结文档",
+            chat_id=TEST_GROUP_SESSION,
+            platform="qq",
+            user_id=TEST_ADMIN_ID,
+            workspace="art-align-ws",
+        )
+        ws_id = trow["workspace_id"]
+        with plugin.runtime.files.activity(trow) as work:
+            work.write("out/summary.md", "# Summary\nok\n")
+            work.commit()
+
+        art_out = await plugin.manage_read(
+            "artifact",
+            json.dumps(
+                {
+                    "kind": "workspace_out",
+                    "workspace_id": ws_id,
+                    "path": "out/summary.md",
+                }
+            ),
+        )
+        assert art_out["success"] is True
+        assert "Summary" in art_out["text"]
+
+        art_inferred = await plugin.manage_read(
+            "artifact",
+            json.dumps(
+                {
+                    "workspace_id": ws_id,
+                    "path": "out/summary.md",
+                }
+            ),
+        )
+        assert art_inferred["success"] is True
+        assert "Summary" in art_inferred["text"]
+    finally:
+        await plugin.on_unload()

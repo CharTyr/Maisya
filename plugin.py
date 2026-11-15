@@ -273,6 +273,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self._bootstrap_messages = {}
         self._bootstrap_platforms = {}
         self._relayed_bootstrap_sources = {}
+        self._recent_dm_memory: dict[str, dict] = {}
         self._vault_command_outcomes: dict[tuple[str, str, str], tuple[bool, str, int]] = {}
         self._stream_cache = {
             "expires": 0.0,
@@ -556,17 +557,200 @@ class MaisyaPlugin(MaiBotPlugin):
             "error": err,
         }
 
+    def _known_chat_specs_sync(self) -> list[str]:
+        specs: list[str] = []
+        seen: set[str] = set()
+        routes = self.messages.list_routes(limit=256) if self.messages is not None else []
+        streams = (getattr(self, "_stream_cache", {}) or {}).get("streams", {}) or {}
+        for r in routes:
+            sid = str(r.get("session_id") or "").strip()
+            s_info = streams.get(sid) or {}
+            plat = str(s_info.get("platform") or r.get("platform") or "").strip().lower()
+            gid = str(s_info.get("group_id") or r.get("group_id") or "").strip()
+            uid = str(s_info.get("user_id") or r.get("user_id") or "").strip()
+            spec = str(s_info.get("stream_spec") or "").strip()
+            if not spec and plat and (gid or uid):
+                spec = format_stream_spec(plat, "group" if gid else "private", gid or uid)
+            token = spec or sid
+            if token and token not in seen:
+                seen.add(token)
+                specs.append(token)
+        for sid, s_info in streams.items():
+            if not isinstance(s_info, dict):
+                continue
+            plat = str(s_info.get("platform") or "").strip().lower()
+            gid = str(s_info.get("group_id") or "").strip()
+            uid = str(s_info.get("user_id") or "").strip()
+            spec = str(s_info.get("stream_spec") or "").strip()
+            if not spec and plat and (gid or uid):
+                spec = format_stream_spec(plat, "group" if gid else "private", gid or uid)
+            token = spec or str(sid)
+            if token and token not in seen:
+                seen.add(token)
+                specs.append(token)
+        for raw in self.settings.enabled_chats:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            parsed = parse_stream_spec(token)
+            norm = format_stream_spec(*parsed) if parsed else token
+            if norm not in seen:
+                seen.add(norm)
+                specs.append(norm)
+        return specs[:128]
+
+    def _record_recent_dm_memory(self, identity: Message) -> None:
+        if identity.group_id or identity.is_plugin_relayed or not identity.user_id:
+            return
+        plat = str(identity.platform or "").strip().lower()
+        uid = str(identity.user_id or "").strip()
+        sid = str(identity.session_id or "").strip()
+        if not uid:
+            return
+        admin_id = f"{plat}:{uid}" if plat else uid
+        spec = format_stream_spec(plat, "private", uid) if plat else uid
+        entry = {
+            "chat_id": spec,
+            "session_id": sid,
+            "user_id": admin_id,
+            "platform": plat,
+            "name": uid,
+            "updated": self._message_now(),
+        }
+        lock = getattr(self, "_bootstrap_lock", None)
+
+        def _apply() -> None:
+            cache = getattr(self, "_recent_dm_memory", None)
+            if cache is None:
+                cache = {}
+                self._recent_dm_memory = cache
+            cache.pop(admin_id, None)
+            cache[admin_id] = entry
+            while len(cache) > 24:
+                cache.pop(next(iter(cache)), None)
+
+        if lock is not None:
+            with lock:
+                _apply()
+        else:
+            _apply()
+
+    def _recent_dms_sync(self, limit: int = 12) -> list[dict]:
+        streams = (getattr(self, "_stream_cache", {}) or {}).get("streams", {}) or {}
+        by_user: dict[str, dict] = {}
+        lock = getattr(self, "_bootstrap_lock", None)
+        if lock is not None:
+            with lock:
+                mem_items = list((getattr(self, "_recent_dm_memory", None) or {}).values())
+        else:
+            mem_items = list((getattr(self, "_recent_dm_memory", None) or {}).values())
+        for item in mem_items:
+            uid_key = str(item.get("user_id") or "").strip()
+            if uid_key:
+                by_user[uid_key] = dict(item)
+        if self.messages is not None:
+            for r in self.messages.list_routes(limit=256):
+                if str(r.get("chat_type") or "").strip().lower() != "private":
+                    continue
+                uid = str(r.get("user_id") or "").strip()
+                plat = str(r.get("platform") or "").strip().lower()
+                sid = str(r.get("session_id") or "").strip()
+                if not uid:
+                    continue
+                admin_id = f"{plat}:{uid}" if plat else uid
+                spec = format_stream_spec(plat, "private", uid) if plat else uid
+                s_info = streams.get(sid) or {}
+                label = str(s_info.get("name") or uid).strip()
+                upd = float(r.get("updated") or 0.0)
+                prev = by_user.get(admin_id)
+                if prev is None or upd >= float(prev.get("updated") or 0.0):
+                    by_user[admin_id] = {
+                        "chat_id": spec,
+                        "session_id": sid,
+                        "user_id": admin_id,
+                        "platform": plat,
+                        "name": label,
+                        "updated": upd,
+                    }
+        for sid, s_info in streams.items():
+            if not isinstance(s_info, dict):
+                continue
+            if str(s_info.get("chat_type") or "").strip().lower() != "private":
+                continue
+            uid = str(s_info.get("user_id") or "").strip()
+            plat = str(s_info.get("platform") or "").strip().lower()
+            if not uid:
+                continue
+            admin_id = f"{plat}:{uid}" if plat else uid
+            if admin_id in by_user:
+                continue
+            spec = str(s_info.get("stream_spec") or "").strip() or (
+                format_stream_spec(plat, "private", uid) if plat else uid
+            )
+            by_user[admin_id] = {
+                "chat_id": spec,
+                "session_id": str(sid),
+                "user_id": admin_id,
+                "platform": plat,
+                "name": str(s_info.get("name") or uid).strip(),
+                "updated": 0.0,
+            }
+        ordered = sorted(
+            by_user.values(), key=lambda x: float(x.get("updated") or 0.0), reverse=True
+        )
+        return ordered[:limit]
+
+    def enrich_onboarding_view(self, view: dict | None) -> dict:
+        out = dict(view or {})
+        mv = out.get("model_verify") if isinstance(out.get("model_verify"), dict) else {}
+        out["run_id"] = str(out.get("run_id") or mv.get("run_id") or "")
+        raw_seq = out.get("sequence")
+        out["sequence"] = int(raw_seq if raw_seq is not None else (mv.get("sequence") or 0))
+        admins_info = dict(self.admins_info or {})
+        host_admins = list(admins_info.get("host_admins") or [])
+        settings_admins = list(admins_info.get("settings_admins") or self.settings.admins)
+        effective_admins = list(
+            admins_info.get("effective_admins")
+            or sorted(merge_admins(host_admins, settings_admins))
+        )
+        out["host_admins"] = host_admins
+        out["plugin_admins"] = list(admins_info.get("plugin_admins") or settings_admins)
+        out["settings_admins"] = settings_admins
+        out["effective_admins"] = effective_admins
+        out["enabled_chats"] = list(self.settings.enabled_chats)
+        out["known_chats"] = self._known_chat_specs_sync()
+        out["recent_dms"] = self._recent_dms_sync()
+        out["default_model"] = str(self.settings.default_model or "")
+        out["permission_mode"] = str(self.settings.permission_mode or "ask_risky")
+        out["sandbox_enabled"] = bool(getattr(self.settings.sandbox, "enabled", False))
+        models = out.get("models")
+        if isinstance(models, list):
+            out["available_models"] = [
+                str(m.get("name") if isinstance(m, dict) else m or "")
+                for m in models
+                if (m.get("name") if isinstance(m, dict) else m)
+            ]
+        else:
+            out["available_models"] = []
+        return out
+
     async def onboarding_view(self, *, is_admin_view: bool = True) -> dict:
         if self.onboarding is None:
-            return {
-                "show": False,
-                "status": "not_ready",
-                "usable": False,
-                "current_step": "hello",
-                "steps": [],
-                "checklist": {"items": [], "usable": False, "missing_requirements": []},
-                "model_verify": {"state": "idle"},
-            }
+            return self.enrich_onboarding_view(
+                {
+                    "show": False,
+                    "status": "not_ready",
+                    "usable": False,
+                    "current_step": "hello",
+                    "steps": [],
+                    "checklist": {
+                        "items": [],
+                        "usable": False,
+                        "missing_requirements": [],
+                    },
+                    "model_verify": {"state": "idle"},
+                }
+            )
         catalog = await asyncio.to_thread(self.get_model_catalog)
         mcp_servers: dict = {}
         if self.runtime is not None and getattr(self.runtime, "services", None) is not None:
@@ -582,7 +766,7 @@ class MaisyaPlugin(MaiBotPlugin):
             self.profiles is not None
             and (self.profiles.path / "default" / "profile.toml").is_file()
         )
-        return await asyncio.to_thread(
+        raw_view = await asyncio.to_thread(
             self.onboarding.view,
             settings=self.settings,
             host_model_catalog=list((catalog or {}).get("models") or []),
@@ -594,6 +778,7 @@ class MaisyaPlugin(MaiBotPlugin):
             default_profile_ready=default_profile_ready,
             profiles_path=self.profiles.path if self.profiles is not None else None,
         )
+        return self.enrich_onboarding_view(raw_view)
 
     def _scrub_probe_text(self, value: str) -> str:
         text = str(value or "")
@@ -1130,10 +1315,14 @@ class MaisyaPlugin(MaiBotPlugin):
                 self._bootstrap_messages.clear()
                 self._bootstrap_platforms.clear()
                 self._relayed_bootstrap_sources.clear()
+                if isinstance(getattr(self, "_recent_dm_memory", None), dict):
+                    self._recent_dm_memory.clear()
         else:
             self._bootstrap_messages.clear()
             self._bootstrap_platforms.clear()
             self._relayed_bootstrap_sources.clear()
+            if isinstance(getattr(self, "_recent_dm_memory", None), dict):
+                self._recent_dm_memory.clear()
 
     def _bootstrap_snapshot(self):
         lock = getattr(self, "_bootstrap_lock", None)
@@ -2018,6 +2207,7 @@ class MaisyaPlugin(MaiBotPlugin):
     async def after_receive(self, **kwargs):
         message = kwargs.get("message") or {}
         identity = Message.from_event(message)
+        self._record_recent_dm_memory(identity)
         try:
             chat_enabled = await asyncio.to_thread(
                 self.enabled_for,
@@ -5195,6 +5385,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             )
             result["chat_sources"] = await self._resolve_chat_sources(source_chat_ids)
+            result["chat_meta"] = result["chat_sources"]
             daily_used, daily_buckets = await asyncio.to_thread(_daily_proactive_summary)
             result["pulse"] = {
                 "enabled": bool(self.settings.plugin.enabled),
@@ -5215,6 +5406,10 @@ class MaisyaPlugin(MaiBotPlugin):
             }
             result["ui_style"] = canonical_ui_style(self.settings.ui_style)
             result["permission_mode"] = self.settings.permission_mode
+            result["default_model"] = str(self.settings.default_model or "")
+            result["sandbox_enabled"] = bool(
+                getattr(self.settings.sandbox, "enabled", False)
+            )
             result["admins_info"] = dict(
                 self.admins_info
                 or {
@@ -5225,7 +5420,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 }
             )
             result["docker"] = await asyncio.to_thread(self._docker_status)
-            result["onboarding"] = await self.onboarding_view(is_admin_view=True)
+            ob_view = await self.onboarding_view(is_admin_view=True)
+            result["onboarding"] = ob_view
+            result["known_chats"] = list(ob_view.get("known_chats") or [])
+            result["recent_dms"] = list(ob_view.get("recent_dms") or [])
+            result["available_models"] = list(ob_view.get("available_models") or [])
             return self.vault.redact(result)
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as error:
             return {

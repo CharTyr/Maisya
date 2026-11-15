@@ -236,6 +236,16 @@ class Management:
             for key, value in asdict(profile).items()
             if key in allowed_keys
         }
+        mcp_list = list(profile.mcp)
+        api_list = list(profile.apis)
+        chats_list = list(profile.allow_chats)
+        data["mcp"] = mcp_list
+        data["mcp_servers"] = mcp_list
+        data["apis"] = api_list
+        data["connectors"] = list(dict.fromkeys([*mcp_list, *api_list]))
+        data["allow_chats"] = chats_list
+        data["enabled_chats"] = chats_list
+        data["allowed_chats"] = chats_list
         data["model_list"] = list(profile.model_list)
         data["resolved_tools"] = list(profile.resolved_tools)
         return data
@@ -926,6 +936,7 @@ class Management:
         grants_list = grants_store.list_grants() if grants_store is not None else []
         handles = self.plugin.vault.handles()
         vault_meta = self.plugin.vault.list_meta()
+        docker = self._docker_status()
         return {
             "settings": settings,
             "version": self._version(settings),
@@ -933,11 +944,12 @@ class Management:
             "admins_info": admins_info,
             "permission_mode": settings.get("permission_mode", "ask_risky"),
             "ui_style": settings["ui_style"],
+            "sandbox_enabled": bool(docker.get("enabled", False)),
             "handles": handles,
             "vault_handles": handles,
             "vault_meta": vault_meta,
             "grants": grants_list,
-            "docker": self._docker_status(),
+            "docker": docker,
             "proactive_quota": self._proactive_quota(),
         }
 
@@ -2038,12 +2050,47 @@ class Management:
         result["permission_mode"] = str(self.plugin.settings.permission_mode or "ask_risky")
         return result
 
+    def _enrich_onboarding_view(self, raw_view: dict | None) -> dict:
+        if hasattr(self.plugin, "enrich_onboarding_view"):
+            return self.plugin.enrich_onboarding_view(raw_view)
+        out = dict(raw_view or {})
+        mv = out.get("model_verify") if isinstance(out.get("model_verify"), dict) else {}
+        out["run_id"] = str(out.get("run_id") or mv.get("run_id") or "")
+        raw_seq = out.get("sequence")
+        out["sequence"] = int(raw_seq if raw_seq is not None else (mv.get("sequence") or 0))
+        admins_info = self._admins_info()
+        out["host_admins"] = list(admins_info.get("host_admins") or [])
+        out["plugin_admins"] = list(admins_info.get("plugin_admins") or [])
+        out["settings_admins"] = list(admins_info.get("settings_admins") or [])
+        out["effective_admins"] = list(admins_info.get("effective_admins") or [])
+        out["enabled_chats"] = list(self.plugin.settings.enabled_chats)
+        out["known_chats"] = [
+            str(item.get("stream_spec") or item.get("chat_id") or "")
+            for item in self._known_chats_sync()
+            if item.get("stream_spec") or item.get("chat_id")
+        ]
+        out["recent_dms"] = []
+        out["default_model"] = str(self.plugin.settings.default_model or "")
+        out["permission_mode"] = str(self.plugin.settings.permission_mode or "ask_risky")
+        out["sandbox_enabled"] = bool(getattr(self.plugin.settings.sandbox, "enabled", False))
+        models = out.get("models")
+        out["available_models"] = (
+            [
+                str(m.get("name") if isinstance(m, dict) else m or "")
+                for m in models
+                if (m.get("name") if isinstance(m, dict) else m)
+            ]
+            if isinstance(models, list)
+            else []
+        )
+        return out
+
     async def _onboarding_view_payload(self) -> dict:
         if hasattr(self.plugin, "onboarding_view"):
             return await self.plugin.onboarding_view(is_admin_view=True)
         mgr = getattr(self.plugin, "onboarding", None)
         if mgr is None:
-            return {"show": False, "usable": True}
+            return self._enrich_onboarding_view({"show": False, "usable": True})
         host_models = await self._collect_host_models()
         admins_info = await completed_thread(self._admins_info)
         services_cfg = await completed_thread(self.plugin.runtime.services.load)
@@ -2051,7 +2098,7 @@ class Management:
         with self.plugin.threads.connect() as db:
             row = db.execute("SELECT COUNT(*) AS n FROM agent_threads").fetchone()
             thread_count = int(row["n"] if row else 0)
-        return await completed_thread(
+        raw_view = await completed_thread(
             mgr.view,
             settings=self.plugin.settings,
             host_model_catalog=host_models["models"],
@@ -2063,6 +2110,7 @@ class Management:
             default_profile_ready=(self.plugin.profiles.path / "default" / "profile.toml").is_file(),
             profiles_path=self.plugin.profiles.path,
         )
+        return await completed_thread(self._enrich_onboarding_view, raw_view)
 
     async def _discovery(self, options=None):
         ctx = getattr(self.plugin, "ctx", None)
@@ -2169,6 +2217,9 @@ class Management:
             result = {
                 **snap,
                 "chat_sources": chat_sources,
+                "chat_meta": chat_sources,
+                "default_model": str(self.plugin.settings.default_model or ""),
+                "sandbox_enabled": bool(getattr(self.plugin.settings.sandbox, "enabled", False)),
                 "thread_id": tid or (sel.get("thread_id") if isinstance(sel, dict) else ""),
                 "thread": sel,
                 "steps": sel.get("steps", []) if isinstance(sel, dict) else [],
@@ -2239,7 +2290,13 @@ class Management:
             )
         elif section == "settings":
             result = await completed_thread(self._settings)
-            result["known_chats"] = await collect_known_chats(self.plugin)
+            known_chat_rows = await collect_known_chats(self.plugin)
+            result["known_chats"] = known_chat_rows
+            result["known_chat_specs"] = [
+                str(c.get("stream_spec") or c.get("chat_id") or "").strip()
+                for c in known_chat_rows
+                if isinstance(c, dict) and (c.get("stream_spec") or c.get("chat_id"))
+            ]
             assets = await completed_thread(self._assets)
             result["profiles"] = [p["id"] for p in assets["profiles"]]
             result["profile_cards"] = assets["profiles"]
@@ -2766,13 +2823,40 @@ class Management:
         }
 
     def _artifact(self, options):
-        kind = options.get("kind", "")
-        offset = options.get("offset", 0)
+        opts = dict(options or {})
+        kind = str(opts.get("kind") or "").strip()
+        if kind == "workspace_out":
+            kind = "workspace_file"
+        art_id = str(opts.get("artifact_id") or opts.get("id") or "").strip()
+        if not kind:
+            if opts.get("handle") or art_id.startswith("att:") or art_id.startswith("att_"):
+                kind = "attachment"
+            elif (opts.get("workspace_id") and opts.get("path")) or (
+                art_id.startswith("ws:") and len(art_id.split(":", 2)) == 3
+            ):
+                kind = "workspace_file"
+            elif opts.get("thread_id") or art_id.startswith("con:"):
+                kind = "conclusion"
+        if kind == "attachment" and not opts.get("handle") and art_id:
+            opts["handle"] = art_id[4:] if art_id.startswith("att:") else art_id
+        elif (
+            kind == "workspace_file"
+            and (not opts.get("workspace_id") or not opts.get("path"))
+            and art_id.startswith("ws:")
+        ):
+            parts = art_id.split(":", 2)
+            if len(parts) == 3:
+                opts.setdefault("workspace_id", parts[1])
+                opts.setdefault("path", parts[2])
+        elif kind == "conclusion" and not opts.get("thread_id") and art_id.startswith("con:"):
+            opts["thread_id"] = art_id[4:]
+
+        offset = opts.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 128 * 1024**2:
             raise ValueError("预览偏移量无效")
 
         if kind == "attachment":
-            handle = options.get("handle", "")
+            handle = opts.get("handle", "")
             if (
                 not isinstance(handle, str)
                 or not handle.startswith("att_")
@@ -2808,10 +2892,10 @@ class Management:
                 )
 
         if kind == "workspace_file":
-            vdir, ws_meta = self._resolve_workspace_dir(options.get("workspace_id", ""))
+            vdir, ws_meta = self._resolve_workspace_dir(opts.get("workspace_id", ""))
             if vdir is None:
                 raise ValueError("工作区尚无已提交文件")
-            rel_path = options.get("path", "")
+            rel_path = opts.get("path", "")
             if not isinstance(rel_path, str) or not rel_path:
                 raise ValueError("文件路径无效")
             with regular_open(vdir, rel_path) as source:
@@ -2831,7 +2915,7 @@ class Management:
                 )
 
         if kind == "conclusion":
-            thread_id = options.get("thread_id", "")
+            thread_id = opts.get("thread_id", "")
             if not isinstance(thread_id, str) or len(thread_id) > 64:
                 raise ValueError("线程编号无效")
             with self.plugin.threads.connect() as db:
@@ -2881,6 +2965,7 @@ class Management:
             "icon_shape",
             "theme_color",
             "clone_from",
+            "base",
             "model_name",
             "model",
             "fallback_models",
@@ -2897,14 +2982,17 @@ class Management:
             "shared_secrets",
             "share_credentials",
             "execution_mode",
+            "environment",
             "permission_mode",
             "session_mode",
             "enabled_chats",
             "allow_chats",
+            "allowed_chats",
             "allow_users",
             "access",
             "instructions",
             "enabled",
+            "bound",
             "network",
             "web_provider",
             "max_tokens",
@@ -2917,16 +3005,117 @@ class Management:
         }
     )
 
+    @staticmethod
+    def _str_list(raw: object) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [tok.strip() for tok in re.split(r"[\s,]+", raw) if tok.strip()]
+        if not isinstance(raw, (list, tuple, set)):
+            return []
+        out: list[str] = []
+        for item in raw:
+            val = (
+                (item.get("id") or item.get("name") or "")
+                if isinstance(item, dict)
+                else item
+            )
+            tok = str(val or "").strip()
+            if tok and tok not in out:
+                out.append(tok)
+        return out
+
     @classmethod
-    def _extract_profile_fields(cls, options: dict) -> dict:
+    def _extract_profile_fields(
+        cls, options: dict, *, services_cfg: dict | None = None
+    ) -> dict:
         nested = options.get("profile") if isinstance(options.get("profile"), dict) else {}
         merged = {**nested, **options}
         if "profile_md" in merged and "instructions" not in merged:
             merged["instructions"] = merged["profile_md"]
-        fields = {}
+        fields: dict = {}
         for key in cls._PROFILE_EDITABLE_KEYS:
             if key in merged and merged[key] is not None:
                 fields[key] = merged[key]
+
+        if "base" in fields:
+            base_val = fields.pop("base")
+            fields.setdefault("clone_from", base_val)
+
+        if "share_credentials" in fields:
+            sc_val = fields.pop("share_credentials")
+            fields.setdefault("shared_secrets", bool(sc_val))
+
+        if "environment" in fields:
+            env_val = str(fields.pop("environment") or "").strip().lower()
+            fields.setdefault(
+                "execution_mode", "sandbox" if env_val == "sandbox" else "host"
+            )
+
+        if "access" in fields:
+            acc = str(fields["access"] or "").strip().lower()
+            if acc == "chats":
+                fields["access"] = "listed"
+            elif acc == "all":
+                fields["access"] = "everyone"
+
+        if "session_mode" in fields:
+            sm = str(fields["session_mode"] or "").strip().lower()
+            if sm in {"thread", "task"}:
+                fields["session_mode"] = "ephemeral"
+
+        if "allowed_chats" in fields:
+            allowed_list = cls._str_list(fields.pop("allowed_chats"))
+            if "allow_chats" not in fields and "enabled_chats" not in fields:
+                fields["allow_chats"] = allowed_list
+
+        has_mcp_input = any(
+            k in fields for k in ("mcp_servers", "mcp", "connectors")
+        )
+        has_api_input = "apis" in fields
+        if has_mcp_input or has_api_input:
+            mcp_acc: list[str] = []
+            api_acc: list[str] = []
+            for tok in cls._str_list(fields.pop("mcp_servers", None)) + cls._str_list(
+                fields.pop("mcp", None)
+            ):
+                if tok not in mcp_acc:
+                    mcp_acc.append(tok)
+            for tok in cls._str_list(fields.pop("apis", None)):
+                if tok not in api_acc:
+                    api_acc.append(tok)
+            raw_conn = fields.pop("connectors", None)
+            if raw_conn is not None:
+                cfg = services_cfg if isinstance(services_cfg, dict) else {}
+                known_apis = set((cfg.get("apis") or {}).keys())
+                known_mcps = set((cfg.get("servers") or {}).keys())
+                if isinstance(raw_conn, dict):
+                    for tok in cls._str_list(
+                        raw_conn.get("mcp_servers") or raw_conn.get("mcp")
+                    ):
+                        if tok not in mcp_acc:
+                            mcp_acc.append(tok)
+                    dict_apis = raw_conn.get("plugin_apis")
+                    if dict_apis is None:
+                        dict_apis = raw_conn.get("apis")
+                    if dict_apis is not None:
+                        has_api_input = True
+                        for tok in cls._str_list(dict_apis):
+                            if tok not in api_acc:
+                                api_acc.append(tok)
+                else:
+                    has_api_input = True
+                    for tok in cls._str_list(raw_conn):
+                        if tok in known_apis and tok not in known_mcps:
+                            if tok not in api_acc:
+                                api_acc.append(tok)
+                        else:
+                            if tok not in mcp_acc:
+                                mcp_acc.append(tok)
+            if has_mcp_input:
+                fields["mcp_servers"] = mcp_acc
+            if has_api_input:
+                fields["apis"] = api_acc
         return fields
 
     async def _apply_settings_patch(
@@ -2938,11 +3127,19 @@ class Management:
             raise ValueError("settings 必须是对象")
         base_dump = self.plugin.settings.model_dump()
         merged = {**base_dump, **raw_settings}
-        if isinstance(raw_settings.get("sandbox"), dict):
-            merged["sandbox"] = {
+        if isinstance(raw_settings.get("sandbox"), dict) or "sandbox_enabled" in raw_settings:
+            sb_merged = {
                 **dict(base_dump.get("sandbox") or {}),
-                **raw_settings["sandbox"],
+                **(
+                    dict(raw_settings["sandbox"])
+                    if isinstance(raw_settings.get("sandbox"), dict)
+                    else {}
+                ),
             }
+            if raw_settings.get("sandbox_enabled") is not None:
+                sb_merged["enabled"] = bool(raw_settings["sandbox_enabled"])
+            merged["sandbox"] = sb_merged
+        merged.pop("sandbox_enabled", None)
         if "admins" in raw_settings:
             host_admins = list(self._admins_info().get("host_admins") or [])
             merged["admins"] = validate_admin_update(
@@ -3063,17 +3260,30 @@ class Management:
         ticket_ok = (not run_id or run_id == str(base_view.get("run_id") or "")) and (
             sequence is None or sequence >= int(base_view.get("sequence") or 0)
         )
+        services_cfg = await completed_thread(self.plugin.runtime.services.load)
         view_kwargs = {
             "settings": self.plugin.settings,
             "host_model_catalog": (await self._collect_host_models())["models"],
             "host_admins": self._admins_info()["host_admins"],
-            "mcp_servers": (await completed_thread(self.plugin.runtime.services.load)).get("servers") or {},
+            "mcp_servers": (services_cfg or {}).get("servers") or {},
             "docker_status": await completed_thread(self._docker_status),
             "existing_threads_count": len(self.plugin.threads.list_threads(limit=50)),
             "is_admin_view": True,
-            "default_profile_ready": (self.plugin.profiles.path / "default" / "profile.toml").is_file(),
+            "default_profile_ready": (
+                self.plugin.profiles.path / "default" / "profile.toml"
+            ).is_file(),
             "profiles_path": self.plugin.profiles.path,
         }
+
+        async def _finish_ob(
+            raw_view: dict, *, probe_sequence: int | None = None
+        ) -> dict:
+            view = await completed_thread(self._enrich_onboarding_view, raw_view)
+            out = {**view, "onboarding": view}
+            if probe_sequence is not None:
+                out["probe_sequence"] = probe_sequence
+            return out
+
         if action == "onboarding_advance":
             data = options.get("data")
             if ticket_ok and isinstance(data, dict):
@@ -3090,35 +3300,57 @@ class Management:
                     )
                     if k in data and data[k] is not None
                 }
+                if data.get("sandbox_enabled") is not None:
+                    sb_patch = dict(
+                        patch_keys.get("sandbox")
+                        if isinstance(patch_keys.get("sandbox"), dict)
+                        else {}
+                    )
+                    sb_patch["enabled"] = bool(data["sandbox_enabled"])
+                    patch_keys["sandbox"] = sb_patch
                 if patch_keys:
                     await self._apply_settings_patch(patch_keys)
                     view_kwargs["settings"] = self.plugin.settings
-                    view_kwargs["docker_status"] = await completed_thread(self._docker_status)
-            step = options.get("step")
-            return await completed_thread(
+                    view_kwargs["docker_status"] = await completed_thread(
+                        self._docker_status
+                    )
+            raw_step = options.get("target_step") or options.get("step")
+            raw_view = await completed_thread(
                 mgr.advance,
-                str(step).strip() if step else None,
+                str(raw_step).strip() if raw_step else None,
                 run_id=run_id,
                 sequence=sequence,
                 data=data if isinstance(data, dict) else None,
                 **view_kwargs,
             )
+            return await _finish_ob(raw_view)
         if action == "onboarding_skip":
-            return await completed_thread(
+            raw_view = await completed_thread(
                 mgr.skip, run_id=run_id, sequence=sequence, **view_kwargs
             )
+            return await _finish_ob(raw_view)
         if action == "onboarding_complete":
-            return await completed_thread(
+            raw_view = await completed_thread(
                 mgr.complete, run_id=run_id, sequence=sequence, **view_kwargs
             )
+            return await _finish_ob(raw_view)
         if action == "onboarding_reset":
-            return await completed_thread(mgr.reset, **view_kwargs)
+            raw_view = await completed_thread(mgr.reset, **view_kwargs)
+            return await _finish_ob(raw_view)
         if action == "onboarding_reopen":
             step = options.get("step")
-            return await completed_thread(
+            raw_view = await completed_thread(
                 mgr.reopen, str(step).strip() if step else None, **view_kwargs
             )
+            return await _finish_ob(raw_view)
         if action == "onboarding_verify_model":
+            raw_probe_seq = options.get("probe_sequence")
+            probe_seq = int(raw_probe_seq) if raw_probe_seq is not None else None
+            if not ticket_ok:
+                return await _finish_ob(
+                    {**base_view, "stale": True, "applied": False},
+                    probe_sequence=probe_seq,
+                )
             model_name = str(
                 options.get("model_name") or self.plugin.settings.default_model or ""
             ).strip()
@@ -3128,12 +3360,13 @@ class Management:
                 if callable(probe_fn)
                 else None
             )
-            return await mgr.verify_model(
+            raw_view = await mgr.verify_model(
                 probe_fn=cb,
                 model_name=model_name,
                 timeout_seconds=10.0,
                 **view_kwargs,
             )
+            return await _finish_ob(raw_view, probe_sequence=probe_seq)
         raise ValueError("未知引导操作")
 
     async def write(self, action, payload):
@@ -3210,7 +3443,13 @@ class Management:
                 or options.get("target")
                 or ""
             ).strip()
-            fields = self._extract_profile_fields(options)
+            services_cfg = (
+                await completed_thread(plugin.runtime.services.load)
+                if getattr(plugin, "runtime", None) is not None
+                and getattr(plugin.runtime, "services", None) is not None
+                else {}
+            )
+            fields = self._extract_profile_fields(options, services_cfg=services_cfg)
 
             def _create_prof():
                 prof = plugin.profiles.create(pid, **fields)
@@ -3228,7 +3467,13 @@ class Management:
             ).strip()
             if not pid:
                 raise ValueError("profile_update 需要提供 profile_id")
-            fields = self._extract_profile_fields(options)
+            services_cfg = (
+                await completed_thread(plugin.runtime.services.load)
+                if getattr(plugin, "runtime", None) is not None
+                and getattr(plugin.runtime, "services", None) is not None
+                else {}
+            )
+            fields = self._extract_profile_fields(options, services_cfg=services_cfg)
             raw_expected = options.get("expected_version")
             if raw_expected is not None and type(raw_expected) is int and "instructions" in fields:
                 cur_md = await completed_thread(
