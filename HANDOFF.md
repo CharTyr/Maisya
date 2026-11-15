@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [极简高权收敛计划](docs/07-极简高权收敛计划.md)。
 
-最后更新：2026-11-16（**`v0.3.0` 极简高权收敛架构基线**，对应 `main` 合入 Wave 1 与 Wave 2 后的能力形态；历史 `v0.2.0` 五页多预置方案已收敛取代）。
+最后更新：2026-11-16（**`v0.3.0` 极简高权收敛架构基线**，对应 `main` 合入 Wave 1～3 全部代码、测试与文档后的已验证形态；历史 `v0.2.0` 五页多预置方案已收敛取代）。
 
 ---
 
@@ -31,13 +31,14 @@
 
 ---
 
-## 2. 本次文档同步观察与待验证收口项
+## 2. 最新验收实测结果（`main` Wave 3 合流基线）
 
-- **本次文档分支已实测确认**：
-  - `python3 webui/build.py --check` 返回退出码 `0`（前端编译产物与源码模板一致）；
-  - 所有文档内部链接、模块清单与接口名称均已逐一对照当前工作区代码校准，移除失效模块引用（`incoming.py`、`recipes.py`、`maisya_incoming_event`、`webhooks.json`、`templates` 等）。
-- **Wave 3 代码回归与测试收口（待全部测试分支合入 `main` 后以实跑为准）**：
-  - 当前并行分支正在推进全量后端测试适配、UI 测试与真实宿主隔离契约复测（含 `stop -> "idle"` 取消守卫联动及无管理员状态下配置回写修复）。接手后应以合入完整修复后的最新 `main` 实跑结果为准，勿直接沿用 `v0.2.0` 历史计数。
+- **前端编译一致性**：`python3 webui/build.py --check` 返回退出码 `0`（[`webui/now.html`](webui/now.html) 与源码模板一致）。
+- **全量本地与 Playwright UI 单测**：
+  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：`505 passed`（`0 failed / 0 errors / 0 skipped`，加 `--rootdir=tests` 同为全量通过）；
+  - 已完整覆盖后端与运行期收口（`stop -> "idle"` 取消守卫联动、无管理员状态下配置回写防误拦、`maisya_shape` 4 动作防自锁死与 `chat_proactive_levels` 写入/清空、`set_profile_models` 落盘、`chat.open_session` 热写回路由、空 `account_id` 会话升级、`start` 解除 `admin_direct` 粘性、`ui_style` 版本号同步）以及 4 页双主题 Playwright Chromium UI 验收。
+- **真实宿主 venv 隔离契约**：`python3 tests_host/run_contract.py`：`Ran 22 tests` `OK`（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
+- **文档校验基线**：所有文档内部链接、模块清单与接口名称已逐一对照当前工作区代码校准，移除失效模块引用（`incoming.py`、`recipes.py`、`maisya_incoming_event`、`webhooks.json`、`templates` 等）。
 
 ---
 
