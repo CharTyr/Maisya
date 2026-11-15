@@ -26,6 +26,18 @@ from .pathsafe import (
 )
 from .workspaces import completed_thread
 
+
+async def _uninterruptible_await(awaitable):
+    """在重复取消下等待关键清理任务彻底完成，返回 `(result, saw_cancel)`。"""
+    task = asyncio.ensure_future(awaitable)
+    saw_cancel = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            saw_cancel = True
+    return task.result(), saw_cancel
+
 DENIED_V4 = (
     "0.0.0.0/8",
     "10.0.0.0/8",
@@ -374,28 +386,39 @@ class Sandbox:
         if not self.ready or self.closing:
             raise RuntimeError(self.error or "沙箱尚未就绪")
         self._admit(path)
-        self._resource(
-            "mount",
-            str(path),
-            {"source": "maisya-" + self.instance, "socket": self.settings.socket},
-        )
         options = f"size={self.settings.work_mib}m,nr_inodes=8192,nosuid,nodev,noswap,mode=0700"
-        subprocess.run(
-            [
-                "mount",
-                "-t",
-                "tmpfs",
-                "-o",
-                options,
-                "maisya-" + self.instance,
-                str(path),
-            ],
-            check=True,
-            capture_output=True,
-            timeout=10,
-            env=minimal_subprocess_env(),
-        )
         try:
+            subprocess.run(
+                [
+                    "mount",
+                    "-t",
+                    "tmpfs",
+                    "-o",
+                    options,
+                    "maisya-" + self.instance,
+                    str(path),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=10,
+                env=minimal_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired:
+            subprocess.run(
+                ["umount", str(path)],
+                check=False,
+                capture_output=True,
+                timeout=5,
+                env=minimal_subprocess_env(),
+            )
+            self._forget(str(path))
+            raise
+        try:
+            self._resource(
+                "mount",
+                str(path),
+                {"source": "maisya-" + self.instance, "socket": self.settings.socket},
+            )
             yield
         finally:
             subprocess.run(
@@ -771,6 +794,11 @@ class Sandbox:
             )
             monitor = None
             attached_task = None
+            prior_quarantined = bool(work.quarantined)
+            terminated_ok = False
+            cleanup_safe = False
+            needs_rollback = False
+            cancel_during_cleanup = False
             try:
                 await self.docker(*arguments)
                 await asyncio.to_thread(self._receipt, key, status="running")
@@ -834,7 +862,7 @@ class Sandbox:
                     try:
                         version = await asyncio.shield(commit)
                     except asyncio.CancelledError:
-                        await commit
+                        await _uninterruptible_await(commit)
                         raise
                 result = {
                     "exit_code": inspection.get("ExitCode", attached.code),
@@ -845,35 +873,68 @@ class Sandbox:
                 await asyncio.to_thread(
                     self._receipt, key, status="completed", result=result
                 )
+                cleanup_safe = True
                 return result
             except BaseException:
-                removed = await asyncio.shield(self._terminate(container))
-                if removed:
-                    rollback = asyncio.create_task(asyncio.to_thread(work.rollback))
-                    await asyncio.shield(rollback)
-                else:
-                    work.quarantined = True
-                await asyncio.to_thread(self._receipt, key, status="interrupted")
+                needs_rollback = True
+                work.quarantined = True
+                terminated_ok, c_term = await _uninterruptible_await(
+                    self._terminate(container)
+                )
+                if c_term:
+                    cancel_during_cleanup = True
+                if terminated_ok:
+                    _, c_rb = await _uninterruptible_await(
+                        asyncio.to_thread(work.rollback)
+                    )
+                    if c_rb:
+                        cancel_during_cleanup = True
+                    cleanup_safe = True
+                _, c_rec = await _uninterruptible_await(
+                    asyncio.to_thread(self._receipt, key, status="interrupted")
+                )
+                if c_rec:
+                    cancel_during_cleanup = True
                 raise
             finally:
                 for task in (monitor, attached_task):
                     if task and not task.done():
                         task.cancel()
-                await asyncio.gather(
-                    *(task for task in (monitor, attached_task) if task),
-                    return_exceptions=True,
-                )
-                removed = await asyncio.shield(self._terminate(container))
-                if removed:
+                pending_bg = [task for task in (monitor, attached_task) if task]
+                if pending_bg:
+                    _, c_bg = await _uninterruptible_await(
+                        asyncio.gather(*pending_bg, return_exceptions=True)
+                    )
+                    if c_bg:
+                        cancel_during_cleanup = True
+                if not terminated_ok:
+                    terminated_ok, c_term2 = await _uninterruptible_await(
+                        self._terminate(container)
+                    )
+                    if c_term2:
+                        cancel_during_cleanup = True
+                if terminated_ok:
                     self.containers.pop(row["thread_id"], None)
-                    await completed_thread(self._forget, container)
+                    _, c_fgt = await _uninterruptible_await(
+                        asyncio.to_thread(self._forget, container)
+                    )
+                    if c_fgt:
+                        cancel_during_cleanup = True
+                    if cleanup_safe and not prior_quarantined:
+                        work.quarantined = False
                 else:
                     work.quarantined = True
                     self.ready, self.error = False, "容器清理未确认，已停止后续执行"
-                    await completed_thread(
-                        self._receipt, key, status="cleanup_unconfirmed"
+                    _, c_cu = await _uninterruptible_await(
+                        asyncio.to_thread(
+                            self._receipt, key, status="cleanup_unconfirmed"
+                        )
                     )
+                    if c_cu:
+                        cancel_during_cleanup = True
                     raise RuntimeError(self.error)
+                if cancel_during_cleanup and not needs_rollback:
+                    raise asyncio.CancelledError
 
     async def _terminate(self, container):
         try:
