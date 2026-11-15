@@ -7,6 +7,8 @@ import json
 import logging
 import re
 import sqlite3
+import time
+from pathlib import Path
 
 from .bridge import _grant_admin_direct
 from .intents import next_daily_due
@@ -14,14 +16,30 @@ from .memory import MemoryLayers
 from .scout import call_capability
 from .trust import parse_stream_spec
 
+_SERENDIPITY_FILLERS = (
+    "刚发现",
+    "一个",
+    "今天",
+    "看看",
+    "不错",
+    "可以",
+    "这个",
+    "那个",
+    "尝试",
+)
+_SERENDIPITY_FILLER_SET = set(_SERENDIPITY_FILLERS)
+
 
 def _extract_tokens(text):
     lower = str(text or "").lower()
     tokens = set(re.findall(r"[a-z0-9_]{2,}", lower))
-    for run in re.findall(r"[\u4e00-\u9fff]{2,}", lower):
+    cleaned = lower
+    for filler in _SERENDIPITY_FILLERS:
+        cleaned = cleaned.replace(filler, " ")
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", cleaned):
         for i in range(len(run) - 1):
             tokens.add(run[i : i + 2])
-    return tokens
+    return tokens - _SERENDIPITY_FILLER_SET
 
 
 class Pulse:
@@ -39,7 +57,7 @@ class Pulse:
         acquaintance_users=None,
         admins=lambda: set(),
         enabled_chats=lambda: [],
-        longing_quiet_hours=72,
+        longing_quiet_hours=0,
         activity=None,
         platform_for=None,
         redact=lambda v: v,
@@ -73,6 +91,104 @@ class Pulse:
         self.resolve_session = resolve_session
         self.task = None
         self.closing = False
+        self._heartbeat_next_at = 0.0
+        self._heartbeat_last_clock = 0.0
+        self._heartbeat_cached_mtime = None
+        self._heartbeat_cached_size = None
+        self._heartbeat_cached_parts = ("", "")
+        self._heartbeat_interval_used = heartbeat_interval
+        self._longing_next_bg_at = 0.0
+        self._longing_last_clock = 0.0
+
+    def invalidate_caches(self):
+        """清空心跳文件与节律冷却缓存，便于配置更新或测试时钟调整后立即重读。"""
+        self._heartbeat_next_at = 0.0
+        self._heartbeat_last_clock = 0.0
+        self._heartbeat_cached_mtime = None
+        self._heartbeat_cached_size = None
+        self._heartbeat_cached_parts = ("", "")
+        self._heartbeat_interval_used = self.heartbeat_interval
+        self._longing_next_bg_at = 0.0
+        self._longing_last_clock = 0.0
+
+    async def _engine_call(self, method_name, *args, **kwargs):
+        if self.engine is None:
+            return None
+        fn = getattr(self.engine, method_name, None)
+        if fn is None:
+            return None
+        params = inspect.signature(fn).parameters
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            filtered = kwargs
+        else:
+            filtered = {k: v for k, v in kwargs.items() if k in params}
+        result = fn(*args, **filtered)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    def _proactive_quota_available(self, target: str = "") -> bool:
+        if self.intents is None:
+            return False
+        fn = self.intents.proactive_quota_available
+        params = inspect.signature(fn).parameters
+        target_param = params.get("target")
+        if target_param is not None and target_param.kind == inspect.Parameter.KEYWORD_ONLY:
+            return bool(fn(target=target))
+        if any(
+            p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            )
+            for p in params.values()
+        ):
+            return bool(fn(target))
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return bool(fn(target=target))
+        return bool(fn())
+
+    def _chat_arena(self, chat_id: str) -> str:
+        if callable(self.routes):
+            try:
+                route = self.routes(chat_id)
+            except (ValueError, RuntimeError, sqlite3.Error):
+                route = None
+            if isinstance(route, dict):
+                ctype = str(route.get("chat_type") or "").strip().lower()
+                if ctype in {"group", "private"}:
+                    return ctype
+        parsed = parse_stream_spec(chat_id)
+        if parsed is not None and parsed[1] in {"group", "private"}:
+            return parsed[1]
+        return ""
+
+    def _with_previous_runs_prompt(self, prompt: str, payload: dict) -> str:
+        if str(payload.get("workspace") or "").strip():
+            return str(prompt)
+        recent_runs = payload.get("recent_runs")
+        if not recent_runs:
+            return str(prompt)
+        if isinstance(recent_runs, list):
+            safe_runs = [
+                {
+                    **item,
+                    "summary": self.redact(str(item.get("summary") or "")),
+                }
+                if isinstance(item, dict)
+                else self.redact(str(item))
+                for item in recent_runs
+            ]
+            serialized = json.dumps(safe_runs, ensure_ascii=False)
+        else:
+            serialized = self.redact(json.dumps(recent_runs, ensure_ascii=False))
+        return (
+            str(prompt)
+            + "\n<previous_runs>"
+            + html.escape(serialized)
+            + "</previous_runs>\n请对比前序巡检结论，聚焦新增变化，避免重复播报相同旧闻。"
+        )
 
     def _runtime_chat_id(self, chat_id, *, allow_unresolved=True):
         token = str(chat_id or "").strip()
@@ -132,12 +248,23 @@ class Pulse:
             + "</maisya_temperament>"
         )
 
-    async def tick(self):
+    async def tick(self, *, background_tick: bool = False):
         if self.closing:
             return
         await self._returns()
         if self.intents is not None:
-            await self._longing()
+            run_longing = True
+            if background_tick:
+                now = self.intents.clock()
+                if now < self._longing_last_clock:
+                    self._longing_next_bg_at = 0.0
+                self._longing_last_clock = now
+                if now < self._longing_next_bg_at:
+                    run_longing = False
+                else:
+                    self._longing_next_bg_at = now + 30.0
+            if run_longing:
+                await self._longing()
             await self._intents()
         await self._heartbeat()
 
@@ -169,12 +296,12 @@ class Pulse:
                 )
             ):
                 continue
+            material_rows = self.bridge.material(rows)
             facts = html.escape(
-                json.dumps(
-                    self.bridge.redact(self.bridge.material(rows)), ensure_ascii=False
-                )
+                json.dumps(self.bridge.redact(material_rows), ensure_ascii=False)
             )
-            if any(_grant_admin_direct(row.get("raw_grant")) for row in rows):
+            admin_direct = any(_grant_admin_direct(row.get("raw_grant")) for row in rows)
+            if admin_direct:
                 intent = (
                     "之前由本会话真实用户消息触发的 Agent 线程已有结果。"
                     "这是管理员最新发起的后台试跑预览（晚于此前历史闲聊或旧取消语，请勿因旧消息静默跳过）："
@@ -184,10 +311,24 @@ class Pulse:
                     + "</maisya_return>"
                 )
             else:
+                scroll_note = ""
+                if any(
+                    isinstance(item, dict)
+                    and item.get("chat_type") == "group"
+                    and int(item.get("messages_since_trigger") or 0) >= 5
+                    and item.get("source_msg_id")
+                    for item in (material_rows or [])
+                ):
+                    scroll_note = (
+                        "当前群聊自原提问起已滚过多条新消息：若开口回应，请结合 source_msg_id "
+                        "引用锚定原消息或点名提问人（share 可传 ref_msg_ids=[source_msg_id]）；"
+                        "若群内话题已翻篇且无需打断，可简短收尾或静默 stop。"
+                    )
                 intent = (
                     "之前由本会话真实用户消息触发的 Agent 线程已有结果。结合当前对话判断是否开口；"
                     "含图片/文件附件或准确链接请调用 maisya_agent(action='share', thread_id=...) 交付，纯文字通过原生 reply 表达，事实将单次交给 Replyer，也可以静默 stop。"
-                    "结果仍可通过 maisya_recall 查阅。\n<maisya_return>"
+                    + scroll_note
+                    + "结果仍可通过 maisya_recall 查阅。\n<maisya_return>"
                     + facts
                     + "</maisya_return>"
                 )
@@ -220,7 +361,7 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred"
                 )
 
-    async def _reschedule_recurring(self, row):
+    async def _reschedule_recurring(self, row, *, thread=None):
         payload = row.get("payload") or {}
         every = int(payload.get("every_seconds") or 0)
         daily_at = str(payload.get("daily_at") or "").strip()
@@ -229,14 +370,48 @@ class Pulse:
         next_payload = dict(payload)
         next_payload.pop("wait_thread", None)
         next_payload.pop("already_started", None)
+        now = self.intents.clock()
+        if not str(payload.get("workspace") or "").strip():
+            result_text = (
+                str((thread.get("result") or {}).get("text") or "").strip()
+                if isinstance(thread, dict) and isinstance(thread.get("result"), dict)
+                else ""
+            )
+            if result_text:
+                prev_runs = [
+                    dict(item)
+                    for item in (payload.get("recent_runs") or [])
+                    if isinstance(item, dict)
+                ]
+                prev_runs.append(
+                    {
+                        "at": int(now),
+                        "summary": self.redact(result_text)[:360],
+                    }
+                )
+                prev_runs = prev_runs[-3:]
+                while len(prev_runs) > 1 and len(
+                    json.dumps(prev_runs, ensure_ascii=False)
+                ) > 1200:
+                    prev_runs.pop(0)
+                while prev_runs and len(
+                    json.dumps(prev_runs, ensure_ascii=False)
+                ) > 1200:
+                    last = prev_runs[-1]
+                    summary = str(last.get("summary") or "")
+                    if len(summary) <= 20:
+                        break
+                    last["summary"] = summary[:-40]
+                next_payload["recent_runs"] = prev_runs
         if daily_at:
             tz_offset = int(payload.get("tz_offset_minutes", 480))
-            due_at, norm = next_daily_due(self.intents.clock(), daily_at, tz_offset)
+            due_at, norm = next_daily_due(now, daily_at, tz_offset)
             next_payload["daily_at"] = norm
             next_payload["tz_offset_minutes"] = tz_offset
             next_payload["every_seconds"] = 86400
         else:
-            due_at = self.intents.clock() + every
+            due_at = now + every
+        due_at = max(now + 60, due_at)
         await asyncio.to_thread(
             self.intents.schedule,
             kind=row["kind"],
@@ -275,6 +450,8 @@ class Pulse:
                 await asyncio.to_thread(
                     self.intents.finish, row["intent_id"], status, reason
                 )
+                if status == "failed":
+                    await self._reschedule_recurring(row)
                 return
         elif row["payload"].get("profile") and self.intents.in_sleep_window(self.sleep_window):
             await asyncio.to_thread(
@@ -295,6 +472,7 @@ class Pulse:
                     "failed",
                     "profile_disabled",
                 )
+                await self._reschedule_recurring(row)
                 return
             if not ability.autonomous and not row["payload"].get("scheduled_admin"):
                 await asyncio.to_thread(
@@ -303,8 +481,12 @@ class Pulse:
                     "failed",
                     "fresh_authorization_required",
                 )
+                await self._reschedule_recurring(row)
                 return
-            prompt = row["payload"].get("prompt") or row["reason"]
+            prompt = self._with_previous_runs_prompt(
+                row["payload"].get("prompt") or row["reason"],
+                row["payload"],
+            )
             raw_thread_chat = str(row["payload"].get("thread_chat_id") or "").strip()
             thread_chat_id = (
                 (await self._ensure_runtime_chat_id(raw_thread_chat))
@@ -315,7 +497,8 @@ class Pulse:
                 source_msg_id = str(row["payload"].get("source_msg_id") or "admin-preview")
                 route = await self.bridge.route(chat_id, source_msg_id, 0)
                 try:
-                    started = await self.engine.start(
+                    started = await self._engine_call(
+                        "start",
                         ability,
                         prompt,
                         chat_id=thread_chat_id,
@@ -332,6 +515,8 @@ class Pulse:
                             "source_platform": platform or "qq",
                             "source_msg_id": source_msg_id,
                         },
+                        background=True,
+                        defer_if_full=True,
                     )
                 finally:
                     await self.bridge.submitted(route)
@@ -344,15 +529,17 @@ class Pulse:
                 await asyncio.to_thread(
                     self.intents.finish, row["intent_id"], "done", "return_routed"
                 )
+                await self._reschedule_recurring(row)
                 return
-            started = await self.engine.start(
+            started = await self._engine_call(
+                "start",
                 ability,
                 prompt,
                 chat_id="self" if chat_id == "self" else chat_id,
                 platform="self" if chat_id == "self" else (platform or "qq"),
                 user_id="",
                 owner="self" if chat_id == "self" else "chat",
-                wait_seconds=5,
+                wait_seconds=0,
                 workspace=row["payload"].get("workspace", ""),
                 grant={
                     **(
@@ -366,6 +553,8 @@ class Pulse:
                         else {}
                     ),
                 },
+                background=True,
+                defer_if_full=True,
             )
             updated_payload = {**row["payload"], "wait_thread": True}
             row = {**row, "thread_id": started["thread_id"], "payload": updated_payload}
@@ -383,14 +572,23 @@ class Pulse:
                 )
             except (ValueError, PermissionError):
                 thread = None
-            if row["payload"].get("wait_thread") and (
-                (self.engine and self.engine.tasks.get(row["thread_id"]))
-                or (thread and thread["state"] == "active")
-            ):
-                await asyncio.to_thread(
-                    self.intents.finish, row["intent_id"], "deferred", delay=5
-                )
-                return
+            if row["payload"].get("wait_thread"):
+                tid = row["thread_id"]
+                if (
+                    self.engine is not None
+                    and tid not in self.engine.tasks
+                    and thread is not None
+                    and int(thread.get("processed_revision") or 0)
+                    < int(thread.get("revision") or 0)
+                ):
+                    await self._engine_call("kick_queued", tid, chat_id, background=True)
+                if (self.engine and self.engine.tasks.get(tid)) or (
+                    thread and thread["state"] == "active"
+                ):
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred", delay=2
+                    )
+                    return
         is_workflow = bool(
             row["source"] == "workflow"
             or row["payload"].get("profile")
@@ -400,7 +598,8 @@ class Pulse:
         if is_workflow:
             intent = (
                 "预设或定时安排的角色工作流已完成本轮运行。结合当前对话与产出内容判断是否交付："
-                "纯文字结论可直接用 reply 自然提起；若含准确链接、图片或文件附件，请调用 maisya_agent(action=\"share\") 交付后结束本轮；若无值得打扰的新内容可静默 stop。"
+                "纯文字结论可直接用 reply 自然提起；若含准确链接、图片或文件附件，请调用 maisya_agent(action=\"share\") 交付后结束本轮；"
+                "若 <maisya_thread_result> 与前序运行相比无新增变化或无值得打扰的新内容，请直接静默 stop。"
                 "\n<maisya_workflow>" + text + "</maisya_workflow>"
             )
             if row["kind"] == "proactive":
@@ -484,19 +683,48 @@ class Pulse:
             else ("deferred" if status in {"session_missing", "uncertain"} else "failed")
         )
         await asyncio.to_thread(self.intents.finish, row["intent_id"], done, status)
-        if done == "done":
-            await self._reschedule_recurring(row)
+        if done in {"done", "failed"}:
+            await self._reschedule_recurring(row, thread=thread)
 
     async def _silent(self, row):
-        if row["payload"].get("already_started"):
-            await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
-            return
         raw_target_chat = row["target"].split(":", 1)[1]
         target_chat = (
             "self"
             if raw_target_chat == "self"
             else await self._ensure_runtime_chat_id(raw_target_chat)
         )
+        if row["payload"].get("already_started"):
+            tid = row.get("thread_id") or ""
+            thread = None
+            if tid and self.engine is not None and tid not in self.engine.tasks:
+                try:
+                    thread = await asyncio.to_thread(
+                        self.bridge.store.get,
+                        tid,
+                        target_chat,
+                        allow_self=target_chat == "self",
+                    )
+                except (ValueError, PermissionError):
+                    thread = None
+                if (
+                    thread is not None
+                    and int(thread.get("processed_revision") or 0)
+                    < int(thread.get("revision") or 0)
+                ):
+                    kicked = await self._engine_call(
+                        "kick_queued", tid, target_chat, background=True
+                    )
+                    if kicked is False:
+                        await asyncio.to_thread(
+                            self.intents.finish,
+                            row["intent_id"],
+                            "deferred",
+                            delay=15,
+                        )
+                        return
+            await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
+            await self._reschedule_recurring(row, thread=thread)
+            return
         if (
             row["payload"].get("profile")
             and not row.get("thread_id")
@@ -521,6 +749,7 @@ class Pulse:
                     "failed",
                     "profile_disabled",
                 )
+                await self._reschedule_recurring(row)
                 return
             if not ability.autonomous and not row["payload"].get("scheduled_admin"):
                 await asyncio.to_thread(
@@ -529,10 +758,16 @@ class Pulse:
                     "failed",
                     "fresh_authorization_required",
                 )
+                await self._reschedule_recurring(row)
                 return
-            await self.engine.start(
-                ability,
+            prompt = self._with_previous_runs_prompt(
                 row["payload"].get("prompt") or row["reason"],
+                row["payload"],
+            )
+            await self._engine_call(
+                "start",
+                ability,
+                prompt,
                 chat_id="self" if target_chat == "self" else target_chat,
                 platform="self" if target_chat == "self" else (platform or "qq"),
                 user_id="",
@@ -542,6 +777,8 @@ class Pulse:
                 grant={"scheduled_admin": True}
                 if row["payload"].get("scheduled_admin")
                 else {},
+                background=True,
+                defer_if_full=True,
             )
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
             await self._reschedule_recurring(row)
@@ -549,6 +786,7 @@ class Pulse:
         thread_id = row["thread_id"]
         if not thread_id:
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
+            await self._reschedule_recurring(row)
             return
         try:
             thread = await asyncio.to_thread(
@@ -563,6 +801,7 @@ class Pulse:
             await asyncio.to_thread(
                 self.intents.finish, row["intent_id"], "done", "thread_closed"
             )
+            await self._reschedule_recurring(row, thread=thread)
             return
         profile = thread["profile_snapshot"]
         if (
@@ -577,6 +816,7 @@ class Pulse:
                 "failed",
                 "fresh_authorization_required",
             )
+            await self._reschedule_recurring(row, thread=thread)
             return
         if thread["owner"] != "self" and not self.enabled(
             thread["chat_id"], thread["platform"]
@@ -586,8 +826,23 @@ class Pulse:
         if self.engine is None:
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
+        if (
+            thread_id not in self.engine.tasks
+            and int(thread.get("processed_revision") or 0)
+            < int(thread.get("revision") or 0)
+        ):
+            kicked = await self._engine_call(
+                "kick_queued", thread_id, target_chat, background=True
+            )
+            if kicked is False:
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "deferred", delay=15
+                )
+                return
         if self.engine.tasks.get(thread_id) or thread["state"] == "active":
-            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "deferred", delay=15
+            )
             return
         try:
             chat_id = thread["chat_id"] if thread["owner"] != "self" else "self"
@@ -602,7 +857,8 @@ class Pulse:
                     )
                     + "</external_event>"
                 )
-            await self.engine.send(
+            await self._engine_call(
+                "send",
                 thread_id,
                 prompt,
                 chat_id=chat_id,
@@ -612,12 +868,14 @@ class Pulse:
                     if row["payload"].get("scheduled_admin")
                     else {}
                 },
+                background=True,
+                defer_if_full=True,
             )
         except (ValueError, PermissionError, RuntimeError, sqlite3.Error):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
         await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
-        await self._reschedule_recurring(row)
+        await self._reschedule_recurring(row, thread=thread)
 
     def _proactive_gate(self, row):
         chat_id = row["target"].split(":", 1)[1]
@@ -625,7 +883,7 @@ class Pulse:
         if level == "quiet":
             return False, "quiet_level"
         source = row["source"]
-        if level == "care" and source == "serendipity":
+        if level == "care" and source == "serendipity" and self._chat_arena(chat_id) != "private":
             return False, "care_blocks_serendipity"
         allowed, reason = self.intents.social_gate(
             row["target"], sleep_window=self.sleep_window
@@ -642,6 +900,61 @@ class Pulse:
             return False, "unfamiliar_chat"
         return True, ""
 
+    def _recent_thread_corpus(self, chat_id: str, raw_chat_id: str = "") -> str:
+        parts = []
+        recent_fn = getattr(self, "recent_topics", None)
+        if callable(recent_fn):
+            try:
+                topics = recent_fn(chat_id)
+            except (ValueError, OSError, RuntimeError, sqlite3.Error, TypeError):
+                topics = None
+            if isinstance(topics, str):
+                parts.append(topics)
+            elif isinstance(topics, (list, tuple, set)):
+                parts.extend(str(item) for item in topics if item)
+        store = getattr(self.bridge, "store", None) if self.bridge is not None else None
+        if store is not None and callable(getattr(store, "connect", None)):
+            lookup_ids = {str(chat_id)}
+            if raw_chat_id:
+                lookup_ids.add(str(raw_chat_id))
+            if callable(self.chat_aliases):
+                try:
+                    lookup_ids.update(
+                        str(alias) for alias in self.chat_aliases(chat_id) if alias
+                    )
+                except (ValueError, RuntimeError, sqlite3.Error, TypeError):
+                    pass
+            clean_ids = sorted(x for x in lookup_ids if x)
+            if clean_ids:
+                placeholders = ",".join("?" for _ in clean_ids)
+                try:
+                    with store.connect() as db:
+                        rows = db.execute(
+                            f"SELECT t.summary, t.history, ts.text "
+                            f"FROM agent_threads t "
+                            f"LEFT JOIN thread_search ts ON ts.thread_id = t.thread_id "
+                            f"WHERE t.chat_id IN ({placeholders}) "
+                            f"ORDER BY t.updated DESC LIMIT 12",
+                            tuple(clean_ids),
+                        ).fetchall()
+                    for row in rows:
+                        keys = set(row.keys()) if hasattr(row, "keys") else set()
+                        for key in ("summary", "text"):
+                            if key in keys and row[key]:
+                                parts.append(str(row[key]))
+                        if "history" in keys and row["history"]:
+                            try:
+                                hist = json.loads(row["history"])
+                            except (ValueError, TypeError):
+                                hist = None
+                            if isinstance(hist, list):
+                                for msg in hist[-6:]:
+                                    if isinstance(msg, dict) and msg.get("content"):
+                                        parts.append(str(msg["content"]))
+                except (sqlite3.Error, OSError, ValueError):
+                    pass
+        return "\n".join(parts)
+
     def propose_serendipity(self, *, thread_id, due_at, reason):
         if self.intents is None or self.memory is None:
             return {"scheduled": False}
@@ -656,7 +969,12 @@ class Pulse:
             if not chat_id or chat_id in seen_sids:
                 continue
             seen_sids.add(chat_id)
-            if self.level_for(chat_id) != "lively":
+            arena = self._chat_arena(chat_id) or self._chat_arena(str(raw_chat_id or ""))
+            level = self.level_for(chat_id)
+            if arena == "private":
+                if level not in {"care", "lively"}:
+                    continue
+            elif level != "lively":
                 continue
             platform = self.platform_for(chat_id) if callable(self.platform_for) else ""
             if not self.enabled(chat_id, platform):
@@ -671,10 +989,12 @@ class Pulse:
             if not self.intents.social_gate("chat:" + chat_id, sleep_window="")[0]:
                 continue
             try:
-                content = (self.memory.read("memory", chat_id=chat_id).get("content") or "").lower()
+                mem_content = self.memory.read("memory", chat_id=chat_id).get("content") or ""
             except (ValueError, OSError, RuntimeError, sqlite3.Error):
-                continue
-            score = sum(1 for tok in tokens if tok in content)
+                mem_content = ""
+            thread_content = self._recent_thread_corpus(chat_id, str(raw_chat_id or ""))
+            corpus_tokens = _extract_tokens(mem_content + "\n" + thread_content)
+            score = len(tokens & corpus_tokens)
             if score > 0 and (best is None or score > best[0]):
                 best = (score, chat_id, platform)
         if best is None:
@@ -702,7 +1022,6 @@ class Pulse:
             or not callable(self.activity)
             or self.longing_quiet_hours <= 0
             or self.intents.in_sleep_window(self.sleep_window)
-            or not await asyncio.to_thread(self.intents.proactive_quota_available)
         ):
             return
         now = self.intents.clock()
@@ -717,6 +1036,10 @@ class Pulse:
                 continue
             seen_sids.add(chat_id)
             if self.level_for(chat_id) == "quiet":
+                continue
+            if not await asyncio.to_thread(
+                self._proactive_quota_available, "chat:" + chat_id
+            ):
                 continue
             platform = (
                 await asyncio.to_thread(self.platform_for, chat_id)
@@ -885,6 +1208,28 @@ class Pulse:
             not isinstance(opened, dict) or opened.get("success", True)
         )
 
+    def _heartbeat_file_path(self):
+        if self.memory is None:
+            return None
+        paths = getattr(self.memory, "paths", None)
+        if isinstance(paths, dict) and paths.get("heartbeat"):
+            return Path(paths["heartbeat"])
+        if callable(paths):
+            try:
+                resolved = paths("heartbeat")
+                if resolved:
+                    return Path(resolved)
+            except TypeError:
+                pass
+        if paths is not None and hasattr(paths, "heartbeat"):
+            resolved = getattr(paths, "heartbeat")
+            if resolved:
+                return Path(resolved)
+        root = getattr(self.memory, "root", None)
+        if root:
+            return Path(root) / "memory/self/HEARTBEAT.md"
+        return None
+
     def _claim_heartbeat(self, now):
         with self.intents.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
@@ -893,6 +1238,7 @@ class Pulse:
             ).fetchone()
             last_run = row["last_proactive"] if row else 0.0
             if now - last_run < self.heartbeat_interval:
+                self._heartbeat_next_at = float(last_run) + self.heartbeat_interval
                 return False
             db.execute(
                 "INSERT INTO social_state (chat_id, locked, last_proactive) "
@@ -900,6 +1246,7 @@ class Pulse:
                 "last_proactive=excluded.last_proactive",
                 (now,),
             )
+        self._heartbeat_next_at = float(now) + self.heartbeat_interval
         return True
 
     async def _heartbeat(self):
@@ -923,27 +1270,86 @@ class Pulse:
         ):
             return
         try:
-            heartbeat = await asyncio.to_thread(self.memory.read, "heartbeat")
-            temperament, plan = MemoryLayers.heartbeat_parts(
-                heartbeat.get("content") or ""
-            )
+            now = self.intents.clock()
+            if self.heartbeat_interval != self._heartbeat_interval_used:
+                self._heartbeat_next_at = 0.0
+                self._heartbeat_interval_used = self.heartbeat_interval
+            if now < self._heartbeat_last_clock:
+                self._heartbeat_next_at = 0.0
+            self._heartbeat_last_clock = now
+            if now < self._heartbeat_next_at:
+                return
+
+            hb_path = self._heartbeat_file_path()
+            if hb_path is not None:
+                try:
+                    st = hb_path.stat()
+                except OSError:
+                    st = None
+                if st is not None:
+                    mtime_ns = st.st_mtime_ns
+                    size = st.st_size
+                    if (
+                        self._heartbeat_cached_mtime == mtime_ns
+                        and self._heartbeat_cached_size == size
+                    ):
+                        temperament, plan = self._heartbeat_cached_parts
+                    else:
+                        heartbeat = await asyncio.to_thread(
+                            self.memory.read, "heartbeat"
+                        )
+                        temperament, plan = MemoryLayers.heartbeat_parts(
+                            heartbeat.get("content") or ""
+                        )
+                        self._heartbeat_cached_mtime = mtime_ns
+                        self._heartbeat_cached_size = size
+                        self._heartbeat_cached_parts = (temperament, plan)
+                elif self._heartbeat_cached_mtime == -1:
+                    temperament, plan = self._heartbeat_cached_parts
+                else:
+                    heartbeat = await asyncio.to_thread(self.memory.read, "heartbeat")
+                    temperament, plan = MemoryLayers.heartbeat_parts(
+                        heartbeat.get("content") or ""
+                    )
+                    self._heartbeat_cached_mtime = -1
+                    self._heartbeat_cached_size = 0
+                    self._heartbeat_cached_parts = (temperament, plan)
+            else:
+                heartbeat = await asyncio.to_thread(self.memory.read, "heartbeat")
+                temperament, plan = MemoryLayers.heartbeat_parts(
+                    heartbeat.get("content") or ""
+                )
             if not plan:
                 return
-            now = self.intents.clock()
             if not await asyncio.to_thread(self._claim_heartbeat, now):
+                if self._heartbeat_next_at <= now:
+                    self._heartbeat_next_at = float(now) + self.heartbeat_interval
                 return
+            if self._heartbeat_next_at <= now:
+                self._heartbeat_next_at = float(now) + self.heartbeat_interval
             ability = await asyncio.to_thread(
                 self.profiles.get, self.heartbeat_profile
             )
             if not ability.autonomous:
                 return
+            journal_obj = await asyncio.to_thread(self.memory.read, "journal")
+            journal_text = str((journal_obj or {}).get("content") or "").strip()
             prompt = (
                 "按自身节奏做一次轻量公开探索并记录近况（不涉及任何具体会话私有信息）：\n"
                 + plan
             )
             if temperament:
                 prompt += "\n<maisya_temperament>" + html.escape(temperament) + "</maisya_temperament>"
-            await self.engine.start(
+            if journal_text:
+                recent_journal = self.redact(journal_text)[-600:]
+                prompt += (
+                    "\n以下为近期已记录的手账，请避开与最近手账重复的主题，不要重复写进 JOURNAL.md 或再次汇报：\n"
+                    "<recent_journal>"
+                    + html.escape(recent_journal)
+                    + "</recent_journal>"
+                )
+            await self._engine_call(
+                "start",
                 ability,
                 prompt,
                 chat_id="self",
@@ -952,6 +1358,8 @@ class Pulse:
                 owner="self",
                 wait_seconds=0,
                 workspace="heartbeat",
+                background=True,
+                defer_if_full=True,
             )
         except (ValueError, PermissionError, RuntimeError, OSError, sqlite3.Error):
             return
@@ -964,7 +1372,7 @@ class Pulse:
         while not self.closing:
             await asyncio.sleep(1)
             try:
-                await self.tick()
+                await self.tick(background_tick=True)
             except asyncio.CancelledError:
                 raise
             except Exception:

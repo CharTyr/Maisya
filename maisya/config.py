@@ -48,8 +48,15 @@ class Settings(PluginConfigBase):
     )
     chat_proactive_levels: dict[str, str] = Field(default_factory=dict)
     acquaintance_users: list[str] = Field(default_factory=list)
-    longing_quiet_hours: int = Field(default=72, ge=12, le=720)
+    longing_quiet_hours: int = Field(default=0, ge=0, le=720)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+
+    @field_validator("longing_quiet_hours")
+    @classmethod
+    def _validate_longing_quiet_hours(cls, value: int) -> int:
+        if value != 0 and not (12 <= value <= 720):
+            raise ValueError("久违问候安静阈值须为 0（关闭）或 12 到 720 小时")
+        return value
 
     @field_validator("chat_proactive_levels")
     @classmethod

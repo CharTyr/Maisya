@@ -660,12 +660,18 @@ async def test_longing_triggers_once_for_quiet_familiar_chat_and_obeys_cooldown(
         await plugin.pulse.tick()
         assert wakes == []
 
-        # Backdate last_human_at by 73 hours (> default 72h longing_quiet_hours)
+        # Default longing_quiet_hours=0 keeps longing disabled even after 73 hours
+        assert plugin.pulse.longing_quiet_hours == 0
         with plugin.messages.path and plugin.threads.connect() as db, db:
             db.execute(
                 "UPDATE session_routes SET last_human_at=? WHERE session_id='chat'",
                 (now[0] - 73 * 3600,),
             )
+        await plugin.pulse.tick()
+        assert wakes == []
+
+        # Enabling longing_quiet_hours=72 triggers once after 73 quiet hours
+        plugin.pulse.longing_quiet_hours = 72
         await plugin.pulse.tick()
         assert len(wakes) == 1
         assert wakes[0]["metadata"]["source"] == "longing"

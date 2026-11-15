@@ -11176,7 +11176,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if ($("#mob-sum-streams")) $("#mob-sum-streams").textContent = `${whitelistEntries.length} 条`;
 
       $("#advanced-runtime-fields").innerHTML = [
-        row("久违问候安静阈值 (小时)", "熟人会话安静超过设定小时数后才可能温柔打招呼 (12-720)。", `<input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="12" max="720" value="${Number(s.longing_quiet_hours ?? 72)}">`),
+        row("久违问候安静阈值 (小时)", "设为 0 默认关闭；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。", `<input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="0" max="720" value="${Number(s.longing_quiet_hours ?? 0)}">`),
         row("线程步数 / 超时 / 上下文上限", "单次后台推理与工具循环的安全保护上限。", `<input id="set-steps" class="mil-input mono" style="width:76px" type="number" min="1" max="64" value="${Number(s.agent_max_steps ?? 16)}" aria-label="最大步数"><input id="set-timeout" class="mil-input mono" style="width:84px" type="number" min="10" max="900" value="${Number(s.agent_timeout ?? 180)}" aria-label="超时秒数"><input id="set-ctx" class="mil-input mono" style="width:96px" type="number" min="24000" max="256000" value="${Number(s.thread_context_chars ?? 48000)}" aria-label="上下文字符上限">`),
       ].join("");
 
@@ -11589,7 +11589,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         heartbeat_interval_minutes: Number($("#heartbeat_interval_minutes").value),
         heartbeat_profile: $("#heartbeat_profile").value.trim() || "scout",
         sleep_window: $("#set-sleep").value.trim(),
-        longing_quiet_hours: Number($("#set-longing")?.value ?? curSettings?.longing_quiet_hours ?? 72),
+        longing_quiet_hours: Number($("#set-longing")?.value ?? curSettings?.longing_quiet_hours ?? 0),
         agent_max_steps: Number($("#set-steps")?.value ?? curSettings?.agent_max_steps ?? 16),
         agent_timeout: Number($("#set-timeout")?.value ?? curSettings?.agent_timeout ?? 180),
         thread_context_chars: Number($("#set-ctx")?.value ?? curSettings?.thread_context_chars ?? 48000),
