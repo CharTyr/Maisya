@@ -156,9 +156,12 @@ def snapshot(
             }
             for row in rows
         ]
+        suppress_fallback = thread_id == "__none__"
+        if suppress_fallback:
+            thread_id = ""
         selected = None
         events = []
-        if not thread_id and threads:
+        if not suppress_fallback and not thread_id and threads:
             preferred = (
                 next((t for t in threads if t["state"] in {"active", "waiting"}), None)
                 or next((t for t in threads if not t["junk"]), None)

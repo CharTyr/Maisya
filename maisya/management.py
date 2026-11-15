@@ -441,6 +441,10 @@ class Management:
             options.get("name") or raw_item.get("name") or raw_item.get("id") or ""
         ).strip()
         self.plugin.vault._validate_handle(name)
+        orig_name = str(options.get("orig_name") or "").strip()
+        orig_kind = str(options.get("orig_kind") or "").strip()
+        if orig_name:
+            self.plugin.vault._validate_handle(orig_name)
         spec = {k: v for k, v in raw_item.items() if k not in {"name", "id"}}
         if isinstance(raw_item.get("spec"), dict) and set(spec) == {"spec"}:
             spec = dict(raw_item["spec"])
@@ -454,6 +458,12 @@ class Management:
         next_config = copy.deepcopy(current)
         next_config.setdefault("servers", {})
         next_config.setdefault("templates", {})
+        if orig_name:
+            _, orig_bucket = (
+                self._service_bucket(orig_kind) if orig_kind else (kind, bucket)
+            )
+            if (orig_bucket, orig_name) != (bucket, name):
+                next_config.get(orig_bucket, {}).pop(orig_name, None)
         next_config[bucket][name] = spec
         self._validate_services(next_config)
         content = json.dumps(next_config, ensure_ascii=False).encode()
@@ -605,6 +615,7 @@ class Management:
                 target=profile_id,
                 expected_version=current["version"],
                 author="rollback",
+                allow_custom=True,
             )
         else:
             saved = self.plugin.memory.rollback(
@@ -612,6 +623,7 @@ class Management:
                 restore_version,
                 target=profile_id,
                 expected_version=current["version"],
+                allow_custom=True,
             )
         if reverted_tid and getattr(self.plugin, "threads", None) is not None:
             with self.plugin.threads.connect() as db, db:
@@ -761,14 +773,36 @@ class Management:
         if intents is not None:
             now = intents.clock()
             start, end = intents._day_bounds(now)
+            counts = {"group": 0, "private": 0}
             with intents.store.connect() as db:
-                row = db.execute(
-                    "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
+                rows = db.execute(
+                    "SELECT target, payload FROM intents WHERE kind='proactive' "
                     "AND source IN ('afterglow','serendipity','longing','later') "
-                    "AND created>=? AND created<? AND status!='cancelled'",
+                    "AND COALESCE(handled, due_at, created)>=? "
+                    "AND COALESCE(handled, due_at, created)<? "
+                    "AND status NOT IN ('cancelled','failed')",
                     (start, end),
-                ).fetchone()
-                used = int(row["count"] if row else 0)
+                ).fetchall()
+                arena_fn = getattr(intents, "_target_arena", None)
+                for row in rows:
+                    target = str(row["target"] if hasattr(row, "keys") else row[0])
+                    raw_payload = row["payload"] if hasattr(row, "keys") else row[1]
+                    try:
+                        parsed_payload = (
+                            json.loads(raw_payload) if raw_payload else None
+                        )
+                    except (TypeError, ValueError):
+                        parsed_payload = None
+                    if callable(arena_fn):
+                        arena = arena_fn(
+                            db,
+                            target,
+                            parsed_payload if isinstance(parsed_payload, dict) else None,
+                        )
+                    else:
+                        arena = "private" if ":private:" in target else "group"
+                    counts[arena if arena in counts else "group"] += 1
+            used = max(counts.values())
         return {
             "used": used,
             "limit": limit,
@@ -1118,6 +1152,8 @@ class Management:
         token = options.get("token", "")
         meta = None
         if not token:
+            if options.get("include_profile") is False:
+                raise ValueError("能力配方导出必须包含角色档案正文（PROFILE.md）")
             if len(self.transfers) >= 4:
                 raise ValueError("传输较多，请稍后再试")
             token = uuid.uuid4().hex
@@ -1239,14 +1275,20 @@ class Management:
                 if ctx is None:
                     return default
                 try:
-                    return await call_capability(ctx, capability, **kwargs)
+                    return await asyncio.wait_for(
+                        call_capability(ctx, capability, timeout_ms=2500, **kwargs),
+                        timeout=3.0,
+                    )
                 except Exception:
                     return default
 
             probe_entries: list[dict] = []
             probe_tasks: dict[str, list[str]] = {}
 
-            raw_models = await probe("llm.get_available_models", {})
+            raw_models, raw_stats = await asyncio.gather(
+                probe("llm.get_available_models", {}),
+                probe("statistics.local.models", {}, top_models=100),
+            )
             if isinstance(raw_models, list):
                 for item in raw_models:
                     if isinstance(item, str) and item.strip():
@@ -1303,7 +1345,6 @@ class Management:
                         else:
                             probe_tasks.setdefault(key, [])
 
-            raw_stats = await probe("statistics.local.models", {}, top_models=100)
             stat_items = (
                 raw_stats.get("models")
                 if isinstance(raw_stats, dict)
@@ -1554,6 +1595,28 @@ class Management:
                 str(options.get("target") or "").strip(),
                 options,
             )
+            if options.get("include_profile") is False and isinstance(result, dict):
+                blocker = "未勾选角色档案正文（PROFILE.md），无法构成完整能力配方；请保留该必选项后再导出。"
+                findings = list(result.get("findings") or [])
+                if not any(
+                    isinstance(f, dict) and f.get("path") == "PROFILE.md" and f.get("severity") == "blocker"
+                    for f in findings
+                ):
+                    findings.insert(
+                        0,
+                        {
+                            "severity": "blocker",
+                            "path": "PROFILE.md",
+                            "message": blocker,
+                        },
+                    )
+                result["findings"] = findings
+                result["can_export"] = False
+                blockers = list(result.get("blockers") or [])
+                if blocker not in blockers:
+                    blockers.append(blocker)
+                result["blockers"] = blockers
+                result["ready"] = False
         elif section == "recipe_package":
             async with self.lock:
                 result = await completed_thread(self._transfer_recipe, options)
@@ -1563,6 +1626,15 @@ class Management:
         else:
             raise ValueError("未知管理查询")
         return result
+
+    async def _read_batch_section(self, key: str, opts: dict) -> dict:
+        try:
+            value = await self._read_section(key, opts)
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "读取失败"}
+        if isinstance(value, dict):
+            return {"success": True, **value}
+        return {"success": True, "data": value}
 
     async def _read(self, section, payload):
         options = self.arguments(payload)
@@ -1578,7 +1650,7 @@ class Management:
                     raise ValueError("非法的批量读取请求")
                 ordered_items.append((key, dict(value or {})))
             values = await asyncio.gather(
-                *(self._read_section(key, opts) for key, opts in ordered_items)
+                *(self._read_batch_section(key, opts) for key, opts in ordered_items)
             )
             result = {
                 "sections": {
@@ -2077,6 +2149,16 @@ class Management:
 
         raise ValueError("未知产物类型")
 
+    async def _persist_settings(self, raw_settings) -> Settings:
+        settings = Settings.model_validate(raw_settings)
+        await self.plugin.on_config_update("self", settings.model_dump(), 0)
+        await completed_thread(
+            atomic_private_write,
+            self.plugin.data_root / "settings.json",
+            json.dumps(settings.model_dump(), ensure_ascii=False).encode(),
+        )
+        return settings
+
     async def write(self, action, payload):
         async with self.request(), self.lock:
             return await self._write(action, payload)
@@ -2221,14 +2303,19 @@ class Management:
                             pass
                         normalized_levels[key] = v
                     raw_settings["chat_proactive_levels"] = normalized_levels
-            settings = Settings.model_validate(raw_settings)
-            await plugin.on_config_update("self", settings.model_dump(), 0)
-            await completed_thread(
-                atomic_private_write,
-                plugin.data_root / "settings.json",
-                json.dumps(settings.model_dump(), ensure_ascii=False).encode(),
-            )
+            await self._persist_settings(raw_settings)
             result = self._settings()
+        elif action == "ui_style":
+            style = str(options.get("ui_style") or "").strip()
+            if style not in {"millennium", "maiwork", "auto"}:
+                raise ValueError("界面风格仅支持 millennium、maiwork 或 auto")
+            raw_settings = plugin.settings.model_dump()
+            raw_settings["ui_style"] = style
+            settings = await self._persist_settings(raw_settings)
+            result = {
+                "ui_style": settings.ui_style,
+                "version": self._settings()["version"],
+            }
         elif action == "services":
             current = await completed_thread(plugin.runtime.services.load)
             if options.get("expected_version") != self._version(current):

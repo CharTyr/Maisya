@@ -1905,7 +1905,8 @@ html.dark .out-ico--ws { color: #fde047; }
   #ms-mgmt-view .m-set-shell[data-mob-sub="routines"] .m-set-sec[data-set-sec="health"],
   #ms-mgmt-view .m-set-shell[data-mob-sub="services"] .m-set-sec[data-set-sec="services"],
   #ms-mgmt-view .m-set-shell[data-mob-sub="vault"] .m-set-sec[data-set-sec="vault"],
-  #ms-mgmt-view .m-set-shell[data-mob-sub="webhooks"] .m-set-sec[data-set-sec="webhooks"] {
+  #ms-mgmt-view .m-set-shell[data-mob-sub="webhooks"] .m-set-sec[data-set-sec="webhooks"],
+  #ms-mgmt-view .m-set-shell[data-mob-sub="runtime"] .m-set-sec[data-set-sec="runtime"] {
     display: flex;
   }
 }
@@ -1972,12 +1973,15 @@ html.dark .out-ico--ws { color: #fde047; }
 
   let savedUiStyle = "millennium";
   let manualUiStyle = "";
+  let uiStyleSeq = 0;
   let lastCtx = null;
   function effectiveUiStyle(ctx) {
-    if (manualUiStyle) return manualUiStyle;
-    if (savedUiStyle === "maiwork" || savedUiStyle === "millennium") return savedUiStyle;
-    const dash = (ctx || lastCtx || window.maibot?.context || {}).dashboardStyle || "millennium";
-    return dash === "millennium" ? "millennium" : "maiwork";
+    const pref = manualUiStyle || savedUiStyle || "millennium";
+    if (pref === "auto") {
+      const dash = (ctx || lastCtx || window.maibot?.context || {}).dashboardStyle || "millennium";
+      return dash === "millennium" ? "millennium" : "maiwork";
+    }
+    return pref === "maiwork" ? "maiwork" : "millennium";
   }
   function syncUiToggle(style) {
     const btn = $("#ui-style-toggle");
@@ -1997,10 +2001,39 @@ html.dark .out-ico--ws { color: #fde047; }
   }
   applyTheme();
   window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
-  $("#ui-style-toggle")?.addEventListener("click", () => {
-    const next = document.documentElement.getAttribute("data-ui-style") === "millennium" ? "maiwork" : "millennium";
+  $("#ui-style-toggle")?.addEventListener("click", async () => {
+    const cur = document.documentElement.getAttribute("data-ui-style") || "millennium";
+    const next = cur === "millennium" ? "maiwork" : "millennium";
+    const prevManual = manualUiStyle;
+    const prevSaved = savedUiStyle;
+    const seq = ++uiStyleSeq;
     manualUiStyle = next;
     applyTheme();
+    try {
+      const r = await rpc("write", "ui_style", { ui_style: next });
+      if (seq !== uiStyleSeq) return;
+      if (!r?.success) {
+        const msg = String(r?.error || "主题风格保存失败");
+        if (/unexpected keyword argument/i.test(msg)) return;
+        manualUiStyle = prevManual;
+        savedUiStyle = prevSaved;
+        applyTheme();
+        say(msg, true);
+        return;
+      }
+      savedUiStyle = r.ui_style || next;
+      manualUiStyle = "";
+      applyTheme();
+      window.dispatchEvent(new CustomEvent("maisya:ui-style-saved", { detail: { uiStyle: savedUiStyle, version: r.version } }));
+    } catch (err) {
+      if (seq !== uiStyleSeq) return;
+      const msg = String(err?.message || err || "主题风格保存失败");
+      if (/unexpected keyword argument/i.test(msg)) return;
+      manualUiStyle = prevManual;
+      savedUiStyle = prevSaved;
+      applyTheme();
+      say(msg, true);
+    }
   });
 
   // 严格限制最多 2 路并发请求，确保排队稳定执行
@@ -2014,14 +2047,20 @@ html.dark .out-ico--ws { color: #fde047; }
     activeSlotCount--;
     if (waiters.length) waiters.shift()();
   }
+  function secResp(sec) {
+    return sec && typeof sec === "object" && "success" in sec
+      ? sec
+      : { success: true, ...(sec || {}) };
+  }
   async function rpc(op, key, body) {
+    const startStyleSeq = uiStyleSeq;
     await acquire();
     try {
       const arg = op === "read"
         ? { section: key, payload: JSON.stringify(body || {}) }
         : { action: key, payload: JSON.stringify(body || {}) };
       const res = op === "read" ? await window.maibot.query("read", arg) : await window.maibot.action("write", arg);
-      if (res?.ui_style) {
+      if (res?.ui_style && startStyleSeq === uiStyleSeq) {
         savedUiStyle = res.ui_style;
         applyTheme();
       }
@@ -2045,11 +2084,25 @@ html.dark .out-ico--ws { color: #fde047; }
     if (tag) tag.hidden = !flag;
   }
 
+  function canTriggerSaveKey(el) {
+    return Boolean(
+      el &&
+      el.isConnected &&
+      !el.disabled &&
+      el.getClientRects().length > 0 &&
+      getComputedStyle(el).visibility !== "hidden"
+    );
+  }
   document.addEventListener("keydown", (ev) => {
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
       ev.preventDefault();
-      if (page === "settings") $("#save-settings")?.click();
-      else if (page === "abilities" || page === "memory") $("#save")?.click();
+      if (page === "settings") {
+        const btn = ["#save-settings", "#save-settings-streams", "#save-settings-adv"].map((s) => $(s)).find(canTriggerSaveKey);
+        btn?.click();
+      } else if (page === "abilities" || page === "memory") {
+        const btn = $("#save");
+        if (canTriggerSaveKey(btn)) btn.click();
+      }
     }
   });
 
@@ -2141,6 +2194,11 @@ html.dark .out-ico--ws { color: #fde047; }
     const say = (text, isErr = false) => {
       if (!sig?.aborted) hostSay(text, isErr);
     };
+    const secResp = (sec) => (
+      sec && typeof sec === "object" && "success" in sec
+        ? sec
+        : { success: true, ...(sec || {}) }
+    );
 
     const fmtReceiptTime = (raw) => {
       if (!raw) return "";
@@ -3926,6 +3984,7 @@ html.dark .out-ico--ws { color: #fde047; }
         if (h && v) secret_notes[h] = v;
       });
       return {
+        include_profile: $("#rcp-inc-profile")?.checked !== false,
         include_skills: $("#rcp-inc-skills")?.checked !== false,
         include_notes: $("#rcp-inc-notes")?.checked !== false,
         include_presets: $("#rcp-inc-presets")?.checked !== false,
@@ -4150,7 +4209,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $("#role-package-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     };
     $("#rcp-draft-btn").onclick = refreshRecipeDraft;
-    ["rcp-inc-skills", "rcp-inc-notes", "rcp-inc-presets", "rcp-inc-routines"].forEach((cid) => {
+    ["rcp-inc-profile", "rcp-inc-skills", "rcp-inc-notes", "rcp-inc-presets", "rcp-inc-routines"].forEach((cid) => {
       $(`#${cid}`)?.addEventListener("change", () => {
         if (!$("#rcp-draft-box")?.hidden) refreshRecipeDraft();
       });
@@ -4995,8 +5054,12 @@ html.dark .out-ico--ws { color: #fde047; }
       if (fitSeg) fitSeg.hidden = true;
 
       if (a.media_kind === "binary") {
-        copyBuffer = a._base64Head || "";
-        stage.innerHTML = `<pre class="mil-pre">二进制文件：${esc(a.name)} (${a.bytes} B)\nMIME：${esc(a.mime)}\nBase64 片段：\n${esc((a._base64Head || "").slice(0, 1200))}</pre>`;
+        const fullB64 = a._base64Head || "";
+        const loadedBytes = Number(a._binaryBytesLoaded || 0);
+        const totalBytes = Number(a.bytes || a.total || loadedBytes);
+        const chunkCount = Array.isArray(a._binaryChunks) ? a._binaryChunks.length : (fullB64 ? 1 : 0);
+        copyBuffer = fullB64;
+        stage.innerHTML = `<pre class="mil-pre">二进制文件：${esc(a.name)} (${totalBytes} B)\nMIME：${esc(a.mime)}\n已加载：${loadedBytes} / ${totalBytes} B（${chunkCount} 段）\nBase64 片段（前 1200 字 / 共 ${fullB64.length} 字）：\n${esc(fullB64.slice(0, 1200))}</pre>`;
         return;
       }
 
@@ -5040,6 +5103,18 @@ html.dark .out-ico--ws { color: #fde047; }
       return bytes;
     }
 
+    function mergeBase64Chunks(chunks) {
+      const arrays = chunks.map(b64ToBytes);
+      const totalLen = arrays.reduce((acc, a) => acc + a.length, 0);
+      const merged = new Uint8Array(totalLen);
+      let writeOff = 0;
+      for (const arr of arrays) {
+        merged.set(arr, writeOff);
+        writeOff += arr.length;
+      }
+      return merged;
+    }
+
     async function loadArtifact(req, append = false) {
       const seq = ++openSeq;
       if (!append) {
@@ -5070,14 +5145,7 @@ html.dark .out-ico--ws { color: #fde047; }
           chunks.push(nxt.base64 || "");
           nextOff = nxt.next_offset;
         }
-        const arrays = chunks.map(b64ToBytes);
-        const totalLen = arrays.reduce((acc, a) => acc + a.length, 0);
-        const merged = new Uint8Array(totalLen);
-        let writeOff = 0;
-        for (const arr of arrays) {
-          merged.set(arr, writeOff);
-          writeOff += arr.length;
-        }
+        const merged = mergeBase64Chunks(chunks);
         r._dims = probeImageDimensions(merged);
         r._imageUrl = chunks.length === 1
           ? `data:${r.mime || "image/png"};base64,${chunks[0]}`
@@ -5091,7 +5159,15 @@ html.dark .out-ico--ws { color: #fde047; }
       }
 
       if (r.media_kind === "binary") {
-        r._base64Head = r.base64 || "";
+        const chunks = append && Array.isArray(curArtifact?._binaryChunks)
+          ? [...curArtifact._binaryChunks]
+          : [];
+        if (r.base64) chunks.push(r.base64);
+        const merged = mergeBase64Chunks(chunks);
+        const fullB64 = chunks.length <= 1 ? (chunks[0] || "") : bytesToBase64(merged);
+        r._binaryChunks = chunks;
+        r._binaryBytesLoaded = merged.length;
+        r._base64Head = fullB64;
         r._req = req;
         curArtifact = r;
         renderArtifactStage();
@@ -5233,7 +5309,10 @@ html.dark .out-ico--ws { color: #fde047; }
         const handle = attBtn.dataset.openAtt;
         const hit = (outData.items || []).find((x) => x.handle === handle);
         if (hit) await openItem(hit, true);
-        else await loadArtifact({ kind: "attachment", handle, offset: 0 });
+        else {
+          $("#out-shell")?.classList.add("is-mob-inspect");
+          await loadArtifact({ kind: "attachment", handle, offset: 0 });
+        }
         return;
       }
       const wsBtn = ev.target.closest("[data-ws]");
@@ -5254,6 +5333,7 @@ html.dark .out-ico--ws { color: #fde047; }
         $$("[data-ws-path]").forEach((b) => b.setAttribute("aria-current", String(b === fileBtn)));
         const wsid = fileBtn.dataset.wsId;
         const fpath = fileBtn.dataset.wsPath;
+        $("#out-shell")?.classList.add("is-mob-inspect");
         await loadArtifact({ kind: "workspace_file", workspace_id: wsid, path: fpath, offset: 0 });
         if (sig?.aborted) return;
         if (curArtifact && curArtifact.workspace_id === wsid && curArtifact.path === fpath) {
@@ -5500,7 +5580,13 @@ html.dark .out-ico--ws { color: #fde047; }
     }
 
     function applyIntentsData(r) {
-      if (!r?.success) return;
+      if (!r?.success) {
+        const msg = r?.error || "读取计划队列失败";
+        if ($("#intent-list")) $("#intent-list").innerHTML = `<p class="mil-hint mil-feedback--err">读取计划队列失败：${esc(msg)}</p>`;
+        if ($("#learning")) $("#learning").innerHTML = `<p class="mil-hint mil-feedback--err">读取学习回执失败：${esc(msg)}</p>`;
+        say(msg, true);
+        return;
+      }
       const srcs = memData?.chat_sources || {};
       const targetName = (raw) => {
         const clean = String(raw || "").replace(/^chat:/, "").trim();
@@ -5640,8 +5726,8 @@ html.dark .out-ico--ws { color: #fde047; }
       });
       if (sig?.aborted) return;
       if (b?.success && b.sections?.memory) {
-        applyOverviewData({ success: true, ...b.sections.memory });
-        if (b.sections.intents) applyIntentsData({ success: true, ...b.sections.intents });
+        applyOverviewData(secResp(b.sections.memory));
+        if (b.sections.intents) applyIntentsData(secResp(b.sections.intents));
         if (sig?.aborted) return;
         await loadAsset(false);
       } else {
@@ -5659,10 +5745,19 @@ html.dark .out-ico--ws { color: #fde047; }
      ════════════════════════════════════════════════════════════════ */
   if (page === "settings") {
     let curSettings = null;
+    let settingsHydrated = false;
     let curVersion = "";
     let svcVersion = "";
     let whVersion = "";
     let settingsMode = "general";
+
+    function setSettingsSaveDisabled(flag) {
+      ["#save-settings", "#save-settings-streams", "#save-settings-adv"].forEach((sel) => {
+        const btn = $(sel);
+        if (btn) btn.disabled = Boolean(flag);
+      });
+    }
+    setSettingsSaveDisabled(true);
     let knownChats = [];
     let knownProfiles = [];
     let whitelistEntries = [];
@@ -5853,7 +5948,7 @@ html.dark .out-ico--ws { color: #fde047; }
     }
 
     let curServicesCfg = {};
-    let editingService = { kind: "mcp", origName: "" };
+    let editingService = { kind: "mcp", origName: "", origKind: "mcp" };
     let mobSheetHolder = null;
     let mobSheetParent = null;
 
@@ -5867,7 +5962,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $$("[data-set-rail]").forEach((b) => {
         const key = b.dataset.setRail;
         const match = (settingsMode === "general" && ["general", "streams", "routines"].includes(key))
-          || (settingsMode === "advanced" && ["services", "vault", "webhooks"].includes(key));
+          || (settingsMode === "advanced" && ["services", "vault", "webhooks", "runtime"].includes(key));
         if (!match) b.classList.remove("is-active");
       });
     }
@@ -5892,9 +5987,10 @@ html.dark .out-ico--ws { color: #fde047; }
         services: "外部服务与工具",
         vault: "凭据保险箱",
         webhooks: "外部事件触发",
+        runtime: "运行时与容器边界",
       };
       if (titleEl) titleEl.textContent = titles[next] || "设置详情";
-      const isAdv = ["services", "vault", "webhooks"].includes(next);
+      const isAdv = ["services", "vault", "webhooks", "runtime"].includes(next);
       setSettingsMode(isAdv ? "advanced" : "general");
       if (addBtn) {
         addBtn.hidden = !["services", "webhooks"].includes(next);
@@ -5936,7 +6032,11 @@ html.dark .out-ico--ws { color: #fde047; }
       const isTpl = kind === "template";
       const pool = isTpl ? (curServicesCfg.templates || {}) : (curServicesCfg.servers || {});
       const spec = (name && pool[name]) || {};
-      editingService = { kind: isTpl ? "template" : "mcp", origName: name || "" };
+      editingService = {
+        kind: isTpl ? "template" : "mcp",
+        origName: name || "",
+        origKind: isTpl ? "template" : "mcp",
+      };
       if ($("#svc-d-kind")) $("#svc-d-kind").value = editingService.kind;
       if ($("#svc-d-name")) $("#svc-d-name").value = name || "";
       if ($("#svc-d-desc")) $("#svc-d-desc").value = spec.description || "";
@@ -6036,6 +6136,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $("#general-fields").innerHTML = genRows.join("");
       if ($("#mob-sum-general")) $("#mob-sum-general").textContent = `${s.plugin?.enabled ? "已开启" : "已停用"} · ${s.proactive_level === "quiet" ? "安静" : (s.proactive_level === "lively" ? "活跃" : "平衡")}`;
       if ($("#mob-sum-streams")) $("#mob-sum-streams").textContent = `${whitelistEntries.length} 条`;
+      if ($("#mob-sum-runtime")) $("#mob-sum-runtime").textContent = `${Number(s.agent_max_steps ?? 16)} 步 · ${Number(s.agent_timeout ?? 180)}s`;
 
       $("#advanced-runtime-fields").innerHTML = [
         row("久违问候安静阈值 (小时)", "设为 0 默认关闭；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。", `<input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="0" max="720" value="${Number(s.longing_quiet_hours ?? 0)}">`),
@@ -6100,7 +6201,13 @@ html.dark .out-ico--ws { color: #fde047; }
     }
 
     function applySettingsData(r) {
-      if (!r?.success) return say(r?.error || "读取设置失败", true);
+      if (!r?.success) {
+        settingsHydrated = false;
+        setSettingsSaveDisabled(true);
+        return say(r?.error || "读取设置失败", true);
+      }
+      settingsHydrated = true;
+      setSettingsSaveDisabled(false);
       curSettings = r.settings;
       curVersion = r.version;
       knownChats = Array.isArray(r.known_chats) ? r.known_chats : [];
@@ -6122,7 +6229,15 @@ html.dark .out-ico--ws { color: #fde047; }
     }
 
     function applyServicesData(r) {
-      if (!r?.success) return;
+      if (!r?.success) {
+        const msg = r?.error || "读取服务配置失败";
+        if ($("#service-cards")) {
+          $("#service-cards").innerHTML = `<span class="mil-hint mil-feedback--err" style="grid-column:1/-1">服务配置读取失败：${esc(msg)}</span>`;
+        }
+        if ($("#mob-sum-services")) $("#mob-sum-services").textContent = "读取失败";
+        if (settingsHydrated) say(msg, true);
+        return;
+      }
       svcVersion = r.version;
       const cfg = r.configuration || {};
       curServicesCfg = cfg;
@@ -6188,7 +6303,15 @@ html.dark .out-ico--ws { color: #fde047; }
     }
 
     function applyWebhooksData(r) {
-      if (!r?.success) return;
+      if (!r?.success) {
+        const msg = r?.error || "读取事件通道失败";
+        if ($("#webhook-cards")) {
+          $("#webhook-cards").innerHTML = `<span class="mil-hint mil-feedback--err">事件通道读取失败：${esc(msg)}</span>`;
+        }
+        if ($("#mob-sum-webhooks")) $("#mob-sum-webhooks").textContent = "读取失败";
+        if (settingsHydrated) say(msg, true);
+        return;
+      }
       whVersion = r.version;
       const cfg = r.configuration || {};
       $("#webhook-config").value = JSON.stringify(cfg, null, 2);
@@ -6218,6 +6341,8 @@ html.dark .out-ico--ws { color: #fde047; }
           `<div class="ms-kv-card"><span class="ms-kv-k">容器与隔离</span><strong class="ms-kv-v num">运行中 ${h.running || 0} · 隔离目录 ${h.quarantined || 0}</strong><span class="ms-kv-sub">仅代码类任务启用容器</span></div>`,
           `<div class="ms-kv-card"><span class="ms-kv-k">工作区存储</span><strong class="ms-kv-v num">${kb} KB</strong><span class="ms-kv-sub num">配额上限 ${mb} MB</span></div>`,
         ].join("");
+      } else if (h) {
+        $("#health").innerHTML = `<div class="ms-kv-card"><span class="ms-kv-k">运行状态异常</span><strong class="ms-kv-v mil-feedback--err">${esc(h.error || "健康检查读取失败")}</strong></div>`;
       }
       if (ir?.success) {
         const pendingCnt = (ir.intents || []).filter((i) => i.status === "pending").length;
@@ -6240,6 +6365,10 @@ html.dark .out-ico--ws { color: #fde047; }
           resolveChat: friendlyStreamName,
           statusLabels: INTENT_STATUS_LABELS,
         });
+      } else if (ir) {
+        const msg = ir.error || "读取计划队列失败";
+        if ($("#intent-list")) $("#intent-list").innerHTML = `<p class="mil-hint mil-feedback--err">读取计划队列失败：${esc(msg)}</p>`;
+        if ($("#learning")) $("#learning").innerHTML = `<p class="mil-hint mil-feedback--err">读取学习回执失败：${esc(msg)}</p>`;
       }
     }
 
@@ -6431,7 +6560,18 @@ html.dark .out-ico--ws { color: #fde047; }
       $(sel)?.addEventListener("input", updateSchedSummary);
     });
 
+    window.addEventListener("maisya:ui-style-saved", (ev) => {
+      const nextStyle = ev?.detail?.uiStyle;
+      if (!nextStyle) return;
+      if (curSettings) curSettings.ui_style = nextStyle;
+      if (ev.detail.version) curVersion = ev.detail.version;
+      if ($("#ui_style")) $("#ui_style").value = nextStyle;
+    }, { signal: sig });
+
     async function saveAllSettings() {
+      if (!settingsHydrated || !curSettings) {
+        return say("设置尚未加载完成，已阻止空保存，请刷新后再试", true);
+      }
       syncSleepHidden();
       syncWhitelistHidden();
       const selWeb = $("#web_provider").value;
@@ -6487,11 +6627,28 @@ html.dark .out-ico--ws { color: #fde047; }
     if ($("#svc-d-kind")) $("#svc-d-kind").addEventListener("change", syncSvcDrawerFields);
     if ($("#svc-d-save")) {
       $("#svc-d-save").onclick = async () => {
+        if (!svcVersion) return say("服务登记尚未加载完成，请稍后重试", true);
         const kind = $("#svc-d-kind")?.value === "template" ? "template" : "mcp";
         const name = ($("#svc-d-name")?.value || "").trim();
         if (!name) return say("请先填写服务代号", true);
         const cmdParts = ($("#svc-d-cmd")?.value || "").trim().split(/\s+/).filter(Boolean);
         if (!cmdParts.length) return say("请填写程序路径与参数", true);
+        const RESERVED_ENV_KEYS = new Set([
+          "PATH", "HOME", "PYTHONPATH", "LD_PRELOAD", "LD_LIBRARY_PATH",
+          "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE",
+          "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "PYTHONUTF8", "PYTHONIOENCODING",
+        ]);
+        const mcpCredEnvKey = (handle, credsObj) => {
+          let key = String(handle || "").toUpperCase().replace(/[^A-Z0-9_]/g, "_").replace(/^_+|_+$/g, "");
+          if (!key || !/^[A-Z]/.test(key) || RESERVED_ENV_KEYS.has(key)) key = `SECRET_${key || "KEY"}`;
+          key = key.slice(0, 64);
+          let cand = key, idx = 2;
+          while (Object.prototype.hasOwnProperty.call(credsObj, cand)) {
+            const suffix = `_${idx++}`;
+            cand = key.slice(0, 64 - suffix.length) + suffix;
+          }
+          return cand;
+        };
         const creds = {};
         const secretNames = [];
         ($("#svc-d-creds")?.value || "").split(/\r?\n/).forEach((line) => {
@@ -6504,6 +6661,7 @@ html.dark .out-ico--ws { color: #fde047; }
             if (k && v) { creds[k] = v; secretNames.push(v); }
           } else {
             secretNames.push(clean);
+            if (kind === "mcp") creds[mcpCredEnvKey(clean, creds)] = clean;
           }
         });
         const item = kind === "template"
@@ -6523,7 +6681,12 @@ html.dark .out-ico--ws { color: #fde047; }
               access: $("#svc-d-access")?.value === "admins" ? "admins" : "everyone",
               memory_mib: Number($("#svc-d-mem")?.value || 256),
             };
-        const r = await rpc("write", "upsert_service_item", { kind, name, item, expected_version: svcVersion });
+        const payload = { kind, name, item, expected_version: svcVersion };
+        if (editingService.origName) {
+          payload.orig_name = editingService.origName;
+          payload.orig_kind = editingService.origKind || editingService.kind;
+        }
+        const r = await rpc("write", "upsert_service_item", payload);
         if (!r?.success) return say(r?.error || "保存服务条目失败", true);
         svcVersion = r.version;
         closeMobileSheet();
@@ -6657,13 +6820,13 @@ html.dark .out-ico--ws { color: #fde047; }
       });
       if (sig?.aborted) return;
       if (b?.success && b.sections?.settings) {
-        applySettingsData({ success: true, ...b.sections.settings });
-        if (b.sections.services) applyServicesData({ success: true, ...b.sections.services });
-        if (b.sections.webhooks) applyWebhooksData({ success: true, ...b.sections.webhooks });
+        applySettingsData(secResp(b.sections.settings));
+        if (b.sections.services) applyServicesData(secResp(b.sections.services));
+        if (b.sections.webhooks) applyWebhooksData(secResp(b.sections.webhooks));
         if (b.sections.health || b.sections.intents) {
           applyHealthData(
-            b.sections.health ? { success: true, ...b.sections.health } : null,
-            b.sections.intents ? { success: true, ...b.sections.intents } : null
+            b.sections.health ? secResp(b.sections.health) : null,
+            b.sections.intents ? secResp(b.sections.intents) : null
           );
         }
       } else {

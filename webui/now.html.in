@@ -1277,13 +1277,14 @@
     return p;
   };
   async function hostRpc(op, key, body) {
+    const startStyleSeq = uiStyleSeq;
     const run = async () => {
       if (disposed) return { success: false, aborted: true };
       const arg = op === "read"
         ? { section: key, payload: JSON.stringify(body || {}) }
         : { action: key, payload: JSON.stringify(body || {}) };
       const res = op === "read" ? await callMaibotRaw("query", "read", arg) : await callMaibotRaw("action", "write", arg);
-      if (!disposed && res?.ui_style) {
+      if (!disposed && res?.ui_style && startStyleSeq === uiStyleSeq) {
         savedUiStyle = res.ui_style;
         applyTheme();
       }
@@ -1322,6 +1323,7 @@
 
   let savedUiStyle = "millennium";
   let manualUiStyle = "";
+  let uiStyleSeq = 0;
   let lastCtx = null;
   function effectiveUiStyle(hostStyle) {
     const pref = manualUiStyle || savedUiStyle || "millennium";
@@ -1356,11 +1358,45 @@
   }
   applyTheme();
   window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail), { signal: shellSig });
-  $("#ui-style-toggle")?.addEventListener("click", () => {
+  $("#ui-style-toggle")?.addEventListener("click", async () => {
     const cur = document.documentElement.getAttribute("data-ui-style") || "millennium";
-    manualUiStyle = cur === "millennium" ? "maiwork" : "millennium";
+    const next = cur === "millennium" ? "maiwork" : "millennium";
+    const prevManual = manualUiStyle;
+    const prevSaved = savedUiStyle;
+    const seq = ++uiStyleSeq;
+    manualUiStyle = next;
     applyTheme();
     if (activePage === "now") drawFlowLines();
+    try {
+      const r = await hostRpc("write", "ui_style", { ui_style: next });
+      if (disposed || seq !== uiStyleSeq) return;
+      if (!r?.success) {
+        const err = String(r?.error || "主题风格保存失败");
+        if (/unexpected keyword argument/i.test(err)) return;
+        manualUiStyle = prevManual;
+        savedUiStyle = prevSaved;
+        applyTheme();
+        if (activePage === "now") drawFlowLines();
+        if (activePage === "now") setNowFeedback(err, "mil-feedback mil-feedback--err");
+        else hostSay(err, true);
+        return;
+      }
+      savedUiStyle = r.ui_style || next;
+      manualUiStyle = "";
+      applyTheme();
+      if (activePage === "now") drawFlowLines();
+      window.dispatchEvent(new CustomEvent("maisya:ui-style-saved", { detail: { uiStyle: savedUiStyle, version: r.version } }));
+    } catch (err) {
+      if (disposed || seq !== uiStyleSeq) return;
+      const msg = String(err?.message || err || "主题风格保存失败");
+      if (/unexpected keyword argument/i.test(msg)) return;
+      manualUiStyle = prevManual;
+      savedUiStyle = prevSaved;
+      applyTheme();
+      if (activePage === "now") drawFlowLines();
+      if (activePage === "now") setNowFeedback(msg, "mil-feedback mil-feedback--err");
+      else hostSay(msg, true);
+    }
   });
 
   const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
@@ -1735,8 +1771,13 @@
   }
 
   function renderStrip(snap) {
-    const sel = snap.selected;
-    const threads = snap.threads || [];
+    const allThreads = snap.threads || [];
+    const threads = state.profileFilter
+      ? allThreads.filter((t) => t.profile === state.profileFilter)
+      : allThreads;
+    const sel = snap.selected && (!state.profileFilter || snap.selected.profile === state.profileFilter)
+      ? snap.selected
+      : null;
     const activeThreads = threads.filter((t) => t.state === "active" || t.state === "waiting");
     const hasErr = Boolean(sel?.result?.error) || (snap.stats?.error_count || 0) > 0;
     const pulse = snap.pulse || {};
@@ -1760,7 +1801,7 @@
     } else if (sel) {
       const st = STATE_LABEL[sel.state] || ["就绪", "", ""];
       $("#now-headline").textContent = sel.result?.error ? "线程出错" : `最近：${st[0]}`;
-      $("#now-subline").textContent = `${threads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${formatChatInline(snap, sel.chat_id)}`;
+      $("#now-subline").textContent = `${allThreads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${formatChatInline(snap, sel.chat_id)}`;
     } else {
       $("#now-headline").textContent = "待命";
       $("#now-subline").textContent = "等待群聊触发或由管理员直接发起工作流";
@@ -1772,7 +1813,7 @@
     if (sel?.revision) badges.push(`<span class="mil-tag">第 ${sel.revision} 轮</span>`);
     $("#now-badges").innerHTML = badges.join("");
 
-    const evs = state.events.slice(-3);
+    const evs = sel ? state.events.slice(-3) : [];
     $("#now-steps").innerHTML = evs.length
       ? evs.map((e) => `<li><span class="mil-tag">${esc(EVENT_KIND_LABELS[e.kind] || e.kind)}</span> ${esc(friendlyEventBrief(snap, e))}</li>`).join("")
       : `<li>暂无最新步骤日志</li>`;
@@ -2271,20 +2312,23 @@
 
   async function refresh(reset = false) {
     if (disposed || activePage !== "now") return;
-    const reqThread = state.threadId;
+    const reqProfile = state.profileFilter;
     const reqChat = state.chatFilter;
+    const reqThread = state.threadId || (reqProfile ? "__none__" : "");
     const reqCursor = reset ? 0 : state.cursor;
+    const startStyleSeq = uiStyleSeq;
     const snap = await enqueueQuery(() => callMaibotRaw("query", "snapshot", {
       thread_id: reqThread,
       chat_id: reqChat,
       cursor: reqCursor,
     }));
     if (disposed || activePage !== "now") return;
+    if (reqProfile !== state.profileFilter || reqChat !== state.chatFilter) return;
     if (!snap?.success) {
       setNowFeedback(snap?.error || "现场快照读取失败", "mil-feedback mil-feedback--err");
       return;
     }
-    if (!disposed && snap.ui_style) {
+    if (!disposed && snap.ui_style && startStyleSeq === uiStyleSeq) {
       savedUiStyle = snap.ui_style;
       applyTheme();
     }
@@ -2293,39 +2337,46 @@
     const scopedThreads = state.profileFilter
       ? (snap.threads || []).filter((t) => t.profile === state.profileFilter)
       : (snap.threads || []);
+    const scopedSelected = snap.selected
+      && (!state.profileFilter || snap.selected.profile === state.profileFilter)
+      && (!state.chatFilter || snap.selected.chat_id === state.chatFilter)
+      ? snap.selected
+      : null;
+    const snapForView = scopedSelected === snap.selected ? snap : { ...snap, selected: null };
     const firstId =
-      (!state.profileFilter && snap.selected?.thread_id) ||
+      (!state.profileFilter && scopedSelected?.thread_id) ||
       scopedThreads.find((t) => t.state === "active" || t.state === "waiting")?.thread_id ||
       scopedThreads.find((t) => !t.junk)?.thread_id ||
       scopedThreads[0]?.thread_id ||
       "";
     if (!state.threadId && firstId) {
       switchThread(firstId);
-      if (snap.selected?.thread_id === firstId) {
+      if (scopedSelected?.thread_id === firstId) {
         reset = true;
       } else {
         if (!disposed && activePage === "now") return refresh(true);
         return;
       }
     }
-    if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
+    if (state.threadId && !scopedSelected && firstId && state.threadId !== firstId) {
       switchThread(firstId);
       if (!disposed && activePage === "now") return refresh(true);
       return;
     }
     if (typeof snap.cursor === "number") state.cursor = snap.cursor;
-    if (snap.events?.length) {
+    if (snap.events?.length && scopedSelected) {
       state.events.push(...snap.events);
       renderEventsAppend(snap.events);
-    } else if (reset) {
+    } else if (reset || !scopedSelected) {
+      if (!scopedSelected) state.events = [];
       renderEventsAppend([]);
     }
-    renderFlow(snap);
-    renderStrip(snap);
-    renderContext(snap);
-    renderThreads(snap);
-    renderInspector(snap);
-    renderLaunchAssist(snap);
+    renderFlow(snapForView);
+    renderStrip(snapForView);
+    renderContext(snapForView);
+    renderThreads(snapForView);
+    renderInspector(snapForView);
+    renderLaunchAssist(snapForView);
   }
 
   /* ───────────── 事件交互绑定 ───────────── */
@@ -2424,11 +2475,14 @@
         refresh(true);
       } else {
         switchThread("");
+        renderEventsAppend([]);
         if (state.lastSnap) {
-          renderFlow(state.lastSnap);
-          renderContext({ ...state.lastSnap, selected: null });
-          renderThreads(state.lastSnap);
-          renderInspector({ ...state.lastSnap, selected: null });
+          const emptySnap = { ...state.lastSnap, selected: null };
+          renderFlow(emptySnap);
+          renderStrip(emptySnap);
+          renderContext(emptySnap);
+          renderThreads(emptySnap);
+          renderInspector(emptySnap);
         }
       }
       return;
@@ -2683,12 +2737,15 @@
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && activePage === "now" && !$("#ctx-scrim").hidden) closeCtxModal();
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      const canClick = (el) => Boolean(el && el.isConnected && !el.disabled && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
       if (activePage === "settings") {
         ev.preventDefault();
-        $("#save-settings")?.click();
+        const btn = ["#save-settings", "#save-settings-streams", "#save-settings-adv"].map((s) => $(s)).find(canClick);
+        btn?.click();
       } else if (activePage === "abilities" || activePage === "memory") {
         ev.preventDefault();
-        $("#save")?.click();
+        const btn = $("#save");
+        if (canClick(btn)) btn.click();
       }
     }
   }, { signal: shellSig });
