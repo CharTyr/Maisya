@@ -629,6 +629,7 @@ class Management:
         enabled_set = set(plugin.settings.enabled_chats)
         records: list[dict] = []
         seen_sids: set[str] = set()
+        known_aliases: set[str] = set()
         for sid in [*streams.keys(), *routes.keys()]:
             if not sid or sid in seen_sids:
                 continue
@@ -649,6 +650,7 @@ class Management:
             aliases = plugin.chat_aliases_for(sid, plat) | {sid}
             if spec:
                 aliases.add(spec)
+            known_aliases.update(aliases)
             records.append(
                 {
                     "chat_id": sid,
@@ -669,10 +671,12 @@ class Management:
                 continue
             parsed = parse_stream_spec(token)
             norm = format_stream_spec(*parsed) if parsed else token
-            if any(token in rec["aliases"] or norm in rec["aliases"] for rec in records):
+            if token in known_aliases or norm in known_aliases:
                 continue
             if parsed is not None:
                 plat, ctype, tid = parsed
+                new_aliases = {token, norm}
+                known_aliases.update(new_aliases)
                 records.append(
                     {
                         "chat_id": norm,
@@ -684,10 +688,11 @@ class Management:
                         "group_id": tid if ctype == "group" else "",
                         "user_id": tid if ctype == "private" else "",
                         "enabled": True,
-                        "aliases": {token, norm},
+                        "aliases": new_aliases,
                     }
                 )
             else:
+                known_aliases.add(token)
                 records.append(
                     {
                         "chat_id": token,
@@ -1155,7 +1160,7 @@ class Management:
                             )
 
             cached_probe = {"entries": probe_entries, "tasks": probe_tasks}
-            self._model_catalog_cache = {"expires": now + 15.0, "probe_data": cached_probe}
+            self._model_catalog_cache = {"expires": now + 60.0, "probe_data": cached_probe}
 
         if isinstance(cached_probe, dict):
             for item in cached_probe.get("entries") or ():
@@ -1192,7 +1197,22 @@ class Management:
             "tasks": task_map,
         }
 
-    async def _discovery(self):
+    _BATCHABLE_SECTIONS = frozenset(
+        {
+            "abilities",
+            "asset",
+            "settings",
+            "services",
+            "webhooks",
+            "memory",
+            "outputs",
+            "intents",
+            "discovery",
+            "health",
+        }
+    )
+
+    async def _discovery(self, options=None):
         ctx = getattr(self.plugin, "ctx", None)
 
         async def probe(capability, default, **kwargs):
@@ -1203,7 +1223,13 @@ class Management:
             except Exception:
                 return default
 
-        raw_streams = await probe("chat.get_all_streams", [], platform="all_platforms")
+        force_refresh = bool((options or {}).get("force"))
+        raw_streams, host_models, raw_plugins, raw_apis = await asyncio.gather(
+            probe("chat.get_all_streams", [], platform="all_platforms"),
+            self._collect_host_models(force=force_refresh, probe_host=True),
+            probe("component.list_loaded_plugins", []),
+            probe("api.list", []),
+        )
         raw_stream_list = (
             raw_streams.get("streams") or raw_streams.get("data") or []
             if isinstance(raw_streams, dict)
@@ -1235,14 +1261,11 @@ class Management:
                 )
             else:
                 streams.append(s)
-        host_models = await self._collect_host_models(force=True, probe_host=True)
-        raw_plugins = await probe("component.list_loaded_plugins", [])
         plugins = (
             raw_plugins.get("plugins") or []
             if isinstance(raw_plugins, dict)
             else raw_plugins
         )
-        raw_apis = await probe("api.list", [])
         apis = raw_apis.get("apis") or [] if isinstance(raw_apis, dict) else raw_apis
         return {
             "streams": streams,
@@ -1257,8 +1280,7 @@ class Management:
         async with self.request():
             return await self._read(section, payload)
 
-    async def _read(self, section, payload):
-        options = self.arguments(payload)
+    async def _read_section(self, section: str, options: dict) -> dict:
         if section == "abilities":
             result = await completed_thread(self._assets)
             result["known_chats"] = await completed_thread(self._known_chats_sync)
@@ -1322,7 +1344,7 @@ class Management:
         elif section == "intents":
             result = await completed_thread(self._intents)
         elif section == "discovery":
-            result = await self._discovery()
+            result = await self._discovery(options)
         elif section == "health":
             sandbox = self.plugin.runtime.sandbox
             result = {
@@ -1361,6 +1383,31 @@ class Management:
                 result = await completed_thread(self._transfer, options)
         else:
             raise ValueError("未知管理查询")
+        return result
+
+    async def _read(self, section, payload):
+        options = self.arguments(payload)
+        if section == "batch":
+            sections_map = options.get("sections")
+            if not isinstance(sections_map, dict) or not (1 <= len(sections_map) <= 6):
+                raise ValueError("非法的批量读取请求")
+            ordered_items: list[tuple[str, dict]] = []
+            for key, value in sections_map.items():
+                if not isinstance(key, str) or key not in self._BATCHABLE_SECTIONS:
+                    raise ValueError("非法的批量读取请求")
+                if value is not None and not isinstance(value, dict):
+                    raise ValueError("非法的批量读取请求")
+                ordered_items.append((key, dict(value or {})))
+            values = await asyncio.gather(
+                *(self._read_section(key, opts) for key, opts in ordered_items)
+            )
+            result = {
+                "sections": {
+                    key: val for (key, _), val in zip(ordered_items, values)
+                }
+            }
+        else:
+            result = await self._read_section(section, options)
         return {
             "success": True,
             "ui_style": self.plugin.settings.ui_style,

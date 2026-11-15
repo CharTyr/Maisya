@@ -1232,10 +1232,14 @@
     }
     return { success: false, error: "请求繁忙，请稍后重试" };
   }
+  let queryInFlight = 0;
   const enqueueQuery = (fn) => {
+    queryInFlight += 1;
     const p = queryQueue.then(() => withSlot(fn), () => withSlot(fn));
     queryQueue = p.catch(() => {});
-    return p;
+    return p.finally(() => {
+      queryInFlight = Math.max(0, queryInFlight - 1);
+    });
   };
   const enqueueAction = (fn) => {
     const p = actionQueue.then(() => withSlot(fn), () => withSlot(fn));
@@ -2214,8 +2218,12 @@
     const firstId = snap.threads?.[0]?.thread_id || "";
     if (!state.threadId && firstId) {
       switchThread(firstId);
-      if (!disposed && activePage === "now") return refresh(true);
-      return;
+      if (snap.selected?.thread_id === firstId) {
+        reset = true;
+      } else {
+        if (!disposed && activePage === "now") return refresh(true);
+        return;
+      }
     }
     if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
       switchThread(firstId);
@@ -2717,7 +2725,7 @@
     }
     timer = setInterval(() => {
       if (disposed || activePage !== "now") return;
-      if (!document.hidden && Date.now() - lastSnapshotAt >= 1800) refresh(false);
+      if (!document.hidden && queryInFlight === 0 && Date.now() - lastSnapshotAt >= 1800) refresh(false);
     }, 2400);
   });
 })();

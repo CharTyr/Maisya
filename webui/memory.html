@@ -5767,10 +5767,14 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
     return { success: false, error: "请求繁忙，请稍后重试" };
   }
+  let queryInFlight = 0;
   const enqueueQuery = (fn) => {
+    queryInFlight += 1;
     const p = queryQueue.then(() => withSlot(fn), () => withSlot(fn));
     queryQueue = p.catch(() => {});
-    return p;
+    return p.finally(() => {
+      queryInFlight = Math.max(0, queryInFlight - 1);
+    });
   };
   const enqueueAction = (fn) => {
     const p = actionQueue.then(() => withSlot(fn), () => withSlot(fn));
@@ -6749,8 +6753,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     const firstId = snap.threads?.[0]?.thread_id || "";
     if (!state.threadId && firstId) {
       switchThread(firstId);
-      if (!disposed && activePage === "now") return refresh(true);
-      return;
+      if (snap.selected?.thread_id === firstId) {
+        reset = true;
+      } else {
+        if (!disposed && activePage === "now") return refresh(true);
+        return;
+      }
     }
     if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
       switchThread(firstId);
@@ -7827,6 +7835,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     let assetLoadSeq = 0;
     let hostModelsProbed = false;
+    let discoveryLoaded = false;
+    let discoveryPromise = null;
     async function loadAsset(preserveDraft = false) {
       const seq = ++assetLoadSeq;
       renderDocModeUI();
@@ -7860,7 +7870,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           syncVisualFromToml();
           if (!hostModelsProbed && !(catalog.model_catalog || []).some((m) => m && m.source && m.source !== "profile")) {
             hostModelsProbed = true;
-            await refreshDiscovery();
+            await (discoveryPromise || refreshDiscovery());
             if (!sig?.aborted && seq === assetLoadSeq && viewMode === "roles" && $("#document").value === "config") {
               renderModelChainEditor();
             }
@@ -8033,18 +8043,21 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (fishEl) fishEl.textContent = fishDrawerOpen ? "定制中" : "外观定制";
     }
 
-    async function refreshDiscovery() {
-      const d = await rpc("read", "discovery", {});
+    async function refreshDiscovery(opts = {}) {
+      const force = Boolean(opts && opts.force);
+      const d = await rpc("read", "discovery", force ? { force: true } : {});
       if (sig?.aborted) return;
       if (!d?.success) {
         $("#discovery-info").textContent = d?.error || "宿主环境探测失败";
         return;
       }
+      discoveryLoaded = true;
       const modelGroups = Object.entries(d.models || {});
       const availModels = Array.isArray(d.available_models) ? d.available_models : [];
       const modelCatalog = Array.isArray(d.model_catalog) ? d.model_catalog : [];
       if (availModels.length) catalog.available_models = availModels;
       if (modelCatalog.length) catalog.model_catalog = modelCatalog;
+      if (availModels.length || modelCatalog.length) hostModelsProbed = true;
       const pluginList = d.plugins || [];
       const apiList = d.apis || [];
       const streamList = d.streams || [];
@@ -8105,6 +8118,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           viewMode = "discovery";
         }
         renderCatalog();
+        if (nextMode === "discovery" && !discoveryLoaded) {
+          await (discoveryPromise || (discoveryPromise = refreshDiscovery().finally(() => {
+            discoveryPromise = null;
+          })));
+          return;
+        }
         await loadAsset(false);
         return;
       }
@@ -9266,7 +9285,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       };
       reader.readAsArrayBuffer(file);
     });
-    $("#refresh-discovery").onclick = refreshDiscovery;
+    $("#refresh-discovery").onclick = async () => {
+      discoveryPromise = refreshDiscovery({ force: true }).finally(() => {
+        discoveryPromise = null;
+      });
+      await discoveryPromise;
+    };
 
     (async () => {
       await Promise.resolve(window.maibot?.ready);
@@ -9276,7 +9300,9 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (sig?.aborted) return;
       await loadAsset(false);
       if (sig?.aborted) return;
-      await refreshDiscovery();
+      discoveryPromise = refreshDiscovery().finally(() => {
+        discoveryPromise = null;
+      });
     })();
   }
 
@@ -10346,10 +10372,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       failed: "已结束",
     };
 
-    async function loadOverview() {
-      const query = $("#search").value.trim();
-      const chat_id = $("#chat").value;
-      const r = await rpc("read", "memory", { chat_id, query });
+    function applyOverviewData(r) {
       if (!r?.success) return say(r?.error || "读取手账概览失败", true);
       memData = r;
       const prevChat = $("#chat").value;
@@ -10389,8 +10412,15 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       renderCards($("#experiences"), r.experiences, "exp");
     }
 
-    async function loadIntents() {
-      const r = await rpc("read", "intents", {});
+    async function loadOverview() {
+      const query = $("#search").value.trim();
+      const chat_id = $("#chat").value;
+      const r = await rpc("read", "memory", { chat_id, query });
+      if (sig?.aborted) return;
+      applyOverviewData(r);
+    }
+
+    function applyIntentsData(r) {
       if (!r?.success) return;
       const srcs = memData?.chat_sources || {};
       const targetName = (raw) => {
@@ -10431,6 +10461,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
             </div>`;
           }).join("")
         : `<span class="mil-hint">暂无自动笔记回执</span>`;
+    }
+
+    async function loadIntents() {
+      const r = await rpc("read", "intents", {});
+      if (sig?.aborted) return;
+      applyIntentsData(r);
     }
 
     document.addEventListener("click", async (ev) => {
@@ -10531,11 +10567,25 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       await Promise.resolve(window.maibot?.ready);
       if (sig?.aborted) return;
       applyTheme();
-      await loadOverview();
+      const b = await rpc("read", "batch", {
+        sections: {
+          memory: { chat_id: $("#chat").value, query: $("#search").value.trim() },
+          intents: {},
+        },
+      });
       if (sig?.aborted) return;
-      await loadAsset(false);
-      if (sig?.aborted) return;
-      await loadIntents();
+      if (b?.success && b.sections?.memory) {
+        applyOverviewData({ success: true, ...b.sections.memory });
+        if (b.sections.intents) applyIntentsData({ success: true, ...b.sections.intents });
+        if (sig?.aborted) return;
+        await loadAsset(false);
+      } else {
+        await loadOverview();
+        if (sig?.aborted) return;
+        await loadAsset(false);
+        if (sig?.aborted) return;
+        await loadIntents();
+      }
     })();
   }
 
@@ -10978,8 +11028,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if ($("#mob-sum-vault")) $("#mob-sum-vault").textContent = `${list.length} 项`;
     }
 
-    async function loadSettings() {
-      const r = await rpc("read", "settings", {});
+    function applySettingsData(r) {
       if (!r?.success) return say(r?.error || "读取设置失败", true);
       curSettings = r.settings;
       curVersion = r.version;
@@ -10995,8 +11044,13 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       updateSchedSummary();
     }
 
-    async function loadServices() {
-      const r = await rpc("read", "services", {});
+    async function loadSettings() {
+      const r = await rpc("read", "settings", {});
+      if (sig?.aborted) return;
+      applySettingsData(r);
+    }
+
+    function applyServicesData(r) {
       if (!r?.success) return;
       svcVersion = r.version;
       const cfg = r.configuration || {};
@@ -11038,6 +11092,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if ($("#mob-sum-services")) $("#mob-sum-services").textContent = `${mcps.length + tpls.length} 项`;
     }
 
+    async function loadServices() {
+      const r = await rpc("read", "services", {});
+      if (sig?.aborted) return;
+      applyServicesData(r);
+    }
+
     function renderWebhookCards(cfg) {
       const keys = Object.keys(cfg || {});
       $("#webhook-cards").innerHTML = keys.length
@@ -11056,8 +11116,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if ($("#mob-sum-webhooks")) $("#mob-sum-webhooks").textContent = `${keys.length} 条`;
     }
 
-    async function loadWebhooks() {
-      const r = await rpc("read", "webhooks", {});
+    function applyWebhooksData(r) {
       if (!r?.success) return;
       whVersion = r.version;
       const cfg = r.configuration || {};
@@ -11065,9 +11124,13 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       renderWebhookCards(cfg);
     }
 
-    async function loadHealth() {
-      const [h, ir] = await Promise.all([rpc("read", "health", {}), rpc("read", "intents", {})]);
+    async function loadWebhooks() {
+      const r = await rpc("read", "webhooks", {});
       if (sig?.aborted) return;
+      applyWebhooksData(r);
+    }
+
+    function applyHealthData(h, ir) {
       if (h?.success) {
         const prov = curSettings?.web_provider || h.web?.provider || "auto";
         const webEngines = Array.isArray(h.web?.third_party_engines) ? h.web.third_party_engines.filter(Boolean) : [];
@@ -11122,6 +11185,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
             }).join("")
           : `<span class="mil-hint">暂无自动笔记回执</span>`;
       }
+    }
+
+    async function loadHealth() {
+      const [h, ir] = await Promise.all([rpc("read", "health", {}), rpc("read", "intents", {})]);
+      if (sig?.aborted) return;
+      applyHealthData(h, ir);
     }
 
     document.addEventListener("change", (ev) => {
@@ -11516,13 +11585,35 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       await Promise.resolve(window.maibot?.ready);
       if (sig?.aborted) return;
       applyTheme();
-      await loadSettings();
+      const b = await rpc("read", "batch", {
+        sections: {
+          settings: {},
+          services: {},
+          webhooks: {},
+          health: {},
+          intents: {},
+        },
+      });
       if (sig?.aborted) return;
-      await loadServices();
-      if (sig?.aborted) return;
-      await loadWebhooks();
-      if (sig?.aborted) return;
-      await loadHealth();
+      if (b?.success && b.sections?.settings) {
+        applySettingsData({ success: true, ...b.sections.settings });
+        if (b.sections.services) applyServicesData({ success: true, ...b.sections.services });
+        if (b.sections.webhooks) applyWebhooksData({ success: true, ...b.sections.webhooks });
+        if (b.sections.health || b.sections.intents) {
+          applyHealthData(
+            b.sections.health ? { success: true, ...b.sections.health } : null,
+            b.sections.intents ? { success: true, ...b.sections.intents } : null
+          );
+        }
+      } else {
+        await loadSettings();
+        if (sig?.aborted) return;
+        await loadServices();
+        if (sig?.aborted) return;
+        await loadWebhooks();
+        if (sig?.aborted) return;
+        await loadHealth();
+      }
     })();
   }
   }
@@ -11651,7 +11742,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
     timer = setInterval(() => {
       if (disposed || activePage !== "now") return;
-      if (!document.hidden && Date.now() - lastSnapshotAt >= 1800) refresh(false);
+      if (!document.hidden && queryInFlight === 0 && Date.now() - lastSnapshotAt >= 1800) refresh(false);
     }, 2400);
   });
 })();

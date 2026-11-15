@@ -2,9 +2,12 @@
 
 import base64
 import hashlib
+import os
 import re
 import sqlite3
+import threading
 import time
+from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,6 +217,10 @@ class MessageStore:
         self.max_messages = max_messages
         self.max_age = max_age
         self.clock = clock
+        self._routes_lock = threading.RLock()
+        self._routes_sig: tuple[int, int, int, int] | None = None
+        self._routes_by_sid: dict[str, dict] = {}
+        self._sids_by_alias: dict[str, list[dict]] = {}
         if path.is_symlink():
             raise ValueError("消息索引不能是符号链接")
         with closing(sqlite3.connect(path)) as db, db:
@@ -246,7 +253,86 @@ class MessageStore:
                 db.execute(
                     "ALTER TABLE session_routes ADD COLUMN last_human_at REAL NOT NULL DEFAULT 0"
                 )
+            initial_rows = db.execute(
+                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope, "
+                "human_count, last_human_at, updated FROM session_routes"
+            ).fetchall()
         safe_chmod(path, 0o600)
+        with self._routes_lock:
+            self._set_routes_from_rows_locked(initial_rows)
+            self._routes_sig = self._db_sig()
+
+    def _db_sig(self) -> tuple[int, int, int, int]:
+        def _stat(target: Path | str) -> tuple[int, int]:
+            try:
+                st = os.stat(target)
+                return (st.st_mtime_ns, st.st_size)
+            except OSError:
+                return (0, 0)
+
+        return (*_stat(self.path), *_stat(f"{self.path}-wal"))
+
+    @staticmethod
+    def _normalize_route_row(row) -> dict:
+        sid, plat, ctype, gid, uid, aid, sc, hc, lha, upd = row
+        return {
+            "session_id": str(sid or "").strip(),
+            "platform": str(plat or "").strip().lower(),
+            "chat_type": str(ctype or "").strip().lower(),
+            "group_id": str(gid or "").strip(),
+            "user_id": str(uid or "").strip(),
+            "account_id": str(aid or "").strip(),
+            "scope": str(sc or "").strip(),
+            "human_count": int(hc or 0),
+            "last_human_at": float(lha or 0.0),
+            "updated": float(upd or 0.0),
+        }
+
+    def _set_routes_from_rows_locked(self, rows) -> None:
+        by_sid: dict[str, dict] = {}
+        for row in rows:
+            entry = self._normalize_route_row(row)
+            if entry["session_id"]:
+                by_sid[entry["session_id"]] = entry
+        self._routes_by_sid = by_sid
+        self._rebuild_route_indexes_locked()
+
+    def _rebuild_route_indexes_locked(self) -> None:
+        by_alias: dict[str, list[dict]] = {}
+        for entry in self._routes_by_sid.values():
+            sid = entry["session_id"]
+            plat_l = entry["platform"]
+            gid = entry["group_id"]
+            uid = entry["user_id"]
+            candidates = {sid}
+            if gid:
+                candidates.update({gid, f"group:{gid}"})
+                if plat_l:
+                    candidates.update({f"{plat_l}:{gid}", f"{plat_l}:group:{gid}"})
+            elif uid:
+                candidates.update({uid, f"private:{uid}"})
+                if plat_l:
+                    candidates.update({f"{plat_l}:{uid}", f"{plat_l}:private:{uid}"})
+            for tok in candidates:
+                by_alias.setdefault(tok, []).append(entry)
+        for hits in by_alias.values():
+            if len(hits) > 1:
+                hits.sort(key=session_rank_key, reverse=True)
+        self._sids_by_alias = by_alias
+
+    def _ensure_routes_loaded(self) -> None:
+        with self._routes_lock:
+            sig = self._db_sig()
+            if self._routes_sig is not None and sig == self._routes_sig:
+                return
+            sig_before = sig
+            with closing(sqlite3.connect(self.path)) as db:
+                rows = db.execute(
+                    "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope, "
+                    "human_count, last_human_at, updated FROM session_routes"
+                ).fetchall()
+            self._set_routes_from_rows_locked(rows)
+            self._routes_sig = sig_before
 
     def record(self, message: Message) -> None:
         if not all(
@@ -254,69 +340,91 @@ class MessageStore:
         ):
             raise ValueError("incomplete message identity")
         now = time.time() if self.clock is None else self.clock()
-        with closing(sqlite3.connect(self.path)) as db, db:
-            seen_human = (
+        with self._routes_lock:
+            sig_before = self._db_sig()
+            chat_type = "group" if message.group_id else "private"
+            route_user = "" if message.group_id else message.user_id
+            inc = 0
+            with closing(sqlite3.connect(self.path)) as db, db:
+                seen_human = (
+                    db.execute(
+                        "SELECT relayed FROM trusted_sources "
+                        "WHERE message_id=? AND session_id=? AND platform=?",
+                        (message.message_id, message.session_id, message.platform),
+                    ).fetchone()
+                    if not message.is_plugin_relayed
+                    else None
+                )
                 db.execute(
-                    "SELECT relayed FROM trusted_sources "
-                    "WHERE message_id=? AND session_id=? AND platform=?",
-                    (message.message_id, message.session_id, message.platform),
-                ).fetchone()
-                if not message.is_plugin_relayed
-                else None
-            )
-            db.execute(
-                "INSERT INTO trusted_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(message_id, session_id, platform) DO UPDATE SET "
-                "relayed = CASE WHEN trusted_sources.user_id != excluded.user_id "
-                "OR trusted_sources.local_operator != excluded.local_operator "
-                "THEN 1 ELSE MAX(trusted_sources.relayed, excluded.relayed) END",
-                (
-                    message.message_id,
-                    alias(message.message_id),
-                    message.session_id,
-                    message.platform,
-                    message.user_id,
-                    message.is_plugin_relayed,
-                    message.is_local_operator,
-                    now,
-                ),
-            )
-            if not message.is_plugin_relayed:
-                chat_type = "group" if message.group_id else "private"
-                route_user = "" if message.group_id else message.user_id
-                inc = 0 if (seen_human is not None and seen_human[0] == 0) else 1
-                db.execute(
-                    "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(session_id) DO UPDATE SET "
-                    "platform=excluded.platform, chat_type=excluded.chat_type, "
-                    "group_id=excluded.group_id, user_id=excluded.user_id, "
-                    "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
-                    "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
-                    "updated=excluded.updated, "
-                    "human_count=session_routes.human_count + excluded.human_count, "
-                    "last_human_at=excluded.last_human_at",
+                    "INSERT INTO trusted_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(message_id, session_id, platform) DO UPDATE SET "
+                    "relayed = CASE WHEN trusted_sources.user_id != excluded.user_id "
+                    "OR trusted_sources.local_operator != excluded.local_operator "
+                    "THEN 1 ELSE MAX(trusted_sources.relayed, excluded.relayed) END",
                     (
+                        message.message_id,
+                        alias(message.message_id),
                         message.session_id,
                         message.platform,
-                        chat_type,
-                        message.group_id,
-                        route_user,
-                        message.account_id,
-                        message.scope,
-                        now,
-                        inc,
+                        message.user_id,
+                        message.is_plugin_relayed,
+                        message.is_local_operator,
                         now,
                     ),
                 )
-            db.execute(
-                "DELETE FROM trusted_sources WHERE received < ?",
-                (now - self.max_age,),
-            )
-            db.execute(
-                "DELETE FROM trusted_sources WHERE rowid IN "
-                "(SELECT rowid FROM trusted_sources ORDER BY rowid DESC LIMIT -1 OFFSET ?)",
-                (self.max_messages,),
-            )
+                if not message.is_plugin_relayed:
+                    inc = 0 if (seen_human is not None and seen_human[0] == 0) else 1
+                    db.execute(
+                        "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(session_id) DO UPDATE SET "
+                        "platform=excluded.platform, chat_type=excluded.chat_type, "
+                        "group_id=excluded.group_id, user_id=excluded.user_id, "
+                        "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
+                        "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
+                        "updated=excluded.updated, "
+                        "human_count=session_routes.human_count + excluded.human_count, "
+                        "last_human_at=excluded.last_human_at",
+                        (
+                            message.session_id,
+                            message.platform,
+                            chat_type,
+                            message.group_id,
+                            route_user,
+                            message.account_id,
+                            message.scope,
+                            now,
+                            inc,
+                            now,
+                        ),
+                    )
+                db.execute(
+                    "DELETE FROM trusted_sources WHERE received < ?",
+                    (now - self.max_age,),
+                )
+                db.execute(
+                    "DELETE FROM trusted_sources WHERE rowid IN "
+                    "(SELECT rowid FROM trusted_sources ORDER BY rowid DESC LIMIT -1 OFFSET ?)",
+                    (self.max_messages,),
+                )
+            if self._routes_sig is not None and self._routes_sig == sig_before:
+                if not message.is_plugin_relayed:
+                    cur = self._routes_by_sid.get(message.session_id) or {}
+                    self._routes_by_sid[message.session_id] = {
+                        "session_id": message.session_id,
+                        "platform": str(message.platform or "").strip().lower(),
+                        "chat_type": chat_type,
+                        "group_id": str(message.group_id or "").strip(),
+                        "user_id": str(route_user or "").strip(),
+                        "account_id": str(message.account_id or "").strip() or cur.get("account_id", ""),
+                        "scope": str(message.scope or "").strip() or cur.get("scope", ""),
+                        "human_count": int(cur.get("human_count") or 0) + inc,
+                        "last_human_at": float(now),
+                        "updated": float(now),
+                    }
+                    self._rebuild_route_indexes_locked()
+                self._routes_sig = self._db_sig()
+            else:
+                self._routes_sig = None
 
     def lookup(
         self, message_id: str, session_id: str, platform: str, *, max_age=None
@@ -341,6 +449,9 @@ class MessageStore:
         return Message(raw, session, platform, user, bool(relayed), bool(local))
 
     def platform_for(self, session_id: str) -> str:
+        route = self.route_for(session_id)
+        if route and route.get("platform"):
+            return str(route["platform"])
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(
                 "SELECT DISTINCT platform FROM trusted_sources WHERE session_id=?",
@@ -348,35 +459,126 @@ class MessageStore:
             ).fetchall()
             if len(rows) == 1:
                 return rows[0][0]
-            route = db.execute(
+            row = db.execute(
                 "SELECT platform FROM session_routes WHERE session_id=?",
                 (session_id,),
             ).fetchone()
-        return route[0] if route else ""
+        return row[0] if row else ""
 
     def route_for(self, session_id: str, *, include_stats: bool = False) -> dict | None:
-        with closing(sqlite3.connect(self.path)) as db:
-            row = db.execute(
-                "SELECT platform, chat_type, group_id, user_id, account_id, scope, "
-                "human_count, last_human_at, updated "
-                "FROM session_routes WHERE session_id=?",
-                (session_id,),
-            ).fetchone()
-        if not row:
+        sid = str(session_id or "").strip()
+        if not sid:
             return None
-        route = {
-            "platform": row[0],
-            "chat_type": row[1],
-            "group_id": row[2],
-            "user_id": row[3],
-            "account_id": row[4],
-            "scope": row[5],
-        }
-        if include_stats:
-            route["human_count"] = int(row[6] or 0)
-            route["last_human_at"] = float(row[7] or 0.0)
-            route["updated"] = float(row[8] or 0.0)
-        return route
+        with self._routes_lock:
+            self._ensure_routes_loaded()
+            row = self._routes_by_sid.get(sid)
+            if not row:
+                return None
+            route = {
+                "platform": row["platform"],
+                "chat_type": row["chat_type"],
+                "group_id": row["group_id"],
+                "user_id": row["user_id"],
+                "account_id": row["account_id"],
+                "scope": row["scope"],
+            }
+            if include_stats:
+                route["human_count"] = int(row.get("human_count") or 0)
+                route["last_human_at"] = float(row.get("last_human_at") or 0.0)
+                route["updated"] = float(row.get("updated") or 0.0)
+            return route
+
+    def upsert_routes(
+        self,
+        entries: dict[str, dict] | Iterable[dict],
+        *,
+        timestamp: float | None = None,
+    ) -> int:
+        if not entries:
+            return 0
+        items = entries.items() if isinstance(entries, dict) else ((None, item) for item in entries)
+        default_now = float(
+            timestamp if timestamp is not None else (time.time() if self.clock is None else self.clock())
+        )
+        with self._routes_lock:
+            self._ensure_routes_loaded()
+            sig_before = self._routes_sig
+            pending: list[tuple[dict, tuple]] = []
+            staged: dict[str, dict] = {}
+            for key_sid, raw in items:
+                if not isinstance(raw, dict):
+                    continue
+                sid = str(raw.get("session_id") or key_sid or "").strip()
+                plat = str(raw.get("platform") or "").strip().lower()
+                ctype = str(raw.get("chat_type") or "").strip().lower()
+                gid = str(raw.get("group_id") or "").strip()
+                uid = "" if gid else str(raw.get("user_id") or "").strip()
+                if not sid or not plat or ctype not in {"group", "private"}:
+                    continue
+                aid = str(raw.get("account_id") or "").strip()
+                sc = str(raw.get("scope") or "").strip()
+                raw_ts = raw.get("timestamp")
+                entry_ts = (
+                    float(raw_ts)
+                    if raw_ts is not None
+                    else (float(timestamp) if timestamp is not None else None)
+                )
+                now = entry_ts if entry_ts is not None else default_now
+
+                cur = staged.get(sid) or self._routes_by_sid.get(sid)
+                eff_gid = gid or (cur["group_id"] if cur else "")
+                eff_uid = uid or (cur["user_id"] if cur else "")
+                eff_aid = aid or (cur["account_id"] if cur else "")
+                eff_sc = sc or (cur["scope"] if cur else "")
+                if cur is not None:
+                    same_meta = (
+                        plat == cur["platform"]
+                        and ctype == cur["chat_type"]
+                        and eff_gid == cur["group_id"]
+                        and eff_uid == cur["user_id"]
+                        and eff_aid == cur["account_id"]
+                        and eff_sc == cur["scope"]
+                    )
+                    same_ts = entry_ts is None or entry_ts == cur["updated"]
+                    if same_meta and same_ts:
+                        continue
+                new_entry = {
+                    "session_id": sid,
+                    "platform": plat,
+                    "chat_type": ctype,
+                    "group_id": eff_gid,
+                    "user_id": eff_uid,
+                    "account_id": eff_aid,
+                    "scope": eff_sc,
+                    "human_count": int(cur.get("human_count") or 0) if cur else 0,
+                    "last_human_at": float(cur.get("last_human_at") or 0.0) if cur else 0.0,
+                    "updated": now,
+                }
+                staged[sid] = new_entry
+                pending.append((new_entry, (sid, plat, ctype, gid, uid, aid, sc, now)))
+
+            if not pending:
+                return 0
+            pre_write_sig = self._db_sig()
+            with closing(sqlite3.connect(self.path)) as db, db:
+                db.executemany(
+                    "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0) "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "platform=excluded.platform, chat_type=excluded.chat_type, "
+                    "group_id=CASE WHEN excluded.group_id!='' THEN excluded.group_id ELSE session_routes.group_id END, "
+                    "user_id=CASE WHEN excluded.user_id!='' THEN excluded.user_id ELSE session_routes.user_id END, "
+                    "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
+                    "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
+                    "updated=excluded.updated",
+                    [params for _, params in pending],
+                )
+            if sig_before is not None and sig_before == pre_write_sig:
+                self._routes_by_sid.update(staged)
+                self._rebuild_route_indexes_locked()
+                self._routes_sig = self._db_sig()
+            else:
+                self._routes_sig = None
+            return len(pending)
 
     def upsert_route(
         self,
@@ -388,36 +590,22 @@ class MessageStore:
         user_id: str = "",
         account_id: str = "",
         scope: str = "",
+        timestamp: float | None = None,
     ) -> None:
-        sid = str(session_id or "").strip()
-        plat = str(platform or "").strip().lower()
-        ctype = str(chat_type or "").strip().lower()
-        gid = str(group_id or "").strip()
-        uid = "" if gid else str(user_id or "").strip()
-        if not sid or not plat or ctype not in {"group", "private"}:
-            return
-        now = time.time() if self.clock is None else self.clock()
-        with closing(sqlite3.connect(self.path)) as db, db:
-            db.execute(
-                "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0) "
-                "ON CONFLICT(session_id) DO UPDATE SET "
-                "platform=excluded.platform, chat_type=excluded.chat_type, "
-                "group_id=CASE WHEN excluded.group_id!='' THEN excluded.group_id ELSE session_routes.group_id END, "
-                "user_id=CASE WHEN excluded.user_id!='' THEN excluded.user_id ELSE session_routes.user_id END, "
-                "account_id=CASE WHEN excluded.account_id!='' THEN excluded.account_id ELSE session_routes.account_id END, "
-                "scope=CASE WHEN excluded.scope!='' THEN excluded.scope ELSE session_routes.scope END, "
-                "updated=excluded.updated",
-                (
-                    sid,
-                    plat,
-                    ctype,
-                    gid,
-                    uid,
-                    str(account_id or "").strip(),
-                    str(scope or "").strip(),
-                    now,
-                ),
-            )
+        self.upsert_routes(
+            [
+                {
+                    "session_id": session_id,
+                    "platform": platform,
+                    "chat_type": chat_type,
+                    "group_id": group_id,
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "scope": scope,
+                }
+            ],
+            timestamp=timestamp,
+        )
 
     def aliases_for(
         self,
@@ -460,81 +648,49 @@ class MessageStore:
             norm = f"{head.strip().lower()}:{tail.strip()}"
         else:
             norm = key
-        with closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute(
-                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope, "
-                "human_count, last_human_at, updated "
-                "FROM session_routes ORDER BY updated DESC LIMIT 512"
-            ).fetchall()
-        matched = []
-        for sid, plat, ctype, gid, uid, aid, sc, hc, lha, upd in rows:
-            plat_l = str(plat or "").strip().lower()
-            candidates = {sid}
-            if gid:
-                candidates.update({gid, f"group:{gid}"})
-                if plat_l:
-                    candidates.update({f"{plat_l}:{gid}", f"{plat_l}:group:{gid}"})
-            elif uid:
-                candidates.update({uid, f"private:{uid}"})
-                if plat_l:
-                    candidates.update({f"{plat_l}:{uid}", f"{plat_l}:private:{uid}"})
-            if key in candidates or norm in candidates:
-                matched.append(
-                    {
-                        "session_id": sid,
-                        "platform": plat_l,
-                        "chat_type": ctype,
-                        "group_id": gid,
-                        "user_id": uid,
-                        "account_id": aid,
-                        "scope": sc,
-                        "human_count": int(hc or 0),
-                        "last_human_at": float(lha or 0.0),
-                        "updated": float(upd or 0.0),
-                    }
-                )
-        matched.sort(key=session_rank_key, reverse=True)
-        return matched
+        with self._routes_lock:
+            self._ensure_routes_loaded()
+            hits_a = self._sids_by_alias.get(key, ())
+            hits_b = self._sids_by_alias.get(norm, ()) if norm != key else ()
+            if not hits_a and not hits_b:
+                return []
+            if not hits_b:
+                return [dict(item) for item in hits_a[:512]]
+            if not hits_a:
+                return [dict(item) for item in hits_b[:512]]
+            seen: set[str] = set()
+            matched: list[dict] = []
+            for item in (*hits_a, *hits_b):
+                sid = item["session_id"]
+                if sid not in seen:
+                    seen.add(sid)
+                    matched.append(dict(item))
+            matched.sort(key=session_rank_key, reverse=True)
+            return matched[:512]
 
     def activity_for(self, session_id: str) -> dict:
-        with closing(sqlite3.connect(self.path)) as db:
-            row = db.execute(
-                "SELECT chat_type, human_count, last_human_at "
-                "FROM session_routes WHERE session_id=?",
-                (session_id,),
-            ).fetchone()
-        if not row:
-            return {"chat_type": "", "human_count": 0, "last_human_at": 0.0}
-        return {
-            "chat_type": row[0],
-            "human_count": int(row[1]),
-            "last_human_at": float(row[2]),
-        }
+        sid = str(session_id or "").strip()
+        with self._routes_lock:
+            self._ensure_routes_loaded()
+            row = self._routes_by_sid.get(sid)
+            if not row:
+                return {"chat_type": "", "human_count": 0, "last_human_at": 0.0}
+            return {
+                "chat_type": row["chat_type"],
+                "human_count": int(row["human_count"]),
+                "last_human_at": float(row["last_human_at"]),
+            }
 
     def list_routes(self, limit: int = 256) -> list[dict]:
         cap = max(1, min(int(limit), 1000))
-        with closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute(
-                "SELECT session_id, platform, chat_type, group_id, user_id, account_id, scope, "
-                "human_count, last_human_at, updated "
-                "FROM session_routes ORDER BY updated DESC LIMIT ?",
-                (cap,),
-            ).fetchall()
-        return [
-            {
-                "session_id": sid,
-                "platform": str(plat or "").strip().lower(),
-                "chat_type": str(ctype or "").strip().lower(),
-                "group_id": str(gid or "").strip(),
-                "user_id": str(uid or "").strip(),
-                "account_id": str(aid or "").strip(),
-                "scope": str(sc or "").strip(),
-                "human_count": int(hc or 0),
-                "last_human_at": float(lha or 0.0),
-                "updated": float(upd or 0.0),
-            }
-            for sid, plat, ctype, gid, uid, aid, sc, hc, lha, upd in rows
-        ]
+        with self._routes_lock:
+            self._ensure_routes_loaded()
+            ordered = sorted(
+                self._routes_by_sid.values(),
+                key=lambda item: float(item.get("updated") or 0.0),
+                reverse=True,
+            )
+            return [dict(item) for item in ordered[:cap]]
 
 
 def normalize_admins(permissions) -> set[str]:

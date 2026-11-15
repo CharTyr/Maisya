@@ -636,6 +636,7 @@ async def collect_known_chats(plugin) -> list[dict]:
     level_map = dict(plugin.settings.chat_proactive_levels or {})
     records: list[dict] = []
     seen_sids: set[str] = set()
+    known_aliases: set[str] = set()
 
     def _spec_for(sid: str, plat: str, ctype: str, gid: str, uid: str, s_info: dict) -> str:
         spec = str(s_info.get("stream_spec") or "").strip()
@@ -668,6 +669,7 @@ async def collect_known_chats(plugin) -> list[dict]:
         aliases = set(plugin.chat_aliases_for(sid, plat)) | {sid}
         if spec:
             aliases.add(spec)
+        known_aliases.update(aliases)
         records.append(
             {
                 "sid": sid,
@@ -693,10 +695,12 @@ async def collect_known_chats(plugin) -> list[dict]:
             continue
         parsed = parse_stream_spec(token)
         norm_tok = format_stream_spec(*parsed) if parsed else token
-        if any(token in rec["aliases"] or norm_tok in rec["aliases"] for rec in records):
+        if token in known_aliases or norm_tok in known_aliases:
             continue
         if parsed is not None:
             plat, ctype, tid = parsed
+            new_aliases = {token, norm_tok}
+            known_aliases.update(new_aliases)
             records.append(
                 {
                     "sid": norm_tok,
@@ -712,10 +716,11 @@ async def collect_known_chats(plugin) -> list[dict]:
                     "last_human_at": 0.0,
                     "updated": 0.0,
                     "avatar": "",
-                    "aliases": {token, norm_tok},
+                    "aliases": new_aliases,
                 }
             )
         else:
+            known_aliases.add(token)
             records.append(
                 {
                     "sid": token,

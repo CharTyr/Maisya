@@ -132,6 +132,8 @@ def snapshot(
         ]
         selected = None
         events = []
+        if not thread_id and threads:
+            thread_id = threads[0]["thread_id"]
         if thread_id:
             target = db.execute(
                 "SELECT chat_id FROM agent_threads WHERE thread_id=?", (thread_id,)
