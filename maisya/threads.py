@@ -461,6 +461,84 @@ class ThreadStore:
                 (encode({"error": "宿主重载中断了运行；可以给原线程 send 继续。"}),),
             )
 
+    @staticmethod
+    def _truncate_tool_block(block, *, target_chars: int, archive_seq: int):
+        assistant_msg = dict(block[0])
+        asst_content = str(assistant_msg.get("content") or "")
+        if len(asst_content) > 400:
+            assistant_msg["content"] = asst_content[:400] + "..."
+        tool_msgs = [dict(m) for m in block[1:]]
+        notice = (
+            f" ...[工具输出过长已截断，完整内容已归档至 event_seq={archive_seq}；"
+            "请直接基于已有结果继续推进，切勿重复调用同一工具，"
+            f"如需查阅后续片段可调 thread_read(event_seq={archive_seq}, offset=...)]"
+        )
+        parsed = []
+        for m in tool_msgs:
+            raw = str(m.get("content") or "")
+            if raw.startswith("<external_data>") and raw.endswith("</external_data>"):
+                prefix, suffix = "<external_data>", "</external_data>"
+                inner = raw[len(prefix) : -len(suffix)]
+            else:
+                prefix, suffix = "", ""
+                inner = raw
+            parsed.append([dict(m), prefix, suffix, inner, raw])
+
+        def _render(caps: list[int | None]) -> list[dict]:
+            out = [assistant_msg]
+            for idx, (base_msg, prefix, suffix, inner, raw) in enumerate(parsed):
+                cap = caps[idx]
+                msg = dict(base_msg)
+                if cap is None:
+                    msg["content"] = raw
+                else:
+                    trimmed_notice = notice if cap >= len(notice) else notice[:cap]
+                    body_cap = max(0, cap - len(trimmed_notice))
+                    msg["content"] = f"{prefix}{inner[:body_cap]}{trimmed_notice}{suffix}"
+                out.append(msg)
+            return out
+
+        caps: list[int | None] = [None] * len(parsed)
+        encoded_len = len(encode(_render(caps)))
+        if encoded_len <= target_chars:
+            return _render(caps)
+
+        # Estimate available raw inner chars after assistant_msg, per-message overhead, and notices
+        skeleton_caps = [0] * len(parsed)
+        skeleton_len = len(encode(_render(skeleton_caps)))
+        avail_inner = max(0, target_chars - skeleton_len)
+        # Water-fill across oversized messages proportional/uniformly
+        raw_lengths = [len(entry[3]) + len(notice) for entry in parsed]
+        n = len(parsed)
+        if n > 0:
+            # Start with generous per-item allocation and water-fill unused budget
+            caps = [min(raw_lengths[i], max(len(notice), avail_inner // n + len(notice))) for i in range(n)]
+            unused = max(0, avail_inner - sum(max(0, c - len(notice)) for c in caps))
+            if unused > 0:
+                for i in range(n):
+                    need = max(0, raw_lengths[i] - (caps[i] or 0))
+                    add = min(unused, need)
+                    caps[i] = (caps[i] or 0) + add
+                    unused -= add
+
+        # Refine caps so encode(rendered) <= target_chars even with JSON escaping
+        for _ in range(12):
+            rendered = _render(caps)
+            cur_len = len(encode(rendered))
+            if cur_len <= target_chars:
+                return rendered
+            excess = cur_len - target_chars
+            # Shrink the largest capped/uncapped tool entry
+            largest_idx = max(range(n), key=lambda i: len(rendered[1 + i].get("content", "")))
+            cur_raw_len = len(parsed[largest_idx][3]) + len(notice)
+            prev_cap = caps[largest_idx] if caps[largest_idx] is not None else cur_raw_len
+            step = max(16, (excess + 1) // 2 if excess > 64 else excess)
+            new_cap = max(0, prev_cap - step)
+            if new_cap == prev_cap:
+                break
+            caps[largest_idx] = new_cap
+        return _render(caps)
+
     def compact(self, thread_id, chat_id, *, max_chars=48000):
         row = self.get(thread_id, chat_id)
         history = row["history"]
@@ -481,23 +559,37 @@ class ThreadStore:
             for index, block in enumerate(blocks)
             if block[0].get("role") == "user"
         ]
-        priority = ([user_blocks[-1], user_blocks[0]] if user_blocks else []) + list(
-            reversed(range(len(blocks)))
+        last_idx = len(blocks) - 1
+        has_trailing_tool_block = bool(
+            blocks
+            and blocks[last_idx][0].get("tool_calls")
+            and any(msg.get("role") == "tool" for msg in blocks[last_idx])
         )
+        if has_trailing_tool_block:
+            priority = (
+                ([user_blocks[-1]] if user_blocks else [])
+                + [last_idx]
+                + ([user_blocks[0]] if user_blocks else [])
+                + list(reversed(range(len(blocks))))
+            )
+        else:
+            priority = ([user_blocks[-1], user_blocks[0]] if user_blocks else []) + list(
+                reversed(range(len(blocks)))
+            )
         selected = set()
         budget = max_chars - min(1000, max_chars // 4)
         size = 2
+        stop_optional_blocks = False
         for index in priority:
+            if stop_optional_blocks and index not in selected:
+                continue
             block_size = len(encode(blocks[index])) + 2
             if index not in selected and size + block_size <= budget:
                 selected.add(index)
                 size += block_size
-        retained = [
-            message
-            for index, block in enumerate(blocks)
-            if index in selected
-            for message in block
-        ]
+            elif has_trailing_tool_block and index == last_idx and last_idx not in selected:
+                # Preserve remaining budget for the truncated trailing tool block
+                stop_optional_blocks = True
         with self.connect() as db, db:
             archive_seq = self.event(
                 db,
@@ -506,6 +598,33 @@ class ThreadStore:
                 row["processed_revision"],
                 {"history": history, "previous_index": row["summary"]},
             )
+            truncated_last = None
+            if has_trailing_tool_block and last_idx not in selected:
+                other_retained = [
+                    message
+                    for index, block in enumerate(blocks)
+                    if index in selected and index != last_idx
+                    for message in block
+                ]
+                other_len = len(encode(other_retained))
+                # If user_blocks[-1] itself nearly exhausted budget, drop earlier blocks
+                # (keep only user_blocks[-1] or empty if necessary) to guarantee tool block fits
+                if budget - other_len < 400 and selected:
+                    selected.clear()
+                    other_retained = []
+                    other_len = 2
+                avail_for_block = max(128, max(budget, max_chars - 64) - other_len - 2)
+                truncated_last = self._truncate_tool_block(
+                    blocks[last_idx],
+                    target_chars=avail_for_block,
+                    archive_seq=archive_seq,
+                )
+            retained = []
+            for index, block in enumerate(blocks):
+                if index == last_idx and truncated_last is not None:
+                    retained.extend(truncated_last)
+                elif index in selected:
+                    retained.extend(block)
             summary = encode(
                 {
                     "archive_event": archive_seq,

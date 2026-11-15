@@ -1377,6 +1377,7 @@ class DigestWorkspace:
         self.work = work
         self.fetcher = fetcher or fetch_public_bytes
         self.clock = clock or time.time
+        self._sources_lock = asyncio.Lock()
 
     def _read_text(self, path: str) -> str | None:
         offset = 0
@@ -1555,27 +1556,37 @@ class DigestWorkspace:
             }
         parsed = parse_feed_xml(body, now=now, lookback_days=30.0)
         resolved_title = title.strip() or parsed.get("title") or host
-        feed = {
-            "id": _feed_id_for(url),
-            "url": str(resp.get("url") or url),
-            "host": host,
-            "title": resolved_title,
-            "origin": origin,
-            "status": "trial" if auto else "active",
-            "added_at": now,
-            "trial_until": (now + TRIAL_DAYS * DAYS_TO_SECS) if auto else 0.0,
-            "candidates_14d": [],
-            "kept_total": 0,
-            "up": 0,
-            "down": 0,
-            "reply": 0,
-            "fail_count": 0,
-            "first_fail_at": 0.0,
-            "last_polled_at": 0.0,
-        }
-        sources["feeds"].append(feed)
-        self._save_sources(sources)
-        self.work.commit()
+        async with self._sources_lock:
+            now = self.clock()
+            sources = self._load_sources()
+            self._prune_rejected(sources, now)
+            rej = self._is_rejected(sources, url, host, now)
+            if rej is not None:
+                return {"ok": False, "reason": f"该来源处于退订/冷却列表: {rej.get('reason', '')}"}
+            for existing in sources["feeds"]:
+                if _normalize_url_key(existing.get("url", "")) == norm:
+                    return {"ok": True, "existing": True, "feed": existing}
+            feed = {
+                "id": _feed_id_for(url),
+                "url": str(resp.get("url") or url),
+                "host": host,
+                "title": resolved_title,
+                "origin": origin,
+                "status": "trial" if auto else "active",
+                "added_at": now,
+                "trial_until": (now + TRIAL_DAYS * DAYS_TO_SECS) if auto else 0.0,
+                "candidates_14d": [],
+                "kept_total": 0,
+                "up": 0,
+                "down": 0,
+                "reply": 0,
+                "fail_count": 0,
+                "first_fail_at": 0.0,
+                "last_polled_at": 0.0,
+            }
+            sources["feeds"].append(feed)
+            self._save_sources(sources)
+            self.work.commit()
         return {"ok": True, "feed": feed}
 
     async def discover(self, url: str, *, origin: str = "discover") -> dict[str, Any]:
@@ -2130,7 +2141,7 @@ class DigestWorkspace:
         max_items: int = 12,
         broad: bool = True,
     ) -> dict[str, Any]:
-        cap_items = max(1, min(int(max_items or 12), 24))
+        cap_items = max(1, min(int(max_items or 12), 14))
         clean_queries = [str(q).strip() for q in (queries or ()) if str(q).strip()][:16]
         if isinstance(topics, str):
             clean_topics = [t.strip() for t in re.split(r"[,，、;；\s]+", topics) if t.strip()]
@@ -2294,7 +2305,9 @@ class DigestWorkspace:
                     return
                 async with sem_fetch:
                     try:
-                        page = await web.fetch(cand["url"], context=context)
+                        page = await asyncio.wait_for(
+                            web.fetch(cand["url"], context=context), timeout=8.0
+                        )
                     except Exception:
                         fetch_errors += 1
                         return
@@ -2304,7 +2317,7 @@ class DigestWorkspace:
                 raw_content = str(page.get("content") or page.get("text") or "").strip()
                 if raw_content:
                     cleaned = re.sub(r"[ \t]+", " ", raw_content)
-                    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()[:2600]
+                    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()[:2200]
                     cand["source_text"] = cleaned
                 pub = str(
                     page.get("published_at")
@@ -2336,7 +2349,7 @@ class DigestWorkspace:
             if not cand.get("source_text"):
                 fallback_body = str(cand.get("body") or cand.get("summary") or cand.get("snippet") or "").strip()
                 if fallback_body:
-                    cand["source_text"] = re.sub(r"\s+", " ", fallback_body).strip()[:2600]
+                    cand["source_text"] = re.sub(r"\s+", " ", fallback_body).strip()[:2200]
             src_txt = str(cand.get("source_text") or "")
             if not cand.get("published"):
                 fallback_pub = str(cand.get("published_at") or "").strip()
@@ -2345,7 +2358,17 @@ class DigestWorkspace:
                 if fallback_pub:
                     cand["published"] = fallback_pub
             cand["has_numbers"] = _has_distinct_numbers(src_txt)
+            if len(src_txt) > 1100:
+                cand["source_text"] = src_txt[:1100]
+            if len(cand.get("source_text") or "") >= 120:
+                cand.pop("summary", None)
+                cand.pop("snippet", None)
+            else:
+                for text_key in ("summary", "snippet"):
+                    if text_key in cand and len(str(cand[text_key] or "")) > 240:
+                        cand[text_key] = str(cand[text_key])[:240]
             cand.pop("body", None)
+            cand.pop("feed_links", None)
             final_candidates.append(cand)
 
         pool_by_url: dict[str, dict[str, Any]] = {}

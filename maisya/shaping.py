@@ -2090,9 +2090,9 @@ async def handle_digest_sources(
     auto_default = _coerce_bool(raw_auto, "auto") if raw_auto is not None else False
 
     async def _mutate(dw: DigestWorkspace) -> dict:
-        added: list[dict] = []
-        discovered: list[dict] = []
-        unsubscribed: list[dict] = []
+        add_sem = asyncio.Semaphore(6)
+        discover_sem = asyncio.Semaphore(4)
+        add_tasks = []
         for item in add_raw:
             if isinstance(item, dict):
                 url = str(item.get("url") or "").strip()
@@ -2108,13 +2108,43 @@ async def handle_digest_sources(
                 title = ""
                 auto_flag = auto_default
             if url:
-                added.append(
-                    await dw.add_feed(url, title=title, auto=auto_flag, origin="admin")
-                )
-        for url in discover_raw:
-            u = str(url or "").strip()
-            if u:
-                discovered.append(await dw.discover(u, origin="admin"))
+                add_tasks.append((url, title, auto_flag))
+
+        async def _add_one(url: str, title: str, auto_flag: bool) -> dict:
+            async with add_sem:
+                try:
+                    return await asyncio.wait_for(
+                        dw.add_feed(url, title=title, auto=auto_flag, origin="admin"),
+                        timeout=6.0,
+                    )
+                except TimeoutError:
+                    return {"ok": False, "url": url, "reason": f"RSS 源 {url} 订阅超时（>6s）"}
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    return {"ok": False, "url": url, "reason": str(exc)}
+
+        async def _discover_one(url: str) -> dict:
+            async with discover_sem:
+                try:
+                    return await asyncio.wait_for(
+                        dw.discover(url, origin="admin"), timeout=6.0
+                    )
+                except TimeoutError:
+                    return {"ok": False, "url": url, "reason": f"主页嗅探 {url} 超时（>6s）"}
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    return {"ok": False, "url": url, "reason": str(exc)}
+
+        added: list[dict] = (
+            list(await asyncio.gather(*(_add_one(u, t, a) for u, t, a in add_tasks)))
+            if add_tasks
+            else []
+        )
+        discover_urls = [str(u or "").strip() for u in discover_raw if str(u or "").strip()]
+        discovered: list[dict] = (
+            list(await asyncio.gather(*(_discover_one(u) for u in discover_urls)))
+            if discover_urls
+            else []
+        )
+        unsubscribed: list[dict] = []
         if unsub_raw:
             feeds_snapshot = list(dw._load_sources().get("feeds", []) or ())
             seen_fids: set[str] = set()
@@ -2826,7 +2856,7 @@ async def _apply_setup_digest_sources(
                 try:
                     res = await asyncio.wait_for(
                         dw.add_feed(url, title=title, auto=auto_flag, origin="admin"),
-                        timeout=8.0,
+                        timeout=5.0,
                     )
                     if res.get("ok"):
                         return 1, None
@@ -2835,7 +2865,7 @@ async def _apply_setup_digest_sources(
                         f"RSS 源 {url} 未订阅成功：{res.get('reason') or '未知原因'}",
                     )
                 except TimeoutError:
-                    return 0, f"RSS 源 {url} 订阅超时（>8s），已跳过"
+                    return 0, f"RSS 源 {url} 订阅超时（>5s），已跳过"
                 except (OSError, ValueError, RuntimeError, TypeError) as exc:
                     return 0, f"RSS 源 {url} 订阅异常：{exc}"
 
@@ -2846,7 +2876,7 @@ async def _apply_setup_digest_sources(
             async with discover_sem:
                 try:
                     res = await asyncio.wait_for(
-                        dw.discover(url, origin="admin"), timeout=8.0
+                        dw.discover(url, origin="admin"), timeout=5.0
                     )
                     if res.get("ok"):
                         return 1, None
@@ -2855,7 +2885,7 @@ async def _apply_setup_digest_sources(
                         f"主页嗅探 {url} 未发现可用订阅：{res.get('reason') or '未知原因'}",
                     )
                 except TimeoutError:
-                    return 0, f"主页嗅探 {url} 超时（>8s），已跳过"
+                    return 0, f"主页嗅探 {url} 超时（>5s），已跳过"
                 except (OSError, ValueError, RuntimeError, TypeError) as exc:
                     return 0, f"主页嗅探 {url} 异常：{exc}"
 
@@ -2942,7 +2972,7 @@ async def _apply_setup_digest_sources(
                 else:
                     seed_res = seed_fn()
                 if inspect.isawaitable(seed_res):
-                    seed_res = await asyncio.wait_for(seed_res, timeout=12.0)
+                    seed_res = await asyncio.wait_for(seed_res, timeout=6.0)
                 if isinstance(seed_res, dict):
                     seeded_items = (
                         seed_res.get("added")
@@ -2963,7 +2993,7 @@ async def _apply_setup_digest_sources(
                         warnings.append(f"冷启动试订提示：{seed_res['reason']}")
                 cur_sources = dw._load_sources()
             except TimeoutError:
-                warnings.append("初期试订源冷启动超时（>12s），已跳过")
+                warnings.append("初期试订源冷启动超时（>6s），已跳过")
             except (OSError, ValueError, RuntimeError, TypeError) as exc:
                 warnings.append(f"初期试订源冷启动异常：{exc}")
 
@@ -3223,18 +3253,28 @@ async def _apply_setup_trial(
         **({"scheduled_admin": True} if cross_chat else {}),
         **({"admin_direct": True} if cross_chat and delivery_mode == "current" else {}),
     }
-    started = await plugin.engine.start(
-        ability,
-        trial_prompt,
-        chat_id=effective_chat_id,
-        platform=effective_platform,
-        user_id="",
-        owner="chat",
-        wait_seconds=wait_seconds if delivery_mode == "current" else 0,
-        return_route=route,
-        workspace=trial_ws,
-        grant=grant,
-    )
+    try:
+        started = await plugin.engine.start(
+            ability,
+            trial_prompt,
+            chat_id=effective_chat_id,
+            platform=effective_platform,
+            user_id="",
+            owner="chat",
+            wait_seconds=wait_seconds if delivery_mode == "current" else 0,
+            return_route=route,
+            workspace=trial_ws,
+            grant=grant,
+        )
+        if (
+            route
+            and started.get("state") in {"idle", "waiting"}
+            and hasattr(plugin, "bridge")
+        ):
+            await plugin.bridge.inline(started["thread_id"], current_chat_id)
+    finally:
+        if route and hasattr(plugin, "bridge"):
+            await plugin.bridge.submitted(route)
     delivery_intent_id = ""
     if cross_chat and delivery_mode == "target" and getattr(plugin, "intents", None) is not None:
         delivery = await plugin.schedule_cross_chat_delivery(
@@ -3288,7 +3328,10 @@ def _build_setup_summary(
     if warnings:
         clauses.append(f"含 {len(warnings)} 条提醒")
     body = "，".join(clauses) if clauses else "未检测到需要变更的配置项"
-    return f"已为 {stream_spec} 完成配置：{body}。"
+    tail = ""
+    if trial_info and trial_info.get("state") == "active":
+        tail = " 后台试跑完成后会自动回传结果，请先调用 reply 自然回复用户，勿调用 wait 或 maisya_recall 轮询。"
+    return f"已为 {stream_spec} 完成配置：{body}。{tail}"
 
 
 async def handle_setup(
@@ -3394,6 +3437,20 @@ async def handle_setup(
 
     trial_thread_id = trial_info["thread_id"] if trial_info else ""
     delivery_intent_id = trial_info.get("delivery_intent_id", "") if trial_info else ""
+    next_step = ""
+    if trial_info and trial_info.get("state") == "active":
+        if trial_info.get("deliver_to") == "current":
+            next_step = (
+                "后台试跑线程已在运行，完成后系统会自动通过 <maisya_returns> 唤醒本会话交付结果与图卡。"
+                "请现在立即调用 reply 先向用户自然简短交代已生效的配置与后台试跑进度；"
+                "本轮切勿调用 wait、切勿用 maisya_recall 轮询等待，也不要对运行中的同一线程重复发指令。"
+            )
+        else:
+            next_step = (
+                "后台试跑线程已在运行，完成后系统会自动投递至目标会话。"
+                "请现在立即调用 reply 先向用户自然简短交代已生效的配置与后台试跑安排；"
+                "本轮切勿调用 wait 或 maisya_recall 轮询等待。"
+            )
     summary = _build_setup_summary(stream_spec, applied, schedules, trial_info, warnings)
     return {
         "kind": "setup",
@@ -3406,6 +3463,7 @@ async def handle_setup(
         "cancelled_schedules": cancelled_schedules,
         "trial_thread_id": trial_thread_id,
         **({"delivery_intent_id": delivery_intent_id} if delivery_intent_id else {}),
+        **({"next_step": next_step} if next_step else {}),
         "summary": summary,
     }
 

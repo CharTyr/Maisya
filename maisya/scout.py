@@ -621,6 +621,15 @@ class Scout:
             result = await self.web.fetch(
                 arguments["url"], context, provider=web_provider
             )
+            if isinstance(result, dict):
+                raw_text = result.get("content")
+                if isinstance(raw_text, str) and len(raw_text) > 12000:
+                    result = {
+                        **result,
+                        "content": raw_text[:12000],
+                        "truncated": True,
+                        "original_chars": len(raw_text),
+                    }
         elif name == "chat_read":
             messages = checked(
                 await call_capability(

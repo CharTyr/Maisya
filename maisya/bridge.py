@@ -180,11 +180,55 @@ class Bridge:
                 rows.extend(
                     self._rows(db, chat_id, offered_ids, thread_id=target_thread)
                 )
-        return any(
-            row.get("return_chat_id") == chat_id
-            and _grant_admin_direct(row.get("raw_grant"))
-            for row in rows
-        )
+            if any(
+                row.get("return_chat_id") == chat_id
+                and _grant_admin_direct(row.get("raw_grant"))
+                for row in rows
+            ):
+                return True
+            if target_thread is None:
+                now = self.clock()
+                active_rows = db.execute(
+                    "SELECT t.thread_id, t.revision, tc.grant AS raw_grant "
+                    "FROM agent_threads t "
+                    "LEFT JOIN thread_context tc ON tc.thread_id=t.thread_id "
+                    "WHERE t.state='active' AND t.updated>=? ORDER BY t.updated DESC LIMIT 32",
+                    (now - 1800,),
+                ).fetchall()
+                for arow in active_rows:
+                    input_row = db.execute(
+                        "SELECT payload FROM thread_events WHERE thread_id=? AND kind='input' AND revision=? ORDER BY seq DESC LIMIT 1",
+                        (arow["thread_id"], arow["revision"]),
+                    ).fetchone()
+                    grant_obj = None
+                    if input_row:
+                        try:
+                            input_payload = json.loads(input_row["payload"])
+                        except (TypeError, ValueError):
+                            input_payload = {}
+                        input_ctx = (
+                            input_payload.get("context")
+                            if isinstance(input_payload, dict)
+                            else None
+                        )
+                        if isinstance(input_ctx, dict) and isinstance(
+                            input_ctx.get("grant"), dict
+                        ):
+                            grant_obj = input_ctx["grant"]
+                    if grant_obj is None and arow["raw_grant"]:
+                        try:
+                            parsed = json.loads(arow["raw_grant"])
+                        except (TypeError, ValueError):
+                            parsed = None
+                        if isinstance(parsed, dict):
+                            grant_obj = parsed
+                    if (
+                        isinstance(grant_obj, dict)
+                        and grant_obj.get("admin_direct") is True
+                        and str(grant_obj.get("source_chat_id") or "") == chat_id
+                    ):
+                        return True
+        return False
 
     def has_pending_for(self, chat_id: str) -> bool:
         return bool(
@@ -416,6 +460,7 @@ class Bridge:
         return facts
 
     async def end_turn(self, chat_id):
+        self._blocked.discard(chat_id)
         self._manual.pop(chat_id, None)
         self._plans = {
             key: value for key, value in self._plans.items() if key[0] != chat_id

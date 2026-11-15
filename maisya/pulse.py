@@ -181,6 +181,7 @@ class Pulse:
                 + facts
                 + "</maisya_return>"
             )
+            self.bridge.new_input(chat_id)
             if not all(self.enabled(chat_id, row["platform"]) for row in rows):
                 await self.bridge.offer(chat_id)
             status = await self._wake(
@@ -294,6 +295,46 @@ class Pulse:
                 )
                 return
             prompt = row["payload"].get("prompt") or row["reason"]
+            raw_thread_chat = str(row["payload"].get("thread_chat_id") or "").strip()
+            thread_chat_id = (
+                (await self._ensure_runtime_chat_id(raw_thread_chat))
+                if raw_thread_chat
+                else chat_id
+            ) or chat_id
+            if bool(row["payload"].get("admin_direct")) and thread_chat_id != chat_id:
+                source_msg_id = str(row["payload"].get("source_msg_id") or "admin-preview")
+                route = await self.bridge.route(chat_id, source_msg_id, 0)
+                try:
+                    started = await self.engine.start(
+                        ability,
+                        prompt,
+                        chat_id=thread_chat_id,
+                        platform=platform or "qq",
+                        user_id="",
+                        owner="chat",
+                        wait_seconds=0,
+                        return_route=route,
+                        workspace=row["payload"].get("workspace", ""),
+                        grant={
+                            "scheduled_admin": True,
+                            "admin_direct": True,
+                            "source_chat_id": chat_id,
+                            "source_platform": platform or "qq",
+                            "source_msg_id": source_msg_id,
+                        },
+                    )
+                finally:
+                    await self.bridge.submitted(route)
+                await asyncio.to_thread(
+                    self.intents.update_thread,
+                    row["intent_id"],
+                    started["thread_id"],
+                    row["payload"],
+                )
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "done", "return_routed"
+                )
+                return
             started = await self.engine.start(
                 ability,
                 prompt,

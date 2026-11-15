@@ -1374,6 +1374,8 @@ class MaisyaPlugin(MaiBotPlugin):
                     )
             elif admin_bootstrap:
                 self._record_bootstrap_message(identity)
+                if self.bridge and not identity.is_plugin_relayed:
+                    self.bridge.new_input(identity.session_id)
             elif (
                 not chat_enabled
                 and self.settings.plugin.enabled
@@ -1544,7 +1546,7 @@ class MaisyaPlugin(MaiBotPlugin):
         steer=False,
         thread_id="",
         message="",
-        wait_seconds=20,
+        wait_seconds=None,
         ref_msg_ids=None,
         from_threads=None,
         attachment_handles=None,
@@ -1553,9 +1555,14 @@ class MaisyaPlugin(MaiBotPlugin):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
         route = None
+        caller_specified_wait = wait_seconds is not None
+        if wait_seconds is None:
+            wait_seconds = 20
         try:
             if not self.engine or not self.settings.plugin.enabled:
                 raise PermissionError("Maisya 尚未就绪或已停用")
+            if type(wait_seconds) not in (int, float) or not 0 <= wait_seconds <= 30:
+                raise ValueError("等待窗口必须在 0 到 30 秒之间")
             deliver_to = str(deliver_to or "auto").strip()
             if deliver_to not in {"auto", "target", "current", "none"}:
                 raise ValueError("deliver_to 必须是 auto/target/current/none")
@@ -1745,7 +1752,16 @@ class MaisyaPlugin(MaiBotPlugin):
                     is False
                 ):
                     raise PermissionError("引用受限线程需要当前管理员授权")
-            effective_wait = 0 if delivery_mode == "target" else wait_seconds
+            def _effective_wait_for(target_profile: str) -> float | int:
+                if delivery_mode == "target":
+                    return 0
+                if target_profile == "digest" and (
+                    not caller_specified_wait or float(wait_seconds) >= 15.0
+                ):
+                    return min(float(wait_seconds), 2.0)
+                return wait_seconds
+
+            effective_wait = _effective_wait_for(profile)
             admin_direct_grant = bool(
                 is_admin_caller
                 and delivery_mode == "current"
@@ -1955,11 +1971,12 @@ class MaisyaPlugin(MaiBotPlugin):
                                 )[:5000]
                                 + "</previous_result>"
                             )
+                    send_wait = _effective_wait_for(row["profile"])
                     route = (
                         await self.bridge.route(
                             chat_id,
                             identity.message_id if identity else "",
-                            effective_wait,
+                            send_wait,
                         )
                         if row["owner"] == "chat" and delivery_mode == "current"
                         else None
@@ -1968,7 +1985,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         thread_id,
                         message,
                         chat_id=row_chat,
-                        wait_seconds=effective_wait,
+                        wait_seconds=send_wait,
                         return_route=route,
                         steer=steer,
                         input_context={
@@ -2023,6 +2040,15 @@ class MaisyaPlugin(MaiBotPlugin):
             ):
                 self._record_ops_receipt(chat_id, f"agent:{action}")
             result = self.vault.redact(result)
+            if action in {"start", "send"} and result.get("state") == "active":
+                result = {
+                    **result,
+                    "next_step": (
+                        "后台线程正在运行，完成后系统会自动唤醒交付结果。"
+                        "请现在立即调用 reply 先自然简短告知用户已开始处理（如已完成相关配置可一并说明）；"
+                        "本轮切勿调用 wait、切勿用 maisya_recall 轮询等待，除非需要改向否则不要对运行中的同一线程重复 send。"
+                    ),
+                }
             return {
                 "success": True,
                 "content": json.dumps(result, ensure_ascii=False),
@@ -2096,7 +2122,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 raise PermissionError("Maisya 尚未就绪或已停用")
             identity = (
                 await asyncio.to_thread(
-                    self._lookup_message, source_msg_id, chat_id, platform, max_age=300
+                    self._lookup_message,
+                    source_msg_id,
+                    chat_id,
+                    platform,
+                    max_age=self._admin_source_max_age(chat_id, platform),
                 )
                 if source_msg_id
                 else None
@@ -2215,14 +2245,21 @@ class MaisyaPlugin(MaiBotPlugin):
                 }
                 for item in memories
             ]
+            redacted_memories = self.vault.redact(memories)
+            has_active = any(
+                isinstance(item, dict) and item.get("state") == "active"
+                for item in rows
+            )
+            payload = {"threads": rows, "memories": redacted_memories}
+            if has_active:
+                payload["active_notice"] = (
+                    "检测到后台线程仍在运行（state=active）。后台线程完成后系统会自动唤醒投递，"
+                    "请勿继续调用 maisya_recall 或 wait 轮询等待；若本轮尚未回复用户，请立即调用 reply 先自然告知当前进展。"
+                )
             return {
                 "success": True,
-                "threads": rows,
-                "memories": self.vault.redact(memories),
-                "content": json.dumps(
-                    self.vault.redact({"threads": rows, "memories": memories}),
-                    ensure_ascii=False,
-                ),
+                **payload,
+                "content": json.dumps(payload, ensure_ascii=False),
             }
         except (ValueError, PermissionError, TypeError, sqlite3.Error) as error:
             return {"success": False, "error": str(error)}
@@ -2627,7 +2664,11 @@ class MaisyaPlugin(MaiBotPlugin):
             identity = None
             if source_msg_id:
                 identity = await asyncio.to_thread(
-                    self._lookup_message, source_msg_id, chat_id, platform, max_age=300
+                    self._lookup_message,
+                    source_msg_id,
+                    chat_id,
+                    platform,
+                    max_age=self._admin_source_max_age(chat_id, platform),
                 )
                 if identity is None or identity.is_plugin_relayed:
                     raise PermissionError("本次调用的来源消息无法核验")
@@ -2875,20 +2916,20 @@ class MaisyaPlugin(MaiBotPlugin):
                 and await asyncio.to_thread(self.bridge.has_admin_direct_for, chat_id)
             )
             if has_admin_direct:
-                returned = await self.bridge.offer(chat_id)
-                if returned:
+                kept_tools = [
+                    item
+                    for item in tools
+                    if names(item) not in {"maisya_shape", "maisya_later"}
+                ]
+                if any(names(item) == "maisya_agent" for item in kept_tools):
                     kept_tools = [
                         item
-                        for item in tools
-                        if names(item) not in {"maisya_shape", "maisya_later"}
+                        for item in kept_tools
+                        if names(item)
+                        not in {"subagent", "subagent_status", "subagent_stop"}
                     ]
-                    if any(names(item) == "maisya_agent" for item in kept_tools):
-                        kept_tools = [
-                            item
-                            for item in kept_tools
-                            if names(item)
-                            not in {"subagent", "subagent_status", "subagent_stop"}
-                        ]
+                returned = await self.bridge.offer(chat_id)
+                if returned:
                     return_item = {
                         "item_type": "UserMessageItem",
                         "meta": {
@@ -2913,6 +2954,12 @@ class MaisyaPlugin(MaiBotPlugin):
                             "item_schema_version": kwargs.get("item_schema_version", 1),
                         },
                     }
+                return {
+                    "action": "continue",
+                    "modified_kwargs": {
+                        "tool_definitions": kept_tools,
+                    },
+                }
             return {
                 "action": "continue",
                 "modified_kwargs": {
@@ -3025,8 +3072,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             admin_lines.extend(
                 [
-                    "遇到「给某群配好某功能/定时/偏好并试跑」的一段话需求，优先单次调用 maisya_shape(action=\"setup\", kind=\"setup\", target_chat=..., source_msg_id=..., patch={..., \"run_now\": true, \"deliver_to\": \"current\"}) 一次到位（支持 enable_chat、sleep_window、enable_profiles/model_name、preferences、rss_urls/topics、daily_at、run_now、deliver_to），不必拆成多步；向管理员汇报配置或任务进展时直接调用 reply(chat_anlyze=..., reply_style=\"长回复\")。",
-                    "所有流标识统一用 平台:类型:id（如 qq:group:12345678，target_chat 也兼容群号/群名/current）；如需盘点先 read(kind='overview', target_chat=...)，局部微调仍支持 settings/profile/skill/memory/digest_sources。",
+                    "遇到「给某群配好某功能/定时/偏好并试跑」的一段话需求，优先单次调用 maisya_shape(action=\"setup\", kind=\"setup\", target_chat=..., source_msg_id=..., patch={..., \"run_now\": true, \"deliver_to\": \"current\"}) 一次到位（支持 enable_chat、sleep_window、enable_profiles/model_name、preferences、rss_urls/unsubscribe/topics、daily_at、run_now、deliver_to），不要拆成多轮碎片调用；局部微调也尽量合并。",
+                    "所有流标识统一用 平台:类型:id（如 qq:group:12345678，target_chat 也兼容群号/群名/current）；注意在私聊中宿主 search_chat_history 只能搜当前私聊，要摸清目标群近期聊什么与口味，应交给目标群的 digest/scout 线程用 chat_read 了解。",
+                    "两段式自然反馈规则（重要）：只要 maisya_shape(setup) 或 maisya_agent(start/send) 返回 state='active'（后台线程已跑起），请在本轮**立即调用 reply**（reply_style=\"长回复\"）自然简短地交代已完成的配置/调整以及后台正在按新要求跑，等系统通过 <maisya_returns> 自动唤醒后再交付成图或结论；**绝对不要调用 wait 或反复调用 maisya_recall 轮询等待，也不要对运行中的同一线程重复发指令**。",
                     "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(daily_at=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
                 ]
             )
@@ -3226,13 +3274,22 @@ class MaisyaPlugin(MaiBotPlugin):
                     source = str(arguments.get("source_msg_id") or "")
                     identity = (
                         await asyncio.to_thread(
-                            self._lookup_message, source, chat_id, platform, max_age=300
+                            self._lookup_message,
+                            source,
+                            chat_id,
+                            platform,
+                            max_age=self._admin_source_max_age(chat_id, platform),
                         )
                         if source
                         else None
                     )
+                    has_explicit_wait = "wait_seconds" in arguments
                     wait = arguments.get("wait_seconds", 20)
                     if type(wait) in (int, float) and 0 <= wait <= 30:
+                        if str(arguments.get("profile") or "") == "digest" and (
+                            not has_explicit_wait or float(wait) >= 15.0
+                        ):
+                            wait = min(float(wait), 2.0)
                         calls.append(
                             (identity.message_id if identity else source, wait)
                         )
