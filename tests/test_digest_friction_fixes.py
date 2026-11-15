@@ -515,7 +515,7 @@ async def test_cross_chat_send_auto_inherits_admin_preview_and_share_survives_ov
             action="send",
             thread_id=preview_tid,
             message="再回到私聊预览",
-            deliver_to="auto",
+            deliver_to="current",
             wait_seconds=0,
             source_msg_id="m-admin-2",
             chat_id="priv_admin_md5",

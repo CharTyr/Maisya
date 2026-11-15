@@ -631,7 +631,7 @@ class MessageStore:
             if plat:
                 aliases.update({f"{plat}:{gid}", f"{plat}:group:{gid}"})
         elif uid:
-            aliases.add(f"private:{uid}")
+            aliases.update({uid, f"private:{uid}"})
             if plat:
                 aliases.update({f"{plat}:{uid}", f"{plat}:private:{uid}"})
         return aliases

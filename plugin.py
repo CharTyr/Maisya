@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import sqlite3
+import threading
 import time
 import tomllib
 import uuid
@@ -249,9 +250,11 @@ class MaisyaPlugin(MaiBotPlugin):
         self._continuing_turn_chats: set[str] = set()
         self._reply_sources: dict[str, tuple[float, list[str]]] = {}
         self._turn_ops_receipts: dict[str, dict] = {}
+        self._bootstrap_lock = threading.RLock()
         self._bootstrap_messages = {}
         self._bootstrap_platforms = {}
         self._relayed_bootstrap_sources = {}
+        self._vault_command_outcomes: dict[tuple[str, str, str], tuple[bool, str, int]] = {}
         self._stream_cache = {
             "expires": 0.0,
             "streams": {},
@@ -451,8 +454,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self._continuing_turn_chats.clear()
         self._reply_sources.clear()
         self._turn_ops_receipts.clear()
-        self._bootstrap_messages.clear()
-        self._bootstrap_platforms.clear()
+        self._vault_command_outcomes.clear()
+        self._clear_bootstrap_caches()
         self.messages = None
         self.vault = None
         self.admins.clear()
@@ -829,9 +832,9 @@ class MaisyaPlugin(MaiBotPlugin):
             self.set_plugin_config(config_data)
             self.settings = settings
             if not self.settings.plugin.enabled:
-                self._bootstrap_messages.clear()
-                self._bootstrap_platforms.clear()
+                self._clear_bootstrap_caches()
                 self._turn_ops_receipts.clear()
+                self._vault_command_outcomes.clear()
             if self.engine:
                 self.engine.idle_seconds = settings.thread_idle_seconds
                 self.engine.max_steps = settings.agent_max_steps
@@ -901,14 +904,39 @@ class MaisyaPlugin(MaiBotPlugin):
             return float(self.messages.clock())
         return time.time()
 
+    def _clear_bootstrap_caches(self) -> None:
+        lock = getattr(self, "_bootstrap_lock", None)
+        if lock is not None:
+            with lock:
+                self._bootstrap_messages.clear()
+                self._bootstrap_platforms.clear()
+                self._relayed_bootstrap_sources.clear()
+        else:
+            self._bootstrap_messages.clear()
+            self._bootstrap_platforms.clear()
+            self._relayed_bootstrap_sources.clear()
+
+    def _bootstrap_snapshot(self):
+        lock = getattr(self, "_bootstrap_lock", None)
+        if lock is not None:
+            with lock:
+                return list((getattr(self, "_bootstrap_messages", None) or {}).items())
+        return list((getattr(self, "_bootstrap_messages", None) or {}).items())
+
+    def _unlock_unreplied_aliases(self, chat_id: str, platform: str = "") -> None:
+        if not self.intents:
+            return
+        aliases = {str(chat_id or "").strip()}
+        aliases.update(self.chat_aliases_for(chat_id, platform))
+        for alias in sorted(tok for tok in aliases if tok):
+            self.intents.note_received(alias, engaged=True)
+
     def _latest_human_ts(self, chat_id: str) -> float:
         latest = 0.0
         if self.messages:
             activity = self.messages.activity_for(chat_id) or {}
             latest = max(latest, float(activity.get("last_human_at") or 0.0))
-        for (sid, _plat, _mid), (ts, ident) in list(
-            getattr(self, "_bootstrap_messages", {}).items()
-        ):
+        for (sid, _plat, _mid), (ts, ident) in self._bootstrap_snapshot():
             if sid == chat_id and not getattr(ident, "is_plugin_relayed", False):
                 latest = max(latest, float(ts or 0.0))
         return latest
@@ -917,7 +945,31 @@ class MaisyaPlugin(MaiBotPlugin):
         if not identity.message_id or not identity.session_id or not identity.platform:
             return
         now = self._message_now()
+        stale_cutoff = now - 300.0
+        lock = getattr(self, "_bootstrap_lock", None)
+
+        def _collect_stale() -> set[str]:
+            return {
+                k[0]
+                for k, (ts, _) in list(self._bootstrap_messages.items())
+                if ts < stale_cutoff
+            } | {
+                k
+                for k, (ts, _) in list(self._bootstrap_platforms.items())
+                if ts < stale_cutoff
+            }
+
+        if lock is not None:
+            with lock:
+                stale_sids = _collect_stale()
+        else:
+            stale_sids = _collect_stale()
+
         direct_cache: dict[str, bool] = {}
+        for sid in stale_sids:
+            direct_cache[sid] = bool(
+                self.bridge and self.bridge.has_admin_direct_for(sid)
+            )
 
         def _cutoff_for(sid: str) -> float:
             if sid not in direct_cache:
@@ -926,26 +978,42 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             return now - (3600.0 if direct_cache[sid] else 300.0)
 
-        for key in [
-            k for k, (ts, _) in self._bootstrap_messages.items() if ts < _cutoff_for(k[0])
-        ]:
-            self._bootstrap_messages.pop(key, None)
-        for sid in [
-            k for k, (ts, _) in self._bootstrap_platforms.items() if ts < _cutoff_for(k)
-        ]:
-            self._bootstrap_platforms.pop(sid, None)
-        self._bootstrap_messages[
-            (identity.session_id, identity.platform, identity.message_id)
-        ] = (now, identity)
-        self._bootstrap_platforms[identity.session_id] = (now, identity.platform)
-        while len(self._bootstrap_messages) > 64:
-            self._bootstrap_messages.pop(next(iter(self._bootstrap_messages)), None)
+        def _apply() -> None:
+            for key in [
+                k
+                for k, (ts, _) in list(self._bootstrap_messages.items())
+                if ts < stale_cutoff and ts < _cutoff_for(k[0])
+            ]:
+                self._bootstrap_messages.pop(key, None)
+            for sid in [
+                k
+                for k, (ts, _) in list(self._bootstrap_platforms.items())
+                if ts < stale_cutoff and ts < _cutoff_for(k)
+            ]:
+                self._bootstrap_platforms.pop(sid, None)
+            self._bootstrap_messages[
+                (identity.session_id, identity.platform, identity.message_id)
+            ] = (now, identity)
+            self._bootstrap_platforms[identity.session_id] = (now, identity.platform)
+            while len(self._bootstrap_messages) > 64:
+                self._bootstrap_messages.pop(next(iter(self._bootstrap_messages)), None)
+
+        if lock is not None:
+            with lock:
+                _apply()
+        else:
+            _apply()
 
     def _platform_for(self, session_id: str) -> str:
         plat = self.messages.platform_for(session_id) if self.messages else ""
         if plat:
             return plat
-        entry = self._bootstrap_platforms.get(session_id)
+        lock = getattr(self, "_bootstrap_lock", None)
+        if lock is not None:
+            with lock:
+                entry = self._bootstrap_platforms.get(session_id)
+        else:
+            entry = self._bootstrap_platforms.get(session_id)
         if entry:
             limit = (
                 3600.0
@@ -987,38 +1055,57 @@ class MaisyaPlugin(MaiBotPlugin):
             or not plat
         ):
             return
-        cache = getattr(self, "_relayed_bootstrap_sources", None)
-        if cache is None:
-            cache = {}
-            self._relayed_bootstrap_sources = cache
         now = self._message_now()
         cutoff = now - 86400.0
-        for key in [k for k, ts in cache.items() if ts < cutoff]:
-            cache.pop(key, None)
-        cache[(identity.session_id, plat, identity.message_id)] = now
-        alias = message_alias(identity.message_id)
-        if alias and alias != identity.message_id:
-            cache[(identity.session_id, plat, alias)] = now
-        while len(cache) > 256:
-            cache.pop(next(iter(cache)), None)
+        lock = getattr(self, "_bootstrap_lock", None)
+
+        def _apply() -> None:
+            cache = getattr(self, "_relayed_bootstrap_sources", None)
+            if cache is None:
+                cache = {}
+                self._relayed_bootstrap_sources = cache
+            for key in [k for k, ts in list(cache.items()) if ts < cutoff]:
+                cache.pop(key, None)
+            cache[(identity.session_id, plat, identity.message_id)] = now
+            alias = message_alias(identity.message_id)
+            if alias and alias != identity.message_id:
+                cache[(identity.session_id, plat, alias)] = now
+            while len(cache) > 256:
+                cache.pop(next(iter(cache)), None)
+
+        if lock is not None:
+            with lock:
+                _apply()
+        else:
+            _apply()
 
     def _is_relayed_bootstrap_source(
         self, message_id: str, session_id: str, platform: str
     ) -> bool:
-        cache = getattr(self, "_relayed_bootstrap_sources", None)
         plat = str(platform or "").strip().lower()
-        if not cache or not message_id or not session_id or not plat:
+        if not message_id or not session_id or not plat:
             return False
         now = self._message_now()
         cutoff = now - 86400.0
         alias = message_alias(message_id)
-        for cand in (message_id, alias):
-            if not cand:
-                continue
-            ts = cache.get((session_id, plat, cand))
-            if ts is not None and ts >= cutoff:
-                return True
-        return False
+        lock = getattr(self, "_bootstrap_lock", None)
+
+        def _check() -> bool:
+            cache = getattr(self, "_relayed_bootstrap_sources", None)
+            if not cache:
+                return False
+            for cand in (message_id, alias):
+                if not cand:
+                    continue
+                ts = cache.get((session_id, plat, cand))
+                if ts is not None and ts >= cutoff:
+                    return True
+            return False
+
+        if lock is not None:
+            with lock:
+                return _check()
+        return _check()
 
     @staticmethod
     def _thread_context_has_admin_direct(row: dict | None) -> bool:
@@ -1045,7 +1132,7 @@ class MaisyaPlugin(MaiBotPlugin):
         now = self._message_now()
         matches = [
             msg
-            for (sid, plat, _), (ts, msg) in self._bootstrap_messages.items()
+            for (sid, plat, _), (ts, msg) in self._bootstrap_snapshot()
             if sid == session_id
             and plat == platform
             and now - ts <= max_age
@@ -1168,7 +1255,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 if norm_p in m_aliases or sid in m_aliases:
                     aliases.add(s_sid)
                     aliases.update(m_aliases)
-        for (msg_sid, _, _), (_, msg) in (getattr(self, "_bootstrap_messages", {}) or {}).items():
+        bootstrap_items = self._bootstrap_snapshot()
+        for (msg_sid, _, _), (_, msg) in bootstrap_items:
             m_aliases = self._route_aliases(
                 str(getattr(msg, "platform", "") or ""),
                 str(getattr(msg, "group_id", "") or ""),
@@ -1215,7 +1303,8 @@ class MaisyaPlugin(MaiBotPlugin):
                     if m_spec == spec:
                         aliases.add(s_sid)
                         aliases.update(self._route_aliases(m_plat, m_gid, m_uid))
-            for (msg_sid, _, _), (_, msg) in (getattr(self, "_bootstrap_messages", {}) or {}).items():
+            bootstrap_items = self._bootstrap_snapshot()
+        for (msg_sid, _, _), (_, msg) in bootstrap_items:
                 m_plat = str(getattr(msg, "platform", "") or "").strip().lower()
                 m_gid = str(getattr(msg, "group_id", "") or "").strip()
                 m_uid = str(getattr(msg, "user_id", "") or "").strip()
@@ -1251,7 +1340,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 if plat and (gid or uid):
                     return format_stream_spec(plat, "group" if gid else "private", gid or uid)
         latest: tuple[float, object] | None = None
-        for (msg_sid, _, _), (ts, msg) in (getattr(self, "_bootstrap_messages", {}) or {}).items():
+        for (msg_sid, _, _), (ts, msg) in self._bootstrap_snapshot():
             if msg_sid == raw and (latest is None or ts >= latest[0]):
                 latest = (ts, msg)
         if latest is not None:
@@ -1378,7 +1467,8 @@ class MaisyaPlugin(MaiBotPlugin):
             if len(specs) == 1 and next(iter(specs)):
                 return max(hits_by_sid.values(), key=session_rank_key)["session_id"]
         boot_hits: set[str] = set()
-        for (msg_sid, _, _), (_, msg) in (getattr(self, "_bootstrap_messages", {}) or {}).items():
+        bootstrap_items = self._bootstrap_snapshot()
+        for (msg_sid, _, _), (_, msg) in bootstrap_items:
             if not msg_sid:
                 continue
             aliases = {msg_sid} | self._route_aliases(
@@ -1431,6 +1521,115 @@ class MaisyaPlugin(MaiBotPlugin):
         )
         return filter_tools(tools, is_admin=is_admin)
 
+    @staticmethod
+    def _vault_extract_event(message) -> tuple[Message | None, str, bool]:
+        if message is None:
+            return None, "", False
+        if isinstance(message, dict):
+            identity = Message.from_event(message)
+            private = not (message.get("message_info") or {}).get("group_info")
+            raw_text = str(message.get("processed_plain_text") or "")
+            return identity, raw_text, private
+
+        def _field(obj, name: str, default=None):
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(name, default)
+            return getattr(obj, name, default)
+
+        info = _field(message, "message_info")
+        group_info = _field(info, "group_info")
+        user_info = _field(info, "user_info")
+        cfg = _field(info, "additional_config")
+        plat = str(_field(message, "platform", "") or "").strip().lower()
+        identity = Message(
+            str(_field(message, "message_id", "") or "").strip(),
+            str(_field(message, "session_id", "") or "").strip(),
+            plat,
+            str(_field(user_info, "user_id", "") or "").strip(),
+            bool(_field(cfg, "relayed_by_plugin", False)),
+            plat == "bot_console" and _field(cfg, "is_local_operator", False) is True,
+            str(_field(group_info, "group_id", "") or "").strip()
+            if group_info is not None
+            else "",
+            str(
+                _field(info, "account_id", "")
+                or _field(cfg, "account_id", "")
+                or ""
+            ).strip(),
+            str(_field(info, "scope", "") or _field(cfg, "scope", "") or "").strip(),
+        )
+        raw_text = str(_field(message, "processed_plain_text", "") or "")
+        return identity, raw_text, group_info is None
+
+    def _vault_outcome_keys(self, identity: Message) -> list[tuple[str, str, str]]:
+        sid = str(identity.session_id or "").strip()
+        plat = str(identity.platform or "").strip().lower()
+        mid = str(identity.message_id or "").strip()
+        if not sid or not mid:
+            return []
+        keys = [(sid, plat, mid)]
+        alias = message_alias(mid)
+        if alias and alias != mid:
+            keys.append((sid, plat, alias))
+        return keys
+
+    def _record_vault_outcome(
+        self, identity: Message, outcome: tuple[bool, str, int]
+    ) -> None:
+        outcomes = getattr(self, "_vault_command_outcomes", None)
+        if outcomes is None:
+            outcomes = {}
+            self._vault_command_outcomes = outcomes
+        for key in self._vault_outcome_keys(identity):
+            outcomes[key] = outcome
+        while len(outcomes) > 128:
+            outcomes.pop(next(iter(outcomes)), None)
+
+    def _pop_vault_outcome(self, identity: Message) -> tuple[bool, str, int] | None:
+        outcomes = getattr(self, "_vault_command_outcomes", None)
+        if not outcomes:
+            return None
+        matched = None
+        for key in self._vault_outcome_keys(identity):
+            hit = outcomes.pop(key, None)
+            if hit is not None and matched is None:
+                matched = hit
+        return matched
+
+    async def _execute_vault_command(
+        self,
+        parts: list[str],
+        *,
+        private: bool,
+        identity: Message | None,
+        secrets: set[str],
+    ) -> tuple[bool, str, int]:
+        if not self.settings.plugin.enabled or self.vault is None:
+            return False, "Maisya 当前已停用，未执行 /vault。", 2
+        if not private:
+            return False, "仅限在管理员私聊中使用 /vault 管理凭据。", 2
+        if identity is None or not await asyncio.to_thread(
+            self.authorize_admin_source,
+            identity.message_id,
+            identity.session_id,
+            identity.platform,
+        ):
+            return False, "仅限已核验管理员在私聊中使用 /vault 管理凭据。", 2
+        try:
+            if len(parts) == 4 and parts[1] == "set":
+                await asyncio.to_thread(self.vault.set, parts[2], parts[3])
+                return True, f"凭据句柄 {parts[2]} 已保存。", 2
+            if len(parts) == 3 and parts[1] == "delete":
+                await asyncio.to_thread(self.vault.delete, parts[2])
+                return True, f"凭据句柄 {parts[2]} 已删除。", 2
+            return False, "用法：/vault set <句柄名> <凭据值> 或 /vault delete <句柄名>。", 2
+        except (OSError, ValueError, VaultError) as error:
+            self.ctx.logger.warning("Maisya 凭据输入未保存；请在保险箱中检查句柄。")
+            safe_err = self.vault.redact(redact_values(str(error), secrets))
+            return False, f"凭据输入未保存：{safe_err}", 2
+
     async def _vault_input(self, message, identity, text):
         command = bool(VAULT_COMMAND.match(text.strip()))
         private = not (message.get("message_info") or {}).get("group_info")
@@ -1441,19 +1640,10 @@ class MaisyaPlugin(MaiBotPlugin):
             secrets.update(secret_variants(text))
             if len(parts) == 4 and parts[1] == "set":
                 secrets.update(secret_variants(parts[3]))
-            try:
-                if private and await asyncio.to_thread(
-                    self.authorize_admin_source,
-                    identity.message_id,
-                    identity.session_id,
-                    identity.platform,
-                ):
-                    if len(parts) == 4 and parts[1] == "set":
-                        await asyncio.to_thread(self.vault.set, parts[2], parts[3])
-                    elif len(parts) == 3 and parts[1] == "delete":
-                        await asyncio.to_thread(self.vault.delete, parts[2])
-            except (OSError, ValueError, VaultError):
-                self.ctx.logger.warning("Maisya 凭据输入未保存；请在保险箱中检查句柄。")
+            outcome = await self._execute_vault_command(
+                parts, private=private, identity=identity, secrets=secrets
+            )
+            self._record_vault_outcome(identity, outcome)
         else:
             clean = PRIVATE_KEY.sub("[PRIVATE KEY REDACTED]", text)
             for match in PRIVATE_KEY.finditer(text):
@@ -1493,11 +1683,18 @@ class MaisyaPlugin(MaiBotPlugin):
                 if self.bridge and not identity.is_plugin_relayed:
                     self.bridge.new_input(identity.session_id)
                 if self.intents and not identity.is_plugin_relayed:
-                    await asyncio.to_thread(
-                        self.intents.note_received,
-                        identity.session_id,
-                        engaged=not bool(identity.group_id),
-                    )
+                    if not identity.group_id:
+                        await asyncio.to_thread(
+                            self._unlock_unreplied_aliases,
+                            identity.session_id,
+                            identity.platform,
+                        )
+                    else:
+                        await asyncio.to_thread(
+                            self.intents.note_received,
+                            identity.session_id,
+                            engaged=False,
+                        )
             elif admin_bootstrap:
                 self._record_bootstrap_message(identity)
                 if self.bridge and not identity.is_plugin_relayed:
@@ -1737,7 +1934,10 @@ class MaisyaPlugin(MaiBotPlugin):
                 effective_chat_id, effective_platform = await self.resolve_chat_id(
                     raw_target_chat, current_chat_id=chat_id, current_platform=platform
                 )
-            elif is_admin_caller and action in {"send", "stop"} and thread_id:
+            elif is_admin_caller and (
+                action in {"send", "stop"}
+                or (action == "share" and deliver_to == "target")
+            ) and thread_id:
                 pre_row = await asyncio.to_thread(
                     self.threads.get,
                     thread_id,
@@ -1791,8 +1991,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 and cross_chat
                 and deliver_to == "auto"
                 and (
-                    not await asyncio.to_thread(self.enabled_for, chat_id, platform)
-                    or (
+                    (
                         thread_id
                         and self.bridge
                         and await asyncio.to_thread(
@@ -1808,10 +2007,16 @@ class MaisyaPlugin(MaiBotPlugin):
                 delivery_mode = "current"
             else:
                 delivery_mode = "target"
+            if action == "share" and delivery_mode == "none":
+                raise ValueError("share 不支持 deliver_to='none'")
             if cross_chat:
-                allow_cross = action == "stop" or (
-                    action in {"start", "send"}
-                    and delivery_mode in {"current", "none"}
+                allow_cross = (
+                    action == "stop"
+                    or (
+                        action in {"start", "send"}
+                        and delivery_mode in {"current", "none"}
+                    )
+                    or (action == "share" and delivery_mode == "current")
                 )
                 if not allow_cross and not await asyncio.to_thread(
                     self.enabled_for, effective_chat_id, effective_platform
@@ -2120,12 +2325,24 @@ class MaisyaPlugin(MaiBotPlugin):
                 ):
                     raise PermissionError("当前真实发言人或会话不在原线程能力范围内")
                 if action == "share":
+                    if delivery_mode == "none":
+                        raise ValueError("share 不支持 deliver_to='none'")
+                    share_dest_chat = (
+                        chat_id
+                        if delivery_mode == "current" and cross_chat
+                        else effective_chat_id
+                    )
+                    share_dest_plat = (
+                        platform
+                        if delivery_mode == "current" and cross_chat
+                        else effective_platform
+                    )
                     if row["owner"] == "self":
                         await asyncio.to_thread(
                             self.memory._guard,
                             "skill",
                             row["result"].get("text", ""),
-                            effective_chat_id,
+                            share_dest_chat,
                         )
                     result = await self.sharing.send(
                         row,
@@ -2133,14 +2350,14 @@ class MaisyaPlugin(MaiBotPlugin):
                         attachment_handles=attachment_handles,
                         ref_msg_ids=ref_msg_ids,
                         target_chat_id=(
-                            effective_chat_id
-                            if row["owner"] == "self" or effective_chat_id != row_chat
+                            share_dest_chat
+                            if row["owner"] == "self" or share_dest_chat != row_chat
                             else None
                         ),
-                        target_platform=effective_platform,
+                        target_platform=share_dest_plat,
                         is_admin=effective_admin,
                         allow_admin_destination=bool(
-                            effective_admin and effective_chat_id == chat_id
+                            effective_admin and share_dest_chat == chat_id
                         ),
                     )
                     if (
@@ -2152,7 +2369,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         and caller_arena == "group"
                     ):
                         await asyncio.to_thread(
-                            self.intents.note_received, chat_id, engaged=True
+                            self._unlock_unreplied_aliases, chat_id, platform
                         )
                 elif action == "stop":
                     if (
@@ -2240,7 +2457,12 @@ class MaisyaPlugin(MaiBotPlugin):
                                 **(
                                     {"admin_direct": True}
                                     if admin_direct_grant
-                                    else {}
+                                    else (
+                                        {"admin_direct": False}
+                                        if cross_chat
+                                        and delivery_mode in {"target", "none"}
+                                        else {}
+                                    )
                                 ),
                             },
                             "references": ref_msg_ids or [],
@@ -3001,7 +3223,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 result = await asyncio.to_thread(
                     self.intents.cancel, intent_id, cancel_target
                 )
-                self._record_ops_receipt(chat_id, "later:cancel")
+                if is_admin_caller:
+                    self._record_ops_receipt(chat_id, "later:cancel")
                 return {"success": True, **result}
             if action != "schedule":
                 raise ValueError("未知的意图动作")
@@ -3088,12 +3311,22 @@ class MaisyaPlugin(MaiBotPlugin):
                     raise PermissionError("覆盖替换已有工作流需要真实管理员消息授权")
                 if not profile:
                     raise ValueError("replace=true 时需要指定 profile")
-                cancelled_ids = await asyncio.to_thread(
-                    self.intents.cancel_matching_workflows,
-                    target,
-                    profile=profile,
-                    workspace="" if profile == "digest" else workspace,
+                replace_aliases = await asyncio.to_thread(
+                    self.chat_aliases_for, effective_chat_id, effective_platform
                 )
+                seen_cancelled: set[str] = set()
+                for cand in sorted(set(replace_aliases) | {effective_chat_id}):
+                    if not cand:
+                        continue
+                    for cid in await asyncio.to_thread(
+                        self.intents.cancel_matching_workflows,
+                        f"chat:{cand}",
+                        profile=profile,
+                        workspace="" if profile == "digest" else workspace,
+                    ):
+                        if cid not in seen_cancelled:
+                            seen_cancelled.add(cid)
+                            cancelled_ids.append(cid)
 
             if profile or source == "workflow":
                 intent_source = (
@@ -3154,14 +3387,18 @@ class MaisyaPlugin(MaiBotPlugin):
                         reason=reason or (f"每日 {norm_hhmm} {profile or '定时任务'}"),
                         thread_id=thread_id,
                         payload=payload,
-                        bypass_limits=True,
+                        bypass_limits=(
+                            intent_kind != "proactive"
+                            or bool(profile or intent_source == "workflow")
+                        ),
                     )
                     created_rows.append(self.vault.redact(scheduled_row))
                 summary_payload = {
                     "intents": created_rows,
                     "cancelled_ids": cancelled_ids,
                 }
-                self._record_ops_receipt(chat_id, "later:schedule")
+                if is_admin_caller:
+                    self._record_ops_receipt(chat_id, "later:schedule")
                 return {
                     "success": True,
                     **created_rows[0],
@@ -3209,7 +3446,8 @@ class MaisyaPlugin(MaiBotPlugin):
             result = self.vault.redact(row)
             if cancelled_ids:
                 result["cancelled_ids"] = cancelled_ids
-            self._record_ops_receipt(chat_id, "later:schedule")
+            if is_admin_caller:
+                self._record_ops_receipt(chat_id, "later:schedule")
             return {
                 "success": True,
                 **result,
@@ -3820,7 +4058,7 @@ class MaisyaPlugin(MaiBotPlugin):
             and (has_reply or has_agent_call)
             and await asyncio.to_thread(self._chat_arena, chat_id, platform) == "group"
         ):
-            await asyncio.to_thread(self.intents.note_received, chat_id, engaged=True)
+            await asyncio.to_thread(self._unlock_unreplied_aliases, chat_id, platform)
         return {"action": "continue"}
 
     @HookHandler(
@@ -4313,18 +4551,28 @@ class MaisyaPlugin(MaiBotPlugin):
 
             result, profile_cards = await asyncio.to_thread(_load_console_bundle)
 
-            def _daily_proactive_used():
+            def _daily_proactive_summary():
                 if not self.intents:
-                    return 0
+                    return 0, {"group": 0, "private": 0}
                 now = self.intents.clock()
                 start, end = self.intents._day_bounds(now)
                 with self.intents.store.connect() as db:
-                    return db.execute(
-                        "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
-                        "AND source IN ('afterglow','serendipity','longing','later') "
-                        "AND created>=? AND created<? AND status!='cancelled'",
-                        (start, end),
-                    ).fetchone()["count"]
+                    counts = self.intents._proactive_counts(db, start, end)
+                buckets = {
+                    "group": int(counts.get("group", 0)),
+                    "private": int(counts.get("private", 0)),
+                }
+                arena = (
+                    self._chat_arena(filter_chat)
+                    if filter_chat and str(filter_chat).strip() not in {"", "self"}
+                    else ""
+                )
+                used = (
+                    buckets[arena]
+                    if arena in {"group", "private"}
+                    else max(buckets["group"], buckets["private"])
+                )
+                return used, buckets
 
             result["profiles"] = [
                 card["id"] for card in profile_cards if card.get("enabled", True)
@@ -4344,6 +4592,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             )
             result["chat_sources"] = await self._resolve_chat_sources(source_chat_ids)
+            daily_used, daily_buckets = await asyncio.to_thread(_daily_proactive_summary)
             result["pulse"] = {
                 "enabled": bool(self.settings.plugin.enabled),
                 "proactive_level": self.settings.proactive_level,
@@ -4353,7 +4602,8 @@ class MaisyaPlugin(MaiBotPlugin):
                     and self.intents.in_sleep_window(self.settings.sleep_window)
                 ),
                 "daily_limit": int(self.settings.daily_proactive_limit),
-                "daily_used": await asyncio.to_thread(_daily_proactive_used),
+                "daily_used": daily_used,
+                "daily_buckets": daily_buckets,
                 "heartbeat_interval_minutes": int(
                     self.settings.heartbeat_interval_minutes
                 ),
@@ -4532,6 +4782,9 @@ class MaisyaPlugin(MaiBotPlugin):
                     raise PermissionError("目标会话尚未启用 Maisya")
                 ability = await asyncio.to_thread(self.profiles.get, str(profile))
                 self.runtime.available(ability)
+                norm_workspace = normalize_profile_workspace(
+                    str(profile), str(workspace or "")
+                )
                 started = await self.engine.start(
                     ability,
                     message,
@@ -4540,7 +4793,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     user_id="",
                     owner="self" if target_chat == "self" else "chat",
                     wait_seconds=0,
-                    workspace=str(workspace or ""),
+                    workspace=norm_workspace,
                     grant={"console_admin": True},
                 )
                 return {"success": True, **self.vault.redact(started)}
@@ -4600,7 +4853,24 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Command("vault", description="私聊录入或删除凭据", pattern=r"^/vault(?:\s|$)")
     async def vault_command(self, **kwargs):
-        return True, "凭据输入已处理，请在保险箱中检查句柄。", 2
+        identity, raw_text, private = self._vault_extract_event(kwargs.get("message"))
+        if identity is not None:
+            outcome = self._pop_vault_outcome(identity)
+            if outcome is not None:
+                return outcome
+        parts = raw_text.strip().split(None, 3)
+        secrets = set(secret_variants(raw_text)) if raw_text else set()
+        if len(parts) == 4 and parts[1] == "set":
+            secrets.update(secret_variants(parts[3]))
+        if not parts or not VAULT_COMMAND.match(raw_text.strip()):
+            if not self.settings.plugin.enabled or self.vault is None:
+                return False, "Maisya 当前已停用，未执行 /vault。", 2
+            if not private and identity is not None:
+                return False, "仅限在管理员私聊中使用 /vault 管理凭据。", 2
+            return False, "仅限已核验管理员在私聊中使用 /vault 管理凭据。", 2
+        return await self._execute_vault_command(
+            parts, private=private, identity=identity, secrets=secrets
+        )
 
     @HookHandler(
         "send_service.before_send",
