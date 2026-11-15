@@ -805,6 +805,18 @@ STARTER_FEEDS: tuple[dict[str, Any], ...] = (
         "keywords": ("pc", "game", "indie game", "gamedev", "steam", "review", "游戏", "独立游戏", "评测"),
     },
     {
+        "url": "https://godotengine.org/rss.xml",
+        "title": "Godot Engine",
+        "category": "game-engine",
+        "keywords": ("godot", "game engine", "gamedev", "indie game", "游戏引擎", "游戏开发", "独立游戏"),
+    },
+    {
+        "url": "https://www.gamedeveloper.com/rss.xml",
+        "title": "Game Developer",
+        "category": "game-dev",
+        "keywords": ("gamedev", "game design", "indie game", "postmortem", "steam", "游戏开发", "独立游戏", "关卡设计"),
+    },
+    {
         "url": "https://lobste.rs/rss",
         "title": "Lobsters",
         "category": "dev",
@@ -2163,10 +2175,10 @@ class DigestWorkspace:
         queries: list[str] | tuple[str, ...] = (),
         topics: list[str] | tuple[str, ...] = (),
         lookback_days: float = 7,
-        max_items: int = 12,
+        max_items: int = 18,
         broad: bool = True,
     ) -> dict[str, Any]:
-        cap_items = max(1, min(int(max_items or 12), 14))
+        cap_items = max(1, min(int(max_items or 18), 20))
         clean_queries = [str(q).strip() for q in (queries or ()) if str(q).strip()][:16]
         if isinstance(topics, str):
             clean_topics = [t.strip() for t in re.split(r"[,，、;；\s]+", topics) if t.strip()]
@@ -2391,6 +2403,23 @@ class DigestWorkspace:
 
             await asyncio.gather(*(_fetch_candidate(c) for c in working_pool))
 
+        full_text_by_url: dict[str, str] = {}
+        for raw_c in combined:
+            c_url = str(raw_c.get("url") or "").strip()
+            if not c_url:
+                continue
+            raw_body = str(
+                raw_c.get("source_text")
+                or raw_c.get("body")
+                or raw_c.get("summary")
+                or raw_c.get("snippet")
+                or ""
+            ).strip()
+            if raw_body:
+                full_text_by_url[_normalize_url_key(c_url)] = re.sub(
+                    r"\s+", " ", raw_body
+                ).strip()[:850]
+
         final_candidates: list[dict[str, Any]] = []
         for cand in working_pool:
             if not cand.get("source_text"):
@@ -2398,6 +2427,9 @@ class DigestWorkspace:
                 if fallback_body:
                     cand["source_text"] = re.sub(r"\s+", " ", fallback_body).strip()[:2200]
             src_txt = str(cand.get("source_text") or "")
+            c_url = str(cand.get("url") or "").strip()
+            if c_url and src_txt:
+                full_text_by_url[_normalize_url_key(c_url)] = src_txt[:2200]
             if not cand.get("published"):
                 fallback_pub = str(cand.get("published_at") or "").strip()
                 if not fallback_pub and src_txt:
@@ -2405,8 +2437,8 @@ class DigestWorkspace:
                 if fallback_pub:
                     cand["published"] = fallback_pub
             cand["has_numbers"] = _has_distinct_numbers(src_txt)
-            if len(src_txt) > 1100:
-                cand["source_text"] = src_txt[:1100]
+            if len(src_txt) > 850:
+                cand["source_text"] = src_txt[:850]
             if len(cand.get("source_text") or "") >= 120:
                 cand.pop("summary", None)
                 cand.pop("snippet", None)
@@ -2441,6 +2473,7 @@ class DigestWorkspace:
                 ),
                 "feed_id": str(cand.get("feed_id") or prev.get("feed_id") or ""),
                 "feed_title": str(cand.get("feed_title") or prev.get("feed_title") or ""),
+                "source_text": full_text_by_url.get(u_key) or str(prev.get("source_text") or ""),
             }
         self._save_pool(
             {
@@ -2594,25 +2627,42 @@ class DigestWorkspace:
                     rejected.append(item)
                     continue
 
+            pool_source_text = (
+                str(pool_meta.get("source_text") or "")
+                if isinstance(pool_meta, dict)
+                else ""
+            )
             source_text = item.get("source_text")
+            quote = str(item.get("quote") or "").strip()
             if source_text is not None:
-                quote = str(item.get("quote") or "").strip()
                 norm_src = re.sub(r"\s+", " ", str(source_text)).strip().lower()
                 norm_quote = re.sub(r"\s+", " ", quote).strip().lower()
                 if not norm_quote or norm_quote not in norm_src:
                     item["reject_reason"] = "引用片段未能在原文中找到对照依据"
                     rejected.append(item)
                     continue
+            elif quote and pool_source_text:
+                norm_src = re.sub(r"\s+", " ", pool_source_text).strip().lower()
+                norm_quote = re.sub(r"\s+", " ", quote).strip().lower()
+                if norm_quote not in norm_src:
+                    item["reject_reason"] = "引用片段未能在原文中找到对照依据"
+                    rejected.append(item)
+                    continue
 
             summary_text = str(item.get("brief") or item.get("summary") or "").strip()
             if not summary_text:
-                item["reject_reason"] = "缺少中文摘要（请提供 1~2 句 brief 或 summary 事实摘要）"
+                item["reject_reason"] = "缺少中文摘要（请提供 brief 或 summary 事实摘要）"
                 rejected.append(item)
                 continue
             item["summary"] = summary_text
 
             if "viz" in item and item["viz"] is not None:
-                valid_viz, viz_drop = _validate_and_check_viz(item.get("viz"), source_text)
+                effective_src = (
+                    source_text
+                    if source_text is not None
+                    else (pool_source_text or None)
+                )
+                valid_viz, viz_drop = _validate_and_check_viz(item.get("viz"), effective_src)
                 if valid_viz is not None:
                     item["viz"] = valid_viz
                 else:
@@ -3004,7 +3054,7 @@ async def run_digest_tool(
             queries=list(arguments.get("queries") or ()),
             topics=topics_arg,
             lookback_days=float(arguments.get("lookback_days", 7) or 7),
-            max_items=int(arguments.get("max_items", 12) or 12),
+            max_items=int(arguments.get("max_items", 18) or 18),
             broad=bool(arguments.get("broad", True)),
         )
     if action == "poll":
@@ -3039,7 +3089,7 @@ async def run_digest_tool(
         )
     if action == "render_card_html":
         raw_max = arguments.get("max_items")
-        max_items = max(1, min(int(raw_max if raw_max is not None else 3), 8))
+        max_items = max(1, min(int(raw_max if raw_max is not None else 5), 8))
         candidates = arguments.get("candidates")
         history = dw._load_history()
         if candidates is None:

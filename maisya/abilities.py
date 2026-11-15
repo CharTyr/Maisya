@@ -207,6 +207,9 @@ def _upgrade_existing_profile_toml(profile_id: str, destination: Path) -> None:
         if type(config.get("max_steps")) is int and config.get("max_steps") == 12:
             config["max_steps"] = 20
             changed = True
+        if type(config.get("max_tokens")) is int and config.get("max_tokens") == 2500:
+            config["max_tokens"] = 4500
+            changed = True
 
     if changed:
         atomic_private_write(destination, _serialize_profile_dict(config).encode("utf-8"))

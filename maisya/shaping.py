@@ -31,8 +31,9 @@ _LOCKOUT_MESSAGE = (
 )
 DEFAULT_DIGEST_SCHEDULE_PROMPT = (
     "结合当前会话 MEMORY.md 中记录的关注主题、已订阅资讯源与读者反馈，"
-    "完成新一期公开资讯搜集、硬条件筛选与精选打分，生成中文标题、1~2 句中文摘要与 1 句入选理由后，"
-    "调用 digest_feed(action='render_card_html', ...) 输出卡片 HTML，"
+    "拆分为 3~4 个具体子方向用 8~12 组中英文短词调用 digest_feed(action='collect', max_items=20) 广搜（兼顾官方一手发布与权威垂直媒体的深度报道、专访与数据盘点），"
+    "完成硬条件筛选与五维打分精选 3~5 条高价值内容（宁缺毋滥），生成中文标题、2~4 句扎实口语化中文摘要（110~180 字）与 1 句入选看点（有连续数字或对比数据时附带 viz 图解）后，"
+    "调用 digest_feed(action='render_card_html', max_items=5, output_path='out/digest-card.html') 输出卡片 HTML，"
     "再用 html_render(html_path='out/digest-card.html', output_path='out/digest-card.png', width=600, selector='.card') 渲染出图并 result_attach 交付。"
 )
 _DIGEST_ADD_KEYS = ("rss_urls", "add_urls", "urls", "add", "feeds")

@@ -1,7 +1,7 @@
 title = "资讯简报"
 enabled = false
 task = "planner"
-max_tokens = 2500
+max_tokens = 4500
 temperature = 0.2
 max_steps = 20
 environment = "readonly"

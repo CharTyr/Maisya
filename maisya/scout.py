@@ -269,7 +269,7 @@ TOOL_DEFINITIONS = {
             "item_id": {"type": "string", "minLength": 1, "maxLength": 128},
             "signal": {"type": "string", "enum": ["up", "down", "reply"]},
             "note": {"type": "string", "minLength": 0, "maxLength": 512},
-            "max_items": {"type": "integer", "minimum": 1, "maximum": 20},
+            "max_items": {"type": "integer", "minimum": 1, "maximum": 24},
             "lookback_days": {"type": "integer", "minimum": 1, "maximum": 90},
             "slot_label": {"type": "string", "minLength": 0, "maxLength": 128},
             "group_title": {"type": "string", "minLength": 0, "maxLength": 128},

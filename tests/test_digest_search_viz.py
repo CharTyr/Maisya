@@ -666,7 +666,15 @@ async def test_seed_starter_feeds_disambiguation_concurrent_poll_and_flexible_un
     dw_dev = digest.DigestWorkspace(_MemoryWork(), fetcher=fast_fetcher, clock=lambda: NOW_TS)
     seed_dev = await dw_dev.seed_starter_feeds("独立开发者, AI Agent, 开源工具", max_add=4)
     assert seed_dev["count"] == 4
-    game_hosts = {"gcores.com", "chuapp.com", "yystv.cn", "itch.io", "rockpapershotgun.com"}
+    game_hosts = {
+        "gcores.com",
+        "chuapp.com",
+        "yystv.cn",
+        "itch.io",
+        "rockpapershotgun.com",
+        "godotengine.org",
+        "gamedeveloper.com",
+    }
     assert all(f["host"].removeprefix("www.") not in game_hosts for f in seed_dev["added"])
 
     # 2. 单独 2 字 "独立" 禁止子串命中 "独立游戏"
@@ -714,3 +722,153 @@ async def test_seed_starter_feeds_disambiguation_concurrent_poll_and_flexible_un
     elapsed = loop.time() - t0
     assert polled["feeds_count"] == 6
     assert elapsed < 0.30, f"poll 应并发执行而非串行，实测耗时 {elapsed:.3f}s"
+
+
+@pytest.mark.asyncio
+async def test_collect_pool_caches_full_source_text_for_quote_and_viz_without_echoing_body():
+    import time
+    from email.utils import formatdate
+
+    recent_rfc = formatdate(time.time() - 3600, usegmt=True)
+    work = _MemoryWork()
+
+    async def _local_rss(url: str):
+        return {
+            "body": _SAMPLE_RSS,
+            "content_type": "application/xml",
+            "status": 200,
+            "url": url,
+            "error": "",
+        }
+
+    dw = digest.DigestWorkspace(work, fetcher=_local_rss)
+    await dw.add_feed("https://eng.example/rss.xml", title="Local Game Wire", auto=False)
+
+    distinct_topics = [
+        ("crimson-clockwork", "新作实机"),
+        ("verdant-hollow", "玩法拆解"),
+        ("asterisk-frontier", "销量口碑"),
+        ("solstice-harbor", "引擎工具"),
+        ("obsidian-foundry", "开发者说"),
+        ("lantern-drift", "独立新品"),
+        ("cobalt-spire", "独立新品"),
+        ("ember-railway", "独立新品"),
+        ("velvet-circuit", "独立新品"),
+        ("tundra-echo", "独立新品"),
+        ("monolith-ward", "独立新品"),
+        ("kestrel-harbor", "独立新品"),
+        ("saffron-vault", "独立新品"),
+        ("quartz-odyssey", "独立新品"),
+        ("aurora-tactics", "独立新品"),
+        ("basalt-chronicle", "独立新品"),
+        ("vermilion-isle", "独立新品"),
+        ("graphite-signal", "独立新品"),
+        ("halcyon-foundry", "独立新品"),
+        ("topaz-lattice", "独立新品"),
+    ]
+
+    class _FakeWeb:
+        async def search_broad(self, q, max_results=8, context=None):
+            return {
+                "results": [
+                    {
+                        "url": f"https://gamedev{i}.example.org/news/{slug}",
+                        "title": f"{slug.replace('-', ' ').title()} Steam Demo & Mechanics Breakdown",
+                        "published_at": recent_rfc,
+                    }
+                    for i, (slug, _) in enumerate(distinct_topics)
+                ]
+            }
+
+        async def fetch(self, url, context=None):
+            prefix = f"Article {url} launches combat overhaul. " + ("Gameplay details " * 55)
+            tail = " TailFact: peak concurrent players reached 48200 with 93% positive Steam reviews in October."
+            return {
+                "url": url,
+                "title": f"Detail {url}",
+                "content": (prefix + tail)[:2100],
+                "published_at": recent_rfc,
+            }
+
+    collected = await dw.collect(web=_FakeWeb(), queries=["indie game"], max_items=20)
+    assert len(collected["candidates"]) == 20
+    assert len(json.dumps(collected, ensure_ascii=False)) < 26000
+    for cand in collected["candidates"]:
+        assert len(str(cand.get("source_text") or "")) <= 850
+
+    pool = dw._load_pool()
+    first_key = digest._normalize_url_key(f"https://gamedev0.example.org/news/{distinct_topics[0][0]}")
+    cached_src = pool["by_url"][first_key]["source_text"]
+    assert len(cached_src) > 900
+    assert "48200" in cached_src and "93%" in cached_src
+
+    # score_select omitting source_text still verifies quote & viz against cached pool tail (> 850 chars)
+    distinct_briefs = [
+        "动作肉鸽《赤色发条》本周重构了弹反与精力循环机制，Boss 二阶段出招节奏更紧凑，Steam 在线峰值冲至 48200。",
+        "像素解谜《翠谷幽径》公开开发者关卡通关热力图，团队重写了谜题引导提示后玩家卡关率下降明显。",
+        "复古战术 RPG《星标边境》公布首周十万份销量复盘，官方确认下月追加无尽模式与创意工坊模组接口。",
+        "《冬至港湾》团队分享用 Godot 4.4 自研水面反射着色器的源码思路，集显核显设备也能稳跑高帧率。",
+        "叙事冒险《黑曜石铸造厂》放出一小时试玩 Demo 与剧情分支架构专访，好评率维持在 93% 以上。",
+    ]
+    candidates = [
+        {
+            "title": f"{distinct_topics[i][0].replace('-', ' ').title()} 重点更新 #{i}",
+            "url": f"https://gamedev{i}.example.org/news/{distinct_topics[i][0]}",
+            "quote": "peak concurrent players reached 48200 with 93% positive Steam reviews",
+            "brief": distinct_briefs[i],
+            "why": f"从第 {i + 1} 个子方向切入，机制与数据细节都很扎实。",
+            "topic": distinct_topics[i][1],
+            "source": f"GameDev{i}",
+            "viz": {
+                "type": "stats",
+                "items": [
+                    {"label": "在线峰值", "value": "48200"},
+                    {"label": "Steam 好评", "value": "93%"},
+                ],
+            }
+            if i == 0
+            else None,
+            "info": 5,
+            "source_score": 5,
+            "relevance": 5,
+            "timeliness": 5,
+            "chat": 4,
+        }
+        for i in range(5)
+    ]
+    candidates.append(
+        {
+            "title": "伪造引文的候选应当被池子原文拦截",
+            "url": f"https://gamedev5.example.org/news/{distinct_topics[5][0]}",
+            "quote": "completely fabricated nonexistent quote snippet",
+            "brief": "一段引用无法对照缓存原文的候选，检验防幻觉拒绝逻辑。",
+            "why": "验证防幻觉机制。",
+            "topic": "防幻觉",
+            "source": "GameDev5",
+            "info": 5,
+            "source_score": 5,
+            "relevance": 5,
+            "timeliness": 5,
+            "chat": 5,
+        }
+    )
+    selected_res = dw.score_select(candidates, max_items=5)
+    assert len(selected_res["selected"]) == 5
+    assert selected_res["selected"][0].get("viz", {}).get("type") == "stats"
+    assert any(
+        r["url"] == f"https://gamedev5.example.org/news/{distinct_topics[5][0]}"
+        and "引用片段未能在原文中找到对照依据" in r["reject_reason"]
+        for r in selected_res["rejected"]
+    )
+
+    # render_card_html without explicit max_items defaults to rendering 5 items
+    card_res = await digest.run_digest_tool(
+        work,
+        {
+            "action": "render_card_html",
+            "group_title": "独立游戏小站",
+            "slot_label": "试跑预览",
+            "output_path": "out/digest-card.html",
+        },
+    )
+    assert card_res["count"] == 5

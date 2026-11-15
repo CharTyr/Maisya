@@ -218,9 +218,9 @@ async def test_digest_collect_bounds_payload_and_concurrent_add_feed_no_clobber(
         collect_res = await dw.collect(web=_FakeWeb(), queries=["indie game"], max_items=20)
         encoded = json.dumps(collect_res, ensure_ascii=False)
         assert len(encoded) < 26000
-        assert len(collect_res["candidates"]) <= 14
+        assert 18 <= len(collect_res["candidates"]) <= 20
         for cand in collect_res["candidates"]:
-            assert len(str(cand.get("source_text") or "")) <= 1200
+            assert len(str(cand.get("source_text") or "")) <= 850
             if cand.get("origin") == "search":
                 assert cand.get("has_numbers") is True
             assert "summary" not in cand and "snippet" not in cand
