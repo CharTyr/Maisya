@@ -18,8 +18,10 @@
       <div class="mil-seg lib-filters" id="lib-filters" role="group" aria-label="产物类型过滤">
         <button type="button" class="mil-key mil-key--sm" data-lib-filter="all" aria-pressed="true">全部</button>
         <button type="button" class="mil-key mil-key--sm" data-lib-filter="image" aria-pressed="false">图文</button>
-        <button type="button" class="mil-key mil-key--sm" data-lib-filter="report" aria-pressed="false">长报告</button>
-        <button type="button" class="mil-key mil-key--sm" data-lib-filter="doc" aria-pressed="false">文档</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="markdown" aria-pressed="false">报告</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="html" aria-pressed="false">网页</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="text" aria-pressed="false">文本</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="conclusion" aria-pressed="false">结论</button>
       </div>
     </div>
 
@@ -66,6 +68,7 @@
         </div>
         <div class="mil-head-r">
           <button type="button" class="mil-key mil-key--sm" id="lib-fs-close-pane">返回画廊</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--danger" id="lib-fs-delete" hidden>删除文件</button>
           <button type="button" class="mil-key mil-key--sm mil-key--hot" id="lib-fs-save">保存文件</button>
         </div>
       </div>
@@ -94,7 +97,7 @@
       <button type="button" class="mil-key mil-key--sm" id="lib-jump-chat">来源会话</button>
       <button type="button" class="mil-key mil-key--sm" id="lib-copy">复制内容</button>
       <a class="mil-key mil-key--sm" id="lib-download" download="artifact.txt" hidden>下载</a>
-      <button type="button" class="mil-key mil-key--sm mil-key--danger" id="lib-art-delete">删除产物</button>
+      <button type="button" class="mil-key mil-key--sm mil-key--danger" id="lib-art-delete" hidden>删除产物</button>
     </div>
 
     <div class="lib-stage" id="lib-stage"></div>

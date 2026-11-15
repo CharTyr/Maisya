@@ -83,15 +83,16 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
         id: "default",
         name: "默认助手",
         description: "通用探索与对话收口",
-        access: "all",
+        access: "everyone",
         enabled: true,
         model_name: "gpt-main",
         execution_mode: "host",
-        session_mode: "thread",
+        session_mode: "persistent",
         shared_secrets: true,
         toolsets: ["context", "web", "workspace", "exec", "schedule"],
         skills: ["summarizer"],
-        connectors: ["github_ro"],
+        mcp: ["github_ro"],
+        apis: [],
         profile_md: "# 默认助手\\n简洁高效完成委派。",
         fish_seed: ""
       }},
@@ -103,11 +104,12 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
         enabled: true,
         model_name: "claude-aux",
         execution_mode: "sandbox",
-        session_mode: "persistent",
+        session_mode: "ephemeral",
         shared_secrets: false,
         toolsets: ["context", "web", "workspace"],
         skills: ["summarizer"],
-        connectors: [],
+        mcp: [],
+        apis: ["search_api"],
         profile_md: "# 深度研判",
         fish_seed: "c-angler-2-wink-analyst"
       }}
@@ -175,7 +177,8 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
     }},
     fsFiles: {{
       "MEMORY.md": "# 会话记忆\\n- 群友偏好简洁回答",
-      "JOURNAL.md": "# 自身近况\\n- 完成 v0.3 重构准备"
+      "JOURNAL.md": "# 自身近况\\n- 完成 v0.3 重构准备",
+      "profiles/custom_probe/note.txt": "可删除的自定义档案附属笔记"
     }},
     probeCalls: 0
   }};
@@ -191,15 +194,17 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
       default_model: state.default_model,
       enabled_chats: state.enabled_chats,
       known_chats: state.known_chats,
-      chat_meta: {{ "qq:group:100246809": {{ name: "极客测试群", plat: "qq", spec: "qq:group:100246809" }} }},
+      chat_sources: {{ "qq:group:100246809": {{ name: "极客测试群", platform: "qq", chat_id: "qq:group:100246809" }} }},
       admins_info: {{ host_admins: state.host_admins, plugin_admins: state.plugin_admins }},
       docker: {{ enabled: state.sandbox_enabled, available: true }},
+      sandbox_enabled: state.sandbox_enabled,
       onboarding: state.onboarding,
       scheduled_intents: state.intents.filter((x) => x.kind === "schedule"),
       watches: state.intents.filter((x) => x.kind === "watch"),
       profiles: state.profiles.map((p) => p.id),
       profile_cards: state.profiles,
-      available_models: state.models,
+      available_models: state.models.map((m) => m.name),
+      model_catalog: state.models,
       threads: state.threads,
       selected: pick ? {{
         ...pick,
@@ -239,24 +244,46 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
           const p = arg?.payload ? JSON.parse(arg.payload) : {{}};
           if (sec === "now_detail") return {{ success: true, ...buildSnap(p.thread_id), selected: buildSnap(p.thread_id).selected }};
           if (sec === "onboarding") return {{ success: true, onboarding: state.onboarding }};
-          if (sec === "profiles") return {{ success: true, profiles: state.profiles, skills: [{{ id: "summarizer", title: "摘要技能" }}], connectors: [{{ id: "github_ro", title: "GitHub 只读", readonly: true }}], available_models: state.models, default_model: state.default_model }};
+          if (sec === "profiles") return {{
+            success: true,
+            profiles: state.profiles,
+            skills: ["summarizer"],
+            skill_items: [{{ id: "summarizer", title: "摘要技能", description: "方法技能" }}],
+            connectors: {{
+              mcp: [{{ id: "github_ro", name: "github_ro", description: "GitHub 只读", readonly: true }}],
+              plugin_apis: [{{ id: "search_api", name: "search_api", api: "search_api", description: "检索 API", readonly: true }}],
+            }},
+            available_models: state.models.map((m) => m.name),
+            model_catalog: state.models,
+            default_model: state.default_model
+          }};
           if (sec === "profile_detail") {{
             const pr = state.profiles.find((x) => x.id === p.profile_id) || state.profiles[0];
-            return {{ success: true, profile: pr, profile_md: pr.profile_md || "" }};
+            return {{
+              success: true,
+              profile: pr,
+              profile_md: pr.profile_md || "",
+              connectors: {{
+                mcp: [{{ id: "github_ro", name: "github_ro", description: "GitHub 只读", readonly: true }}],
+                plugin_apis: [{{ id: "search_api", name: "search_api", api: "search_api", description: "检索 API", readonly: true }}],
+              }},
+            }};
           }}
           if (sec === "library") return {{ success: true, items: [
-            {{ id: "art-img", artifact_id: "art-img", title: "封面海报图", media_kind: "image", kind: "image", mime: "image/png", data_uri: `data:image/png;base64,${{tinyPngB64}}`, chat_id: "qq:group:100246809", profile: "default", thread_id: "th-run-1" }},
-            {{ id: "art-rep", artifact_id: "art-rep", title: "周度排查报告", media_kind: "report", kind: "report", mime: "text/markdown", preview_text: "# 报告正文\\n测试全部完成。", chat_id: "qq:group:100246809", profile: "analyst", thread_id: "th-idle-2" }}
+            {{ id: "att:att_img1", handle: "att_img1", title: "封面海报图", media_kind: "image", kind: "attachment", mime: "image/png", data_uri: `data:image/png;base64,${{tinyPngB64}}`, chat_id: "qq:group:100246809", profile: "default", thread_id: "th-run-1" }},
+            {{ id: "ws:ws_1:out/report.md", title: "周度排查报告", media_kind: "markdown", kind: "workspace_out", workspace_id: "ws_1", path: "out/report.md", mime: "text/markdown", excerpt: "工作区报告", chat_id: "qq:group:100246809", profile: "analyst", thread_id: "th-idle-2" }}
           ] }};
           if (sec === "artifact") {{
-            if (p.artifact_id === "art-img") return {{ success: true, artifact_id: "art-img", mime: "image/png", data_uri: `data:image/png;base64,${{tinyPngB64}}` }};
-            return {{ success: true, artifact_id: p.artifact_id, mime: "text/markdown", text: "# 报告正文\\n分块读取结果" }};
+            if (p.kind === "attachment" && p.handle === "att_img1") return {{ success: true, kind: "attachment", handle: "att_img1", mime: "image/png", base64: tinyPngB64 }};
+            if (p.kind === "workspace_file" && p.workspace_id === "ws_1" && p.path === "out/report.md") return {{ success: true, kind: "workspace_file", mime: "text/markdown", text: "# 报告正文\\n工作区文件分块读取" }};
+            return {{ success: false, error: `未知产物请求: ${{JSON.stringify(p)}}` }};
           }}
           if (sec === "fs_list") return {{ success: true, path: p.path || "", entries: [
             {{ name: "MEMORY.md", path: "MEMORY.md", kind: "file", size: 42, writable: true }},
             {{ name: "JOURNAL.md", path: "JOURNAL.md", kind: "file", size: 38, writable: true }},
+            {{ name: "note.txt", path: "profiles/custom_probe/note.txt", kind: "file", size: 24, writable: true }},
             {{ name: "profiles", path: "profiles", kind: "dir" }}
-          ] }};
+          ].filter((e) => state.fsFiles[e.path] !== undefined || e.kind === "dir") }};
           if (sec === "fs_read") return {{ success: true, path: p.path, content: state.fsFiles[p.path] || "", version: 1, writable: true }};
           if (sec === "settings") return {{
             success: true,
@@ -365,6 +392,10 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             state.fsFiles[p.path] = p.content;
             return {{ success: true, version: 2 }};
           }}
+          if (act === "fs_delete") {{
+            delete state.fsFiles[p.path];
+            return {{ success: true, deleted: true, path: p.path }};
+          }}
           if (act === "settings_update") {{
             if (p.settings?.admins && p.settings.admins.length === 0 && state.host_admins.length === 0) {{
               return {{ success: false, error: "至少保留一位管理员" }};
@@ -374,7 +405,8 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             return {{ success: true, version: 2 }};
           }}
           if (act === "vault_set") {{
-            state.vault_meta.push({{ handle: p.handle, label: p.label, domain: p.domain, fields: Object.keys(p.fields || {{ TOKEN: 1 }}) }});
+            const fieldNames = Array.isArray(p.fields) ? p.fields : Object.keys(p.fields || {{ TOKEN: 1 }});
+            state.vault_meta.push({{ handle: p.handle, label: p.label, domain: p.domain, fields: fieldNames }});
             return {{ success: true }};
           }}
           return {{ success: true }};
@@ -431,9 +463,13 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         assert "MODEL_OK_22ms" in probe_text, f"模型连通结果异常: {probe_text}"
         assert "STALE_ERROR_FROM_FIRST_PROBE" not in probe_text, "未丢弃过期探测响应"
 
-        # 进入第 5 步并完成引导
+        # 进入第 5 步并完成引导（校验 runtime 步骤传出 sandbox: {enabled}）
         page.locator("#onb-next").click()
         assert "7 项就绪清单" in page.locator("#onb-stage").inner_text()
+        adv_calls = page.evaluate(
+            """() => window.__maibotCalls.filter(c => c.type === 'action' && c.name === 'write' && c.arg?.action === 'onboarding_advance').map(c => JSON.parse(c.arg.payload))"""
+        )
+        assert any(isinstance(c.get("data", {}).get("sandbox"), dict) for c in adv_calls)
         page.locator("#onb-next").click()
         onb_scrim.wait_for(state="hidden")
 
@@ -479,36 +515,60 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         page.locator("#pr-md").fill("line1\nline2\nline3")
         assert "3 / 150 行" in page.locator("#pr-md-count").inner_text()
         page.locator('[data-pr-tab="abilities"]').click()
-        assert "5 大工具集" in page.locator("#pr-pane-abilities").inner_text()
+        ab_text = page.locator("#pr-pane-abilities").inner_text()
+        assert "5 大工具集" in ab_text
+        assert "github_ro" in ab_text and "search_api" in ab_text
 
-        # 新建并删除自定义档案
+        # 新建并删除自定义档案，校验对齐后端字段枚举（无 connectors/chats/thread）
         page.locator("#pr-btn-new").click()
         page.locator("#pr-id").fill("custom_probe")
         page.locator("#pr-name").fill("自定义探针")
         page.locator("#pr-desc").fill("测试新建能力")
         page.locator("#pr-btn-save").click()
         page.locator('[data-pick-profile-id="custom_probe"]').wait_for(state="visible")
+        create_call = page.evaluate(
+            """() => window.__maibotCalls.find(c => c.type === 'action' && c.name === 'write' && c.arg?.action === 'profile_create')"""
+        )
+        assert create_call
+        create_payload = json.loads(create_call["arg"]["payload"])
+        assert "connectors" not in create_payload
+        assert create_payload["access"] == "everyone"
+        assert create_payload["session_mode"] == "persistent"
+        assert isinstance(create_payload["mcp_servers"], list)
+        assert isinstance(create_payload["apis"], list)
+
         page.locator("#pr-btn-export").click()
         page.wait_for_timeout(50)
         page.locator("#pr-btn-delete").click()
         page.wait_for_timeout(80)
 
-        # 5. 资料库页：无 <img>/<iframe> + CSS 图片舞台 + 系统文件编辑保存
+        # 5. 资料库页：无 <img>/<iframe> + CSS 图片舞台 + workspace_out -> workspace_file + 系统文件编辑删除
         page.locator('[data-nav="library"]').click()
         page.locator("#lib-gallery .lib-card").first.wait_for(state="visible")
         page.locator("#lib-gallery .lib-card").first.click()
         page.locator("#lib-drawer .lib-img-stage").wait_for(state="visible")
+        assert page.locator("#lib-art-delete").is_hidden()
         bg = page.locator("#lib-drawer .lib-img-stage").evaluate("el => getComputedStyle(el).backgroundImage")
         assert "data:image/png;base64," in bg
         assert page.locator("img, iframe").count() == 0
 
+        # 点击工作区产物 -> 验证传给 read("artifact") 的 kind == "workspace_file"
+        page.locator("#lib-gallery .lib-card").nth(1).click()
+        page.locator("#lib-stage pre").wait_for(state="visible")
+        assert "工作区文件分块读取" in page.locator("#lib-stage pre").inner_text()
+
         page.locator('#lib-fs-tree [data-fs-path="MEMORY.md"]').click()
         page.locator("#lib-fs-editor").wait_for(state="visible")
+        assert page.locator("#lib-fs-delete").is_hidden()
         page.locator("#lib-fs-editor").fill("# 更新记忆")
         page.locator("#lib-fs-save").click()
-        page.wait_for_timeout(80)
+        page.wait_for_timeout(50)
+        page.locator('#lib-fs-tree [data-fs-path="profiles/custom_probe/note.txt"]').click()
+        page.locator("#lib-fs-delete").wait_for(state="visible")
+        page.locator("#lib-fs-delete").click()
+        page.wait_for_timeout(50)
 
-        # 6. 设置页：4 块结构 + 防自锁死报错 + Vault 只存不显
+        # 6. 设置页：4 块结构 + 防自锁死报错 + Vault 只存不显 + fields 仅传字段名数组
         page.locator('[data-nav="settings"]').click()
         for blk in ("#set-block-chats", "#set-block-auth", "#set-block-vault", "#set-block-runtime"):
             page.locator(blk).wait_for(state="visible")
@@ -517,7 +577,7 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         page.locator('[data-set-del-admin="qq:private:10001"]').click()
         assert "管理员" in page.locator("#set-admin-err").inner_text()
 
-        # 写入 Vault -> 秘密输入框立即清空且不回显在 DOM
+        # 写入 Vault -> 秘密输入框立即清空、不回显且 fields 仅为字段名数组
         page.locator("#set-vault-handle").fill("demo_pat")
         page.locator("#set-vault-label").fill("演示凭据")
         page.locator("#set-vault-domain").fill("api.example.com")
@@ -527,6 +587,12 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         assert page.locator("#set-vault-secret").input_value() == ""
         assert "secret-xyz-999" not in page.locator("#set-vault-list").inner_text()
         assert "demo_pat" in page.locator("#set-vault-list").inner_text()
+        vault_call = page.evaluate(
+            """() => window.__maibotCalls.find(c => c.type === 'action' && c.name === 'write' && c.arg?.action === 'vault_set')"""
+        )
+        assert vault_call
+        vault_payload = json.loads(vault_call["arg"]["payload"])
+        assert vault_payload["fields"] == ["TOKEN"]
 
         assert page.evaluate("() => window.__getPeakInflight()") <= 2
         browser.close()

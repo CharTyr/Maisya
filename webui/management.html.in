@@ -653,10 +653,33 @@
       fishMode: "auto",
       toolsets: new Set(ALL_TOOLSETS),
       skillsSet: new Set(),
+      mcpSet: new Set(),
+      apisSet: new Set(),
       connectorsSet: new Set(),
       fishSeed: "",
     };
     pendingProfileTarget = null;
+
+    function normalizeConnectors(raw) {
+      if (Array.isArray(raw)) {
+        return raw.map((c) => (typeof c === "string" ? { id: c, name: c, kind: "mcp" } : { kind: c?.kind || "mcp", ...c }));
+      }
+      if (raw && typeof raw === "object") {
+        const out = [];
+        (Array.isArray(raw.mcp) ? raw.mcp : []).forEach((c) => {
+          const obj = typeof c === "string" ? { id: c, name: c } : (c || {});
+          const id = obj.id || obj.name || "";
+          if (id) out.push({ ...obj, id, kind: "mcp" });
+        });
+        (Array.isArray(raw.plugin_apis) ? raw.plugin_apis : []).forEach((c) => {
+          const obj = typeof c === "string" ? { id: c, name: c } : (c || {});
+          const id = obj.id || obj.name || obj.api || "";
+          if (id) out.push({ ...obj, id, kind: "api" });
+        });
+        return out;
+      }
+      return [];
+    }
 
     const getCur = () => pState.profiles.find((p) => p.id === pState.selectedId) || pState.profiles[0] || null;
     const say = (txt, err = false) => {
@@ -725,8 +748,20 @@
       }
       if (pState.abKind === "all" || pState.abKind === "connectors") {
         pState.connectors.forEach((c) => {
-          const id = c.id || c.name || c;
-          rows.push({ kind: "connectors", id, title: c.title || c.name || id, desc: c.description || c.scope || "外部服务连接器", tag: c.readonly ? "只读连接器" : "连接器", checked: pState.connectorsSet.has(id) });
+          const id = c.id || c.name || c.api || c;
+          const connKind = c.kind === "api" ? "api" : "mcp";
+          const checked = connKind === "api"
+            ? (pState.apisSet.has(id) || pState.connectorsSet.has(id))
+            : (pState.mcpSet.has(id) || pState.connectorsSet.has(id));
+          rows.push({
+            kind: "connectors",
+            connKind,
+            id,
+            title: c.title || c.name || id,
+            desc: c.description || c.scope || (connKind === "api" ? "跨插件 @API 连接器" : "外部服务连接器"),
+            tag: connKind === "api" ? (c.readonly ? "只读 API" : "插件 API") : (c.readonly ? "只读连接器" : "连接器"),
+            checked,
+          });
         });
       }
       const filtered = q ? rows.filter((r) => `${r.id} ${r.title} ${r.desc}`.toLowerCase().includes(q)) : rows;
@@ -738,7 +773,7 @@
               <span class="mil-tag">${esc(r.tag)}</span>
             </div>
             <label class="mil-switch">
-              <input type="checkbox" data-ab-toggle-kind="${esc(r.kind)}" data-ab-toggle-id="${esc(r.id)}" ${r.checked ? "checked" : ""} />
+              <input type="checkbox" data-ab-toggle-kind="${esc(r.kind)}" data-ab-toggle-id="${esc(r.id)}" data-ab-conn-kind="${esc(r.connKind || "")}" ${r.checked ? "checked" : ""} />
               <span class="mil-switch-track"></span>
             </label>
           </div>`).join("")
@@ -775,7 +810,10 @@
         $("#ab-mob-role-env").textContent = cur.access === "admins" ? "仅管理员" : cur.execution_mode === "sandbox" ? "沙箱" : "常规";
         $("#mob-val-overview").textContent = cur.id;
         $("#mob-val-models").textContent = cur.model_name || "默认槽位";
-        const abCount = (cur.toolsets?.length ?? ALL_TOOLSETS.length) + (cur.skills?.length || 0) + (cur.connectors?.length || 0);
+        const connCount = (Array.isArray(cur.mcp) ? cur.mcp.length : (cur.mcp_servers?.length || 0))
+          + (Array.isArray(cur.apis) ? cur.apis.length : 0)
+          + (Array.isArray(cur.connectors) ? cur.connectors.length : 0);
+        const abCount = (cur.toolsets?.length ?? ALL_TOOLSETS.length) + (cur.skills?.length || 0) + connCount;
         $("#mob-val-skills").textContent = `${abCount} 项`;
         $("#mob-val-fish").textContent = parseFishCustom(cur.fish_seed)?.species ? "自定义" : "自动";
       }
@@ -802,18 +840,20 @@
 
     function fillEditorFromProfile(p, isNew = false) {
       pState.creating = isNew;
-      const obj = p || { id: "", name: "", description: "", access: "all", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], connectors: [], shared_secrets: true, execution_mode: "host", session_mode: "thread", fish_seed: "" };
+      const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "host", session_mode: "persistent", fish_seed: "" };
       $("#pr-head-title").textContent = isNew ? "新建能力档案" : `编辑档案 · ${obj.name || obj.title || obj.id}`;
       $("#pr-id").value = obj.id || "";
       $("#pr-id").readOnly = !isNew;
       $("#pr-name").value = obj.name || obj.title || "";
       $("#pr-desc").value = obj.description || "";
-      $("#pr-access").value = obj.access || "all";
+      const rawAccess = obj.access || "everyone";
+      const normAccess = rawAccess === "all" ? "everyone" : rawAccess === "chats" ? "listed" : rawAccess;
+      $("#pr-access").value = normAccess;
       $("#pr-enabled").checked = obj.enabled !== false;
       $("#pr-enabled-txt").textContent = obj.enabled !== false ? "已启用" : "已停用";
       const chatsWrap = $("#pr-chats-wrap");
-      if (chatsWrap) chatsWrap.hidden = ($("#pr-access").value !== "chats");
-      $("#pr-allowed-chats").value = (obj.allowed_chats || obj.enabled_chats || []).join(", ");
+      if (chatsWrap) chatsWrap.hidden = ($("#pr-access").value !== "listed");
+      $("#pr-allowed-chats").value = (obj.allow_chats || obj.enabled_chats || obj.allowed_chats || []).join(", ");
 
       const cloneSel = $("#pr-clone");
       if (cloneSel) {
@@ -826,14 +866,19 @@
         modelSel.value = obj.model_name || "";
       }
       $("#pr-exec-mode").value = obj.execution_mode || obj.environment || "host";
-      $("#pr-session-mode").value = obj.session_mode || "thread";
+      const rawSess = obj.session_mode || "persistent";
+      $("#pr-session-mode").value = rawSess === "thread" ? "persistent" : rawSess === "task" ? "ephemeral" : rawSess;
       $("#pr-shared-secrets").checked = obj.shared_secrets !== false && obj.share_credentials !== false;
-      $("#pr-md").value = obj.profile_md || "";
+      $("#pr-md").value = obj.profile_md ?? obj.instructions ?? "";
       updateMdCounter();
 
       pState.toolsets = new Set(Array.isArray(obj.toolsets) ? obj.toolsets : ALL_TOOLSETS);
       pState.skillsSet = new Set(Array.isArray(obj.skills) ? obj.skills : []);
-      pState.connectorsSet = new Set(Array.isArray(obj.connectors || obj.mcp_servers) ? (obj.connectors || obj.mcp_servers) : []);
+      const mcpVals = Array.isArray(obj.mcp_servers) ? obj.mcp_servers : Array.isArray(obj.mcp) ? obj.mcp : Array.isArray(obj.connectors) ? obj.connectors : [];
+      const apiVals = Array.isArray(obj.apis) ? obj.apis : [];
+      pState.mcpSet = new Set(mcpVals);
+      pState.apisSet = new Set(apiVals);
+      pState.connectorsSet = new Set([...mcpVals, ...apiVals]);
       pState.fishSeed = obj.fish_seed || "";
       const parsed = parseFishCustom(pState.fishSeed);
       pState.fishMode = parsed ? "lock" : pState.fishSeed ? "random" : "auto";
@@ -854,7 +899,9 @@
       const det = await hostRpc("read", "profile_detail", { profile_id: pid });
       if (disposed || sig?.aborted || pid !== pState.selectedId) return;
       if (det?.success && det.profile) {
-        const merged = { ...det.profile, profile_md: det.profile_md ?? det.profile.profile_md ?? "" };
+        if (det.connectors) pState.connectors = normalizeConnectors(det.connectors);
+        if (Array.isArray(det.skills) && det.skills.length) pState.skills = det.skills;
+        const merged = { ...det.profile, profile_md: det.profile_md ?? det.profile.profile_md ?? det.profile.instructions ?? "" };
         const idx = pState.profiles.findIndex((x) => x.id === pid);
         if (idx >= 0) pState.profiles[idx] = { ...pState.profiles[idx], ...merged };
         fillEditorFromProfile(merged, false);
@@ -866,9 +913,9 @@
       if (disposed || sig?.aborted) return;
       if (!res?.success) { say(res?.error || "档案加载失败", true); return; }
       pState.profiles = res.profiles || res.abilities || [];
-      pState.skills = res.skills || [];
-      pState.connectors = res.connectors || res.mcp_servers || [];
-      pState.models = res.available_models || res.model_catalog || [];
+      pState.skills = (Array.isArray(res.skill_items) && res.skill_items.length) ? res.skill_items : (res.skills || []);
+      pState.connectors = normalizeConnectors(res.connectors || res.mcp_servers || []);
+      pState.models = (Array.isArray(res.model_catalog) && res.model_catalog.length) ? res.model_catalog : (res.available_models || []);
       if (!pState.selectedId || !pState.profiles.some((p) => p.id === pState.selectedId)) {
         pState.selectedId = pState.profiles[0]?.id || "default";
       }
@@ -1039,19 +1086,23 @@
           name,
           title: name,
           description: ($("#pr-desc")?.value || "").trim(),
-          access: $("#pr-access")?.value || "all",
+          access: $("#pr-access")?.value || "everyone",
           enabled: Boolean($("#pr-enabled")?.checked),
-          allowed_chats: chats,
+          allow_chats: chats,
+          enabled_chats: chats,
           clone_from: $("#pr-clone")?.value || "",
           model_name: $("#pr-model")?.value || "",
           execution_mode: $("#pr-exec-mode")?.value || "host",
-          session_mode: $("#pr-session-mode")?.value || "thread",
+          session_mode: $("#pr-session-mode")?.value || "persistent",
           shared_secrets: Boolean($("#pr-shared-secrets")?.checked),
+          instructions: md,
           profile_md: md,
           fish_seed: pState.fishSeed,
           toolsets: [...pState.toolsets],
           skills: [...pState.skillsSet],
-          connectors: [...pState.connectorsSet],
+          mcp_servers: [...pState.mcpSet],
+          mcp: [...pState.mcpSet],
+          apis: [...pState.apisSet],
         };
         const act = pState.creating ? "profile_create" : "profile_update";
         const res = await hostRpc("write", act, payload);
@@ -1098,14 +1149,22 @@
 
     view.addEventListener("change", async (ev) => {
       if (ev.target.id === "pr-access") {
-        $("#pr-chats-wrap").hidden = ev.target.value !== "chats";
+        $("#pr-chats-wrap").hidden = ev.target.value !== "listed";
       } else if (ev.target.id === "pr-enabled") {
         $("#pr-enabled-txt").textContent = ev.target.checked ? "已启用" : "已停用";
       } else if (ev.target.dataset.abToggleId) {
         const kind = ev.target.dataset.abToggleKind;
         const id = ev.target.dataset.abToggleId;
-        const setRef = kind === "toolsets" ? pState.toolsets : kind === "skills" ? pState.skillsSet : pState.connectorsSet;
-        if (ev.target.checked) setRef.add(id); else setRef.delete(id);
+        const checked = ev.target.checked;
+        if (kind === "toolsets") {
+          if (checked) pState.toolsets.add(id); else pState.toolsets.delete(id);
+        } else if (kind === "skills") {
+          if (checked) pState.skillsSet.add(id); else pState.skillsSet.delete(id);
+        } else {
+          if (checked) pState.connectorsSet.add(id); else pState.connectorsSet.delete(id);
+          const connRef = ev.target.dataset.abConnKind === "api" ? pState.apisSet : pState.mcpSet;
+          if (checked) connRef.add(id); else connRef.delete(id);
+        }
       } else if (ev.target.id === "pr-import-file") {
         const file = ev.target.files?.[0];
         ev.target.value = "";
@@ -1185,28 +1244,52 @@
       if (el) { el.textContent = txt || ""; el.className = `mil-feedback${!txt ? "" : err ? " mil-feedback--err" : " mil-feedback--ok"}`; }
     };
 
+    function filterMatchesKind(it, filter) {
+      if (!filter || filter === "all") return true;
+      const mk = String(it.media_kind || "").toLowerCase();
+      const k = String(it.kind || "").toLowerCase();
+      if (filter === "markdown") return mk === "markdown" || mk === "report" || mk === "md";
+      if (filter === "html") return mk === "html" || mk === "page";
+      if (filter === "doc") return ["doc", "markdown", "text", "pdf", "conclusion"].includes(mk);
+      return mk === filter || k === filter;
+    }
+
+    function canDeleteFs(path) {
+      const parts = String(path || "").split("/").filter(Boolean);
+      if (parts.length < 2) return false;
+      if (parts[0] === "profiles") {
+        if (parts[1] === "default") return false;
+        if (parts.length >= 3 && ["PROFILE.md", "profile.toml"].includes(parts[2])) return false;
+        return true;
+      }
+      if (parts[0] === "skills") {
+        if (parts.length >= 3 && parts[2] === "SKILL.md") return false;
+        return parts.length >= 3;
+      }
+      return false;
+    }
+
     function renderGallery() {
       const box = $("#lib-gallery");
       const cnt = $("#lib-count-tag");
       if (!box) return;
       const q = lState.query.trim().toLowerCase();
       const filtered = lState.items.filter((it) => {
-        const k = (it.media_kind || it.kind || "doc").toLowerCase();
-        if (lState.filter !== "all" && !k.includes(lState.filter)) return false;
-        if (q && !`${it.title || ""} ${it.name || ""} ${it.chat_id || ""} ${it.profile || ""} ${it.summary || ""}`.toLowerCase().includes(q)) return false;
+        if (!filterMatchesKind(it, lState.filter)) return false;
+        if (q && !`${it.title || ""} ${it.name || ""} ${it.chat_id || ""} ${it.profile || ""} ${it.summary || ""} ${it.excerpt || ""}`.toLowerCase().includes(q)) return false;
         return true;
       });
       if (cnt) cnt.textContent = `${filtered.length} 项`;
       box.innerHTML = filtered.length
         ? filtered.map((it, idx) => {
             const safeImg = isSafeImageDataUri(it.data_uri) ? it.data_uri : "";
-            const bKey = safeImg ? "image" : (it.kind === "html" ? "html" : it.kind === "report" ? "markdown" : "file");
+            const bKey = safeImg ? "image" : (it.media_kind === "html" || it.kind === "html" ? "html" : (it.media_kind === "markdown" || it.kind === "report") ? "markdown" : "file");
             const ic = window.MaisyaIcons?.brand ? window.MaisyaIcons.brand(bKey, 20) : "";
             return `<button type="button" class="lib-card${lState.selectedItem?.id === it.id ? " is-selected" : ""}" data-lib-idx="${idx}">
               ${safeImg ? `<div class="lib-thumb-img" role="img" aria-label="${esc(it.title || it.name)}" style="background-image:url('${esc(safeImg)}')"></div>` : `<div class="now-card-head">${ic}<span class="mil-tag">${esc(it.media_kind || it.kind || "文档")}</span></div>`}
               <strong style="font-size:13px">${esc(it.title || it.name || it.path || "未命名产物")}</strong>
-              <span class="mil-hint">${esc(it.summary || it.chat_name || it.chat_id || "点击预览")}</span>
-              <div class="now-card-meta">${it.profile ? `<span class="mono">${esc(it.profile)}</span>` : ""}<span>${fmtTime(it.created_at || it.updated)}</span></div>
+              <span class="mil-hint">${esc(it.summary || it.excerpt || it.chat_name || it.chat_id || "点击预览")}</span>
+              <div class="now-card-meta">${it.profile ? `<span class="mono">${esc(it.profile)}</span>` : ""}<span>${fmtTime(it.created_at || it.updated || it.at)}</span></div>
             </button>`;
           }).join("")
         : `<div class="mil-hint">暂无匹配产物，执行生成类活动后将在此汇总。</div>`;
@@ -1219,13 +1302,28 @@
       $("#lib-shell").classList.add("has-drawer");
       $("#lib-drawer").hidden = false;
       $("#lib-drawer-title").textContent = it.title || it.name || "产物详情";
-      $("#lib-drawer-meta").textContent = `${it.chat_name || it.chat_id || ""} · ${it.mime || it.kind || ""}`;
+      $("#lib-drawer-meta").textContent = `${it.chat_name || it.chat_id || ""} · ${it.mime || it.media_kind || it.kind || ""}`;
+      const delArtBtn = $("#lib-art-delete");
+      if (delArtBtn) delArtBtn.hidden = !Boolean(it.deletable);
       const stage = $("#lib-stage");
       stage.innerHTML = `<div class="mil-hint">正在读取内容…</div>`;
 
       let detail = it;
-      if (it.path || it.workspace_id || it.artifact_id || it.id) {
-        const res = await hostRpc("read", "artifact", { workspace_id: it.workspace_id || "", path: it.path || "", artifact_id: it.artifact_id || it.id || "", offset: 0, chunk_size: 32768 });
+      const rawKind = String(it.kind || "");
+      const artKind = rawKind === "workspace_out" ? "workspace_file"
+        : (rawKind === "attachment" || rawKind === "workspace_file" || rawKind === "conclusion") ? rawKind
+        : (it.handle ? "attachment" : (it.workspace_id && it.path) ? "workspace_file" : it.thread_id ? "conclusion" : "");
+      if (artKind || it.path || it.workspace_id || it.artifact_id || it.id) {
+        const res = await hostRpc("read", "artifact", {
+          kind: artKind || undefined,
+          handle: it.handle || undefined,
+          workspace_id: it.workspace_id || "",
+          path: it.path || "",
+          thread_id: it.thread_id || undefined,
+          artifact_id: it.artifact_id || it.id || "",
+          offset: 0,
+          chunk_size: 32768,
+        });
         if (disposed || sig?.aborted) return;
         if (res?.success) detail = { ...it, ...res };
       }
@@ -1288,6 +1386,8 @@
       ed.value = res.content || "";
       ed.readOnly = res.writable === false;
       $("#lib-fs-save").hidden = res.writable === false;
+      const fsDelBtn = $("#lib-fs-delete");
+      if (fsDelBtn) fsDelBtn.hidden = !canDeleteFs(path);
       sayFs(res.truncated ? "文件较长，已截断展示" : "");
       loadFsList(lState.fsPath);
     }
@@ -1299,7 +1399,8 @@
       lState.items = res.items || res.artifacts || [];
       renderGallery();
       if (pendingLibraryTarget) {
-        const target = lState.items.find((x) => x.id === pendingLibraryTarget.id || x.path === pendingLibraryTarget.id || x.artifact_id === pendingLibraryTarget.id);
+        const tid = pendingLibraryTarget.id;
+        const target = lState.items.find((x) => x.handle === tid || x.id === tid || x.id === `att:${tid}` || x.path === tid || x.artifact_id === tid);
         pendingLibraryTarget = null;
         if (target) openArtifactDrawer(target);
       }
@@ -1336,13 +1437,6 @@
         try { await navigator.clipboard?.writeText?.(lState.copyText || ""); sayLib("已复制产物内容"); } catch (_) {}
         return;
       }
-      if (ev.target.closest("#lib-art-delete") && lState.selectedItem) {
-        const path = lState.selectedItem.path || lState.selectedItem.id;
-        const r = await hostRpc("write", "fs_delete", { path });
-        if (!r?.success) sayLib(r?.error || "删除产物失败", true);
-        else { $("#lib-drawer").hidden = true; $("#lib-shell").classList.remove("has-drawer"); lState.selectedItem = null; sayLib("产物已删除"); loadLibrary(); }
-        return;
-      }
       const fsItem = ev.target.closest("[data-fs-path]");
       if (fsItem) {
         const p = fsItem.dataset.fsPath;
@@ -1360,6 +1454,19 @@
         $("#lib-fs-pane").hidden = true;
         $("#lib-gallery-pane").hidden = false;
         lState.fsOpenPath = "";
+        return;
+      }
+      if (ev.target.closest("#lib-fs-delete") && lState.fsOpenPath && canDeleteFs(lState.fsOpenPath)) {
+        const r = await hostRpc("write", "fs_delete", { path: lState.fsOpenPath });
+        if (!r?.success) sayFs(r?.error || "文件删除失败", true);
+        else {
+          $("#lib-fs-pane").hidden = true;
+          $("#lib-gallery-pane").hidden = false;
+          lState.fsOpenPath = "";
+          sayFs("");
+          sayLib("文件已删除");
+          await loadFsList(lState.fsPath);
+        }
         return;
       }
       if (ev.target.closest("#lib-fs-save") && lState.fsOpenPath) {
@@ -1473,7 +1580,7 @@
       const parts = sw.split(/[-~]/);
       $("#set-sleep-start").value = (parts[0] || "23:30").trim();
       $("#set-sleep-end").value = (parts[1] || "08:00").trim();
-      const sbOn = Boolean(sState.data?.docker?.enabled ?? set.sandbox_enabled);
+      const sbOn = Boolean(sState.data?.docker?.enabled ?? sState.data?.sandbox_enabled ?? set.sandbox_enabled ?? set.sandbox?.enabled);
       $("#set-sandbox-enabled").checked = sbOn;
       $("#set-sandbox-txt").textContent = sbOn ? "已启用" : "未启用";
       const curTheme = normalizeThemePref(sState.data?.ui_style || set.ui_style || savedUiStyle);
@@ -1494,7 +1601,7 @@
       sState.pluginAdmins = [...(ai.plugin_admins || ai.settings_admins || set.admins || [])];
       sState.grants = [...(res.grants || [])];
       sState.vaultMeta = [...(res.vault_meta || [])];
-      sState.models = [...(res.available_models || res.model_catalog || [])];
+      sState.models = (Array.isArray(res.model_catalog) && res.model_catalog.length) ? res.model_catalog : (res.available_models || []);
       renderChats();
       renderAdmins();
       renderGrants();
@@ -1578,13 +1685,16 @@
         const domain = ($("#set-vault-domain")?.value || "").trim();
         const raw = $("#set-vault-secret")?.value || "";
         if (!handle || !raw.trim()) { saySet("请填写凭据句柄 (handle) 与秘密内容", true); return; }
-        const fields = {};
+        const fieldNames = [];
         raw.split(/\r?\n/).forEach((line) => {
           const idx = line.indexOf("=");
-          if (idx > 0) fields[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+          if (idx > 0) {
+            const k = line.slice(0, idx).trim();
+            if (k && !fieldNames.includes(k)) fieldNames.push(k);
+          }
         });
-        const payload = Object.keys(fields).length
-          ? { handle, label, domain, fields, value: raw.trim() }
+        const payload = fieldNames.length
+          ? { handle, label, domain, fields: fieldNames, value: raw.trim() }
           : { handle, label, domain, value: raw.trim() };
         const r = await hostRpc("write", "vault_set", payload);
         $("#set-vault-secret").value = "";
@@ -1600,11 +1710,13 @@
         const swStart = ($("#set-sleep-start")?.value || "23:30").trim();
         const swEnd = ($("#set-sleep-end")?.value || "08:00").trim();
         const limit = Math.max(0, Math.min(50, Number($("#set-daily-limit")?.value || 1)));
+        const sbOn = Boolean($("#set-sandbox-enabled")?.checked);
         await savePartialSettings({
           default_model: $("#set-default-model")?.value || "",
           daily_proactive_limit: limit,
           sleep_window: `${swStart}-${swEnd}`,
-          sandbox_enabled: Boolean($("#set-sandbox-enabled")?.checked),
+          sandbox_enabled: sbOn,
+          sandbox: { enabled: sbOn },
         });
         await loadSettings();
         return;

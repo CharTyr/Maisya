@@ -820,8 +820,8 @@
   function chatDisplayName(snap, cid) {
     if (!cid) return "未知会话";
     if (cid === "self") return "自身线程 (self)";
-    const meta = snap?.chat_meta?.[cid] || {};
-    return meta.name || cid;
+    const meta = snap?.chat_sources?.[cid] || snap?.chat_meta?.[cid] || {};
+    return meta.name || meta.title || meta.label || cid;
   }
   function profileFishSeedFromSnap(snap, pid) {
     const card = (snap?.profile_cards || []).find((c) => c.id === pid);
@@ -1198,7 +1198,7 @@
     $("#now-conclusion").textContent = resText;
     const atts = Array.isArray(sel.artifacts) && sel.artifacts.length ? sel.artifacts : (sel.attachments || []);
     $("#now-attachments").innerHTML = atts.map((att) =>
-      `<button type="button" class="mil-key mil-key--sm" data-jump-lib="${esc(att.id || att.handle || att.path || "")}">${esc(att.title || att.name || "查看产物")}</button>`
+      `<button type="button" class="mil-key mil-key--sm" data-jump-lib="${esc(att.handle || att.id || att.path || "")}">${esc(att.title || att.name || "查看产物")}</button>`
     ).join("");
 
     // 切换 总览 vs 单步命令详情
@@ -1313,11 +1313,14 @@
   function applyOnbView(view, opts = {}) {
     if (!view || typeof view !== "object") return;
     onb.info = view;
-    if (view.run_id) onb.runId = String(view.run_id);
-    if (typeof view.sequence === "number") onb.seq = Math.max(onb.seq, view.sequence);
+    const mv = view.model_verify && typeof view.model_verify === "object" ? view.model_verify : null;
+    const rId = view.run_id || mv?.run_id || "";
+    if (rId) onb.runId = String(rId);
+    const vSeq = typeof view.sequence === "number" ? view.sequence : (typeof mv?.sequence === "number" ? mv.sequence : null);
+    if (vSeq !== null) onb.seq = Math.max(onb.seq, vSeq);
     if (!opts.keepStep && view.current_step) onb.stepIdx = stepIndexFromName(view.current_step);
-    if (view.model_verify && (!onb.probePending || view.model_verify.sequence >= onb.probeSeq)) {
-      onb.probeResult = view.model_verify;
+    if (mv && (!onb.probePending || (typeof mv.sequence === "number" ? mv.sequence >= onb.probeSeq : true))) {
+      onb.probeResult = mv;
     }
     if (onb.open && !opts.skipRender) renderOnbStep(opts.dir || 0);
   }
@@ -1369,14 +1372,19 @@
     const items = Array.isArray(info.items) ? info.items : [];
     const adminsInfo = state.lastSnap?.admins_info || {};
     const hostAdmins = info.host_admins || adminsInfo.host_admins || [];
-    const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
+    const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || info.settings_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
     const recentDms = info.recent_dms || state.lastSnap?.recent_dms || [];
     const knownChats = info.known_chats || state.lastSnap?.known_chats || state.lastSnap?.enabled_chats || [];
     const enabledChats = onb.draftChats ?? (info.enabled_chats || state.lastSnap?.enabled_chats || []);
-    const models = info.models || state.lastSnap?.available_models || [];
-    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || models[0]?.name || "";
+    const models = (Array.isArray(info.model_catalog) && info.model_catalog.length ? info.model_catalog : null)
+      || info.models
+      || (Array.isArray(state.lastSnap?.model_catalog) && state.lastSnap.model_catalog.length ? state.lastSnap.model_catalog : null)
+      || state.lastSnap?.available_models
+      || [];
+    const firstModelName = typeof models[0] === "string" ? models[0] : (models[0]?.name || "");
+    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || firstModelName || "";
     const curPerm = onb.draftPerm || info.permission_mode || state.lastSnap?.permission_mode || "ask_risky";
-    const curSandbox = onb.draftSandbox !== null ? onb.draftSandbox : Boolean(info.sandbox_enabled ?? state.lastSnap?.docker?.enabled);
+    const curSandbox = onb.draftSandbox !== null ? onb.draftSandbox : Boolean(info.sandbox_enabled ?? info.sandbox?.enabled ?? state.lastSnap?.sandbox_enabled ?? state.lastSnap?.docker?.enabled);
 
     if (dots) {
       dots.innerHTML = ONB_STEPS.map((s, i) => `<span class="onb-dot${i === idx ? " is-active" : i < idx ? " is-done" : ""}" title="${esc(s)}"></span>`).join("");
@@ -1430,15 +1438,16 @@
         </div>`;
     } else if (step === "runtime") {
       const pr = onb.probeResult;
+      const isFail = pr?.state === "error" || pr?.state === "failed";
       const prTxt = onb.probePending ? "正在探测模型连通性…" : pr?.message ? `${pr.state === "ok" ? "连通正常" : "连通失败"}：${pr.message}${pr.duration_ms ? ` (${pr.duration_ms}ms)` : ""}` : "建议在完成前点击右侧按钮实际探针测试一次";
-      const prCls = onb.probePending ? "mil-tag mil-tag--warn" : pr?.state === "ok" ? "mil-tag mil-tag--ok" : pr?.state === "error" ? "mil-tag mil-tag--bad" : "mil-tag";
+      const prCls = onb.probePending ? "mil-tag mil-tag--warn" : pr?.state === "ok" ? "mil-tag mil-tag--ok" : isFail ? "mil-tag mil-tag--bad" : "mil-tag";
       pane.innerHTML = `
         <div class="mil-silk">第 4 步 · 默认模型、授权与安全沙箱</div>
         <div class="mil-grid-2">
           <div class="mil-field">
             <label class="mil-label" for="onb-model">默认任务模型</label>
             <select class="mil-select" id="onb-model">
-              ${models.length ? models.map((m) => `<option value="${esc(m.name)}" ${m.name === curModel ? "selected" : ""}>${esc(m.name)}${m.provider ? ` (${esc(m.provider)})` : ""}</option>`).join("") : `<option value="${esc(curModel || "utils")}">${esc(curModel || "utils")}</option>`}
+              ${models.length ? models.map((m) => { const mn = typeof m === "string" ? m : (m.name || ""); const mp = typeof m === "object" ? (m.provider || "") : ""; return `<option value="${esc(mn)}" ${mn === curModel ? "selected" : ""}>${esc(mn)}${mp ? ` (${esc(mp)})` : ""}</option>`; }).join("") : `<option value="${esc(curModel || "utils")}">${esc(curModel || "utils")}</option>`}
             </select>
           </div>
           <div class="mil-field">
@@ -1494,12 +1503,14 @@
   }
 
   async function onbStepMutation(actionName, payloadBuilder, opts = {}) {
-    const reqRunId = onb.runId || onb.info?.run_id || "";
+    const reqRunId = onb.runId || onb.info?.run_id || onb.info?.model_verify?.run_id || "";
     const reqSeq = ++onb.seq;
     const body = { ...(payloadBuilder ? payloadBuilder() : {}), run_id: reqRunId, sequence: reqSeq };
     const res = await hostRpc("write", actionName, body);
     if (disposed || !onb.open) return res;
-    if (res?.stale || (res?.run_id && reqRunId && res.run_id !== reqRunId && actionName !== "onboarding_reopen")) {
+    const view = res?.onboarding && typeof res.onboarding === "object" ? res.onboarding : res;
+    const resRunId = res?.run_id || view?.run_id || view?.model_verify?.run_id || "";
+    if (res?.stale || (resRunId && reqRunId && resRunId !== reqRunId && actionName !== "onboarding_reopen")) {
       return res;
     }
     if (reqSeq !== onb.seq && actionName === "onboarding_verify_model") return res;
@@ -1510,7 +1521,7 @@
     }
     $("#onb-feedback").textContent = "";
     $("#onb-feedback").className = "mil-feedback";
-    applyOnbView(res.onboarding || res, {
+    applyOnbView(view, {
       keepStep: Boolean(opts.keepStep || actionName === "onboarding_verify_model"),
       skipRender: Boolean(opts.skipRender),
       dir: opts.dir || 0,
@@ -1519,7 +1530,7 @@
   }
 
   async function triggerOnbModelProbe() {
-    const reqRunId = onb.runId || onb.info?.run_id || "";
+    const reqRunId = onb.runId || onb.info?.run_id || onb.info?.model_verify?.run_id || "";
     const curProbeSeq = ++onb.probeSeq;
     const seq = ++onb.seq;
     const modelName = $("#onb-model")?.value || onb.draftModel || "";
@@ -1529,13 +1540,14 @@
     if (tag) { tag.textContent = "正在探测模型连通性…"; tag.className = "mil-tag mil-tag--warn"; }
     const res = await hostRpc("write", "onboarding_verify_model", { run_id: reqRunId, sequence: seq, probe_sequence: curProbeSeq, model_name: modelName });
     if (disposed || !onb.open) return;
-    const resRunId = res?.run_id || res?.onboarding?.run_id || "";
-    const resProbeSeq = res?.probe_sequence ?? res?.model_verify?.sequence ?? res?.sequence;
+    const resMv = res?.model_verify || res?.onboarding?.model_verify;
+    const resRunId = res?.run_id || res?.onboarding?.run_id || resMv?.run_id || "";
+    const resProbeSeq = res?.probe_sequence ?? resMv?.sequence ?? res?.sequence;
     if (res?.stale || (reqRunId && resRunId && resRunId !== reqRunId) || (curProbeSeq !== onb.probeSeq) || (typeof resProbeSeq === "number" && resProbeSeq < curProbeSeq && resProbeSeq !== seq)) {
       return; // 严格丢弃过期探测响应
     }
     onb.probePending = false;
-    onb.probeResult = res?.model_verify || res?.onboarding?.model_verify || { state: res?.success ? "ok" : "error", message: res?.message || res?.error || "探测完成" };
+    onb.probeResult = resMv || { state: res?.success ? "ok" : "error", message: res?.message || res?.error || "探测完成" };
     renderOnbStep(0);
   }
 
@@ -1547,7 +1559,8 @@
       onb.draftModel = $("#onb-model")?.value || onb.draftModel;
       onb.draftPerm = $("#onb-perm")?.value || onb.draftPerm;
       onb.draftSandbox = $("#onb-sandbox") ? Boolean($("#onb-sandbox").checked) : onb.draftSandbox;
-      return { default_model: onb.draftModel, permission_mode: onb.draftPerm, sandbox_enabled: Boolean(onb.draftSandbox) };
+      const sb = Boolean(onb.draftSandbox);
+      return { default_model: onb.draftModel, permission_mode: onb.draftPerm, sandbox_enabled: sb, sandbox: { enabled: sb } };
     }
     return {};
   }
@@ -1566,9 +1579,10 @@
       const curView = state.lastSnap?.onboarding;
       if (curView && curView.show === false) {
         const res = await hostRpc("write", "onboarding_reopen", {});
-        if (res?.success && res.onboarding) {
-          if (state.lastSnap) state.lastSnap.onboarding = res.onboarding;
-          openOnboardingModal(res.onboarding);
+        const viewObj = res?.onboarding || res;
+        if (res?.success && viewObj && typeof viewObj === "object") {
+          if (state.lastSnap) state.lastSnap.onboarding = viewObj;
+          openOnboardingModal(viewObj);
           return;
         }
       }
@@ -1601,7 +1615,15 @@
       try {
         if (onb.stepIdx >= ONB_STEPS.length - 1) {
           const res = await onbStepMutation("onboarding_complete", () => ({}), { keepStep: true, skipRender: true });
-          if (res?.success) { closeOnboardingModal(true); refresh(true); }
+          const viewObj = res?.onboarding || res;
+          if (res?.success && res?.completed !== false && viewObj?.completed !== false) {
+            closeOnboardingModal(true);
+            refresh(true);
+          } else if (res?.success && (res?.completed === false || viewObj?.completed === false)) {
+            $("#onb-feedback").textContent = String(res?.message || res?.error || "尚有就绪条件未完成，请先检查并完善");
+            $("#onb-feedback").className = "mil-feedback mil-feedback--err";
+            applyOnbView(viewObj, { keepStep: false, dir: 0 });
+          }
         } else {
           const curStepIdx = onb.stepIdx;
           const data = collectCurrentOnbStepData();
@@ -1613,7 +1635,8 @@
             { keepStep: true, skipRender: true }
           );
           if (res?.success) {
-            const srvStep = res?.onboarding?.current_step;
+            const viewObj = res?.onboarding || res;
+            const srvStep = viewObj?.current_step;
             const srvIdx = srvStep ? stepIndexFromName(srvStep) : curStepIdx + 1;
             onb.stepIdx = Math.min(ONB_STEPS.length - 1, srvStep ? srvIdx : curStepIdx + 1);
             renderOnbStep(1);

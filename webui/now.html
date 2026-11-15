@@ -4330,7 +4330,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 }
 
   const PAGES = { now: "现场", profiles: "档案", library: "资料库", settings: "设置" };
-  const MGMT_FRAGMENTS = {"now": "  <div class=\"mil-feedback\" id=\"feedback\" data-feedback-slot=\"now\" aria-live=\"polite\"><\/div>\n\n  <div class=\"now-v3-grid\">\n    <!-- 左栏：预定与盯梢 + 活动时间线 -->\n    <div class=\"now-col-stack\">\n      <section class=\"mil-panel\" aria-label=\"预定与盯梢\">\n        <div class=\"mil-head\">\n          <div class=\"mil-head-l\">\n            <span data-icon-slot=\"routines\"><\/span>\n            <div>\n              <div class=\"mil-silk\">预定与盯梢<\/div>\n              <div class=\"mil-silk-en\">SCHEDULES &amp; WATCHES<\/div>\n            <\/div>\n          <\/div>\n          <div class=\"mil-head-r\">\n            <span class=\"mil-tag\" id=\"now-intent-count\">0 项<\/span>\n          <\/div>\n        <\/div>\n        <div class=\"now-intent-list\" id=\"now-intents\">\n          <div class=\"mil-hint\">暂无预定或盯梢项<\/div>\n        <\/div>\n      <\/section>\n\n      <section class=\"mil-panel\" aria-label=\"活动时间线\">\n        <div class=\"mil-head\">\n          <div class=\"mil-head-l\">\n            <span data-icon-slot=\"heartbeat\"><\/span>\n            <div>\n              <div class=\"mil-silk\">活动时间线<\/div>\n              <div class=\"mil-silk-en\">ACTIVITY TIMELINE<\/div>\n            <\/div>\n          <\/div>\n          <div class=\"mil-head-r\">\n            <span class=\"mil-tag\" id=\"now-thread-count\">0 条<\/span>\n          <\/div>\n        <\/div>\n\n        <div class=\"now-filter-row\" style=\"margin-bottom:10px\">\n          <input type=\"search\" class=\"mil-input\" id=\"now-thread-search\" placeholder=\"搜索线程标题、会话或档案…\" aria-label=\"筛选活动时间线\" />\n          <div class=\"mil-seg\" id=\"now-thread-filters\" role=\"group\" aria-label=\"线程状态筛选\">\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"all\" aria-pressed=\"true\">全部<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"running\" aria-pressed=\"false\">进行中<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"approval\" aria-pressed=\"false\">待确认<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"history\" aria-pressed=\"false\">历史可续<\/button>\n          <\/div>\n        <\/div>\n\n        <div class=\"now-thread-list\" id=\"now-threads\">\n          <div class=\"mil-hint\">暂无活动记录<\/div>\n        <\/div>\n      <\/section>\n    <\/div>\n\n    <!-- 右栏：确认条 + 垂直步骤时间线 + 总览/Treemap/单步详情 -->\n    <section class=\"mil-panel now-inspector-card\" aria-label=\"线程复盘与操作台\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span id=\"now-sel-fish\"><\/span>\n          <div>\n            <div class=\"mil-silk\" id=\"now-sel-title\">尚未选中线程<\/div>\n            <div class=\"mil-silk-en\" id=\"now-sel-meta\">在左侧点选活动，查看步骤链与上下文方块图<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <span class=\"mil-tag\" id=\"now-sel-state\">待命<\/span>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"now-reopen-btn\" hidden>恢复继续<\/button>\n        <\/div>\n      <\/div>\n\n      <!-- 等待授权确认条 -->\n      <div class=\"now-approval-bar\" id=\"now-approval-bar\" hidden>\n        <div class=\"now-card-head\">\n          <strong id=\"now-appr-title\">需要确认后才能继续执行<\/strong>\n          <span class=\"mil-tag mil-tag--warn\" id=\"now-appr-risk\">需要授权<\/span>\n        <\/div>\n        <div class=\"mil-hint\" id=\"now-appr-detail\"><\/div>\n        <pre class=\"mil-pre\" id=\"now-appr-cmd\" hidden><\/pre>\n        <div class=\"now-approval-actions\">\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" data-appr-decision=\"once\">仅本次允许<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-appr-decision=\"session\">本轮会话允许<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-appr-decision=\"always\">长期记住<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" data-appr-decision=\"deny\">拒绝<\/button>\n        <\/div>\n      <\/div>\n\n      <!-- 运行控制：补充说明 + 停止 -->\n      <div class=\"now-note-bar\" id=\"now-controls-bar\" hidden>\n        <input type=\"text\" class=\"mil-input\" id=\"now-note-input\" placeholder=\"给当前活动补充一条提示或转向说明…\" aria-label=\"补充说明\" />\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"now-note-send\">补充说明<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"now-stop-btn\" hidden>停止<\/button>\n      <\/div>\n\n      <div class=\"now-stage\">\n        <!-- Muse 式垂直步骤时间线 -->\n        <div>\n          <div class=\"mil-label\" style=\"margin-bottom:8px\">执行步骤链<\/div>\n          <div class=\"now-steps-wrap\" id=\"now-step-timeline\">\n            <div class=\"mil-hint\">选择线程后展示触发、思考与工具步骤。<\/div>\n          <\/div>\n        <\/div>\n\n        <!-- 右侧详情视图：总览（含 Token Treemap）或 单步命令与脱敏输出 -->\n        <div class=\"now-inspector-card\">\n          <div id=\"now-view-overview\">\n            <div class=\"now-summary-box\" style=\"margin-bottom:12px\">\n              <div class=\"now-card-head\">\n                <span class=\"mil-label\">一句话结论与交付<\/span>\n                <div class=\"mil-row\" id=\"now-attachments\"><\/div>\n              <\/div>\n              <div id=\"now-conclusion\" class=\"mil-hint\">选中线程后在这里汇总结论与生成产物。<\/div>\n            <\/div>\n\n            <!-- 保留并美化的上下文与 Token 消耗方块图 (Treemap) -->\n            <div class=\"mil-panel mil-panel--soft\" id=\"ctx-panel\" style=\"padding:12px\">\n              <div class=\"mil-head\" style=\"margin-bottom:8px\">\n                <div class=\"mil-head-l\">\n                  <span class=\"mil-silk\">上下文与 Token 消耗<\/span>\n                  <span class=\"mil-tag\" id=\"ctx-health\">待命<\/span>\n                <\/div>\n                <div class=\"mil-head-r\">\n                  <div class=\"mil-seg\" role=\"group\" aria-label=\"上下文视图模式\">\n                    <button type=\"button\" class=\"mil-key mil-key--sm\" data-ctx-view=\"map\" aria-pressed=\"true\">方块<\/button>\n                    <button type=\"button\" class=\"mil-key mil-key--sm\" data-ctx-view=\"grid\" aria-pressed=\"false\">方格<\/button>\n                  <\/div>\n                <\/div>\n              <\/div>\n              <div class=\"mil-row\" style=\"justify-content:space-between;margin-bottom:6px\">\n                <span class=\"mil-hint num\" id=\"ctx-readout\">0 / 262.1K tokens (0%)<\/span>\n              <\/div>\n              <div class=\"mil-meter\" id=\"ctx-meter\" style=\"margin-bottom:8px\"><i id=\"ctx-meter-bar\" style=\"width:0%\"><\/i><\/div>\n              <div class=\"ctx-cats\" id=\"ctx-cats\"><\/div>\n              <div class=\"ctx-board\" style=\"margin-bottom:10px\">\n                <div class=\"ctx-map-stage\" id=\"ctx-map\"><\/div>\n                <div class=\"cm-grid\" id=\"ctx-grid\" hidden><\/div>\n              <\/div>\n              <div class=\"ctx-items\" id=\"ctx-items\"><\/div>\n            <\/div>\n          <\/div>\n\n          <div id=\"now-view-step\" class=\"now-summary-box\" hidden>\n            <div class=\"now-card-head\">\n              <div>\n                <div class=\"mil-silk\" id=\"now-step-title\">步骤详情<\/div>\n                <div class=\"mil-hint mono\" id=\"now-step-meta\">—<\/div>\n              <\/div>\n              <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"now-back-overview\">返回总览<\/button>\n            <\/div>\n            <div class=\"mil-field\">\n              <span class=\"mil-label\">命令 / 参数<\/span>\n              <pre class=\"mil-pre\" id=\"now-step-args\"><\/pre>\n            <\/div>\n            <div class=\"mil-field\">\n              <span class=\"mil-label\">脱敏输出<\/span>\n              <pre class=\"mil-pre\" id=\"now-step-output\"><\/pre>\n            <\/div>\n          <\/div>\n        <\/div>\n      <\/div>\n    <\/section>\n  <\/div>\n\n  <!-- 折叠临时调度入口 -->\n  <details class=\"mil-panel\" id=\"launch-wrap\">\n    <summary class=\"mil-head\" style=\"cursor:pointer;margin-bottom:0\">\n      <div class=\"mil-head-l\">\n        <span class=\"mil-silk\"><span class=\"mil-silk-en\">WAKE · <\/span>▸ 临时发起一个线程<\/span>\n        <button type=\"button\" class=\"mil-help\" data-help=\"日常由 MaiBot 主脑按语境调度；管理员也可在这里手动按档案触发验证\" aria-label=\"查看说明\" aria-expanded=\"false\">?<\/button>\n      <\/div>\n      <div class=\"mil-head-r\"><span class=\"mil-vent\" aria-hidden=\"true\"><i><\/i><i><\/i><i><\/i><i><\/i><i><\/i><\/span><\/div>\n    <\/summary>\n    <div style=\"margin-top:12px;padding-top:12px;border-top:1px solid var(--mil-rule)\">\n      <div class=\"launch-grid\" style=\"margin-bottom:10px\">\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"launch-profile\">能力档案<\/label>\n          <input id=\"launch-profile\" class=\"mil-input mono\" list=\"launch-profile-list\" value=\"default\" placeholder=\"default\" />\n          <datalist id=\"launch-profile-list\"><\/datalist>\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"launch-chat\">关联会话<\/label>\n          <input id=\"launch-chat\" class=\"mil-input mono\" list=\"launch-chat-list\" placeholder=\"qq:group:100246809 或 self\" />\n          <datalist id=\"launch-chat-list\"><\/datalist>\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"launch-workspace\">持久工作区（可选）<\/label>\n          <input id=\"launch-workspace\" class=\"mil-input mono\" placeholder=\"digest_daily\" />\n        <\/div>\n      <\/div>\n      <div class=\"mil-field\" style=\"margin-bottom:10px\">\n        <label class=\"mil-label\" for=\"launch-prompt\">事情描述<\/label>\n        <textarea id=\"launch-prompt\" class=\"mil-textarea\" rows=\"2\" placeholder=\"输入需要探索或处理的内容…\"><\/textarea>\n      <\/div>\n      <div class=\"mil-row\" style=\"justify-content:space-between\">\n        <div class=\"mil-feedback\" id=\"launch-feedback\" aria-live=\"polite\"><\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"launch-run\">立即发起<\/button>\n      <\/div>\n    <\/div>\n  <\/details>", "profiles": "<div class=\"m-ab-shell\" data-tab=\"profiles\">\n  <!-- 移动端无边框裸鱼轮播与首屏摘要卡片（<= 760px 展示） -->\n  <section class=\"m-ab-mob-head\" id=\"ab-mob-head\" aria-label=\"档案快速切换\">\n    <div class=\"m-mob-carousel-wrap\">\n      <button type=\"button\" class=\"mob-role-step prev\" data-mob-step=\"-1\" aria-label=\"上一个档案\">&lt;<\/button>\n      <div class=\"m-mob-carousel mob-role-carousel\" id=\"mob-role-carousel\" role=\"listbox\" aria-label=\"档案小鱼轮播\"><\/div>\n      <button type=\"button\" class=\"mob-role-step next\" data-mob-step=\"1\" aria-label=\"下一个档案\">&gt;<\/button>\n      <div class=\"mob-role-dots\" id=\"mob-role-dots\"><\/div>\n    <\/div>\n    <div class=\"mil-panel m-mob-role-card1\" id=\"ab-mob-role-card1\">\n      <div class=\"m-mob-role-card1-head\">\n        <span class=\"m-mob-role-card1-title\" id=\"ab-mob-role-title\">—<\/span>\n        <span class=\"mil-tag\" id=\"ab-mob-role-env\">待加载<\/span>\n      <\/div>\n      <div class=\"m-mob-role-card1-rows\">\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"overview\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"roles\"><\/span><span>基础档案信息<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-overview\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"advanced\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"cpu\"><\/span><span>常规与模型设定<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-models\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"abilities\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"skills\"><\/span><span>技能 / 连接器 / 工具集<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-skills\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"fish\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"journal\"><\/span><span>小鱼外形定制<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-fish\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n      <\/div>\n    <\/div>\n  <\/section>\n\n  <!-- 主工作区：左侧档案列表 + 右侧 Hermes 渐进式定制表单 -->\n  <div class=\"m-ab-studio pr-studio\">\n    <aside class=\"mil-panel m-ab-roster\" aria-label=\"档案列表\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"roles\"><\/span>\n          <div>\n            <div class=\"mil-silk\">能力档案<\/div>\n            <div class=\"mil-silk-en\">PROFILES<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"pr-btn-new\">+ 新建档案<\/button>\n        <\/div>\n      <\/div>\n\n      <div class=\"pr-roster-tools\">\n        <input type=\"search\" class=\"mil-input\" id=\"pr-search\" placeholder=\"筛选档案标识、名称或描述…\" aria-label=\"筛选档案\" />\n        <div class=\"mil-row\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"pr-btn-import\">导入 .zip<\/button>\n          <input type=\"file\" id=\"pr-import-file\" accept=\".zip,application/zip\" hidden />\n        <\/div>\n      <\/div>\n\n      <div class=\"ab-roster\" id=\"pr-roster\" role=\"listbox\" aria-label=\"全部档案\"><\/div>\n    <\/aside>\n\n    <section class=\"mil-panel pr-editor\" id=\"pr-editor\" aria-label=\"档案详情编辑\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span id=\"pr-head-fish\"><\/span>\n          <div>\n            <div class=\"mil-silk\" id=\"pr-head-title\">档案编辑<\/div>\n            <div class=\"mil-silk-en\" id=\"pr-head-sub\">HERMES PROGRESSIVE PROFILE<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r pr-toolbar\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"pr-btn-export\">导出 .zip<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"pr-btn-delete\">删除自定义档案<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"pr-btn-save\">保存档案<\/button>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-feedback\" id=\"pr-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n\n      <!-- 顶部小鱼与作用范围选择器 -->\n      <div class=\"role-fish-box\" id=\"pr-fish-box\">\n        <div class=\"role-fish-head\">\n          <div class=\"fish-preview-box\">\n            <div id=\"pr-fish-preview\"><\/div>\n            <div>\n              <div class=\"mil-label\">形象标识小鱼<\/div>\n              <div class=\"mil-hint\" id=\"pr-fish-summary\">自动按档案名稳定生成像素鱼<\/div>\n            <\/div>\n          <\/div>\n          <div class=\"mil-seg\" id=\"pr-fish-mode\" role=\"group\" aria-label=\"小鱼外形模式\">\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-fish-mode=\"auto\" aria-pressed=\"true\">自动<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-fish-mode=\"random\" aria-pressed=\"false\">随机<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-fish-mode=\"lock\" aria-pressed=\"false\">锁定<\/button>\n          <\/div>\n        <\/div>\n        <div class=\"fish-drawer\" id=\"pr-fish-drawer\" hidden>\n          <div class=\"mil-label\">鱼种外形<\/div>\n          <div class=\"fish-opts\" id=\"pr-fish-species\"><\/div>\n          <div class=\"mil-label\">配色<\/div>\n          <div class=\"fish-swatches\" id=\"pr-fish-colors\"><\/div>\n        <\/div>\n      <\/div>\n\n      <!-- 首屏三项（id / name / description）+ 作用范围 -->\n      <div class=\"pr-primary-grid\">\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"pr-id\">档案标识 (id)<\/label>\n          <input type=\"text\" class=\"mil-input mono\" id=\"pr-id\" placeholder=\"例如 coder_review\" autocomplete=\"off\" />\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"pr-name\">显示名称 (name)<\/label>\n          <input type=\"text\" class=\"mil-input\" id=\"pr-name\" placeholder=\"例如 代码审校助手\" autocomplete=\"off\" />\n        <\/div>\n        <div class=\"mil-field pr-span-2\">\n          <label class=\"mil-label\" for=\"pr-desc\">能力描述 (description)<\/label>\n          <input type=\"text\" class=\"mil-input\" id=\"pr-desc\" placeholder=\"用一句话说明主脑何时适合调度这个档案\" />\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"pr-access\">可用范围与权限层级<\/label>\n          <select class=\"mil-select\" id=\"pr-access\">\n            <option value=\"all\">全部已启用会话（只读通用）<\/option>\n            <option value=\"admins\">仅核验管理员（可含高权服务与密钥）<\/option>\n            <option value=\"chats\">指定会话白名单<\/option>\n          <\/select>\n        <\/div>\n        <div class=\"mil-field pr-enable-field\">\n          <span class=\"mil-label\">启用状态<\/span>\n          <label class=\"mil-switch\">\n            <input type=\"checkbox\" id=\"pr-enabled\" checked />\n            <span class=\"mil-switch-track\"><\/span>\n            <span class=\"mil-switch-txt\" id=\"pr-enabled-txt\">已启用<\/span>\n          <\/label>\n        <\/div>\n        <div class=\"mil-field pr-span-2\" id=\"pr-chats-wrap\" hidden>\n          <label class=\"mil-label\" for=\"pr-allowed-chats\">允许会话列表（逗号分隔 &lt;platform&gt;:&lt;group|private&gt;:&lt;id&gt;）<\/label>\n          <input type=\"text\" class=\"mil-input mono\" id=\"pr-allowed-chats\" placeholder=\"例如 qq:group:100246809\" />\n        <\/div>\n      <\/div>\n\n      <!-- 折叠 高级 两栏：常规 | 能力 -->\n      <div class=\"pr-adv-wrap\">\n        <button type=\"button\" class=\"mil-key pr-adv-toggle\" id=\"pr-adv-toggle\" aria-expanded=\"false\" aria-controls=\"pr-adv-body\">\n          <span id=\"pr-adv-chevron\">⌄<\/span>\n          <span>高级设置（常规设定与能力开关）<\/span>\n        <\/button>\n\n        <div class=\"pr-adv-body\" id=\"pr-adv-body\" hidden>\n          <div class=\"mil-seg pr-subtabs\" role=\"tablist\" aria-label=\"高级分页\">\n            <button type=\"button\" class=\"mil-key mil-key--sm\" role=\"tab\" data-pr-tab=\"general\" aria-selected=\"true\">常规<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" role=\"tab\" data-pr-tab=\"abilities\" aria-selected=\"false\">能力<\/button>\n          <\/div>\n\n          <div class=\"pr-pane\" id=\"pr-pane-general\">\n            <div class=\"mil-grid-2\">\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-clone\">克隆来源（可选）<\/label>\n                <select class=\"mil-select\" id=\"pr-clone\">\n                  <option value=\"\">不从其他档案克隆<\/option>\n                <\/select>\n              <\/div>\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-model\">首选模型<\/label>\n                <select class=\"mil-select\" id=\"pr-model\"><\/select>\n              <\/div>\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-exec-mode\">执行环境 (execution_mode)<\/label>\n                <select class=\"mil-select\" id=\"pr-exec-mode\">\n                  <option value=\"host\">宿主机线程（默认）<\/option>\n                  <option value=\"sandbox\">轻量沙箱环境<\/option>\n                <\/select>\n              <\/div>\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-session-mode\">会话方式 (session_mode)<\/label>\n                <select class=\"mil-select\" id=\"pr-session-mode\">\n                  <option value=\"thread\">持续线程上下文 (thread)<\/option>\n                  <option value=\"ephemeral\">单次临时任务 (ephemeral)<\/option>\n                  <option value=\"persistent\">固定持久工作区 (persistent)<\/option>\n                <\/select>\n              <\/div>\n            <\/div>\n\n            <label class=\"mil-chk\">\n              <input type=\"checkbox\" id=\"pr-shared-secrets\" checked />\n              <span>与主档案共享安全存储与连接器<\/span>\n            <\/label>\n\n            <div class=\"mil-field\">\n              <div class=\"pr-md-head\">\n                <label class=\"mil-label\" for=\"pr-md\">档案说明 (PROFILE.md)<\/label>\n                <span class=\"mil-tag\" id=\"pr-md-count\">0 / 150 行<\/span>\n              <\/div>\n              <textarea class=\"mil-textarea mil-textarea--code m-ab-textarea\" id=\"pr-md\" rows=\"8\" placeholder=\"留空自动生成档案规则与人格提示词；如需手写请控制在 150 行以内\"><\/textarea>\n              <div class=\"mil-hint\">留空自动生成；若自定义补充，建议简洁明确并控制在 150 行以内。<\/div>\n            <\/div>\n          <\/div>\n\n          <div class=\"pr-pane\" id=\"pr-pane-abilities\" hidden>\n            <div class=\"pr-ab-filter\">\n              <input type=\"search\" class=\"mil-input\" id=\"pr-ab-search\" placeholder=\"搜索技能、连接器或工具集…\" aria-label=\"搜索能力项\" />\n              <div class=\"mil-seg\" id=\"pr-ab-kind\" role=\"group\" aria-label=\"能力分类\">\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"all\" aria-pressed=\"true\">全部<\/button>\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"toolsets\" aria-pressed=\"false\">5 大工具集<\/button>\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"skills\" aria-pressed=\"false\">技能<\/button>\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"connectors\" aria-pressed=\"false\">连接器<\/button>\n              <\/div>\n            <\/div>\n            <div class=\"pr-ability-grid\" id=\"pr-ability-cards\"><\/div>\n          <\/div>\n        <\/div>\n      <\/div>\n    <\/section>\n  <\/div>\n\n  <!-- 移动端底部快捷编辑抽屉 -->\n  <div class=\"m-mob-scrim m-mob-sheet-scrim\" id=\"profiles-mob-scrim\" hidden>\n    <div class=\"m-mob-sheet\" role=\"dialog\" aria-modal=\"true\" aria-label=\"档案移动端快捷操作\">\n      <div class=\"m-mob-handle\" aria-hidden=\"true\"><\/div>\n      <div class=\"m-mob-sheet-head\">\n        <strong id=\"profiles-mob-sheet-title\">快速设定<\/strong>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"profiles-mob-sheet-close\">完成<\/button>\n      <\/div>\n      <div id=\"profiles-mob-sheet-body\" class=\"pr-mob-sheet-body\"><\/div>\n    <\/div>\n  <\/div>\n<\/div>", "library": "<div class=\"m-out-shell lib-shell\" id=\"lib-shell\" data-tab=\"library\">\n  <aside class=\"mil-panel m-out-aside lib-aside\" aria-label=\"资料过滤与系统文件\">\n    <div class=\"mil-head\">\n      <div class=\"mil-head-l\">\n        <span data-icon-slot=\"artifacts\"><\/span>\n        <div>\n          <div class=\"mil-silk\">资料库<\/div>\n          <div class=\"mil-silk-en\">LIBRARY<\/div>\n        <\/div>\n      <\/div>\n      <div class=\"mil-head-r\">\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-refresh\">刷新<\/button>\n      <\/div>\n    <\/div>\n\n    <div class=\"lib-aside-block\">\n      <input type=\"search\" class=\"mil-input\" id=\"lib-search\" placeholder=\"搜索产物标题、档案或来源会话…\" aria-label=\"搜索生成产物\" />\n      <div class=\"mil-seg lib-filters\" id=\"lib-filters\" role=\"group\" aria-label=\"产物类型过滤\">\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"all\" aria-pressed=\"true\">全部<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"image\" aria-pressed=\"false\">图文<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"report\" aria-pressed=\"false\">长报告<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"doc\" aria-pressed=\"false\">文档<\/button>\n      <\/div>\n    <\/div>\n\n    <!-- 侧栏底部入口：系统文件 -->\n    <div class=\"lib-fs-entry\" id=\"lib-fs-entry\">\n      <div class=\"lib-fs-entry-head\">\n        <div class=\"mil-label\">系统文件<\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-fs-back\" hidden>回根目录<\/button>\n      <\/div>\n      <div class=\"mil-hint\" id=\"lib-fs-crumbs\">根目录（MEMORY / JOURNAL / HEARTBEAT / 工作区）<\/div>\n      <div class=\"lib-fs-tree\" id=\"lib-fs-tree\" role=\"tree\" aria-label=\"系统文件目录树\"><\/div>\n    <\/div>\n  <\/aside>\n\n  <main class=\"mil-panel m-out-main lib-main\" aria-label=\"生成产物画廊与文件浏览\">\n    <!-- 主画廊区 -->\n    <section id=\"lib-gallery-pane\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"artifacts\"><\/span>\n          <div>\n            <div class=\"mil-silk\">生成产物画廊<\/div>\n            <div class=\"mil-silk-en\">ARTIFACTS GALLERY<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <span class=\"mil-tag\" id=\"lib-count-tag\">0 项<\/span>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-feedback\" id=\"lib-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n      <div class=\"lib-gallery\" id=\"lib-gallery\"><\/div>\n    <\/section>\n\n    <!-- 系统文件阅读/编辑面板（点击侧栏系统文件后切换显示） -->\n    <section id=\"lib-fs-pane\" hidden>\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"workspace\"><\/span>\n          <div>\n            <div class=\"mil-silk\" id=\"lib-fs-title\">系统文件<\/div>\n            <div class=\"mil-silk-en mono\" id=\"lib-fs-path\">—<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-fs-close-pane\">返回画廊<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"lib-fs-save\">保存文件<\/button>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-feedback\" id=\"lib-fs-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n      <textarea class=\"mil-textarea mil-textarea--code lib-fs-editor\" id=\"lib-fs-editor\" rows=\"18\" aria-label=\"系统文件内容\"><\/textarea>\n    <\/section>\n  <\/main>\n\n  <!-- 产物预览抽屉 -->\n  <aside class=\"mil-panel lib-drawer\" id=\"lib-drawer\" hidden aria-label=\"产物详情预览\">\n    <div class=\"mil-head\">\n      <div class=\"mil-head-l\">\n        <span data-icon-slot=\"artifacts\"><\/span>\n        <div>\n          <div class=\"mil-silk\" id=\"lib-drawer-title\">产物详情<\/div>\n          <div class=\"mil-silk-en\" id=\"lib-drawer-meta\">—<\/div>\n        <\/div>\n      <\/div>\n      <div class=\"mil-head-r\">\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-drawer-close\" aria-label=\"关闭预览\">关闭<\/button>\n      <\/div>\n    <\/div>\n\n    <div class=\"lib-drawer-actions\">\n      <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-jump-chat\">来源会话<\/button>\n      <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-copy\">复制内容<\/button>\n      <a class=\"mil-key mil-key--sm\" id=\"lib-download\" download=\"artifact.txt\" hidden>下载<\/a>\n      <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"lib-art-delete\">删除产物<\/button>\n    <\/div>\n\n    <div class=\"lib-stage\" id=\"lib-stage\"><\/div>\n  <\/aside>\n<\/div>", "settings": "<div class=\"m-set-shell set-v3-shell\" data-tab=\"settings\">\n  <div class=\"mil-feedback\" id=\"set-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n\n  <div class=\"set-blocks\">\n    <!-- 1. 会话开关 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-chats\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"roles\"><\/span>\n          <div>\n            <div class=\"mil-silk\">会话开关<\/div>\n            <div class=\"mil-silk-en\">CHATS &amp; ALLOWLIST<\/div>\n          <\/div>\n        <\/div>\n        <span class=\"mil-tag mil-tag--ok\">管理员私聊自动放行<\/span>\n      <\/div>\n\n      <div class=\"mil-hint\">已核验管理员在私聊发出的消息会自动放行且支持跨会话调度；普通群聊需在下方显式打开开关。<\/div>\n\n      <div class=\"ms-entry-add\">\n        <input type=\"text\" class=\"mil-input mono\" id=\"set-chat-input\" placeholder=\"手动添加，例如 qq:group:100246809\" aria-label=\"添加群聊标识\" />\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"set-chat-add\">添加会话<\/button>\n      <\/div>\n\n      <div class=\"ms-entry-list\" id=\"set-chat-list\"><\/div>\n    <\/section>\n\n    <!-- 2. 权限与管理员 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-auth\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"vault\"><\/span>\n          <div>\n            <div class=\"mil-silk\">权限与管理员<\/div>\n            <div class=\"mil-silk-en\">TRUST &amp; DUAL-SOURCE ADMINS<\/div>\n          <\/div>\n        <\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"set-reopen-onb\">重新打开新手引导<\/button>\n      <\/div>\n\n      <div class=\"mil-field\">\n        <label class=\"mil-label\" for=\"set-perm-mode\">默认授权策略<\/label>\n        <select class=\"mil-select\" id=\"set-perm-mode\">\n          <option value=\"ask_risky\">仅高危操作确认 (ask_risky · 推荐)<\/option>\n          <option value=\"autonomous\">受托自主执行 (autonomous)<\/option>\n          <option value=\"always_ask\">每次写/命令操作都确认 (always_ask)<\/option>\n        <\/select>\n      <\/div>\n\n      <div class=\"set-admins-split\">\n        <div class=\"set-subcard\">\n          <div class=\"mil-label\">宿主授权管理员（只读 · 来自宿主配置）<\/div>\n          <div class=\"set-admin-badges\" id=\"set-host-admins\"><\/div>\n        <\/div>\n        <div class=\"set-subcard\">\n          <div class=\"mil-label\">插件内管理员（可增删 · 至少保留一位管理员）<\/div>\n          <div class=\"mil-feedback mil-feedback--err\" id=\"set-admin-err\" role=\"alert\"><\/div>\n          <div class=\"set-admin-badges\" id=\"set-plugin-admins\"><\/div>\n          <div class=\"ms-entry-add\">\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-admin-input\" placeholder=\"输入用户标识，例如 qq:private:10001\" aria-label=\"添加插件管理员\" />\n            <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"set-admin-add\">加入管理员<\/button>\n          <\/div>\n        <\/div>\n      <\/div>\n\n      <div class=\"set-grants-wrap\">\n        <div class=\"mil-label\">已记住的授权记录 (grants)<\/div>\n        <div class=\"ms-entry-list\" id=\"set-grants-list\"><\/div>\n      <\/div>\n    <\/section>\n\n    <!-- 3. 安全存储 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-vault\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"vault\"><\/span>\n          <div>\n            <div class=\"mil-silk\">安全存储<\/div>\n            <div class=\"mil-silk-en\">VAULT METADATA ONLY<\/div>\n          <\/div>\n        <\/div>\n        <span class=\"mil-tag\">只存不显<\/span>\n      <\/div>\n\n      <div class=\"mil-hint\">列表仅显示凭据句柄、标签与适用域名，永不回显任何秘密明文。<\/div>\n      <div class=\"ms-entry-list\" id=\"set-vault-list\"><\/div>\n\n      <div class=\"set-vault-form\">\n        <div class=\"mil-grid-2\">\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-handle\">凭据句柄 (handle)<\/label>\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-vault-handle\" placeholder=\"例如 github_pat\" autocomplete=\"off\" />\n          <\/div>\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-label\">显示名称 (label)<\/label>\n            <input type=\"text\" class=\"mil-input\" id=\"set-vault-label\" placeholder=\"例如 GitHub 只读令牌\" autocomplete=\"off\" />\n          <\/div>\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-domain\">允许域名 (domain)<\/label>\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-vault-domain\" placeholder=\"例如 api.github.com\" autocomplete=\"off\" />\n          <\/div>\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-secret\">秘密字段（每行 键=值，写入即清空输入框）<\/label>\n            <textarea class=\"mil-textarea mil-textarea--code\" id=\"set-vault-secret\" rows=\"2\" placeholder=\"TOKEN=...\" autocomplete=\"off\"><\/textarea>\n          <\/div>\n        <\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"set-vault-save\">存入安全存储<\/button>\n      <\/div>\n    <\/section>\n\n    <!-- 4. 基础运行 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-runtime\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"gear\"><\/span>\n          <div>\n            <div class=\"mil-silk\">基础运行<\/div>\n            <div class=\"mil-silk-en\">RUNTIME &amp; THEME<\/div>\n          <\/div>\n        <\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"set-save-runtime\">保存运行设置<\/button>\n      <\/div>\n\n      <div class=\"mil-grid-2\">\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"set-default-model\">默认任务模型槽位<\/label>\n          <select class=\"mil-select\" id=\"set-default-model\"><\/select>\n        <\/div>\n\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"set-daily-limit\">每日主动搭话上限 (0 - 50)<\/label>\n          <input type=\"number\" class=\"mil-input num\" id=\"set-daily-limit\" min=\"0\" max=\"50\" step=\"1\" value=\"1\" />\n        <\/div>\n\n        <div class=\"mil-field\">\n          <label class=\"mil-label\">免打扰时段（HH:MM）<\/label>\n          <div class=\"mil-row\" id=\"sleep-range-wrap\">\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-sleep-start\" placeholder=\"23:30\" maxlength=\"5\" aria-label=\"免打扰开始时间\" />\n            <span>~<\/span>\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-sleep-end\" placeholder=\"08:00\" maxlength=\"5\" aria-label=\"免打扰结束时间\" />\n          <\/div>\n        <\/div>\n\n        <div class=\"mil-field\">\n          <span class=\"mil-label\">轻量 Docker 沙箱<\/span>\n          <label class=\"mil-switch\">\n            <input type=\"checkbox\" id=\"set-sandbox-enabled\" />\n            <span class=\"mil-switch-track\"><\/span>\n            <span class=\"mil-switch-txt\" id=\"set-sandbox-txt\">未启用<\/span>\n          <\/label>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-field\">\n        <span class=\"mil-label\">界面主题<\/span>\n        <div class=\"mil-seg\" id=\"set-theme-seg\" role=\"group\" aria-label=\"界面主题切换\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-theme-choice=\"millennium\" aria-pressed=\"true\">千禧机械<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-theme-choice=\"modern\" aria-pressed=\"false\">现代极简<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-theme-choice=\"auto\" aria-pressed=\"false\">自动跟随<\/button>\n        <\/div>\n      <\/div>\n    <\/section>\n  <\/div>\n<\/div>"};
+  const MGMT_FRAGMENTS = {"now": "  <div class=\"mil-feedback\" id=\"feedback\" data-feedback-slot=\"now\" aria-live=\"polite\"><\/div>\n\n  <div class=\"now-v3-grid\">\n    <!-- 左栏：预定与盯梢 + 活动时间线 -->\n    <div class=\"now-col-stack\">\n      <section class=\"mil-panel\" aria-label=\"预定与盯梢\">\n        <div class=\"mil-head\">\n          <div class=\"mil-head-l\">\n            <span data-icon-slot=\"routines\"><\/span>\n            <div>\n              <div class=\"mil-silk\">预定与盯梢<\/div>\n              <div class=\"mil-silk-en\">SCHEDULES &amp; WATCHES<\/div>\n            <\/div>\n          <\/div>\n          <div class=\"mil-head-r\">\n            <span class=\"mil-tag\" id=\"now-intent-count\">0 项<\/span>\n          <\/div>\n        <\/div>\n        <div class=\"now-intent-list\" id=\"now-intents\">\n          <div class=\"mil-hint\">暂无预定或盯梢项<\/div>\n        <\/div>\n      <\/section>\n\n      <section class=\"mil-panel\" aria-label=\"活动时间线\">\n        <div class=\"mil-head\">\n          <div class=\"mil-head-l\">\n            <span data-icon-slot=\"heartbeat\"><\/span>\n            <div>\n              <div class=\"mil-silk\">活动时间线<\/div>\n              <div class=\"mil-silk-en\">ACTIVITY TIMELINE<\/div>\n            <\/div>\n          <\/div>\n          <div class=\"mil-head-r\">\n            <span class=\"mil-tag\" id=\"now-thread-count\">0 条<\/span>\n          <\/div>\n        <\/div>\n\n        <div class=\"now-filter-row\" style=\"margin-bottom:10px\">\n          <input type=\"search\" class=\"mil-input\" id=\"now-thread-search\" placeholder=\"搜索线程标题、会话或档案…\" aria-label=\"筛选活动时间线\" />\n          <div class=\"mil-seg\" id=\"now-thread-filters\" role=\"group\" aria-label=\"线程状态筛选\">\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"all\" aria-pressed=\"true\">全部<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"running\" aria-pressed=\"false\">进行中<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"approval\" aria-pressed=\"false\">待确认<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-th-filter=\"history\" aria-pressed=\"false\">历史可续<\/button>\n          <\/div>\n        <\/div>\n\n        <div class=\"now-thread-list\" id=\"now-threads\">\n          <div class=\"mil-hint\">暂无活动记录<\/div>\n        <\/div>\n      <\/section>\n    <\/div>\n\n    <!-- 右栏：确认条 + 垂直步骤时间线 + 总览/Treemap/单步详情 -->\n    <section class=\"mil-panel now-inspector-card\" aria-label=\"线程复盘与操作台\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span id=\"now-sel-fish\"><\/span>\n          <div>\n            <div class=\"mil-silk\" id=\"now-sel-title\">尚未选中线程<\/div>\n            <div class=\"mil-silk-en\" id=\"now-sel-meta\">在左侧点选活动，查看步骤链与上下文方块图<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <span class=\"mil-tag\" id=\"now-sel-state\">待命<\/span>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"now-reopen-btn\" hidden>恢复继续<\/button>\n        <\/div>\n      <\/div>\n\n      <!-- 等待授权确认条 -->\n      <div class=\"now-approval-bar\" id=\"now-approval-bar\" hidden>\n        <div class=\"now-card-head\">\n          <strong id=\"now-appr-title\">需要确认后才能继续执行<\/strong>\n          <span class=\"mil-tag mil-tag--warn\" id=\"now-appr-risk\">需要授权<\/span>\n        <\/div>\n        <div class=\"mil-hint\" id=\"now-appr-detail\"><\/div>\n        <pre class=\"mil-pre\" id=\"now-appr-cmd\" hidden><\/pre>\n        <div class=\"now-approval-actions\">\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" data-appr-decision=\"once\">仅本次允许<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-appr-decision=\"session\">本轮会话允许<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-appr-decision=\"always\">长期记住<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" data-appr-decision=\"deny\">拒绝<\/button>\n        <\/div>\n      <\/div>\n\n      <!-- 运行控制：补充说明 + 停止 -->\n      <div class=\"now-note-bar\" id=\"now-controls-bar\" hidden>\n        <input type=\"text\" class=\"mil-input\" id=\"now-note-input\" placeholder=\"给当前活动补充一条提示或转向说明…\" aria-label=\"补充说明\" />\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"now-note-send\">补充说明<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"now-stop-btn\" hidden>停止<\/button>\n      <\/div>\n\n      <div class=\"now-stage\">\n        <!-- Muse 式垂直步骤时间线 -->\n        <div>\n          <div class=\"mil-label\" style=\"margin-bottom:8px\">执行步骤链<\/div>\n          <div class=\"now-steps-wrap\" id=\"now-step-timeline\">\n            <div class=\"mil-hint\">选择线程后展示触发、思考与工具步骤。<\/div>\n          <\/div>\n        <\/div>\n\n        <!-- 右侧详情视图：总览（含 Token Treemap）或 单步命令与脱敏输出 -->\n        <div class=\"now-inspector-card\">\n          <div id=\"now-view-overview\">\n            <div class=\"now-summary-box\" style=\"margin-bottom:12px\">\n              <div class=\"now-card-head\">\n                <span class=\"mil-label\">一句话结论与交付<\/span>\n                <div class=\"mil-row\" id=\"now-attachments\"><\/div>\n              <\/div>\n              <div id=\"now-conclusion\" class=\"mil-hint\">选中线程后在这里汇总结论与生成产物。<\/div>\n            <\/div>\n\n            <!-- 保留并美化的上下文与 Token 消耗方块图 (Treemap) -->\n            <div class=\"mil-panel mil-panel--soft\" id=\"ctx-panel\" style=\"padding:12px\">\n              <div class=\"mil-head\" style=\"margin-bottom:8px\">\n                <div class=\"mil-head-l\">\n                  <span class=\"mil-silk\">上下文与 Token 消耗<\/span>\n                  <span class=\"mil-tag\" id=\"ctx-health\">待命<\/span>\n                <\/div>\n                <div class=\"mil-head-r\">\n                  <div class=\"mil-seg\" role=\"group\" aria-label=\"上下文视图模式\">\n                    <button type=\"button\" class=\"mil-key mil-key--sm\" data-ctx-view=\"map\" aria-pressed=\"true\">方块<\/button>\n                    <button type=\"button\" class=\"mil-key mil-key--sm\" data-ctx-view=\"grid\" aria-pressed=\"false\">方格<\/button>\n                  <\/div>\n                <\/div>\n              <\/div>\n              <div class=\"mil-row\" style=\"justify-content:space-between;margin-bottom:6px\">\n                <span class=\"mil-hint num\" id=\"ctx-readout\">0 / 262.1K tokens (0%)<\/span>\n              <\/div>\n              <div class=\"mil-meter\" id=\"ctx-meter\" style=\"margin-bottom:8px\"><i id=\"ctx-meter-bar\" style=\"width:0%\"><\/i><\/div>\n              <div class=\"ctx-cats\" id=\"ctx-cats\"><\/div>\n              <div class=\"ctx-board\" style=\"margin-bottom:10px\">\n                <div class=\"ctx-map-stage\" id=\"ctx-map\"><\/div>\n                <div class=\"cm-grid\" id=\"ctx-grid\" hidden><\/div>\n              <\/div>\n              <div class=\"ctx-items\" id=\"ctx-items\"><\/div>\n            <\/div>\n          <\/div>\n\n          <div id=\"now-view-step\" class=\"now-summary-box\" hidden>\n            <div class=\"now-card-head\">\n              <div>\n                <div class=\"mil-silk\" id=\"now-step-title\">步骤详情<\/div>\n                <div class=\"mil-hint mono\" id=\"now-step-meta\">—<\/div>\n              <\/div>\n              <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"now-back-overview\">返回总览<\/button>\n            <\/div>\n            <div class=\"mil-field\">\n              <span class=\"mil-label\">命令 / 参数<\/span>\n              <pre class=\"mil-pre\" id=\"now-step-args\"><\/pre>\n            <\/div>\n            <div class=\"mil-field\">\n              <span class=\"mil-label\">脱敏输出<\/span>\n              <pre class=\"mil-pre\" id=\"now-step-output\"><\/pre>\n            <\/div>\n          <\/div>\n        <\/div>\n      <\/div>\n    <\/section>\n  <\/div>\n\n  <!-- 折叠临时调度入口 -->\n  <details class=\"mil-panel\" id=\"launch-wrap\">\n    <summary class=\"mil-head\" style=\"cursor:pointer;margin-bottom:0\">\n      <div class=\"mil-head-l\">\n        <span class=\"mil-silk\"><span class=\"mil-silk-en\">WAKE · <\/span>▸ 临时发起一个线程<\/span>\n        <button type=\"button\" class=\"mil-help\" data-help=\"日常由 MaiBot 主脑按语境调度；管理员也可在这里手动按档案触发验证\" aria-label=\"查看说明\" aria-expanded=\"false\">?<\/button>\n      <\/div>\n      <div class=\"mil-head-r\"><span class=\"mil-vent\" aria-hidden=\"true\"><i><\/i><i><\/i><i><\/i><i><\/i><i><\/i><\/span><\/div>\n    <\/summary>\n    <div style=\"margin-top:12px;padding-top:12px;border-top:1px solid var(--mil-rule)\">\n      <div class=\"launch-grid\" style=\"margin-bottom:10px\">\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"launch-profile\">能力档案<\/label>\n          <input id=\"launch-profile\" class=\"mil-input mono\" list=\"launch-profile-list\" value=\"default\" placeholder=\"default\" />\n          <datalist id=\"launch-profile-list\"><\/datalist>\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"launch-chat\">关联会话<\/label>\n          <input id=\"launch-chat\" class=\"mil-input mono\" list=\"launch-chat-list\" placeholder=\"qq:group:100246809 或 self\" />\n          <datalist id=\"launch-chat-list\"><\/datalist>\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"launch-workspace\">持久工作区（可选）<\/label>\n          <input id=\"launch-workspace\" class=\"mil-input mono\" placeholder=\"digest_daily\" />\n        <\/div>\n      <\/div>\n      <div class=\"mil-field\" style=\"margin-bottom:10px\">\n        <label class=\"mil-label\" for=\"launch-prompt\">事情描述<\/label>\n        <textarea id=\"launch-prompt\" class=\"mil-textarea\" rows=\"2\" placeholder=\"输入需要探索或处理的内容…\"><\/textarea>\n      <\/div>\n      <div class=\"mil-row\" style=\"justify-content:space-between\">\n        <div class=\"mil-feedback\" id=\"launch-feedback\" aria-live=\"polite\"><\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"launch-run\">立即发起<\/button>\n      <\/div>\n    <\/div>\n  <\/details>", "profiles": "<div class=\"m-ab-shell\" data-tab=\"profiles\">\n  <!-- 移动端无边框裸鱼轮播与首屏摘要卡片（<= 760px 展示） -->\n  <section class=\"m-ab-mob-head\" id=\"ab-mob-head\" aria-label=\"档案快速切换\">\n    <div class=\"m-mob-carousel-wrap\">\n      <button type=\"button\" class=\"mob-role-step prev\" data-mob-step=\"-1\" aria-label=\"上一个档案\">&lt;<\/button>\n      <div class=\"m-mob-carousel mob-role-carousel\" id=\"mob-role-carousel\" role=\"listbox\" aria-label=\"档案小鱼轮播\"><\/div>\n      <button type=\"button\" class=\"mob-role-step next\" data-mob-step=\"1\" aria-label=\"下一个档案\">&gt;<\/button>\n      <div class=\"mob-role-dots\" id=\"mob-role-dots\"><\/div>\n    <\/div>\n    <div class=\"mil-panel m-mob-role-card1\" id=\"ab-mob-role-card1\">\n      <div class=\"m-mob-role-card1-head\">\n        <span class=\"m-mob-role-card1-title\" id=\"ab-mob-role-title\">—<\/span>\n        <span class=\"mil-tag\" id=\"ab-mob-role-env\">待加载<\/span>\n      <\/div>\n      <div class=\"m-mob-role-card1-rows\">\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"overview\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"roles\"><\/span><span>基础档案信息<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-overview\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"advanced\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"cpu\"><\/span><span>常规与模型设定<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-models\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"abilities\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"skills\"><\/span><span>技能 / 连接器 / 工具集<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-skills\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n        <button type=\"button\" class=\"m-mob-row\" data-mob-role-jump=\"fish\">\n          <span class=\"m-mob-row-l\"><span class=\"m-mob-row-ic\" data-icon-slot=\"journal\"><\/span><span>小鱼外形定制<\/span><\/span>\n          <span class=\"m-mob-row-r\"><span class=\"m-mob-row-val\" id=\"mob-val-fish\">—<\/span><span class=\"m-mob-row-arr\">&gt;<\/span><\/span>\n        <\/button>\n      <\/div>\n    <\/div>\n  <\/section>\n\n  <!-- 主工作区：左侧档案列表 + 右侧 Hermes 渐进式定制表单 -->\n  <div class=\"m-ab-studio pr-studio\">\n    <aside class=\"mil-panel m-ab-roster\" aria-label=\"档案列表\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"roles\"><\/span>\n          <div>\n            <div class=\"mil-silk\">能力档案<\/div>\n            <div class=\"mil-silk-en\">PROFILES<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"pr-btn-new\">+ 新建档案<\/button>\n        <\/div>\n      <\/div>\n\n      <div class=\"pr-roster-tools\">\n        <input type=\"search\" class=\"mil-input\" id=\"pr-search\" placeholder=\"筛选档案标识、名称或描述…\" aria-label=\"筛选档案\" />\n        <div class=\"mil-row\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"pr-btn-import\">导入 .zip<\/button>\n          <input type=\"file\" id=\"pr-import-file\" accept=\".zip,application/zip\" hidden />\n        <\/div>\n      <\/div>\n\n      <div class=\"ab-roster\" id=\"pr-roster\" role=\"listbox\" aria-label=\"全部档案\"><\/div>\n    <\/aside>\n\n    <section class=\"mil-panel pr-editor\" id=\"pr-editor\" aria-label=\"档案详情编辑\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span id=\"pr-head-fish\"><\/span>\n          <div>\n            <div class=\"mil-silk\" id=\"pr-head-title\">档案编辑<\/div>\n            <div class=\"mil-silk-en\" id=\"pr-head-sub\">HERMES PROGRESSIVE PROFILE<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r pr-toolbar\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"pr-btn-export\">导出 .zip<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"pr-btn-delete\">删除自定义档案<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"pr-btn-save\">保存档案<\/button>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-feedback\" id=\"pr-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n\n      <!-- 顶部小鱼与作用范围选择器 -->\n      <div class=\"role-fish-box\" id=\"pr-fish-box\">\n        <div class=\"role-fish-head\">\n          <div class=\"fish-preview-box\">\n            <div id=\"pr-fish-preview\"><\/div>\n            <div>\n              <div class=\"mil-label\">形象标识小鱼<\/div>\n              <div class=\"mil-hint\" id=\"pr-fish-summary\">自动按档案名稳定生成像素鱼<\/div>\n            <\/div>\n          <\/div>\n          <div class=\"mil-seg\" id=\"pr-fish-mode\" role=\"group\" aria-label=\"小鱼外形模式\">\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-fish-mode=\"auto\" aria-pressed=\"true\">自动<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-fish-mode=\"random\" aria-pressed=\"false\">随机<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" data-fish-mode=\"lock\" aria-pressed=\"false\">锁定<\/button>\n          <\/div>\n        <\/div>\n        <div class=\"fish-drawer\" id=\"pr-fish-drawer\" hidden>\n          <div class=\"mil-label\">鱼种外形<\/div>\n          <div class=\"fish-opts\" id=\"pr-fish-species\"><\/div>\n          <div class=\"mil-label\">配色<\/div>\n          <div class=\"fish-swatches\" id=\"pr-fish-colors\"><\/div>\n        <\/div>\n      <\/div>\n\n      <!-- 首屏三项（id / name / description）+ 作用范围 -->\n      <div class=\"pr-primary-grid\">\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"pr-id\">档案标识 (id)<\/label>\n          <input type=\"text\" class=\"mil-input mono\" id=\"pr-id\" placeholder=\"例如 coder_review\" autocomplete=\"off\" />\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"pr-name\">显示名称 (name)<\/label>\n          <input type=\"text\" class=\"mil-input\" id=\"pr-name\" placeholder=\"例如 代码审校助手\" autocomplete=\"off\" />\n        <\/div>\n        <div class=\"mil-field pr-span-2\">\n          <label class=\"mil-label\" for=\"pr-desc\">能力描述 (description)<\/label>\n          <input type=\"text\" class=\"mil-input\" id=\"pr-desc\" placeholder=\"用一句话说明主脑何时适合调度这个档案\" />\n        <\/div>\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"pr-access\">可用范围与权限层级<\/label>\n          <select class=\"mil-select\" id=\"pr-access\">\n            <option value=\"everyone\">全部已启用会话（只读通用）<\/option>\n            <option value=\"admins\">仅核验管理员（可含高权服务与密钥）<\/option>\n            <option value=\"listed\">指定会话白名单<\/option>\n          <\/select>\n        <\/div>\n        <div class=\"mil-field pr-enable-field\">\n          <span class=\"mil-label\">启用状态<\/span>\n          <label class=\"mil-switch\">\n            <input type=\"checkbox\" id=\"pr-enabled\" checked />\n            <span class=\"mil-switch-track\"><\/span>\n            <span class=\"mil-switch-txt\" id=\"pr-enabled-txt\">已启用<\/span>\n          <\/label>\n        <\/div>\n        <div class=\"mil-field pr-span-2\" id=\"pr-chats-wrap\" hidden>\n          <label class=\"mil-label\" for=\"pr-allowed-chats\">允许会话列表（逗号分隔 &lt;platform&gt;:&lt;group|private&gt;:&lt;id&gt;）<\/label>\n          <input type=\"text\" class=\"mil-input mono\" id=\"pr-allowed-chats\" placeholder=\"例如 qq:group:100246809\" />\n        <\/div>\n      <\/div>\n\n      <!-- 折叠 高级 两栏：常规 | 能力 -->\n      <div class=\"pr-adv-wrap\">\n        <button type=\"button\" class=\"mil-key pr-adv-toggle\" id=\"pr-adv-toggle\" aria-expanded=\"false\" aria-controls=\"pr-adv-body\">\n          <span id=\"pr-adv-chevron\">⌄<\/span>\n          <span>高级设置（常规设定与能力开关）<\/span>\n        <\/button>\n\n        <div class=\"pr-adv-body\" id=\"pr-adv-body\" hidden>\n          <div class=\"mil-seg pr-subtabs\" role=\"tablist\" aria-label=\"高级分页\">\n            <button type=\"button\" class=\"mil-key mil-key--sm\" role=\"tab\" data-pr-tab=\"general\" aria-selected=\"true\">常规<\/button>\n            <button type=\"button\" class=\"mil-key mil-key--sm\" role=\"tab\" data-pr-tab=\"abilities\" aria-selected=\"false\">能力<\/button>\n          <\/div>\n\n          <div class=\"pr-pane\" id=\"pr-pane-general\">\n            <div class=\"mil-grid-2\">\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-clone\">克隆来源（可选）<\/label>\n                <select class=\"mil-select\" id=\"pr-clone\">\n                  <option value=\"\">不从其他档案克隆<\/option>\n                <\/select>\n              <\/div>\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-model\">首选模型<\/label>\n                <select class=\"mil-select\" id=\"pr-model\"><\/select>\n              <\/div>\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-exec-mode\">执行环境 (execution_mode)<\/label>\n                <select class=\"mil-select\" id=\"pr-exec-mode\">\n                  <option value=\"host\">宿主机线程（默认）<\/option>\n                  <option value=\"sandbox\">轻量沙箱环境<\/option>\n                <\/select>\n              <\/div>\n              <div class=\"mil-field\">\n                <label class=\"mil-label\" for=\"pr-session-mode\">会话方式 (session_mode)<\/label>\n                <select class=\"mil-select\" id=\"pr-session-mode\">\n                  <option value=\"persistent\">持续线程工作区 (persistent)<\/option>\n                  <option value=\"ephemeral\">单次临时任务 (ephemeral)<\/option>\n                <\/select>\n              <\/div>\n            <\/div>\n\n            <label class=\"mil-chk\">\n              <input type=\"checkbox\" id=\"pr-shared-secrets\" checked />\n              <span>与主档案共享安全存储与连接器<\/span>\n            <\/label>\n\n            <div class=\"mil-field\">\n              <div class=\"pr-md-head\">\n                <label class=\"mil-label\" for=\"pr-md\">档案说明 (PROFILE.md)<\/label>\n                <span class=\"mil-tag\" id=\"pr-md-count\">0 / 150 行<\/span>\n              <\/div>\n              <textarea class=\"mil-textarea mil-textarea--code m-ab-textarea\" id=\"pr-md\" rows=\"8\" placeholder=\"留空自动生成档案规则与人格提示词；如需手写请控制在 150 行以内\"><\/textarea>\n              <div class=\"mil-hint\">留空自动生成；若自定义补充，建议简洁明确并控制在 150 行以内。<\/div>\n            <\/div>\n          <\/div>\n\n          <div class=\"pr-pane\" id=\"pr-pane-abilities\" hidden>\n            <div class=\"pr-ab-filter\">\n              <input type=\"search\" class=\"mil-input\" id=\"pr-ab-search\" placeholder=\"搜索技能、连接器或工具集…\" aria-label=\"搜索能力项\" />\n              <div class=\"mil-seg\" id=\"pr-ab-kind\" role=\"group\" aria-label=\"能力分类\">\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"all\" aria-pressed=\"true\">全部<\/button>\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"toolsets\" aria-pressed=\"false\">5 大工具集<\/button>\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"skills\" aria-pressed=\"false\">技能<\/button>\n                <button type=\"button\" class=\"mil-key mil-key--sm\" data-ab-kind=\"connectors\" aria-pressed=\"false\">连接器<\/button>\n              <\/div>\n            <\/div>\n            <div class=\"pr-ability-grid\" id=\"pr-ability-cards\"><\/div>\n          <\/div>\n        <\/div>\n      <\/div>\n    <\/section>\n  <\/div>\n\n  <!-- 移动端底部快捷编辑抽屉 -->\n  <div class=\"m-mob-scrim m-mob-sheet-scrim\" id=\"profiles-mob-scrim\" hidden>\n    <div class=\"m-mob-sheet\" role=\"dialog\" aria-modal=\"true\" aria-label=\"档案移动端快捷操作\">\n      <div class=\"m-mob-handle\" aria-hidden=\"true\"><\/div>\n      <div class=\"m-mob-sheet-head\">\n        <strong id=\"profiles-mob-sheet-title\">快速设定<\/strong>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"profiles-mob-sheet-close\">完成<\/button>\n      <\/div>\n      <div id=\"profiles-mob-sheet-body\" class=\"pr-mob-sheet-body\"><\/div>\n    <\/div>\n  <\/div>\n<\/div>", "library": "<div class=\"m-out-shell lib-shell\" id=\"lib-shell\" data-tab=\"library\">\n  <aside class=\"mil-panel m-out-aside lib-aside\" aria-label=\"资料过滤与系统文件\">\n    <div class=\"mil-head\">\n      <div class=\"mil-head-l\">\n        <span data-icon-slot=\"artifacts\"><\/span>\n        <div>\n          <div class=\"mil-silk\">资料库<\/div>\n          <div class=\"mil-silk-en\">LIBRARY<\/div>\n        <\/div>\n      <\/div>\n      <div class=\"mil-head-r\">\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-refresh\">刷新<\/button>\n      <\/div>\n    <\/div>\n\n    <div class=\"lib-aside-block\">\n      <input type=\"search\" class=\"mil-input\" id=\"lib-search\" placeholder=\"搜索产物标题、档案或来源会话…\" aria-label=\"搜索生成产物\" />\n      <div class=\"mil-seg lib-filters\" id=\"lib-filters\" role=\"group\" aria-label=\"产物类型过滤\">\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"all\" aria-pressed=\"true\">全部<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"image\" aria-pressed=\"false\">图文<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"markdown\" aria-pressed=\"false\">报告<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"html\" aria-pressed=\"false\">网页<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"text\" aria-pressed=\"false\">文本<\/button>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" data-lib-filter=\"conclusion\" aria-pressed=\"false\">结论<\/button>\n      <\/div>\n    <\/div>\n\n    <!-- 侧栏底部入口：系统文件 -->\n    <div class=\"lib-fs-entry\" id=\"lib-fs-entry\">\n      <div class=\"lib-fs-entry-head\">\n        <div class=\"mil-label\">系统文件<\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-fs-back\" hidden>回根目录<\/button>\n      <\/div>\n      <div class=\"mil-hint\" id=\"lib-fs-crumbs\">根目录（MEMORY / JOURNAL / HEARTBEAT / 工作区）<\/div>\n      <div class=\"lib-fs-tree\" id=\"lib-fs-tree\" role=\"tree\" aria-label=\"系统文件目录树\"><\/div>\n    <\/div>\n  <\/aside>\n\n  <main class=\"mil-panel m-out-main lib-main\" aria-label=\"生成产物画廊与文件浏览\">\n    <!-- 主画廊区 -->\n    <section id=\"lib-gallery-pane\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"artifacts\"><\/span>\n          <div>\n            <div class=\"mil-silk\">生成产物画廊<\/div>\n            <div class=\"mil-silk-en\">ARTIFACTS GALLERY<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <span class=\"mil-tag\" id=\"lib-count-tag\">0 项<\/span>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-feedback\" id=\"lib-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n      <div class=\"lib-gallery\" id=\"lib-gallery\"><\/div>\n    <\/section>\n\n    <!-- 系统文件阅读/编辑面板（点击侧栏系统文件后切换显示） -->\n    <section id=\"lib-fs-pane\" hidden>\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"workspace\"><\/span>\n          <div>\n            <div class=\"mil-silk\" id=\"lib-fs-title\">系统文件<\/div>\n            <div class=\"mil-silk-en mono\" id=\"lib-fs-path\">—<\/div>\n          <\/div>\n        <\/div>\n        <div class=\"mil-head-r\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-fs-close-pane\">返回画廊<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"lib-fs-delete\" hidden>删除文件<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"lib-fs-save\">保存文件<\/button>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-feedback\" id=\"lib-fs-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n      <textarea class=\"mil-textarea mil-textarea--code lib-fs-editor\" id=\"lib-fs-editor\" rows=\"18\" aria-label=\"系统文件内容\"><\/textarea>\n    <\/section>\n  <\/main>\n\n  <!-- 产物预览抽屉 -->\n  <aside class=\"mil-panel lib-drawer\" id=\"lib-drawer\" hidden aria-label=\"产物详情预览\">\n    <div class=\"mil-head\">\n      <div class=\"mil-head-l\">\n        <span data-icon-slot=\"artifacts\"><\/span>\n        <div>\n          <div class=\"mil-silk\" id=\"lib-drawer-title\">产物详情<\/div>\n          <div class=\"mil-silk-en\" id=\"lib-drawer-meta\">—<\/div>\n        <\/div>\n      <\/div>\n      <div class=\"mil-head-r\">\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-drawer-close\" aria-label=\"关闭预览\">关闭<\/button>\n      <\/div>\n    <\/div>\n\n    <div class=\"lib-drawer-actions\">\n      <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-jump-chat\">来源会话<\/button>\n      <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"lib-copy\">复制内容<\/button>\n      <a class=\"mil-key mil-key--sm\" id=\"lib-download\" download=\"artifact.txt\" hidden>下载<\/a>\n      <button type=\"button\" class=\"mil-key mil-key--sm mil-key--danger\" id=\"lib-art-delete\" hidden>删除产物<\/button>\n    <\/div>\n\n    <div class=\"lib-stage\" id=\"lib-stage\"><\/div>\n  <\/aside>\n<\/div>", "settings": "<div class=\"m-set-shell set-v3-shell\" data-tab=\"settings\">\n  <div class=\"mil-feedback\" id=\"set-feedback\" role=\"status\" aria-live=\"polite\"><\/div>\n\n  <div class=\"set-blocks\">\n    <!-- 1. 会话开关 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-chats\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"roles\"><\/span>\n          <div>\n            <div class=\"mil-silk\">会话开关<\/div>\n            <div class=\"mil-silk-en\">CHATS &amp; ALLOWLIST<\/div>\n          <\/div>\n        <\/div>\n        <span class=\"mil-tag mil-tag--ok\">管理员私聊自动放行<\/span>\n      <\/div>\n\n      <div class=\"mil-hint\">已核验管理员在私聊发出的消息会自动放行且支持跨会话调度；普通群聊需在下方显式打开开关。<\/div>\n\n      <div class=\"ms-entry-add\">\n        <input type=\"text\" class=\"mil-input mono\" id=\"set-chat-input\" placeholder=\"手动添加，例如 qq:group:100246809\" aria-label=\"添加群聊标识\" />\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"set-chat-add\">添加会话<\/button>\n      <\/div>\n\n      <div class=\"ms-entry-list\" id=\"set-chat-list\"><\/div>\n    <\/section>\n\n    <!-- 2. 权限与管理员 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-auth\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"vault\"><\/span>\n          <div>\n            <div class=\"mil-silk\">权限与管理员<\/div>\n            <div class=\"mil-silk-en\">TRUST &amp; DUAL-SOURCE ADMINS<\/div>\n          <\/div>\n        <\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"set-reopen-onb\">重新打开新手引导<\/button>\n      <\/div>\n\n      <div class=\"mil-field\">\n        <label class=\"mil-label\" for=\"set-perm-mode\">默认授权策略<\/label>\n        <select class=\"mil-select\" id=\"set-perm-mode\">\n          <option value=\"ask_risky\">仅高危操作确认 (ask_risky · 推荐)<\/option>\n          <option value=\"autonomous\">受托自主执行 (autonomous)<\/option>\n          <option value=\"always_ask\">每次写/命令操作都确认 (always_ask)<\/option>\n        <\/select>\n      <\/div>\n\n      <div class=\"set-admins-split\">\n        <div class=\"set-subcard\">\n          <div class=\"mil-label\">宿主授权管理员（只读 · 来自宿主配置）<\/div>\n          <div class=\"set-admin-badges\" id=\"set-host-admins\"><\/div>\n        <\/div>\n        <div class=\"set-subcard\">\n          <div class=\"mil-label\">插件内管理员（可增删 · 至少保留一位管理员）<\/div>\n          <div class=\"mil-feedback mil-feedback--err\" id=\"set-admin-err\" role=\"alert\"><\/div>\n          <div class=\"set-admin-badges\" id=\"set-plugin-admins\"><\/div>\n          <div class=\"ms-entry-add\">\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-admin-input\" placeholder=\"输入用户标识，例如 qq:private:10001\" aria-label=\"添加插件管理员\" />\n            <button type=\"button\" class=\"mil-key mil-key--sm\" id=\"set-admin-add\">加入管理员<\/button>\n          <\/div>\n        <\/div>\n      <\/div>\n\n      <div class=\"set-grants-wrap\">\n        <div class=\"mil-label\">已记住的授权记录 (grants)<\/div>\n        <div class=\"ms-entry-list\" id=\"set-grants-list\"><\/div>\n      <\/div>\n    <\/section>\n\n    <!-- 3. 安全存储 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-vault\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"vault\"><\/span>\n          <div>\n            <div class=\"mil-silk\">安全存储<\/div>\n            <div class=\"mil-silk-en\">VAULT METADATA ONLY<\/div>\n          <\/div>\n        <\/div>\n        <span class=\"mil-tag\">只存不显<\/span>\n      <\/div>\n\n      <div class=\"mil-hint\">列表仅显示凭据句柄、标签与适用域名，永不回显任何秘密明文。<\/div>\n      <div class=\"ms-entry-list\" id=\"set-vault-list\"><\/div>\n\n      <div class=\"set-vault-form\">\n        <div class=\"mil-grid-2\">\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-handle\">凭据句柄 (handle)<\/label>\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-vault-handle\" placeholder=\"例如 github_pat\" autocomplete=\"off\" />\n          <\/div>\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-label\">显示名称 (label)<\/label>\n            <input type=\"text\" class=\"mil-input\" id=\"set-vault-label\" placeholder=\"例如 GitHub 只读令牌\" autocomplete=\"off\" />\n          <\/div>\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-domain\">允许域名 (domain)<\/label>\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-vault-domain\" placeholder=\"例如 api.github.com\" autocomplete=\"off\" />\n          <\/div>\n          <div class=\"mil-field\">\n            <label class=\"mil-label\" for=\"set-vault-secret\">秘密字段（每行 键=值，写入即清空输入框）<\/label>\n            <textarea class=\"mil-textarea mil-textarea--code\" id=\"set-vault-secret\" rows=\"2\" placeholder=\"TOKEN=...\" autocomplete=\"off\"><\/textarea>\n          <\/div>\n        <\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"set-vault-save\">存入安全存储<\/button>\n      <\/div>\n    <\/section>\n\n    <!-- 4. 基础运行 -->\n    <section class=\"mil-panel set-block\" id=\"set-block-runtime\">\n      <div class=\"mil-head\">\n        <div class=\"mil-head-l\">\n          <span data-icon-slot=\"gear\"><\/span>\n          <div>\n            <div class=\"mil-silk\">基础运行<\/div>\n            <div class=\"mil-silk-en\">RUNTIME &amp; THEME<\/div>\n          <\/div>\n        <\/div>\n        <button type=\"button\" class=\"mil-key mil-key--sm mil-key--hot\" id=\"set-save-runtime\">保存运行设置<\/button>\n      <\/div>\n\n      <div class=\"mil-grid-2\">\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"set-default-model\">默认任务模型槽位<\/label>\n          <select class=\"mil-select\" id=\"set-default-model\"><\/select>\n        <\/div>\n\n        <div class=\"mil-field\">\n          <label class=\"mil-label\" for=\"set-daily-limit\">每日主动搭话上限 (0 - 50)<\/label>\n          <input type=\"number\" class=\"mil-input num\" id=\"set-daily-limit\" min=\"0\" max=\"50\" step=\"1\" value=\"1\" />\n        <\/div>\n\n        <div class=\"mil-field\">\n          <label class=\"mil-label\">免打扰时段（HH:MM）<\/label>\n          <div class=\"mil-row\" id=\"sleep-range-wrap\">\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-sleep-start\" placeholder=\"23:30\" maxlength=\"5\" aria-label=\"免打扰开始时间\" />\n            <span>~<\/span>\n            <input type=\"text\" class=\"mil-input mono\" id=\"set-sleep-end\" placeholder=\"08:00\" maxlength=\"5\" aria-label=\"免打扰结束时间\" />\n          <\/div>\n        <\/div>\n\n        <div class=\"mil-field\">\n          <span class=\"mil-label\">轻量 Docker 沙箱<\/span>\n          <label class=\"mil-switch\">\n            <input type=\"checkbox\" id=\"set-sandbox-enabled\" />\n            <span class=\"mil-switch-track\"><\/span>\n            <span class=\"mil-switch-txt\" id=\"set-sandbox-txt\">未启用<\/span>\n          <\/label>\n        <\/div>\n      <\/div>\n\n      <div class=\"mil-field\">\n        <span class=\"mil-label\">界面主题<\/span>\n        <div class=\"mil-seg\" id=\"set-theme-seg\" role=\"group\" aria-label=\"界面主题切换\">\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-theme-choice=\"millennium\" aria-pressed=\"true\">千禧机械<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-theme-choice=\"modern\" aria-pressed=\"false\">现代极简<\/button>\n          <button type=\"button\" class=\"mil-key mil-key--sm\" data-theme-choice=\"auto\" aria-pressed=\"false\">自动跟随<\/button>\n        <\/div>\n      <\/div>\n    <\/section>\n  <\/div>\n<\/div>"};
   const defaultPage = document.body.dataset.defaultPage || "now";
   let activePage = Object.prototype.hasOwnProperty.call(PAGES, defaultPage) ? defaultPage : "now";
   let mgmtAbort = null;
@@ -4583,8 +4583,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
   function chatDisplayName(snap, cid) {
     if (!cid) return "未知会话";
     if (cid === "self") return "自身线程 (self)";
-    const meta = snap?.chat_meta?.[cid] || {};
-    return meta.name || cid;
+    const meta = snap?.chat_sources?.[cid] || snap?.chat_meta?.[cid] || {};
+    return meta.name || meta.title || meta.label || cid;
   }
   function profileFishSeedFromSnap(snap, pid) {
     const card = (snap?.profile_cards || []).find((c) => c.id === pid);
@@ -4961,7 +4961,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     $("#now-conclusion").textContent = resText;
     const atts = Array.isArray(sel.artifacts) && sel.artifacts.length ? sel.artifacts : (sel.attachments || []);
     $("#now-attachments").innerHTML = atts.map((att) =>
-      `<button type="button" class="mil-key mil-key--sm" data-jump-lib="${esc(att.id || att.handle || att.path || "")}">${esc(att.title || att.name || "查看产物")}</button>`
+      `<button type="button" class="mil-key mil-key--sm" data-jump-lib="${esc(att.handle || att.id || att.path || "")}">${esc(att.title || att.name || "查看产物")}</button>`
     ).join("");
 
     // 切换 总览 vs 单步命令详情
@@ -5076,11 +5076,14 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
   function applyOnbView(view, opts = {}) {
     if (!view || typeof view !== "object") return;
     onb.info = view;
-    if (view.run_id) onb.runId = String(view.run_id);
-    if (typeof view.sequence === "number") onb.seq = Math.max(onb.seq, view.sequence);
+    const mv = view.model_verify && typeof view.model_verify === "object" ? view.model_verify : null;
+    const rId = view.run_id || mv?.run_id || "";
+    if (rId) onb.runId = String(rId);
+    const vSeq = typeof view.sequence === "number" ? view.sequence : (typeof mv?.sequence === "number" ? mv.sequence : null);
+    if (vSeq !== null) onb.seq = Math.max(onb.seq, vSeq);
     if (!opts.keepStep && view.current_step) onb.stepIdx = stepIndexFromName(view.current_step);
-    if (view.model_verify && (!onb.probePending || view.model_verify.sequence >= onb.probeSeq)) {
-      onb.probeResult = view.model_verify;
+    if (mv && (!onb.probePending || (typeof mv.sequence === "number" ? mv.sequence >= onb.probeSeq : true))) {
+      onb.probeResult = mv;
     }
     if (onb.open && !opts.skipRender) renderOnbStep(opts.dir || 0);
   }
@@ -5132,14 +5135,19 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     const items = Array.isArray(info.items) ? info.items : [];
     const adminsInfo = state.lastSnap?.admins_info || {};
     const hostAdmins = info.host_admins || adminsInfo.host_admins || [];
-    const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
+    const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || info.settings_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
     const recentDms = info.recent_dms || state.lastSnap?.recent_dms || [];
     const knownChats = info.known_chats || state.lastSnap?.known_chats || state.lastSnap?.enabled_chats || [];
     const enabledChats = onb.draftChats ?? (info.enabled_chats || state.lastSnap?.enabled_chats || []);
-    const models = info.models || state.lastSnap?.available_models || [];
-    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || models[0]?.name || "";
+    const models = (Array.isArray(info.model_catalog) && info.model_catalog.length ? info.model_catalog : null)
+      || info.models
+      || (Array.isArray(state.lastSnap?.model_catalog) && state.lastSnap.model_catalog.length ? state.lastSnap.model_catalog : null)
+      || state.lastSnap?.available_models
+      || [];
+    const firstModelName = typeof models[0] === "string" ? models[0] : (models[0]?.name || "");
+    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || firstModelName || "";
     const curPerm = onb.draftPerm || info.permission_mode || state.lastSnap?.permission_mode || "ask_risky";
-    const curSandbox = onb.draftSandbox !== null ? onb.draftSandbox : Boolean(info.sandbox_enabled ?? state.lastSnap?.docker?.enabled);
+    const curSandbox = onb.draftSandbox !== null ? onb.draftSandbox : Boolean(info.sandbox_enabled ?? info.sandbox?.enabled ?? state.lastSnap?.sandbox_enabled ?? state.lastSnap?.docker?.enabled);
 
     if (dots) {
       dots.innerHTML = ONB_STEPS.map((s, i) => `<span class="onb-dot${i === idx ? " is-active" : i < idx ? " is-done" : ""}" title="${esc(s)}"></span>`).join("");
@@ -5193,15 +5201,16 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         </div>`;
     } else if (step === "runtime") {
       const pr = onb.probeResult;
+      const isFail = pr?.state === "error" || pr?.state === "failed";
       const prTxt = onb.probePending ? "正在探测模型连通性…" : pr?.message ? `${pr.state === "ok" ? "连通正常" : "连通失败"}：${pr.message}${pr.duration_ms ? ` (${pr.duration_ms}ms)` : ""}` : "建议在完成前点击右侧按钮实际探针测试一次";
-      const prCls = onb.probePending ? "mil-tag mil-tag--warn" : pr?.state === "ok" ? "mil-tag mil-tag--ok" : pr?.state === "error" ? "mil-tag mil-tag--bad" : "mil-tag";
+      const prCls = onb.probePending ? "mil-tag mil-tag--warn" : pr?.state === "ok" ? "mil-tag mil-tag--ok" : isFail ? "mil-tag mil-tag--bad" : "mil-tag";
       pane.innerHTML = `
         <div class="mil-silk">第 4 步 · 默认模型、授权与安全沙箱</div>
         <div class="mil-grid-2">
           <div class="mil-field">
             <label class="mil-label" for="onb-model">默认任务模型</label>
             <select class="mil-select" id="onb-model">
-              ${models.length ? models.map((m) => `<option value="${esc(m.name)}" ${m.name === curModel ? "selected" : ""}>${esc(m.name)}${m.provider ? ` (${esc(m.provider)})` : ""}</option>`).join("") : `<option value="${esc(curModel || "utils")}">${esc(curModel || "utils")}</option>`}
+              ${models.length ? models.map((m) => { const mn = typeof m === "string" ? m : (m.name || ""); const mp = typeof m === "object" ? (m.provider || "") : ""; return `<option value="${esc(mn)}" ${mn === curModel ? "selected" : ""}>${esc(mn)}${mp ? ` (${esc(mp)})` : ""}</option>`; }).join("") : `<option value="${esc(curModel || "utils")}">${esc(curModel || "utils")}</option>`}
             </select>
           </div>
           <div class="mil-field">
@@ -5257,12 +5266,14 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
   }
 
   async function onbStepMutation(actionName, payloadBuilder, opts = {}) {
-    const reqRunId = onb.runId || onb.info?.run_id || "";
+    const reqRunId = onb.runId || onb.info?.run_id || onb.info?.model_verify?.run_id || "";
     const reqSeq = ++onb.seq;
     const body = { ...(payloadBuilder ? payloadBuilder() : {}), run_id: reqRunId, sequence: reqSeq };
     const res = await hostRpc("write", actionName, body);
     if (disposed || !onb.open) return res;
-    if (res?.stale || (res?.run_id && reqRunId && res.run_id !== reqRunId && actionName !== "onboarding_reopen")) {
+    const view = res?.onboarding && typeof res.onboarding === "object" ? res.onboarding : res;
+    const resRunId = res?.run_id || view?.run_id || view?.model_verify?.run_id || "";
+    if (res?.stale || (resRunId && reqRunId && resRunId !== reqRunId && actionName !== "onboarding_reopen")) {
       return res;
     }
     if (reqSeq !== onb.seq && actionName === "onboarding_verify_model") return res;
@@ -5273,7 +5284,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     }
     $("#onb-feedback").textContent = "";
     $("#onb-feedback").className = "mil-feedback";
-    applyOnbView(res.onboarding || res, {
+    applyOnbView(view, {
       keepStep: Boolean(opts.keepStep || actionName === "onboarding_verify_model"),
       skipRender: Boolean(opts.skipRender),
       dir: opts.dir || 0,
@@ -5282,7 +5293,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
   }
 
   async function triggerOnbModelProbe() {
-    const reqRunId = onb.runId || onb.info?.run_id || "";
+    const reqRunId = onb.runId || onb.info?.run_id || onb.info?.model_verify?.run_id || "";
     const curProbeSeq = ++onb.probeSeq;
     const seq = ++onb.seq;
     const modelName = $("#onb-model")?.value || onb.draftModel || "";
@@ -5292,13 +5303,14 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     if (tag) { tag.textContent = "正在探测模型连通性…"; tag.className = "mil-tag mil-tag--warn"; }
     const res = await hostRpc("write", "onboarding_verify_model", { run_id: reqRunId, sequence: seq, probe_sequence: curProbeSeq, model_name: modelName });
     if (disposed || !onb.open) return;
-    const resRunId = res?.run_id || res?.onboarding?.run_id || "";
-    const resProbeSeq = res?.probe_sequence ?? res?.model_verify?.sequence ?? res?.sequence;
+    const resMv = res?.model_verify || res?.onboarding?.model_verify;
+    const resRunId = res?.run_id || res?.onboarding?.run_id || resMv?.run_id || "";
+    const resProbeSeq = res?.probe_sequence ?? resMv?.sequence ?? res?.sequence;
     if (res?.stale || (reqRunId && resRunId && resRunId !== reqRunId) || (curProbeSeq !== onb.probeSeq) || (typeof resProbeSeq === "number" && resProbeSeq < curProbeSeq && resProbeSeq !== seq)) {
       return; // 严格丢弃过期探测响应
     }
     onb.probePending = false;
-    onb.probeResult = res?.model_verify || res?.onboarding?.model_verify || { state: res?.success ? "ok" : "error", message: res?.message || res?.error || "探测完成" };
+    onb.probeResult = resMv || { state: res?.success ? "ok" : "error", message: res?.message || res?.error || "探测完成" };
     renderOnbStep(0);
   }
 
@@ -5310,7 +5322,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       onb.draftModel = $("#onb-model")?.value || onb.draftModel;
       onb.draftPerm = $("#onb-perm")?.value || onb.draftPerm;
       onb.draftSandbox = $("#onb-sandbox") ? Boolean($("#onb-sandbox").checked) : onb.draftSandbox;
-      return { default_model: onb.draftModel, permission_mode: onb.draftPerm, sandbox_enabled: Boolean(onb.draftSandbox) };
+      const sb = Boolean(onb.draftSandbox);
+      return { default_model: onb.draftModel, permission_mode: onb.draftPerm, sandbox_enabled: sb, sandbox: { enabled: sb } };
     }
     return {};
   }
@@ -5329,9 +5342,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const curView = state.lastSnap?.onboarding;
       if (curView && curView.show === false) {
         const res = await hostRpc("write", "onboarding_reopen", {});
-        if (res?.success && res.onboarding) {
-          if (state.lastSnap) state.lastSnap.onboarding = res.onboarding;
-          openOnboardingModal(res.onboarding);
+        const viewObj = res?.onboarding || res;
+        if (res?.success && viewObj && typeof viewObj === "object") {
+          if (state.lastSnap) state.lastSnap.onboarding = viewObj;
+          openOnboardingModal(viewObj);
           return;
         }
       }
@@ -5364,7 +5378,15 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       try {
         if (onb.stepIdx >= ONB_STEPS.length - 1) {
           const res = await onbStepMutation("onboarding_complete", () => ({}), { keepStep: true, skipRender: true });
-          if (res?.success) { closeOnboardingModal(true); refresh(true); }
+          const viewObj = res?.onboarding || res;
+          if (res?.success && res?.completed !== false && viewObj?.completed !== false) {
+            closeOnboardingModal(true);
+            refresh(true);
+          } else if (res?.success && (res?.completed === false || viewObj?.completed === false)) {
+            $("#onb-feedback").textContent = String(res?.message || res?.error || "尚有就绪条件未完成，请先检查并完善");
+            $("#onb-feedback").className = "mil-feedback mil-feedback--err";
+            applyOnbView(viewObj, { keepStep: false, dir: 0 });
+          }
         } else {
           const curStepIdx = onb.stepIdx;
           const data = collectCurrentOnbStepData();
@@ -5376,7 +5398,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
             { keepStep: true, skipRender: true }
           );
           if (res?.success) {
-            const srvStep = res?.onboarding?.current_step;
+            const viewObj = res?.onboarding || res;
+            const srvStep = viewObj?.current_step;
             const srvIdx = srvStep ? stepIndexFromName(srvStep) : curStepIdx + 1;
             onb.stepIdx = Math.min(ONB_STEPS.length - 1, srvStep ? srvIdx : curStepIdx + 1);
             renderOnbStep(1);
@@ -5696,10 +5719,33 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       fishMode: "auto",
       toolsets: new Set(ALL_TOOLSETS),
       skillsSet: new Set(),
+      mcpSet: new Set(),
+      apisSet: new Set(),
       connectorsSet: new Set(),
       fishSeed: "",
     };
     pendingProfileTarget = null;
+
+    function normalizeConnectors(raw) {
+      if (Array.isArray(raw)) {
+        return raw.map((c) => (typeof c === "string" ? { id: c, name: c, kind: "mcp" } : { kind: c?.kind || "mcp", ...c }));
+      }
+      if (raw && typeof raw === "object") {
+        const out = [];
+        (Array.isArray(raw.mcp) ? raw.mcp : []).forEach((c) => {
+          const obj = typeof c === "string" ? { id: c, name: c } : (c || {});
+          const id = obj.id || obj.name || "";
+          if (id) out.push({ ...obj, id, kind: "mcp" });
+        });
+        (Array.isArray(raw.plugin_apis) ? raw.plugin_apis : []).forEach((c) => {
+          const obj = typeof c === "string" ? { id: c, name: c } : (c || {});
+          const id = obj.id || obj.name || obj.api || "";
+          if (id) out.push({ ...obj, id, kind: "api" });
+        });
+        return out;
+      }
+      return [];
+    }
 
     const getCur = () => pState.profiles.find((p) => p.id === pState.selectedId) || pState.profiles[0] || null;
     const say = (txt, err = false) => {
@@ -5768,8 +5814,20 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       }
       if (pState.abKind === "all" || pState.abKind === "connectors") {
         pState.connectors.forEach((c) => {
-          const id = c.id || c.name || c;
-          rows.push({ kind: "connectors", id, title: c.title || c.name || id, desc: c.description || c.scope || "外部服务连接器", tag: c.readonly ? "只读连接器" : "连接器", checked: pState.connectorsSet.has(id) });
+          const id = c.id || c.name || c.api || c;
+          const connKind = c.kind === "api" ? "api" : "mcp";
+          const checked = connKind === "api"
+            ? (pState.apisSet.has(id) || pState.connectorsSet.has(id))
+            : (pState.mcpSet.has(id) || pState.connectorsSet.has(id));
+          rows.push({
+            kind: "connectors",
+            connKind,
+            id,
+            title: c.title || c.name || id,
+            desc: c.description || c.scope || (connKind === "api" ? "跨插件 @API 连接器" : "外部服务连接器"),
+            tag: connKind === "api" ? (c.readonly ? "只读 API" : "插件 API") : (c.readonly ? "只读连接器" : "连接器"),
+            checked,
+          });
         });
       }
       const filtered = q ? rows.filter((r) => `${r.id} ${r.title} ${r.desc}`.toLowerCase().includes(q)) : rows;
@@ -5781,7 +5839,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
               <span class="mil-tag">${esc(r.tag)}</span>
             </div>
             <label class="mil-switch">
-              <input type="checkbox" data-ab-toggle-kind="${esc(r.kind)}" data-ab-toggle-id="${esc(r.id)}" ${r.checked ? "checked" : ""} />
+              <input type="checkbox" data-ab-toggle-kind="${esc(r.kind)}" data-ab-toggle-id="${esc(r.id)}" data-ab-conn-kind="${esc(r.connKind || "")}" ${r.checked ? "checked" : ""} />
               <span class="mil-switch-track"></span>
             </label>
           </div>`).join("")
@@ -5818,7 +5876,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         $("#ab-mob-role-env").textContent = cur.access === "admins" ? "仅管理员" : cur.execution_mode === "sandbox" ? "沙箱" : "常规";
         $("#mob-val-overview").textContent = cur.id;
         $("#mob-val-models").textContent = cur.model_name || "默认槽位";
-        const abCount = (cur.toolsets?.length ?? ALL_TOOLSETS.length) + (cur.skills?.length || 0) + (cur.connectors?.length || 0);
+        const connCount = (Array.isArray(cur.mcp) ? cur.mcp.length : (cur.mcp_servers?.length || 0))
+          + (Array.isArray(cur.apis) ? cur.apis.length : 0)
+          + (Array.isArray(cur.connectors) ? cur.connectors.length : 0);
+        const abCount = (cur.toolsets?.length ?? ALL_TOOLSETS.length) + (cur.skills?.length || 0) + connCount;
         $("#mob-val-skills").textContent = `${abCount} 项`;
         $("#mob-val-fish").textContent = parseFishCustom(cur.fish_seed)?.species ? "自定义" : "自动";
       }
@@ -5845,18 +5906,20 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     function fillEditorFromProfile(p, isNew = false) {
       pState.creating = isNew;
-      const obj = p || { id: "", name: "", description: "", access: "all", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], connectors: [], shared_secrets: true, execution_mode: "host", session_mode: "thread", fish_seed: "" };
+      const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "host", session_mode: "persistent", fish_seed: "" };
       $("#pr-head-title").textContent = isNew ? "新建能力档案" : `编辑档案 · ${obj.name || obj.title || obj.id}`;
       $("#pr-id").value = obj.id || "";
       $("#pr-id").readOnly = !isNew;
       $("#pr-name").value = obj.name || obj.title || "";
       $("#pr-desc").value = obj.description || "";
-      $("#pr-access").value = obj.access || "all";
+      const rawAccess = obj.access || "everyone";
+      const normAccess = rawAccess === "all" ? "everyone" : rawAccess === "chats" ? "listed" : rawAccess;
+      $("#pr-access").value = normAccess;
       $("#pr-enabled").checked = obj.enabled !== false;
       $("#pr-enabled-txt").textContent = obj.enabled !== false ? "已启用" : "已停用";
       const chatsWrap = $("#pr-chats-wrap");
-      if (chatsWrap) chatsWrap.hidden = ($("#pr-access").value !== "chats");
-      $("#pr-allowed-chats").value = (obj.allowed_chats || obj.enabled_chats || []).join(", ");
+      if (chatsWrap) chatsWrap.hidden = ($("#pr-access").value !== "listed");
+      $("#pr-allowed-chats").value = (obj.allow_chats || obj.enabled_chats || obj.allowed_chats || []).join(", ");
 
       const cloneSel = $("#pr-clone");
       if (cloneSel) {
@@ -5869,14 +5932,19 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         modelSel.value = obj.model_name || "";
       }
       $("#pr-exec-mode").value = obj.execution_mode || obj.environment || "host";
-      $("#pr-session-mode").value = obj.session_mode || "thread";
+      const rawSess = obj.session_mode || "persistent";
+      $("#pr-session-mode").value = rawSess === "thread" ? "persistent" : rawSess === "task" ? "ephemeral" : rawSess;
       $("#pr-shared-secrets").checked = obj.shared_secrets !== false && obj.share_credentials !== false;
-      $("#pr-md").value = obj.profile_md || "";
+      $("#pr-md").value = obj.profile_md ?? obj.instructions ?? "";
       updateMdCounter();
 
       pState.toolsets = new Set(Array.isArray(obj.toolsets) ? obj.toolsets : ALL_TOOLSETS);
       pState.skillsSet = new Set(Array.isArray(obj.skills) ? obj.skills : []);
-      pState.connectorsSet = new Set(Array.isArray(obj.connectors || obj.mcp_servers) ? (obj.connectors || obj.mcp_servers) : []);
+      const mcpVals = Array.isArray(obj.mcp_servers) ? obj.mcp_servers : Array.isArray(obj.mcp) ? obj.mcp : Array.isArray(obj.connectors) ? obj.connectors : [];
+      const apiVals = Array.isArray(obj.apis) ? obj.apis : [];
+      pState.mcpSet = new Set(mcpVals);
+      pState.apisSet = new Set(apiVals);
+      pState.connectorsSet = new Set([...mcpVals, ...apiVals]);
       pState.fishSeed = obj.fish_seed || "";
       const parsed = parseFishCustom(pState.fishSeed);
       pState.fishMode = parsed ? "lock" : pState.fishSeed ? "random" : "auto";
@@ -5897,7 +5965,9 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const det = await hostRpc("read", "profile_detail", { profile_id: pid });
       if (disposed || sig?.aborted || pid !== pState.selectedId) return;
       if (det?.success && det.profile) {
-        const merged = { ...det.profile, profile_md: det.profile_md ?? det.profile.profile_md ?? "" };
+        if (det.connectors) pState.connectors = normalizeConnectors(det.connectors);
+        if (Array.isArray(det.skills) && det.skills.length) pState.skills = det.skills;
+        const merged = { ...det.profile, profile_md: det.profile_md ?? det.profile.profile_md ?? det.profile.instructions ?? "" };
         const idx = pState.profiles.findIndex((x) => x.id === pid);
         if (idx >= 0) pState.profiles[idx] = { ...pState.profiles[idx], ...merged };
         fillEditorFromProfile(merged, false);
@@ -5909,9 +5979,9 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (disposed || sig?.aborted) return;
       if (!res?.success) { say(res?.error || "档案加载失败", true); return; }
       pState.profiles = res.profiles || res.abilities || [];
-      pState.skills = res.skills || [];
-      pState.connectors = res.connectors || res.mcp_servers || [];
-      pState.models = res.available_models || res.model_catalog || [];
+      pState.skills = (Array.isArray(res.skill_items) && res.skill_items.length) ? res.skill_items : (res.skills || []);
+      pState.connectors = normalizeConnectors(res.connectors || res.mcp_servers || []);
+      pState.models = (Array.isArray(res.model_catalog) && res.model_catalog.length) ? res.model_catalog : (res.available_models || []);
       if (!pState.selectedId || !pState.profiles.some((p) => p.id === pState.selectedId)) {
         pState.selectedId = pState.profiles[0]?.id || "default";
       }
@@ -6082,19 +6152,23 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
           name,
           title: name,
           description: ($("#pr-desc")?.value || "").trim(),
-          access: $("#pr-access")?.value || "all",
+          access: $("#pr-access")?.value || "everyone",
           enabled: Boolean($("#pr-enabled")?.checked),
-          allowed_chats: chats,
+          allow_chats: chats,
+          enabled_chats: chats,
           clone_from: $("#pr-clone")?.value || "",
           model_name: $("#pr-model")?.value || "",
           execution_mode: $("#pr-exec-mode")?.value || "host",
-          session_mode: $("#pr-session-mode")?.value || "thread",
+          session_mode: $("#pr-session-mode")?.value || "persistent",
           shared_secrets: Boolean($("#pr-shared-secrets")?.checked),
+          instructions: md,
           profile_md: md,
           fish_seed: pState.fishSeed,
           toolsets: [...pState.toolsets],
           skills: [...pState.skillsSet],
-          connectors: [...pState.connectorsSet],
+          mcp_servers: [...pState.mcpSet],
+          mcp: [...pState.mcpSet],
+          apis: [...pState.apisSet],
         };
         const act = pState.creating ? "profile_create" : "profile_update";
         const res = await hostRpc("write", act, payload);
@@ -6141,14 +6215,22 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     view.addEventListener("change", async (ev) => {
       if (ev.target.id === "pr-access") {
-        $("#pr-chats-wrap").hidden = ev.target.value !== "chats";
+        $("#pr-chats-wrap").hidden = ev.target.value !== "listed";
       } else if (ev.target.id === "pr-enabled") {
         $("#pr-enabled-txt").textContent = ev.target.checked ? "已启用" : "已停用";
       } else if (ev.target.dataset.abToggleId) {
         const kind = ev.target.dataset.abToggleKind;
         const id = ev.target.dataset.abToggleId;
-        const setRef = kind === "toolsets" ? pState.toolsets : kind === "skills" ? pState.skillsSet : pState.connectorsSet;
-        if (ev.target.checked) setRef.add(id); else setRef.delete(id);
+        const checked = ev.target.checked;
+        if (kind === "toolsets") {
+          if (checked) pState.toolsets.add(id); else pState.toolsets.delete(id);
+        } else if (kind === "skills") {
+          if (checked) pState.skillsSet.add(id); else pState.skillsSet.delete(id);
+        } else {
+          if (checked) pState.connectorsSet.add(id); else pState.connectorsSet.delete(id);
+          const connRef = ev.target.dataset.abConnKind === "api" ? pState.apisSet : pState.mcpSet;
+          if (checked) connRef.add(id); else connRef.delete(id);
+        }
       } else if (ev.target.id === "pr-import-file") {
         const file = ev.target.files?.[0];
         ev.target.value = "";
@@ -6228,28 +6310,52 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (el) { el.textContent = txt || ""; el.className = `mil-feedback${!txt ? "" : err ? " mil-feedback--err" : " mil-feedback--ok"}`; }
     };
 
+    function filterMatchesKind(it, filter) {
+      if (!filter || filter === "all") return true;
+      const mk = String(it.media_kind || "").toLowerCase();
+      const k = String(it.kind || "").toLowerCase();
+      if (filter === "markdown") return mk === "markdown" || mk === "report" || mk === "md";
+      if (filter === "html") return mk === "html" || mk === "page";
+      if (filter === "doc") return ["doc", "markdown", "text", "pdf", "conclusion"].includes(mk);
+      return mk === filter || k === filter;
+    }
+
+    function canDeleteFs(path) {
+      const parts = String(path || "").split("/").filter(Boolean);
+      if (parts.length < 2) return false;
+      if (parts[0] === "profiles") {
+        if (parts[1] === "default") return false;
+        if (parts.length >= 3 && ["PROFILE.md", "profile.toml"].includes(parts[2])) return false;
+        return true;
+      }
+      if (parts[0] === "skills") {
+        if (parts.length >= 3 && parts[2] === "SKILL.md") return false;
+        return parts.length >= 3;
+      }
+      return false;
+    }
+
     function renderGallery() {
       const box = $("#lib-gallery");
       const cnt = $("#lib-count-tag");
       if (!box) return;
       const q = lState.query.trim().toLowerCase();
       const filtered = lState.items.filter((it) => {
-        const k = (it.media_kind || it.kind || "doc").toLowerCase();
-        if (lState.filter !== "all" && !k.includes(lState.filter)) return false;
-        if (q && !`${it.title || ""} ${it.name || ""} ${it.chat_id || ""} ${it.profile || ""} ${it.summary || ""}`.toLowerCase().includes(q)) return false;
+        if (!filterMatchesKind(it, lState.filter)) return false;
+        if (q && !`${it.title || ""} ${it.name || ""} ${it.chat_id || ""} ${it.profile || ""} ${it.summary || ""} ${it.excerpt || ""}`.toLowerCase().includes(q)) return false;
         return true;
       });
       if (cnt) cnt.textContent = `${filtered.length} 项`;
       box.innerHTML = filtered.length
         ? filtered.map((it, idx) => {
             const safeImg = isSafeImageDataUri(it.data_uri) ? it.data_uri : "";
-            const bKey = safeImg ? "image" : (it.kind === "html" ? "html" : it.kind === "report" ? "markdown" : "file");
+            const bKey = safeImg ? "image" : (it.media_kind === "html" || it.kind === "html" ? "html" : (it.media_kind === "markdown" || it.kind === "report") ? "markdown" : "file");
             const ic = window.MaisyaIcons?.brand ? window.MaisyaIcons.brand(bKey, 20) : "";
             return `<button type="button" class="lib-card${lState.selectedItem?.id === it.id ? " is-selected" : ""}" data-lib-idx="${idx}">
               ${safeImg ? `<div class="lib-thumb-img" role="img" aria-label="${esc(it.title || it.name)}" style="background-image:url('${esc(safeImg)}')"></div>` : `<div class="now-card-head">${ic}<span class="mil-tag">${esc(it.media_kind || it.kind || "文档")}</span></div>`}
               <strong style="font-size:13px">${esc(it.title || it.name || it.path || "未命名产物")}</strong>
-              <span class="mil-hint">${esc(it.summary || it.chat_name || it.chat_id || "点击预览")}</span>
-              <div class="now-card-meta">${it.profile ? `<span class="mono">${esc(it.profile)}</span>` : ""}<span>${fmtTime(it.created_at || it.updated)}</span></div>
+              <span class="mil-hint">${esc(it.summary || it.excerpt || it.chat_name || it.chat_id || "点击预览")}</span>
+              <div class="now-card-meta">${it.profile ? `<span class="mono">${esc(it.profile)}</span>` : ""}<span>${fmtTime(it.created_at || it.updated || it.at)}</span></div>
             </button>`;
           }).join("")
         : `<div class="mil-hint">暂无匹配产物，执行生成类活动后将在此汇总。</div>`;
@@ -6262,13 +6368,28 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       $("#lib-shell").classList.add("has-drawer");
       $("#lib-drawer").hidden = false;
       $("#lib-drawer-title").textContent = it.title || it.name || "产物详情";
-      $("#lib-drawer-meta").textContent = `${it.chat_name || it.chat_id || ""} · ${it.mime || it.kind || ""}`;
+      $("#lib-drawer-meta").textContent = `${it.chat_name || it.chat_id || ""} · ${it.mime || it.media_kind || it.kind || ""}`;
+      const delArtBtn = $("#lib-art-delete");
+      if (delArtBtn) delArtBtn.hidden = !Boolean(it.deletable);
       const stage = $("#lib-stage");
       stage.innerHTML = `<div class="mil-hint">正在读取内容…</div>`;
 
       let detail = it;
-      if (it.path || it.workspace_id || it.artifact_id || it.id) {
-        const res = await hostRpc("read", "artifact", { workspace_id: it.workspace_id || "", path: it.path || "", artifact_id: it.artifact_id || it.id || "", offset: 0, chunk_size: 32768 });
+      const rawKind = String(it.kind || "");
+      const artKind = rawKind === "workspace_out" ? "workspace_file"
+        : (rawKind === "attachment" || rawKind === "workspace_file" || rawKind === "conclusion") ? rawKind
+        : (it.handle ? "attachment" : (it.workspace_id && it.path) ? "workspace_file" : it.thread_id ? "conclusion" : "");
+      if (artKind || it.path || it.workspace_id || it.artifact_id || it.id) {
+        const res = await hostRpc("read", "artifact", {
+          kind: artKind || undefined,
+          handle: it.handle || undefined,
+          workspace_id: it.workspace_id || "",
+          path: it.path || "",
+          thread_id: it.thread_id || undefined,
+          artifact_id: it.artifact_id || it.id || "",
+          offset: 0,
+          chunk_size: 32768,
+        });
         if (disposed || sig?.aborted) return;
         if (res?.success) detail = { ...it, ...res };
       }
@@ -6331,6 +6452,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       ed.value = res.content || "";
       ed.readOnly = res.writable === false;
       $("#lib-fs-save").hidden = res.writable === false;
+      const fsDelBtn = $("#lib-fs-delete");
+      if (fsDelBtn) fsDelBtn.hidden = !canDeleteFs(path);
       sayFs(res.truncated ? "文件较长，已截断展示" : "");
       loadFsList(lState.fsPath);
     }
@@ -6342,7 +6465,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       lState.items = res.items || res.artifacts || [];
       renderGallery();
       if (pendingLibraryTarget) {
-        const target = lState.items.find((x) => x.id === pendingLibraryTarget.id || x.path === pendingLibraryTarget.id || x.artifact_id === pendingLibraryTarget.id);
+        const tid = pendingLibraryTarget.id;
+        const target = lState.items.find((x) => x.handle === tid || x.id === tid || x.id === `att:${tid}` || x.path === tid || x.artifact_id === tid);
         pendingLibraryTarget = null;
         if (target) openArtifactDrawer(target);
       }
@@ -6379,13 +6503,6 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         try { await navigator.clipboard?.writeText?.(lState.copyText || ""); sayLib("已复制产物内容"); } catch (_) {}
         return;
       }
-      if (ev.target.closest("#lib-art-delete") && lState.selectedItem) {
-        const path = lState.selectedItem.path || lState.selectedItem.id;
-        const r = await hostRpc("write", "fs_delete", { path });
-        if (!r?.success) sayLib(r?.error || "删除产物失败", true);
-        else { $("#lib-drawer").hidden = true; $("#lib-shell").classList.remove("has-drawer"); lState.selectedItem = null; sayLib("产物已删除"); loadLibrary(); }
-        return;
-      }
       const fsItem = ev.target.closest("[data-fs-path]");
       if (fsItem) {
         const p = fsItem.dataset.fsPath;
@@ -6403,6 +6520,19 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         $("#lib-fs-pane").hidden = true;
         $("#lib-gallery-pane").hidden = false;
         lState.fsOpenPath = "";
+        return;
+      }
+      if (ev.target.closest("#lib-fs-delete") && lState.fsOpenPath && canDeleteFs(lState.fsOpenPath)) {
+        const r = await hostRpc("write", "fs_delete", { path: lState.fsOpenPath });
+        if (!r?.success) sayFs(r?.error || "文件删除失败", true);
+        else {
+          $("#lib-fs-pane").hidden = true;
+          $("#lib-gallery-pane").hidden = false;
+          lState.fsOpenPath = "";
+          sayFs("");
+          sayLib("文件已删除");
+          await loadFsList(lState.fsPath);
+        }
         return;
       }
       if (ev.target.closest("#lib-fs-save") && lState.fsOpenPath) {
@@ -6516,7 +6646,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const parts = sw.split(/[-~]/);
       $("#set-sleep-start").value = (parts[0] || "23:30").trim();
       $("#set-sleep-end").value = (parts[1] || "08:00").trim();
-      const sbOn = Boolean(sState.data?.docker?.enabled ?? set.sandbox_enabled);
+      const sbOn = Boolean(sState.data?.docker?.enabled ?? sState.data?.sandbox_enabled ?? set.sandbox_enabled ?? set.sandbox?.enabled);
       $("#set-sandbox-enabled").checked = sbOn;
       $("#set-sandbox-txt").textContent = sbOn ? "已启用" : "未启用";
       const curTheme = normalizeThemePref(sState.data?.ui_style || set.ui_style || savedUiStyle);
@@ -6537,7 +6667,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       sState.pluginAdmins = [...(ai.plugin_admins || ai.settings_admins || set.admins || [])];
       sState.grants = [...(res.grants || [])];
       sState.vaultMeta = [...(res.vault_meta || [])];
-      sState.models = [...(res.available_models || res.model_catalog || [])];
+      sState.models = (Array.isArray(res.model_catalog) && res.model_catalog.length) ? res.model_catalog : (res.available_models || []);
       renderChats();
       renderAdmins();
       renderGrants();
@@ -6621,13 +6751,16 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const domain = ($("#set-vault-domain")?.value || "").trim();
         const raw = $("#set-vault-secret")?.value || "";
         if (!handle || !raw.trim()) { saySet("请填写凭据句柄 (handle) 与秘密内容", true); return; }
-        const fields = {};
+        const fieldNames = [];
         raw.split(/\r?\n/).forEach((line) => {
           const idx = line.indexOf("=");
-          if (idx > 0) fields[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+          if (idx > 0) {
+            const k = line.slice(0, idx).trim();
+            if (k && !fieldNames.includes(k)) fieldNames.push(k);
+          }
         });
-        const payload = Object.keys(fields).length
-          ? { handle, label, domain, fields, value: raw.trim() }
+        const payload = fieldNames.length
+          ? { handle, label, domain, fields: fieldNames, value: raw.trim() }
           : { handle, label, domain, value: raw.trim() };
         const r = await hostRpc("write", "vault_set", payload);
         $("#set-vault-secret").value = "";
@@ -6643,11 +6776,13 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         const swStart = ($("#set-sleep-start")?.value || "23:30").trim();
         const swEnd = ($("#set-sleep-end")?.value || "08:00").trim();
         const limit = Math.max(0, Math.min(50, Number($("#set-daily-limit")?.value || 1)));
+        const sbOn = Boolean($("#set-sandbox-enabled")?.checked);
         await savePartialSettings({
           default_model: $("#set-default-model")?.value || "",
           daily_proactive_limit: limit,
           sleep_window: `${swStart}-${swEnd}`,
-          sandbox_enabled: Boolean($("#set-sandbox-enabled")?.checked),
+          sandbox_enabled: sbOn,
+          sandbox: { enabled: sbOn },
         });
         await loadSettings();
         return;

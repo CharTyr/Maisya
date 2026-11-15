@@ -119,9 +119,9 @@
         <div class="mil-field">
           <label class="mil-label" for="pr-access">可用范围与权限层级</label>
           <select class="mil-select" id="pr-access">
-            <option value="all">全部已启用会话（只读通用）</option>
+            <option value="everyone">全部已启用会话（只读通用）</option>
             <option value="admins">仅核验管理员（可含高权服务与密钥）</option>
-            <option value="chats">指定会话白名单</option>
+            <option value="listed">指定会话白名单</option>
           </select>
         </div>
         <div class="mil-field pr-enable-field">
@@ -173,9 +173,8 @@
               <div class="mil-field">
                 <label class="mil-label" for="pr-session-mode">会话方式 (session_mode)</label>
                 <select class="mil-select" id="pr-session-mode">
-                  <option value="thread">持续线程上下文 (thread)</option>
+                  <option value="persistent">持续线程工作区 (persistent)</option>
                   <option value="ephemeral">单次临时任务 (ephemeral)</option>
-                  <option value="persistent">固定持久工作区 (persistent)</option>
                 </select>
               </div>
             </div>
