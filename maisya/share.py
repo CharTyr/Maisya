@@ -4,6 +4,7 @@ import asyncio
 import base64
 import html
 import json
+from pathlib import PurePosixPath
 import re
 
 from .scout import call_capability, checked, safe_url
@@ -269,7 +270,35 @@ class Share:
         )
         if old:
             return {"already_handled": True, **old}
-        handles, refs = attachment_handles or [], ref_msg_ids or []
+        if attachment_handles is None or attachment_handles == []:
+            raw_atts = [
+                item
+                for item in (row.get("result") or {}).get("attachments", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("handle"), str)
+                and item["handle"].startswith("att_")
+                and int(item.get("bytes") or 0) <= 5 * 1024**2
+            ]
+            image_stems = {
+                PurePosixPath(str(item.get("name") or "")).stem.lower()
+                for item in raw_atts
+                if item.get("kind") == "image"
+                or PurePosixPath(str(item.get("name") or "")).suffix.lower()
+                in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+            }
+            handles = [
+                item["handle"]
+                for item in raw_atts
+                if not (
+                    PurePosixPath(str(item.get("name") or "")).suffix.lower()
+                    in {".html", ".htm"}
+                    and PurePosixPath(str(item.get("name") or "")).stem.lower()
+                    in image_stems
+                )
+            ][:4]
+        else:
+            handles = attachment_handles
+        refs = ref_msg_ids or []
         if (
             not isinstance(handles, list)
             or len(handles) > 4

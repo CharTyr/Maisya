@@ -1811,6 +1811,17 @@ class DigestWorkspace:
                 if len(recent_cands) != len(feed.get("candidates_14d", [])):
                     feed["candidates_14d"] = recent_cands
                     changed = True
+                raw_url_map = feed.get("candidate_urls_14d")
+                if isinstance(raw_url_map, dict):
+                    cutoff = now - TRIAL_DAYS * DAYS_TO_SECS
+                    pruned_url_map = {
+                        str(k): float(ts)
+                        for k, ts in raw_url_map.items()
+                        if k and float(ts) >= cutoff
+                    }
+                    if len(pruned_url_map) != len(raw_url_map):
+                        feed["candidate_urls_14d"] = pruned_url_map
+                        changed = True
                 kept_total = int(feed.get("kept_total", 0) or 0)
                 if kept_total == 0 and len(recent_cands) >= TRIAL_CAND_MIN:
                     unsubscribed.append(
@@ -1926,9 +1937,21 @@ class DigestWorkspace:
                 feed["first_fail_at"] = 0.0
                 cap = TRIAL_CAND_CAP if feed.get("status") == "trial" else 8
                 picked = parsed["items"][:cap]
+                is_trial = feed.get("status") == "trial"
+                seen_url_map = (
+                    dict(feed.get("candidate_urls_14d") or {})
+                    if is_trial and isinstance(feed.get("candidate_urls_14d"), dict)
+                    else {}
+                )
                 for it in picked:
-                    if feed.get("status") == "trial":
-                        feed.setdefault("candidates_14d", []).append(now)
+                    if is_trial:
+                        u_key = (
+                            _normalize_url_key(str(it.get("url") or ""))
+                            or str(it.get("title") or "").strip()
+                        )
+                        if u_key and u_key not in seen_url_map:
+                            seen_url_map[u_key] = now
+                            feed.setdefault("candidates_14d", []).append(now)
                     candidates.append(
                         {
                             **it,
@@ -1937,6 +1960,8 @@ class DigestWorkspace:
                             "feed_title": feed.get("title", ""),
                         }
                     )
+                if is_trial:
+                    feed["candidate_urls_14d"] = seen_url_map
                 changed = True
 
         if changed:
@@ -2262,31 +2287,53 @@ class DigestWorkspace:
                         cand["engines"] = list(row["engines"])
                     search_kept.append(cand)
 
-        # Domain round-robin scatter to ensure diverse sources in the fetch window
-        combined = rss_kept + search_kept
-        buckets: dict[str, list[dict[str, Any]]] = {}
-        bucket_order: list[str] = []
-        for cand in combined:
-            dom = _host_of(cand.get("url", "")) or "unknown"
-            if dom.startswith("www."):
-                dom = dom[4:]
-            if dom not in buckets:
-                buckets[dom] = []
-                bucket_order.append(dom)
-            buckets[dom].append(cand)
+        # Balance RSS and search quotas with round-robin scatter so aggregator RSS feeds never starve search results
+        def _scatter_by(items: list[dict[str, Any]], key_fn) -> list[dict[str, Any]]:
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            bucket_order: list[str] = []
+            for item in items:
+                key = str(key_fn(item) or "unknown")
+                if key not in buckets:
+                    buckets[key] = []
+                    bucket_order.append(key)
+                buckets[key].append(item)
+            out: list[dict[str, Any]] = []
+            idx = 0
+            while len(out) < len(items):
+                added_any = False
+                for key in bucket_order:
+                    bucket = buckets[key]
+                    if idx < len(bucket):
+                        out.append(bucket[idx])
+                        added_any = True
+                if not added_any:
+                    break
+                idx += 1
+            return out
 
-        scattered: list[dict[str, Any]] = []
-        idx = 0
-        while len(scattered) < len(combined):
-            added_any = False
-            for dom in bucket_order:
-                bucket = buckets[dom]
-                if idx < len(bucket):
-                    scattered.append(bucket[idx])
-                    added_any = True
-            if not added_any:
-                break
-            idx += 1
+        rss_scattered = _scatter_by(
+            rss_kept,
+            lambda c: str(c.get("feed_id") or _host_of(c.get("url", "")) or "rss"),
+        )
+        search_scattered = _scatter_by(
+            search_kept,
+            lambda c: (_host_of(c.get("url", "")) or "search").removeprefix("www."),
+        )
+        combined = rss_scattered + search_scattered
+        if rss_scattered and search_scattered:
+            search_quota = min(len(search_scattered), max(cap_items // 2, 1))
+            rss_quota = min(len(rss_scattered), cap_items - search_quota)
+            paired = min(rss_quota, search_quota)
+            scattered: list[dict[str, Any]] = []
+            for r_it, s_it in zip(rss_scattered[:paired], search_scattered[:paired]):
+                scattered.append(r_it)
+                scattered.append(s_it)
+            scattered.extend(rss_scattered[paired:rss_quota])
+            scattered.extend(search_scattered[paired:search_quota])
+            scattered.extend(rss_scattered[rss_quota:])
+            scattered.extend(search_scattered[search_quota:])
+        else:
+            scattered = rss_scattered or search_scattered
 
         working_pool = [dict(c) for c in scattered[:cap_items]]
 

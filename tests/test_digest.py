@@ -263,6 +263,7 @@ async def test_rss_xml_xxe_ssrf_and_auto_trial_unsubscribe_state_machine(tmp_pat
     plugin = await loaded(tmp_path / "rss_rt")
 
     fail_mode = {"slowfail": False}
+    goodsite_round = {"n": 0}
 
     def _rss_payload(title: str, url_prefix: str, count: int) -> bytes:
         items = "\n".join(
@@ -288,8 +289,10 @@ async def test_rss_xml_xxe_ssrf_and_auto_trial_unsubscribe_state_machine(tmp_pat
                 "error": "",
             }
         if url == "https://goodsite.example/feed.xml":
+            batch = goodsite_round["n"]
+            goodsite_round["n"] += 1
             return {
-                "body": _rss_payload("GoodSite", "https://goodsite.example/articles", 4),
+                "body": _rss_payload("GoodSite", f"https://goodsite.example/articles/r{batch}", 4),
                 "content_type": "application/xml",
                 "status": 200,
                 "url": url,

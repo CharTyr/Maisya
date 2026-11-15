@@ -694,3 +694,278 @@ async def test_pulse_admin_direct_preview_intent_runs_on_group_workspace_and_wak
         assert all(kw["stream_id"] != "10001" for kw in wakes)
     finally:
         await plg.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_digest_collect_preserves_search_quota_when_aggregator_rss_floods(tmp_path):
+    plg = await _boot_plugin(tmp_path / "collect_quota", enabled_chats=["qq:group:10001"])
+    try:
+        cur = plg.memory.read("profile", target="digest", document="profile.toml")
+        plg.memory.write(
+            "profile",
+            cur["content"].replace("enabled = false", "enabled = true"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
+        row = plg.threads.create(
+            plg.profiles.get("digest"),
+            "collect 配额均衡测试",
+            chat_id="10001",
+            platform="qq",
+            user_id="",
+            workspace="digest",
+        )
+        work = await plg.runtime._work(row)
+        recent_rfc = formatdate(time.time() - 3600, usegmt=True)
+        recent_iso = "2026-11-15T08:00:00Z"
+
+        hn_titles = [
+            "Postgres Vacuum Memory Overhead Measurement",
+            "BGP Route Flap Dampening Study",
+            "Zig Allocator Arena Fragmentation Report",
+            "Wayland Color Management Protocol Update",
+            "SQLite WAL Checkpoint Latency Analysis",
+            "FreeBSD ZFS Snapshot Replication Benchmarks",
+            "WebGPU Shader Compilation Pipeline Overview",
+            "QUIC Congestion Window Recovery Notes",
+        ]
+        blog_titles = [
+            "Rust Macro Hygiene Edge Cases",
+            "LLVM Register Allocator Greedy Passes",
+            "Font Subpixel Hinting On HiDPI Displays",
+            "DNS Over HTTPS Recursive Resolver Metrics",
+            "NVMe Namespace Queue Depth Tuning",
+            "SIMD UTF8 Validation Lookup Tables",
+        ]
+
+        async def _aggregator_fetcher(url: str):
+            if "hnrss.org" in url:
+                items = "\n".join(
+                    f"<item><title>{title}</title>"
+                    f"<link>https://tech{i}.example/releases/patch-{i}</link>"
+                    f"<pubDate>{recent_rfc}</pubDate>"
+                    f"<description>Technical measurements and trace findings #{i}.</description></item>"
+                    for i, title in enumerate(hn_titles)
+                )
+                return {
+                    "body": f"<rss version='2.0'><channel><title>HN</title>{items}</channel></rss>".encode(),
+                    "content_type": "application/xml",
+                    "status": 200,
+                    "url": url,
+                    "error": "",
+                }
+            items = "\n".join(
+                f"<item><title>{title}</title>"
+                f"<link>https://blog{i}.example/notes/bench-{i}</link>"
+                f"<pubDate>{recent_rfc}</pubDate>"
+                f"<description>Engineering notes and profiler numbers #{i}.</description></item>"
+                for i, title in enumerate(blog_titles)
+            )
+            return {
+                "body": f"<rss version='2.0'><channel><title>AggBlog</title>{items}</channel></rss>".encode(),
+                "content_type": "application/xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
+
+        dw = DigestWorkspace(work, fetcher=_aggregator_fetcher)
+        await dw.add_feed("https://hnrss.org/newest?points=100", title="HN", auto=False)
+        await dw.add_feed("https://aggblog.example/feed.xml", title="AggBlog", auto=False)
+
+        game_titles = [
+            "After the Wane Rotoscoped Noir Adventure Preview",
+            "Funeral for the Sun Nonlinear Detective Casebook",
+            "Mindlock Apartment Point Click Thriller Demo",
+            "Clockwork Harbour Maritime Puzzle Chronicle",
+            "Ashlands Tactical Deckbuilder Steam Update",
+            "Velvet Station Underground Narrative Indie Game",
+        ]
+
+        class _MockWeb:
+            async def search_broad(self, query: str, *, max_results: int = 8, context=None):
+                return {
+                    "results": [
+                        {
+                            "title": title,
+                            "url": f"https://indie{i}.example/games/item-{i}",
+                            "snippet": f"Hands-on indie game preview #{i} with release details.",
+                            "published_at": recent_iso,
+                        }
+                        for i, title in enumerate(game_titles)
+                    ]
+                }
+
+            async def fetch(self, url: str, *, context=None):
+                return {
+                    "title": "Indie Game Hands-On",
+                    "content": " ".join(["Full indie game impressions and release mechanics details."] * 8),
+                    "published_at": recent_iso,
+                }
+
+        res = await dw.collect(
+            web=_MockWeb(),
+            queries=["indie detective game 2026"],
+            topics=["独立游戏"],
+            max_items=12,
+        )
+        cands = res["candidates"]
+        search_cnt = sum(1 for c in cands if c.get("origin") == "search")
+        rss_cnt = sum(1 for c in cands if c.get("origin") == "rss")
+        assert search_cnt >= 5, res
+        assert rss_cnt >= 5, res
+    finally:
+        await plg.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_digest_poll_deduplicates_trial_candidates_across_repeated_polls(tmp_path):
+    plg = await _boot_plugin(tmp_path / "poll_dedup", enabled_chats=["qq:group:10001"])
+    try:
+        cur = plg.memory.read("profile", target="digest", document="profile.toml")
+        plg.memory.write(
+            "profile",
+            cur["content"].replace("enabled = false", "enabled = true"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
+        row = plg.threads.create(
+            plg.profiles.get("digest"),
+            "poll 去重防误杀测试",
+            chat_id="10001",
+            platform="qq",
+            user_id="",
+            workspace="digest",
+        )
+        work = await plg.runtime._work(row)
+        now_ts = time.time()
+        clock = [now_ts]
+        recent_rfc = formatdate(now_ts - 3600, usegmt=True)
+
+        async def _static_fetcher(url: str):
+            items = "\n".join(
+                f"<item><title>Indie Preview #{i}</title>"
+                f"<link>https://indiesource.example/posts/p-{i}</link>"
+                f"<pubDate>{recent_rfc}</pubDate>"
+                f"<description>Static RSS candidate #{i}.</description></item>"
+                for i in range(4)
+            )
+            return {
+                "body": f"<rss version='2.0'><channel><title>IndieSource</title>{items}</channel></rss>".encode(),
+                "content_type": "application/xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
+
+        dw = DigestWorkspace(work, fetcher=_static_fetcher, clock=lambda: clock[0])
+        added = await dw.add_feed(
+            "https://indiesource.example/feed.xml",
+            title="IndieSource",
+            auto=True,
+            origin="starter",
+        )
+        assert added["ok"] and added["feed"]["status"] == "trial"
+
+        polled = {}
+        for _ in range(6):
+            clock[0] += 300.0
+            polled = await dw.poll()
+
+        assert polled["unsubscribed"] == []
+        feeds = dw.status()["feeds"]
+        assert len(feeds) == 1
+        assert feeds[0]["status"] == "trial"
+        assert len(feeds[0]["candidates_14d"]) == 2
+    finally:
+        await plg.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_share_auto_includes_declared_result_attachments_when_handles_omitted(tmp_path):
+    import base64 as _b64
+
+    plg = await _boot_plugin(tmp_path / "share_auto_att", enabled_chats=["qq:group:10001"])
+    try:
+        cur = plg.memory.read("profile", target="digest", document="profile.toml")
+        plg.memory.write(
+            "profile",
+            cur["content"].replace("enabled = false", "enabled = true"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
+        sent_calls = []
+
+        async def _cap(name, **kwargs):
+            if name == "chat.get_all_streams":
+                return {"success": True, "streams": list(plg.ctx.streams)}
+            if name == "maisaka.reply.generate":
+                return {"success": True, "text": "今天的独立游戏精选出炉啦。"}
+            if name == "send.hybrid":
+                sent_calls.append(kwargs)
+                return {"success": True, "sent": True, "message_id": "msg-share-att"}
+            return {"success": True, "response": "ok", "tool_calls": []}
+
+        plg.ctx.call_capability = _cap
+        await plg.after_receive(
+            message={
+                "message_id": "m-grp-1",
+                "session_id": "10001",
+                "platform": "qq",
+                "timestamp": str(time.time()),
+                "processed_plain_text": "发一下简报",
+                "raw_message": [{"type": "text", "data": "发一下简报"}],
+                "message_info": {
+                    "user_info": {"user_id": "Alice"},
+                    "group_info": {"group_id": "10001"},
+                    "additional_config": {"relayed_by_plugin": ""},
+                },
+            }
+        )
+
+        row = plg.threads.create(
+            plg.profiles.get("digest"),
+            "自动携带成果图片附件",
+            chat_id="10001",
+            platform="qq",
+            user_id="qq:Alice",
+            workspace="digest",
+        )
+        tid = row["thread_id"]
+        work = await plg.runtime._work(row)
+        png_bytes = _b64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+        )
+        work.write_bytes("out/digest-card.html", b"<html><body>card</body></html>")
+        work.write_bytes("out/digest-card.png", png_bytes)
+        work.commit()
+        atts = plg.runtime.files.attach(row, work, ["out/digest-card.html", "out/digest-card.png"])
+        plg.threads.finish(
+            tid,
+            "10001",
+            {"text": "今日独立游戏简报 https://indie.example/game1", "attachments": atts},
+            [],
+            row["revision"],
+        )
+        plg.bridge.stage(plg.threads.get(tid, "10001"), "10001")
+
+        shared = await plg.agent_tool(
+            action="share",
+            thread_id=tid,
+            chat_id="10001",
+            platform="qq",
+            source_msg_id="m-grp-1",
+        )
+        assert shared["route"] == "share" and shared["sent"] is True, shared
+        assert len(sent_calls) == 1
+        seg_types = [seg.get("type") for seg in sent_calls[0]["segments"]]
+        assert "image" in seg_types, sent_calls[0]["segments"]
+        assert "file" not in seg_types, sent_calls[0]["segments"]
+    finally:
+        await plg.on_unload()
