@@ -1,6 +1,7 @@
 """Opt-in digest workflow engine: SSRF/XXE-safe RSS state machine, 5D scoring filter & card renderer."""
 
 import asyncio
+import codecs
 import hashlib
 import http.client
 import html
@@ -9,6 +10,7 @@ import ipaddress
 import json
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -411,16 +413,23 @@ def _strip_html(raw: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+def _normalize_epoch_number(num: float) -> float:
+    # 将 13 位毫秒级时间戳（>= 1e12，对应 2001 年后的毫秒值）归一为秒级
+    if abs(num) >= 1e12:
+        return num / 1000.0
+    return num
+
+
 def _parse_timestamp(value: Any) -> float | None:
     if value is None or value == "":
         return None
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
+        return _normalize_epoch_number(float(value))
     text = str(value).strip()
     if not text:
         return None
     if re.fullmatch(r"\d+(?:\.\d+)?", text):
-        return float(text)
+        return _normalize_epoch_number(float(text))
     iso = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
         dt = datetime.fromisoformat(iso)
@@ -442,28 +451,43 @@ def _local_tag(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower() if "}" in tag else tag.lower()
 
 
-def _extract_first_img_src(raw_html: str) -> str:
+def _resolve_http_url(raw_url: str, base_url: str = "") -> str:
+    cand = html.unescape(str(raw_url or "")).strip()
+    if not cand:
+        return ""
+    if base_url:
+        cand = urllib.parse.urljoin(base_url, cand)
+    if cand.lower().startswith(("http://", "https://")):
+        return cand
+    return ""
+
+
+def _extract_first_img_src(raw_html: str, *, base_url: str = "") -> str:
     if not raw_html:
         return ""
     unescaped = html.unescape(raw_html)
-    m = re.search(
-        r"""<img\b[^>]*?\bsrc\s*=\s*(?:"(https?://[^"\s>]+)"|'(https?://[^'\s>]+)')""",
+    for m in re.finditer(
+        r"""<(?:[a-z_][\w.-]*:)?img\b[^>]*?\bsrc\s*=\s*(?:"([^"\s>]+)"|'([^'\s>]+)'|([^\s"'=<>`]+))""",
         unescaped,
         re.IGNORECASE,
-    )
-    if not m:
-        return ""
-    return (m.group(1) or m.group(2) or "").strip()
+    ):
+        raw_src = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+        resolved = _resolve_http_url(raw_src, base_url)
+        if resolved:
+            return resolved
+    return ""
 
 
-def _extract_item_image(node: ET.Element, html_blobs: list[str]) -> str:
+def _extract_item_image(
+    node: ET.Element, html_blobs: list[str], *, base_url: str = ""
+) -> str:
     """从 RSS/Atom 条目节点抽取封面图片链接（enclosure/media:content/media:thumbnail/正文 img）。"""
     for child in node:
         tag = _local_tag(child.tag)
         if tag == "enclosure":
-            u = (child.attrib.get("url") or "").strip()
+            u = _resolve_http_url(child.attrib.get("url") or "", base_url)
             t = (child.attrib.get("type") or "").strip().lower()
-            if u.lower().startswith(("http://", "https://")) and (
+            if u and (
                 t.startswith("image/")
                 or (not t and re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)", u, re.I))
             ):
@@ -471,21 +495,21 @@ def _extract_item_image(node: ET.Element, html_blobs: list[str]) -> str:
         elif tag == "link":
             rel = (child.attrib.get("rel") or "").strip().lower()
             t = (child.attrib.get("type") or "").strip().lower()
-            href = (child.attrib.get("href") or "").strip()
-            if rel == "enclosure" and href.lower().startswith(("http://", "https://")) and t.startswith("image/"):
+            href = _resolve_http_url(child.attrib.get("href") or "", base_url)
+            if rel == "enclosure" and href and t.startswith("image/"):
                 return href
 
     for elem in node.iter():
         etag = _local_tag(elem.tag)
         if etag == "thumbnail":
-            u = (elem.attrib.get("url") or "").strip()
-            if u.lower().startswith(("http://", "https://")):
+            u = _resolve_http_url(elem.attrib.get("url") or "", base_url)
+            if u:
                 return u
         elif etag == "content" and "media" in elem.tag.lower():
-            u = (elem.attrib.get("url") or "").strip()
+            u = _resolve_http_url(elem.attrib.get("url") or "", base_url)
             medium = (elem.attrib.get("medium") or "").strip().lower()
             t = (elem.attrib.get("type") or "").strip().lower()
-            if u.lower().startswith(("http://", "https://")) and (
+            if u and (
                 medium == "image"
                 or t.startswith("image/")
                 or re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)", u, re.I)
@@ -493,7 +517,7 @@ def _extract_item_image(node: ET.Element, html_blobs: list[str]) -> str:
                 return u
 
     for blob in html_blobs:
-        img_url = _extract_first_img_src(blob)
+        img_url = _extract_first_img_src(blob, base_url=base_url)
         if img_url:
             return img_url
     return ""
@@ -604,23 +628,167 @@ def _is_blocked_domain(
     return False
 
 
+_XML_DECL_ENC_RE = re.compile(
+    r"""^(\s*<\?xml\b[^>]*?\bencoding\s*=\s*)(["'])([^"']+)\2""",
+    re.IGNORECASE,
+)
+_XML_CODING_MAP = {
+    "gb2312": "gb18030",
+    "gbk": "gb18030",
+    "gb_2312": "gb18030",
+    "gb_2312-80": "gb18030",
+    "gb-2312": "gb18030",
+    "cp936": "gb18030",
+    "ms936": "gb18030",
+    "x-gbk": "gb18030",
+    "chinese": "gb18030",
+}
+
+
+def _decode_xml_to_utf8_text(xml_data: bytes | str) -> str:
+    if isinstance(xml_data, str):
+        text = xml_data.lstrip("\ufeff")
+    else:
+        raw = bytes(xml_data)
+        if not raw.strip():
+            return ""
+        text = ""
+        if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            text = raw.decode("utf-16")
+        elif raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+            text = raw.decode("utf-32")
+        else:
+            if raw.startswith(codecs.BOM_UTF8):
+                raw = raw[len(codecs.BOM_UTF8) :]
+            head = raw[:512].decode("ascii", errors="ignore")
+            m = _XML_DECL_ENC_RE.search(head)
+            declared = (m.group(3) or "").strip().lower() if m else ""
+            mapped = _XML_CODING_MAP.get(declared, declared)
+            if mapped and mapped not in {"utf-8", "utf8"}:
+                try:
+                    codecs.lookup(mapped)
+                    try:
+                        text = raw.decode(mapped)
+                    except UnicodeDecodeError:
+                        text = raw.decode(mapped, errors="replace")
+                except LookupError:
+                    text = raw.decode("utf-8")
+            else:
+                text = raw.decode("utf-8")
+    return _XML_DECL_ENC_RE.sub(r'\1\2utf-8\2', text, count=1)
+
+
+def _strip_safe_doctype(text: str) -> str:
+    n = len(text)
+    pos = 0
+    out: list[str] = []
+    last = 0
+    while pos < n:
+        while pos < n and text[pos].isspace():
+            pos += 1
+        if pos >= n:
+            break
+        if text.startswith("<?", pos):
+            end = text.find("?>", pos + 2)
+            if end < 0:
+                break
+            pos = end + 2
+            continue
+        if text.startswith("<!--", pos):
+            end = text.find("-->", pos + 4)
+            if end < 0:
+                break
+            pos = end + 3
+            continue
+        if re.match(r"<!DOCTYPE(?=\s)", text[pos:], re.IGNORECASE):
+            j = pos + 9
+            quote: str | None = None
+            bracket = 0
+            dt_end = -1
+            while j < n:
+                ch = text[j]
+                if quote is not None:
+                    if ch == quote:
+                        quote = None
+                    j += 1
+                    continue
+                if bracket > 0 and text.startswith("<!--", j):
+                    c_end = text.find("-->", j + 4)
+                    if c_end < 0:
+                        break
+                    j = c_end + 3
+                    continue
+                if ch in ("'", '"'):
+                    quote = ch
+                elif ch == "[":
+                    bracket += 1
+                elif ch == "]":
+                    bracket = max(0, bracket - 1)
+                elif ch == ">" and bracket == 0:
+                    dt_end = j + 1
+                    break
+                j += 1
+            if dt_end < 0:
+                break
+            doctype_slice = text[pos:dt_end]
+            if re.search(r"<!\s*ENTITY\b", doctype_slice, re.IGNORECASE):
+                raise ValueError("拒绝包含 ENTITY/DOCTYPE 的危险 XML 输入")
+            out.append(text[last:pos])
+            last = dt_end
+            pos = dt_end
+            continue
+        break
+    out.append(text[last:])
+    return "".join(out)
+
+
+def _link_rank_and_href(child: ET.Element) -> tuple[int, str]:
+    rel = (child.attrib.get("rel") or "").strip().lower()
+    href = (child.text or "").strip() or (child.attrib.get("href") or "").strip()
+    if not href or rel in {"enclosure", "replies", "hub", "edit", "license", "icon"}:
+        return (99, "")
+    if rel == "self":
+        return (3, href)
+    if rel in {"via", "related"}:
+        return (2, href)
+    if rel == "alternate" or not rel:
+        return (0, href)
+    return (1, href)
+
+
 def parse_feed_xml(
     xml_data: bytes | str,
     *,
     now: float | None = None,
     lookback_days: float = 14.0,
     max_items: int = 30,
+    base_url: str = "",
 ) -> dict[str, Any]:
-    raw_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else bytes(xml_data)
-    if not raw_bytes.strip():
+    if isinstance(xml_data, str):
+        if not xml_data.strip():
+            raise ValueError("RSS XML 内容为空")
+    elif not bytes(xml_data).strip():
         raise ValueError("RSS XML 内容为空")
+
+    try:
+        xml_text = _decode_xml_to_utf8_text(xml_data)
+    except UnicodeDecodeError as err:
+        raise ValueError(f"RSS XML 解码失败: {err}") from err
+    if not xml_text.strip():
+        raise ValueError("RSS XML 内容为空")
+
+    cleaned_text = _strip_safe_doctype(xml_text)
+    raw_bytes = cleaned_text.encode("utf-8")
 
     parser = xml.parsers.expat.ParserCreate()
 
     def _reject_doctype(*_args):
-        raise ValueError("拒绝包含 DOCTYPE 的 XML 输入")
+        raise ValueError("拒绝包含 DOCTYPE/ENTITY 的危险 XML 输入")
 
     parser.StartDoctypeDeclHandler = _reject_doctype
+    parser.EntityDeclHandler = _reject_doctype
+    parser.UnparsedEntityDeclHandler = _reject_doctype
+    parser.ExternalEntityRefHandler = _reject_doctype
     try:
         parser.Parse(raw_bytes, True)
     except ValueError:
@@ -637,39 +805,58 @@ def parse_feed_xml(
     cutoff = now_ts - float(lookback_days) * DAYS_TO_SECS
     root_name = _local_tag(root.tag)
     feed_title = ""
+    channel_link = ""
+    channel_link_rank = 99
+    effective_base = str(base_url or "").strip()
     items: list[dict[str, Any]] = []
 
     if root_name in {"rss", "rdf"}:
         channel = next((c for c in root if _local_tag(c.tag) == "channel"), root)
         for child in channel:
-            if _local_tag(child.tag) == "title":
-                feed_title = _strip_html(child.text or "")
-                break
+            ctag = _local_tag(child.tag)
+            if ctag == "title" and not feed_title:
+                feed_title = _strip_html(child.text or "".join(child.itertext()))
+            elif ctag == "link":
+                rank, cand = _link_rank_and_href(child)
+                if cand and rank < channel_link_rank:
+                    channel_link = cand
+                    channel_link_rank = rank
+        if not effective_base and channel_link.lower().startswith(("http://", "https://")):
+            effective_base = channel_link
         item_nodes = [c for c in channel if _local_tag(c.tag) == "item"]
         if not item_nodes and root_name == "rdf":
             item_nodes = [c for c in root if _local_tag(c.tag) == "item"]
         for node in item_nodes:
             title = link = pub_raw = summary = ""
+            link_rank = 99
             html_blobs: list[str] = []
             for child in node:
                 tag = _local_tag(child.tag)
                 text = (child.text or "").strip()
                 if tag == "title" and not title:
-                    title = _strip_html(text)
-                elif tag == "link" and not link:
-                    link = text or (child.attrib.get("href") or "").strip()
+                    title = _strip_html(text or "".join(child.itertext()))
+                elif tag == "link":
+                    rank, cand = _link_rank_and_href(child)
+                    if cand and rank < link_rank:
+                        link = cand
+                        link_rank = rank
                 elif tag in {"pubdate", "date", "published", "updated"} and not pub_raw:
-                    pub_raw = text
+                    pub_raw = text or "".join(child.itertext()).strip()
                 elif tag in {"description", "encoded", "summary", "content"} and "media" not in child.tag.lower():
-                    raw_blob = text or "".join(ET.tostring(sub, encoding="unicode") for sub in child)
+                    raw_blob = (child.text or "") + "".join(
+                        ET.tostring(sub, encoding="unicode") for sub in child
+                    )
                     if raw_blob:
                         html_blobs.append(raw_blob)
                     if not summary:
-                        summary = _strip_html(text or "".join(child.itertext()))
+                        summary = _strip_html(text or "".join(child.itertext()) or raw_blob)
+            if link and effective_base:
+                link = urllib.parse.urljoin(effective_base, link)
             pub_ts = _parse_timestamp(pub_raw)
             if pub_ts is not None and pub_ts < cutoff:
                 continue
             if title and link:
+                item_base = link if link.lower().startswith(("http://", "https://")) else effective_base
                 items.append(
                     {
                         "title": title,
@@ -677,18 +864,26 @@ def parse_feed_xml(
                         "published": pub_raw,
                         "published_ts": pub_ts,
                         "summary": summary[:400],
-                        "image_url": _extract_item_image(node, html_blobs),
+                        "image_url": _extract_item_image(node, html_blobs, base_url=item_base),
                     }
                 )
     elif root_name == "feed":
         for child in root:
-            if _local_tag(child.tag) == "title":
+            ctag = _local_tag(child.tag)
+            if ctag == "title" and not feed_title:
                 feed_title = _strip_html("".join(child.itertext()))
-                break
+            elif ctag == "link":
+                rank, cand = _link_rank_and_href(child)
+                if cand and rank < channel_link_rank:
+                    channel_link = cand
+                    channel_link_rank = rank
+        if not effective_base and channel_link.lower().startswith(("http://", "https://")):
+            effective_base = channel_link
         for node in root:
             if _local_tag(node.tag) != "entry":
                 continue
             title = link = pub_raw = summary = ""
+            link_rank = 99
             html_blobs = []
             for child in node:
                 tag = _local_tag(child.tag)
@@ -696,24 +891,27 @@ def parse_feed_xml(
                 if tag == "title" and not title:
                     title = _strip_html(text)
                 elif tag == "link":
-                    rel = (child.attrib.get("rel") or "alternate").lower()
-                    href = (child.attrib.get("href") or "").strip()
-                    if href and rel != "enclosure" and (not link or rel == "alternate"):
-                        link = href
+                    rank, cand = _link_rank_and_href(child)
+                    if cand and rank < link_rank:
+                        link = cand
+                        link_rank = rank
                 elif tag in {"published", "updated"} and not pub_raw:
                     pub_raw = text
                 elif tag in {"summary", "content"} and "media" not in child.tag.lower():
-                    raw_blob = (child.text or "") or "".join(
+                    raw_blob = (child.text or "") + "".join(
                         ET.tostring(sub, encoding="unicode") for sub in child
                     )
                     if raw_blob:
                         html_blobs.append(raw_blob)
                     if not summary:
-                        summary = _strip_html(text)
+                        summary = _strip_html(text or raw_blob)
+            if link and effective_base:
+                link = urllib.parse.urljoin(effective_base, link)
             pub_ts = _parse_timestamp(pub_raw)
             if pub_ts is not None and pub_ts < cutoff:
                 continue
             if title and link:
+                item_base = link if link.lower().startswith(("http://", "https://")) else effective_base
                 items.append(
                     {
                         "title": title,
@@ -721,12 +919,18 @@ def parse_feed_xml(
                         "published": pub_raw,
                         "published_ts": pub_ts,
                         "summary": summary[:400],
-                        "image_url": _extract_item_image(node, html_blobs),
+                        "image_url": _extract_item_image(node, html_blobs, base_url=item_base),
                     }
                 )
     else:
         raise ValueError("不支持的订阅 XML 根标签")
 
+    items.sort(
+        key=lambda it: (
+            0 if it.get("published_ts") is not None else 1,
+            -(float(it["published_ts"]) if it.get("published_ts") is not None else 0.0),
+        )
+    )
     return {"title": feed_title, "items": items[:max_items]}
 
 
@@ -1567,6 +1771,10 @@ def prefilter_search_item(
     return None
 
 
+_WORKSPACE_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_WORKSPACE_THREAD_LOCKS_GUARD = threading.Lock()
+
+
 class DigestWorkspace:
     """Manages RSS source trial/graduation/unsubscribe and digest history inside a workspace."""
 
@@ -1575,6 +1783,27 @@ class DigestWorkspace:
         self.fetcher = fetcher or fetch_public_bytes
         self.clock = clock or time.time
         self._sources_lock = asyncio.Lock()
+
+    def _thread_sources_lock(self) -> threading.RLock:
+        root = (
+            getattr(self.work, "root", None)
+            or getattr(self.work, "_root", None)
+            or getattr(self.work, "work_dir", None)
+            or getattr(self.work, "dir", None)
+        )
+        if root is not None:
+            try:
+                key = f"path:{Path(root).resolve()}"
+            except Exception:
+                key = f"obj:{id(self.work)}"
+        else:
+            key = f"obj:{id(self.work)}"
+        with _WORKSPACE_THREAD_LOCKS_GUARD:
+            lock = _WORKSPACE_THREAD_LOCKS.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                _WORKSPACE_THREAD_LOCKS[key] = lock
+            return lock
 
     def _read_text(self, path: str) -> str | None:
         offset = 0
@@ -1707,18 +1936,19 @@ class DigestWorkspace:
         }
 
     def status(self) -> dict[str, Any]:
-        now = self.clock()
-        sources = self._load_sources()
-        changed = self._prune_rejected(sources, now)
-        if changed:
-            self._save_sources(sources)
-            self.work.commit()
-        history = self._load_history()
-        return {
-            "feeds": list(sources.get("feeds", [])),
-            "rejected": list(sources.get("rejected", [])),
-            "history_count": len(history.get("items", [])),
-        }
+        with self._thread_sources_lock():
+            now = self.clock()
+            sources = self._load_sources()
+            changed = self._prune_rejected(sources, now)
+            if changed:
+                self._save_sources(sources)
+                self.work.commit()
+            history = self._load_history()
+            return {
+                "feeds": list(sources.get("feeds", [])),
+                "rejected": list(sources.get("rejected", [])),
+                "history_count": len(history.get("items", [])),
+            }
 
     async def add_feed(
         self,
@@ -1728,21 +1958,32 @@ class DigestWorkspace:
         auto: bool = True,
         origin: str = "manual",
     ) -> dict[str, Any]:
-        now = self.clock()
-        sources = await asyncio.to_thread(self._load_sources)
-        self._prune_rejected(sources, now)
         host = _host_of(url)
         if not host:
             return {"ok": False, "reason": "订阅链接无效"}
         if _is_big_platform(url):
             return {"ok": False, "reason": "大平台域名不做全站自动订阅"}
-        rej = self._is_rejected(sources, url, host, now)
-        if rej is not None:
-            return {"ok": False, "reason": f"该来源处于退订/冷却列表: {rej.get('reason', '')}"}
         norm = _normalize_url_key(url)
-        for existing in sources["feeds"]:
-            if _normalize_url_key(existing.get("url", "")) == norm:
-                return {"ok": True, "existing": True, "feed": existing}
+
+        def _precheck() -> dict[str, Any] | None:
+            with self._thread_sources_lock():
+                now_local = self.clock()
+                sources = self._load_sources()
+                self._prune_rejected(sources, now_local)
+                rej = self._is_rejected(sources, url, host, now_local)
+                if rej is not None:
+                    return {
+                        "ok": False,
+                        "reason": f"该来源处于退订/冷却列表: {rej.get('reason', '')}",
+                    }
+                for existing in sources["feeds"]:
+                    if _normalize_url_key(existing.get("url", "")) == norm:
+                        return {"ok": True, "existing": True, "feed": existing}
+                return None
+
+        pre_res = await asyncio.to_thread(_precheck)
+        if pre_res is not None:
+            return pre_res
 
         resp = await self.fetcher(url)
         body = resp.get("body")
@@ -1751,46 +1992,52 @@ class DigestWorkspace:
                 "ok": False,
                 "reason": f"抓取订阅源失败: {resp.get('error') or resp.get('status')}",
             }
+        final_url = str(resp.get("url") or url)
+        now = self.clock()
         parsed = await asyncio.to_thread(
-            parse_feed_xml, body, now=now, lookback_days=30.0
+            parse_feed_xml, body, now=now, lookback_days=30.0, base_url=final_url
         )
         resolved_title = title.strip() or parsed.get("title") or host
-        async with self._sources_lock:
-            now = self.clock()
-            sources = await asyncio.to_thread(self._load_sources)
-            self._prune_rejected(sources, now)
-            rej = self._is_rejected(sources, url, host, now)
-            if rej is not None:
-                return {"ok": False, "reason": f"该来源处于退订/冷却列表: {rej.get('reason', '')}"}
-            for existing in sources["feeds"]:
-                if _normalize_url_key(existing.get("url", "")) == norm:
-                    return {"ok": True, "existing": True, "feed": existing}
-            feed = {
-                "id": _feed_id_for(url),
-                "url": str(resp.get("url") or url),
-                "host": host,
-                "title": resolved_title,
-                "origin": origin,
-                "status": "trial" if auto else "active",
-                "added_at": now,
-                "trial_until": (now + TRIAL_DAYS * DAYS_TO_SECS) if auto else 0.0,
-                "candidates_14d": [],
-                "kept_total": 0,
-                "up": 0,
-                "down": 0,
-                "reply": 0,
-                "fail_count": 0,
-                "first_fail_at": 0.0,
-                "last_polled_at": 0.0,
-            }
-            sources["feeds"].append(feed)
 
-            def _save_new_feed() -> None:
+        def _commit_new_feed() -> dict[str, Any]:
+            with self._thread_sources_lock():
+                now_local = self.clock()
+                sources = self._load_sources()
+                self._prune_rejected(sources, now_local)
+                rej = self._is_rejected(sources, url, host, now_local)
+                if rej is not None:
+                    return {
+                        "ok": False,
+                        "reason": f"该来源处于退订/冷却列表: {rej.get('reason', '')}",
+                    }
+                for existing in sources["feeds"]:
+                    if _normalize_url_key(existing.get("url", "")) == norm:
+                        return {"ok": True, "existing": True, "feed": existing}
+                feed = {
+                    "id": _feed_id_for(url),
+                    "url": final_url,
+                    "host": host,
+                    "title": resolved_title,
+                    "origin": origin,
+                    "status": "trial" if auto else "active",
+                    "added_at": now_local,
+                    "trial_until": (now_local + TRIAL_DAYS * DAYS_TO_SECS) if auto else 0.0,
+                    "candidates_14d": [],
+                    "kept_total": 0,
+                    "up": 0,
+                    "down": 0,
+                    "reply": 0,
+                    "fail_count": 0,
+                    "first_fail_at": 0.0,
+                    "last_polled_at": 0.0,
+                }
+                sources["feeds"].append(feed)
                 self._save_sources(sources)
                 self.work.commit()
+                return {"ok": True, "feed": feed}
 
-            await asyncio.to_thread(_save_new_feed)
-        return {"ok": True, "feed": feed}
+        async with self._sources_lock:
+            return await asyncio.to_thread(_commit_new_feed)
 
     async def discover(self, url: str, *, origin: str = "discover") -> dict[str, Any]:
         now = self.clock()
@@ -1802,10 +2049,15 @@ class DigestWorkspace:
         if _is_big_platform(url):
             return {"ok": False, "reason": "大平台域名不做全站自动订阅"}
 
-        sources = await asyncio.to_thread(self._load_sources)
-        self._prune_rejected(sources, now)
         host = _host_of(url)
-        rej = self._is_rejected(sources, url, host, now)
+
+        def _load_and_check_rejected() -> tuple[dict[str, Any], dict[str, Any] | None]:
+            with self._thread_sources_lock():
+                sources_local = self._load_sources()
+                self._prune_rejected(sources_local, now)
+                return sources_local, self._is_rejected(sources_local, url, host, now)
+
+        sources, rej = await asyncio.to_thread(_load_and_check_rejected)
         if rej is not None:
             return {"ok": False, "reason": f"该来源处于退订/冷却列表: {rej.get('reason', '')}"}
 
@@ -1823,7 +2075,7 @@ class DigestWorkspace:
         if "xml" in ctype or sniff.startswith((b"<?xml", b"<rss", b"<feed")):
             try:
                 await asyncio.to_thread(
-                    parse_feed_xml, body, now=now, lookback_days=30.0
+                    parse_feed_xml, body, now=now, lookback_days=30.0, base_url=final_url
                 )
                 return await self.add_feed(final_url, auto=True, origin=origin)
             except ValueError:
@@ -1857,209 +2109,234 @@ class DigestWorkspace:
         return {"ok": False, "reason": "未在该站点发现有效的公开 RSS/Atom 订阅源"}
 
     def unsubscribe(
-        self, feed_id: str, *, reason: str = "手动退订", cooldown_days: float = 0.0
+        self,
+        feed_id: str = "",
+        *,
+        url: str = "",
+        reason: str = "手动退订",
+        cooldown_days: float = 0.0,
     ) -> dict[str, Any]:
-        now = self.clock()
-        sources = self._load_sources()
-        key = str(feed_id or "").strip()
-        if not key:
-            return {"ok": False, "reason": "未找到对应订阅源"}
-        key_low = key.lower()
-        key_norm = _normalize_url_key(key) if "://" in key else ""
-        key_host = _host_of(key) if "://" in key else key_low
-        if key_host.startswith("www."):
-            key_host = key_host[4:]
+        with self._thread_sources_lock():
+            now = self.clock()
+            sources = self._load_sources()
+            key = str(feed_id or url or "").strip()
+            if not key:
+                return {"ok": False, "reason": "未找到对应订阅源"}
+            key_low = key.lower()
+            key_norm = _normalize_url_key(key) if "://" in key else ""
+            key_host = _host_of(key) if "://" in key else key_low
+            if key_host.startswith("www."):
+                key_host = key_host[4:]
 
-        feeds = sources.get("feeds", [])
-        target = next((f for f in feeds if f.get("id") == key), None)
-        if not target and key_norm:
-            target = next(
-                (f for f in feeds if _normalize_url_key(f.get("url", "")) == key_norm),
-                None,
+            feeds = sources.get("feeds", [])
+            target = next((f for f in feeds if f.get("id") == key), None)
+            if not target and key_norm:
+                target = next(
+                    (f for f in feeds if _normalize_url_key(f.get("url", "")) == key_norm),
+                    None,
+                )
+            if not target:
+                target = next(
+                    (
+                        f
+                        for f in feeds
+                        if str(f.get("title") or "").strip().lower() == key_low
+                    ),
+                    None,
+                )
+            if not target and key_host:
+                def _bare_host(f: dict[str, Any]) -> str:
+                    h = str(f.get("host") or _host_of(f.get("url", ""))).strip().lower()
+                    return h[4:] if h.startswith("www.") else h
+
+                target = next((f for f in feeds if _bare_host(f) == key_host), None)
+
+            if not target:
+                return {"ok": False, "reason": "未找到对应订阅源"}
+            info = self._retire_feed(
+                sources, target, reason, now, cooldown_days=cooldown_days
             )
-        if not target:
-            target = next(
-                (
-                    f
-                    for f in feeds
-                    if str(f.get("title") or "").strip().lower() == key_low
-                ),
-                None,
-            )
-        if not target and key_host:
-            def _bare_host(f: dict[str, Any]) -> str:
-                h = str(f.get("host") or _host_of(f.get("url", ""))).strip().lower()
-                return h[4:] if h.startswith("www.") else h
-
-            target = next((f for f in feeds if _bare_host(f) == key_host), None)
-
-        if not target:
-            return {"ok": False, "reason": "未找到对应订阅源"}
-        info = self._retire_feed(
-            sources, target, reason, now, cooldown_days=cooldown_days
-        )
-        self._save_sources(sources)
-        self.work.commit()
-        return {"ok": True, **info}
+            self._save_sources(sources)
+            self.work.commit()
+            return {"ok": True, **info}
 
     def record_selected_items(self, items: list[dict[str, Any]]) -> None:
-        now = self.clock()
-        history = self._load_history()
-        sources = self._load_sources()
-        feed_map = {f["id"]: f for f in sources["feeds"]}
-        for raw in items:
-            created = float(raw.get("created", now) or now)
-            entry = {
-                "id": raw.get("id")
-                or "it_" + hashlib.sha256((raw.get("url", "") + str(created)).encode()).hexdigest()[:10],
-                "title": str(raw.get("title") or ""),
-                "url": str(raw.get("url") or ""),
-                "url_key": raw.get("url_key") or _normalize_url_key(raw.get("url", "")),
-                "feed_id": str(raw.get("feed_id") or ""),
-                "source": str(raw.get("source") or _host_of(raw.get("url", ""))),
-                "topic": str(raw.get("topic") or ""),
-                "avg": float(raw.get("avg", 0.0) or 0.0),
-                "up": int(raw.get("up", 0) or 0),
-                "down": int(raw.get("down", 0) or 0),
-                "reply": int(raw.get("reply", 0) or 0),
-                "created": created,
-            }
-            history["items"].append(entry)
-            fid = entry["feed_id"]
-            if fid and fid in feed_map:
-                feed_map[fid]["kept_total"] = int(feed_map[fid].get("kept_total", 0)) + 1
-        self._save_history(history)
-        self._save_sources(sources)
-        self.work.commit()
+        with self._thread_sources_lock():
+            now = self.clock()
+            history = self._load_history()
+            sources = self._load_sources()
+            feed_map = {f["id"]: f for f in sources["feeds"]}
+            for raw in items:
+                created = float(raw.get("created", now) or now)
+                entry = {
+                    "id": raw.get("id")
+                    or "it_" + hashlib.sha256((raw.get("url", "") + str(created)).encode()).hexdigest()[:10],
+                    "title": str(raw.get("title") or ""),
+                    "url": str(raw.get("url") or ""),
+                    "url_key": raw.get("url_key") or _normalize_url_key(raw.get("url", "")),
+                    "feed_id": str(raw.get("feed_id") or ""),
+                    "source": str(raw.get("source") or _host_of(raw.get("url", ""))),
+                    "topic": str(raw.get("topic") or ""),
+                    "avg": float(raw.get("avg", 0.0) or 0.0),
+                    "up": int(raw.get("up", 0) or 0),
+                    "down": int(raw.get("down", 0) or 0),
+                    "reply": int(raw.get("reply", 0) or 0),
+                    "created": created,
+                }
+                history["items"].append(entry)
+                fid = entry["feed_id"]
+                if fid and fid in feed_map:
+                    feed_map[fid]["kept_total"] = int(feed_map[fid].get("kept_total", 0)) + 1
+            self._save_history(history)
+            self._save_sources(sources)
+            self.work.commit()
 
     def feedback(
         self, *, item_id: str, signal: str, note: str = ""
     ) -> dict[str, Any]:
         if signal not in {"up", "down", "reply"}:
             raise ValueError("反馈信号仅支持 up / down / reply")
-        history = self._load_history()
-        sources = self._load_sources()
-        target = next((it for it in history["items"] if it.get("id") == item_id), None)
-        if not target:
-            return {"ok": False, "reason": "未找到对应的历史推送条目"}
-        target[signal] = int(target.get(signal, 0) or 0) + 1
-        if note:
-            target["last_note"] = note[:256]
-        net_useless = 0
-        fid = target.get("feed_id")
-        if fid:
-            feed = next((f for f in sources["feeds"] if f.get("id") == fid), None)
-            if feed:
-                feed[signal] = int(feed.get(signal, 0) or 0) + 1
-                net_useless = max(
-                    0,
-                    int(feed.get("down", 0) or 0)
-                    - (int(feed.get("up", 0) or 0) + int(feed.get("reply", 0) or 0)),
-                )
-        self._save_history(history)
-        self._save_sources(sources)
-        self.work.commit()
-        return {
-            "ok": True,
-            "item_id": item_id,
-            "signal": signal,
-            "net_useless": net_useless,
-        }
+        with self._thread_sources_lock():
+            history = self._load_history()
+            sources = self._load_sources()
+            target = next((it for it in history["items"] if it.get("id") == item_id), None)
+            if not target:
+                return {"ok": False, "reason": "未找到对应的历史推送条目"}
+            target[signal] = int(target.get(signal, 0) or 0) + 1
+            if note:
+                target["last_note"] = note[:256]
+            net_useless = 0
+            fid = target.get("feed_id")
+            if fid:
+                feed = next((f for f in sources["feeds"] if f.get("id") == fid), None)
+                if feed:
+                    feed[signal] = int(feed.get(signal, 0) or 0) + 1
+                    net_useless = max(
+                        0,
+                        int(feed.get("down", 0) or 0)
+                        - (int(feed.get("up", 0) or 0) + int(feed.get("reply", 0) or 0)),
+                    )
+            self._save_history(history)
+            self._save_sources(sources)
+            self.work.commit()
+            return {
+                "ok": True,
+                "item_id": item_id,
+                "signal": signal,
+                "net_useless": net_useless,
+            }
 
     async def poll(self, *, lookback_days: float = 14.0) -> dict[str, Any]:
         now = self.clock()
-        sources = await asyncio.to_thread(self._load_sources)
-        changed = self._prune_rejected(sources, now)
         graduated: list[dict[str, Any]] = []
         unsubscribed: list[dict[str, Any]] = []
         subscribed: list[dict[str, Any]] = []
         candidates: list[dict[str, Any]] = []
 
-        # Phase 1: Evaluate lifecycle transitions before fetching
-        active_or_trial = list(sources.get("feeds", []))
-        for feed in active_or_trial:
-            net_useless = int(feed.get("down", 0) or 0) - (
-                int(feed.get("up", 0) or 0) + int(feed.get("reply", 0) or 0)
-            )
-            if net_useless >= NET_USELESS_MIN:
-                unsubscribed.append(
-                    self._retire_feed(
-                        sources, feed, f"群友连续反馈没用（净负反馈 {net_useless} 次）", now
+        # Phase 1: Evaluate lifecycle transitions atomically before fetching
+        def _phase1_lifecycle() -> tuple[dict[str, Any], dict[str, Any]]:
+            with self._thread_sources_lock():
+                sources_local = self._load_sources()
+                changed_local = self._prune_rejected(sources_local, now)
+                for feed in list(sources_local.get("feeds", [])):
+                    net_useless = int(feed.get("down", 0) or 0) - (
+                        int(feed.get("up", 0) or 0) + int(feed.get("reply", 0) or 0)
                     )
-                )
-                changed = True
-                continue
-            fail_count = int(feed.get("fail_count", 0) or 0)
-            first_fail = float(feed.get("first_fail_at", 0.0) or 0.0)
-            if (
-                fail_count >= FETCH_FAILURE_MIN
-                and first_fail > 0
-                and (now - first_fail) >= FETCH_FAILURE_DAYS * DAYS_TO_SECS
-            ):
-                unsubscribed.append(
-                    self._retire_feed(
-                        sources,
-                        feed,
-                        "连续抓取失败超过 3 天，进入 30 天冷却退订",
-                        now,
-                        cooldown_days=FAILURE_COOLDOWN_DAYS,
-                    )
-                )
-                changed = True
-                continue
-            if feed.get("status") == "trial":
-                recent_cands = [
-                    float(ts)
-                    for ts in feed.get("candidates_14d", [])
-                    if float(ts) >= now - TRIAL_DAYS * DAYS_TO_SECS
-                ]
-                if len(recent_cands) != len(feed.get("candidates_14d", [])):
-                    feed["candidates_14d"] = recent_cands
-                    changed = True
-                raw_url_map = feed.get("candidate_urls_14d")
-                if isinstance(raw_url_map, dict):
-                    cutoff = now - TRIAL_DAYS * DAYS_TO_SECS
-                    pruned_url_map = {
-                        str(k): float(ts)
-                        for k, ts in raw_url_map.items()
-                        if k and float(ts) >= cutoff
-                    }
-                    if len(pruned_url_map) != len(raw_url_map):
-                        feed["candidate_urls_14d"] = pruned_url_map
-                        changed = True
-                kept_total = int(feed.get("kept_total", 0) or 0)
-                if kept_total == 0 and len(recent_cands) >= TRIAL_CAND_MIN:
-                    unsubscribed.append(
-                        self._retire_feed(
-                            sources, feed, "14 天内已出满 10 条候选仍无一条入选", now
-                        )
-                    )
-                    changed = True
-                    continue
-                trial_until = float(feed.get("trial_until", 0.0) or 0.0)
-                if trial_until > 0 and now >= trial_until:
-                    if kept_total >= 1:
-                        feed["status"] = "active"
-                        feed["trial_until"] = 0.0
-                        graduated.append(
-                            {
-                                "feed_id": feed["id"],
-                                "url": feed["url"],
-                                "title": feed.get("title", ""),
-                            }
-                        )
-                        changed = True
-                    else:
+                    if net_useless >= NET_USELESS_MIN:
                         unsubscribed.append(
                             self._retire_feed(
-                                sources, feed, "14 天试用期到期仍无一条入选", now
+                                sources_local,
+                                feed,
+                                f"群友连续反馈没用（净负反馈 {net_useless} 次）",
+                                now,
                             )
                         )
-                        changed = True
+                        changed_local = True
                         continue
+                    fail_count = int(feed.get("fail_count", 0) or 0)
+                    first_fail = float(feed.get("first_fail_at", 0.0) or 0.0)
+                    if (
+                        fail_count >= FETCH_FAILURE_MIN
+                        and first_fail > 0
+                        and (now - first_fail) >= FETCH_FAILURE_DAYS * DAYS_TO_SECS
+                    ):
+                        unsubscribed.append(
+                            self._retire_feed(
+                                sources_local,
+                                feed,
+                                "连续抓取失败超过 3 天，进入 30 天冷却退订",
+                                now,
+                                cooldown_days=FAILURE_COOLDOWN_DAYS,
+                            )
+                        )
+                        changed_local = True
+                        continue
+                    if feed.get("status") == "trial":
+                        recent_cands = [
+                            float(ts)
+                            for ts in feed.get("candidates_14d", [])
+                            if float(ts) >= now - TRIAL_DAYS * DAYS_TO_SECS
+                        ]
+                        if len(recent_cands) != len(feed.get("candidates_14d", [])):
+                            feed["candidates_14d"] = recent_cands
+                            changed_local = True
+                        raw_url_map = feed.get("candidate_urls_14d")
+                        if isinstance(raw_url_map, dict):
+                            cutoff = now - TRIAL_DAYS * DAYS_TO_SECS
+                            pruned_url_map = {
+                                str(k): float(ts)
+                                for k, ts in raw_url_map.items()
+                                if k and float(ts) >= cutoff
+                            }
+                            if len(pruned_url_map) != len(raw_url_map):
+                                feed["candidate_urls_14d"] = pruned_url_map
+                                changed_local = True
+                        kept_total = int(feed.get("kept_total", 0) or 0)
+                        if kept_total == 0 and len(recent_cands) >= TRIAL_CAND_MIN:
+                            unsubscribed.append(
+                                self._retire_feed(
+                                    sources_local,
+                                    feed,
+                                    "14 天内已出满 10 条候选仍无一条入选",
+                                    now,
+                                )
+                            )
+                            changed_local = True
+                            continue
+                        trial_until = float(feed.get("trial_until", 0.0) or 0.0)
+                        if trial_until > 0 and now >= trial_until:
+                            if kept_total >= 1:
+                                feed["status"] = "active"
+                                feed["trial_until"] = 0.0
+                                graduated.append(
+                                    {
+                                        "feed_id": feed["id"],
+                                        "url": feed["url"],
+                                        "title": feed.get("title", ""),
+                                    }
+                                )
+                                changed_local = True
+                            else:
+                                unsubscribed.append(
+                                    self._retire_feed(
+                                        sources_local,
+                                        feed,
+                                        "14 天试用期到期仍无一条入选",
+                                        now,
+                                    )
+                                )
+                                changed_local = True
+                                continue
+                if changed_local:
+                    self._save_sources(sources_local)
+                    self.work.commit()
+                history_local = self._load_history()
+                return sources_local, history_local
+
+        async with self._sources_lock:
+            sources, history = await asyncio.to_thread(_phase1_lifecycle)
 
         # Phase 2: Trusted source auto-discovery from last 30d non-RSS high-signal history
-        history = await asyncio.to_thread(self._load_history)
         win_start = now - TRUSTED_WINDOW_DAYS * DAYS_TO_SECS
         by_host: dict[str, list[dict[str, Any]]] = {}
         for item in history.get("items", []):
@@ -2091,17 +2368,17 @@ class DigestWorkspace:
                 and len(utc8_days) >= TRUSTED_MIN_DAYS
                 and positive >= 1
             ):
-                if changed:
-                    await asyncio.to_thread(self._save_sources, sources)
-                    await asyncio.to_thread(self.work.commit)
-                    changed = False
                 res = await self.discover(f"https://{host}/", origin="trusted")
                 if res.get("ok") and not res.get("existing"):
                     subscribed.append(res["feed"])
-                    sources = await asyncio.to_thread(self._load_sources)
+
+        def _load_feeds_snapshot() -> list[dict[str, Any]]:
+            with self._thread_sources_lock():
+                return list(self._load_sources().get("feeds", []))
 
         # Phase 3: Fetch remaining active & trial feeds concurrently (Semaphore(6))
-        feeds_list = list(sources.get("feeds", []))
+        feeds_list = await asyncio.to_thread(_load_feeds_snapshot)
+        feeds_count = len(feeds_list)
         if feeds_list:
             sem_poll = asyncio.Semaphore(6)
 
@@ -2118,15 +2395,12 @@ class DigestWorkspace:
                         }
 
             responses = await asyncio.gather(*(_fetch_feed(f) for f in feeds_list))
+            outcomes: list[tuple[str, bool, list[dict[str, Any]]]] = []
             for feed, resp in zip(feeds_list, responses):
                 body = resp.get("body")
                 status_code = int(resp.get("status", 0) or 0)
-                feed["last_polled_at"] = now
                 if not body or status_code >= 400:
-                    feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
-                    if not feed.get("first_fail_at"):
-                        feed["first_fail_at"] = now
-                    changed = True
+                    outcomes.append((feed["id"], False, []))
                     continue
                 try:
                     parsed = await asyncio.to_thread(
@@ -2135,57 +2409,76 @@ class DigestWorkspace:
                         now=now,
                         lookback_days=lookback_days,
                         max_items=20,
+                        base_url=str(resp.get("url") or feed.get("url") or ""),
                     )
                 except ValueError:
-                    feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
-                    if not feed.get("first_fail_at"):
-                        feed["first_fail_at"] = now
-                    changed = True
+                    outcomes.append((feed["id"], False, []))
                     continue
-                feed["fail_count"] = 0
-                feed["first_fail_at"] = 0.0
-                cap = TRIAL_CAND_CAP if feed.get("status") == "trial" else 8
-                picked = parsed["items"][:cap]
-                is_trial = feed.get("status") == "trial"
-                seen_url_map = (
-                    dict(feed.get("candidate_urls_14d") or {})
-                    if is_trial and isinstance(feed.get("candidate_urls_14d"), dict)
-                    else {}
-                )
-                for it in picked:
-                    if is_trial:
-                        u_key = (
-                            _normalize_url_key(str(it.get("url") or ""))
-                            or str(it.get("title") or "").strip()
+                outcomes.append((feed["id"], True, list(parsed.get("items") or [])))
+
+            def _apply_poll_outcomes() -> int:
+                with self._thread_sources_lock():
+                    fresh_sources = self._load_sources()
+                    fresh_by_id = {
+                        f["id"]: f
+                        for f in fresh_sources.get("feeds", [])
+                        if isinstance(f, dict) and f.get("id")
+                    }
+                    changed_local = False
+                    for fid, ok_flag, parsed_items in outcomes:
+                        fresh_feed = fresh_by_id.get(fid)
+                        if fresh_feed is None:
+                            continue
+                        fresh_feed["last_polled_at"] = now
+                        changed_local = True
+                        if not ok_flag:
+                            fresh_feed["fail_count"] = int(fresh_feed.get("fail_count", 0) or 0) + 1
+                            if not fresh_feed.get("first_fail_at"):
+                                fresh_feed["first_fail_at"] = now
+                            continue
+                        fresh_feed["fail_count"] = 0
+                        fresh_feed["first_fail_at"] = 0.0
+                        is_trial = fresh_feed.get("status") == "trial"
+                        cap = TRIAL_CAND_CAP if is_trial else 8
+                        picked = parsed_items[:cap]
+                        seen_url_map = (
+                            dict(fresh_feed.get("candidate_urls_14d") or {})
+                            if is_trial and isinstance(fresh_feed.get("candidate_urls_14d"), dict)
+                            else {}
                         )
-                        if u_key and u_key not in seen_url_map:
-                            seen_url_map[u_key] = now
-                            feed.setdefault("candidates_14d", []).append(now)
-                    candidates.append(
-                        {
-                            **it,
-                            "feed_id": feed["id"],
-                            "source": feed.get("host") or _host_of(it.get("url", "")),
-                            "feed_title": feed.get("title", ""),
-                        }
-                    )
-                if is_trial:
-                    feed["candidate_urls_14d"] = seen_url_map
-                changed = True
+                        for it in picked:
+                            if is_trial:
+                                u_key = (
+                                    _normalize_url_key(str(it.get("url") or ""))
+                                    or str(it.get("title") or "").strip()
+                                )
+                                if u_key and u_key not in seen_url_map:
+                                    seen_url_map[u_key] = now
+                                    fresh_feed.setdefault("candidates_14d", []).append(now)
+                            candidates.append(
+                                {
+                                    **it,
+                                    "feed_id": fresh_feed["id"],
+                                    "source": fresh_feed.get("host") or _host_of(it.get("url", "")),
+                                    "feed_title": fresh_feed.get("title", ""),
+                                }
+                            )
+                        if is_trial:
+                            fresh_feed["candidate_urls_14d"] = seen_url_map
+                    if changed_local:
+                        self._save_sources(fresh_sources)
+                        self.work.commit()
+                    return len(fresh_sources.get("feeds", []))
 
-        if changed:
-            def _save_polled() -> None:
-                self._save_sources(sources)
-                self.work.commit()
-
-            await asyncio.to_thread(_save_polled)
+            async with self._sources_lock:
+                feeds_count = await asyncio.to_thread(_apply_poll_outcomes)
 
         return {
             "candidates": candidates,
             "graduated": graduated,
             "unsubscribed": unsubscribed,
             "subscribed": subscribed,
-            "feeds_count": len(sources.get("feeds", [])),
+            "feeds_count": feeds_count,
         }
 
     async def seed_starter_feeds(
@@ -2212,6 +2505,15 @@ class DigestWorkspace:
             t in hint_lower for t in game_terms
         )
 
+        def _kw_word_match(kw_l: str) -> bool:
+            if not kw_l or not hint_lower:
+                return False
+            if kw_l.isascii():
+                prefix = r"(?<![a-z0-9])" if kw_l[0].isalnum() else ""
+                suffix = r"(?![a-z0-9])" if kw_l[-1].isalnum() else ""
+                return bool(re.search(prefix + re.escape(kw_l) + suffix, hint_lower))
+            return kw_l in hint_lower
+
         def _match_score(entry: dict[str, Any]) -> int:
             if not hint_lower.strip():
                 return 0
@@ -2227,7 +2529,7 @@ class DigestWorkspace:
                 kw_l = str(kw).lower()
                 if not kw_l:
                     continue
-                if kw_l in hint_lower:
+                if _kw_word_match(kw_l):
                     score += 3
                 elif any(
                     tok == kw_l or (len(kw_l) >= 4 and kw_l in tok)
@@ -2261,8 +2563,14 @@ class DigestWorkspace:
             ]
 
         now = self.clock()
-        sources = await asyncio.to_thread(self._load_sources)
-        self._prune_rejected(sources, now)
+
+        def _seed_precheck() -> dict[str, Any]:
+            with self._thread_sources_lock():
+                sources_local = self._load_sources()
+                self._prune_rejected(sources_local, now)
+                return sources_local
+
+        sources = await asyncio.to_thread(_seed_precheck)
         existing_urls = {
             _normalize_url_key(f.get("url", ""))
             for f in sources.get("feeds", [])
@@ -2309,12 +2617,12 @@ class DigestWorkspace:
                             f"抓取订阅源失败: {resp.get('error') or resp.get('status')}",
                             None,
                         )
+                    final_url = str(resp.get("url") or url)
                     parsed = await asyncio.to_thread(
-                        parse_feed_xml, body, now=now, lookback_days=30.0
+                        parse_feed_xml, body, now=now, lookback_days=30.0, base_url=final_url
                     )
                 except Exception as exc:
                     return entry, False, f"抓取异常: {exc}", None
-            final_url = str(resp.get("url") or url)
             host = _host_of(final_url) or _host_of(url)
             resolved_title = str(entry.get("title") or "").strip() or str(parsed.get("title") or "").strip() or host
             feed_meta = {
@@ -2338,35 +2646,52 @@ class DigestWorkspace:
             return entry, True, "", feed_meta
 
         probe_results = await asyncio.gather(*(_probe_entry(e) for e in to_probe))
-        changed = False
-        for entry, ok, reason, feed_meta in probe_results:
-            if len(added) >= cap:
-                break
-            url = str(entry["url"])
-            norm = _normalize_url_key(url)
-            if not ok or feed_meta is None:
-                skipped.append({"url": url, "reason": reason})
-                continue
-            final_norm = _normalize_url_key(feed_meta.get("url") or url)
-            if norm in existing_urls or final_norm in existing_urls:
-                skipped.append({"url": url, "reason": "已存在订阅"})
-                continue
-            sources["feeds"].append(feed_meta)
-            existing_urls.add(norm)
-            existing_urls.add(final_norm)
-            added.append(feed_meta)
-            changed = True
 
-        if changed:
-            def _save_seeded() -> None:
-                self._save_sources(sources)
-                self.work.commit()
+        def _commit_seeded() -> int:
+            with self._thread_sources_lock():
+                now_local = self.clock()
+                fresh_sources = self._load_sources()
+                self._prune_rejected(fresh_sources, now_local)
+                fresh_existing = {
+                    _normalize_url_key(f.get("url", ""))
+                    for f in fresh_sources.get("feeds", [])
+                    if isinstance(f, dict) and f.get("url")
+                }
+                changed_local = False
+                for entry, ok, reason, feed_meta in probe_results:
+                    if len(added) >= cap:
+                        break
+                    url = str(entry["url"])
+                    norm = _normalize_url_key(url)
+                    if not ok or feed_meta is None:
+                        skipped.append({"url": url, "reason": reason})
+                        continue
+                    final_url = str(feed_meta.get("url") or url)
+                    final_norm = _normalize_url_key(final_url)
+                    if norm in fresh_existing or final_norm in fresh_existing:
+                        skipped.append({"url": url, "reason": "已存在订阅"})
+                        continue
+                    if (
+                        self._is_rejected(
+                            fresh_sources, final_url, _host_of(final_url), now_local
+                        )
+                        is not None
+                    ):
+                        skipped.append({"url": url, "reason": "位于退订冷却列表"})
+                        continue
+                    fresh_sources["feeds"].append(feed_meta)
+                    fresh_existing.add(norm)
+                    fresh_existing.add(final_norm)
+                    added.append(feed_meta)
+                    changed_local = True
+                if changed_local:
+                    self._save_sources(fresh_sources)
+                    self.work.commit()
+                return len(fresh_sources.get("feeds", []))
 
-            await asyncio.to_thread(_save_seeded)
+        async with self._sources_lock:
+            total_feeds = await asyncio.to_thread(_commit_seeded)
 
-        total_feeds = len(
-            (await asyncio.to_thread(self._load_sources)).get("feeds", [])
-        )
         return {
             "added": added,
             "skipped": skipped,
@@ -2697,7 +3022,11 @@ class DigestWorkspace:
         # Opportunistically subscribe to at most 1 non-big-platform RSS feed found during fetch
         discovered_feeds: list[str] = []
         if discovered_feed_candidates:
-            current_sources = await asyncio.to_thread(self._load_sources)
+            def _load_sources_locked() -> dict[str, Any]:
+                with self._thread_sources_lock():
+                    return self._load_sources()
+
+            current_sources = await asyncio.to_thread(_load_sources_locked)
             known_feed_keys = {
                 _normalize_url_key(f.get("url", ""))
                 for f in current_sources.get("feeds", [])
@@ -2744,6 +3073,12 @@ class DigestWorkspace:
         }
 
     def score_select(
+        self, candidates: list[dict[str, Any]], *, max_items: int = 5
+    ) -> dict[str, Any]:
+        with self._thread_sources_lock():
+            return self._score_select_unlocked(candidates, max_items=max_items)
+
+    def _score_select_unlocked(
         self, candidates: list[dict[str, Any]], *, max_items: int = 5
     ) -> dict[str, Any]:
         now = self.clock()
@@ -3322,9 +3657,18 @@ async def run_digest_tool(
             origin=str(arguments.get("origin") or "manual"),
         )
     if action == "unsubscribe":
+        unsub_target = (
+            arguments.get("feed_id")
+            or arguments.get("url")
+            or arguments.get("domain")
+            or arguments.get("host")
+            or arguments.get("title")
+            or arguments.get("query")
+            or ""
+        )
         return await asyncio.to_thread(
             dw.unsubscribe,
-            arguments.get("feed_id", ""),
+            str(unsub_target),
             reason=str(arguments.get("note") or "手动退订"),
         )
     if action == "feedback":

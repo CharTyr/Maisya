@@ -636,7 +636,7 @@
 .vs-tab-radio[data-tab-idx="3"]:checked ~ .vs-tab-bar label[data-tab-idx="3"],
 .vs-tab-radio[data-tab-idx="4"]:checked ~ .vs-tab-bar label[data-tab-idx="4"],
 .vs-tab-radio[data-tab-idx="5"]:checked ~ .vs-tab-bar label[data-tab-idx="5"],
-.vs-tab-lbl.is-active {
+.vs-tabs:not(:has(.vs-tab-radio:checked)) .vs-tab-lbl.is-active {
   color: var(--vs-blue);
   background: var(--vs-fill);
   border-color: var(--vs-line);
@@ -648,7 +648,7 @@
 .vs-tab-radio[data-tab-idx="3"]:checked ~ .vs-tab-panels > .vs-tab-panel[data-tab-idx="3"],
 .vs-tab-radio[data-tab-idx="4"]:checked ~ .vs-tab-panels > .vs-tab-panel[data-tab-idx="4"],
 .vs-tab-radio[data-tab-idx="5"]:checked ~ .vs-tab-panels > .vs-tab-panel[data-tab-idx="5"],
-.vs-tab-panel.is-active {
+.vs-tabs:not(:has(.vs-tab-radio:checked)) .vs-tab-panel.is-active {
   display: block;
 }
 

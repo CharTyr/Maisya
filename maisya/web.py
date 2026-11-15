@@ -8,6 +8,7 @@ import json
 import random
 import re
 import socket
+import sys
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -640,7 +641,12 @@ def _has_usable_keys(engine: str, engines: dict[str, Any]) -> bool:
             isinstance(k, str) and k.strip() for k in (engines.get("deepseek_api_keys") or [])
         )
     if engine == "duckduckgo":
-        return importlib.util.find_spec("ddgs") is not None
+        if "ddgs" in sys.modules:
+            return sys.modules["ddgs"] is not None
+        try:
+            return importlib.util.find_spec("ddgs") is not None
+        except (ValueError, ModuleNotFoundError):
+            return False
     return engine == "anysearch"
 
 
@@ -775,7 +781,10 @@ def _search_exa(
         )
         if status >= 400 or not raw:
             continue
-        data = json.loads(raw.decode("utf-8", errors="replace"))
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except (ValueError, TypeError):
+            continue
         if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("results"), list):
             continue
         items = []
@@ -842,7 +851,10 @@ def _search_tavily(
         )
         if status >= 400 or not raw:
             continue
-        data = json.loads(raw.decode("utf-8", errors="replace"))
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except (ValueError, TypeError):
+            continue
         if not isinstance(data, dict) or not isinstance(data.get("results"), list):
             continue
         items = [
@@ -910,7 +922,10 @@ def _search_anysearch(
         )
         if status >= 400 or not raw:
             continue
-        data = json.loads(raw.decode("utf-8", errors="replace"))
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except (ValueError, TypeError):
+            continue
         if not isinstance(data, dict) or data.get("code") != 0:
             continue
         items = (data.get("data") or {}).get("results") if isinstance(data.get("data"), dict) else None
@@ -963,7 +978,10 @@ def _search_you(
         )
         if status >= 400 or not raw:
             continue
-        data = json.loads(raw.decode("utf-8", errors="replace"))
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except (ValueError, TypeError):
+            continue
         if not isinstance(data, dict):
             continue
         if news:
@@ -1037,7 +1055,10 @@ def _search_deepseek(
         )
         if status >= 400 or not raw:
             continue
-        data = json.loads(raw.decode("utf-8", errors="replace"))
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except (ValueError, TypeError):
+            continue
         if not isinstance(data, dict) or not isinstance(data.get("content"), list):
             continue
         items = []
@@ -1063,7 +1084,13 @@ def _search_deepseek(
     return False, []
 
 
-def _search_duckduckgo(query: str, limit: int, engines: dict[str, Any], timeout: float) -> tuple[bool, list[dict[str, Any]]]:
+def _search_duckduckgo(
+    query: str,
+    limit: int,
+    engines: dict[str, Any],
+    timeout: float,
+    proxy: str = "",
+) -> tuple[bool, list[dict[str, Any]]]:
     from ddgs import DDGS
 
     kwargs: dict[str, Any] = {
@@ -1075,7 +1102,10 @@ def _search_duckduckgo(query: str, limit: int, engines: dict[str, Any], timeout:
     tl = str(engines.get("duckduckgo_timelimit") or "").strip()
     if tl and tl != "none":
         kwargs["timelimit"] = tl
-    with DDGS(timeout=int(timeout)) as ddgs:
+    ddgs_kwargs: dict[str, Any] = {"timeout": int(timeout)}
+    if proxy:
+        ddgs_kwargs["proxy"] = proxy
+    with DDGS(**ddgs_kwargs) as ddgs:
         rows = ddgs.text(query, **kwargs)
     return True, [
         {
@@ -1110,7 +1140,7 @@ def _query_third_party_engine(
     if engine == "deepseek":
         return _search_deepseek(query, limit, engines, timeout, proxy, http_request)
     if engine == "duckduckgo":
-        return _search_duckduckgo(query, limit, engines, timeout)
+        return _search_duckduckgo(query, limit, engines, timeout, proxy=proxy)
     return False, []
 
 
@@ -1410,20 +1440,22 @@ class WebRouter:
                 self.host, capability, timeout_ms=70000, **kwargs
             )
         except Exception as exc:
-            message = str(exc) or "宿主只读能力调用失败"
+            message = str(self.redact(str(exc) or "宿主只读能力调用失败"))
             if any(marker in message for marker in HOST_DISABLED_MARKERS):
                 raise _HostWebDisabledError(message) from None
             raise RuntimeError(message) from None
         if result is None:
             raise RuntimeError("宿主只读能力调用失败，请检查该能力配置")
         if isinstance(result, dict) and result.get("success") is False:
-            message = str(result.get("error") or "宿主只读能力调用失败，请检查该能力配置")
+            message = str(
+                self.redact(str(result.get("error") or "宿主只读能力调用失败，请检查该能力配置"))
+            )
             if any(marker in message for marker in HOST_DISABLED_MARKERS):
                 raise _HostWebDisabledError(message)
             raise RuntimeError(message)
         if isinstance(result, dict) and "result" in result:
-            return result["result"]
-        return result
+            return self.redact(result["result"])
+        return self.redact(result)
 
     async def _call_third_party(
         self, kind: str, arguments: dict[str, Any], cfg: dict[str, Any] | None = None
@@ -1462,9 +1494,13 @@ class WebRouter:
                 )
             return self.redact(redact_values(raw, secrets))
         except (ValueError, PermissionError) as exc:
-            raise type(exc)(redact_values(str(exc), secrets)) from None
+            cleaned = str(self.redact(redact_values(str(exc), secrets)))
+            raise type(exc)(cleaned) from None
         except Exception as exc:
-            cleaned = redact_values(str(exc), secrets) or "第三方联网调用失败"
+            cleaned = (
+                str(self.redact(redact_values(str(exc), secrets)))
+                or "第三方联网调用失败"
+            )
             raise RuntimeError(cleaned) from None
 
     async def _call_service_web(
@@ -1474,9 +1510,16 @@ class WebRouter:
             if mode == "any":
                 return None
             raise RuntimeError("能力服务尚未登记")
-        return await self.services.call_web(
-            kind, arguments, context, self.runtime, mode=mode
-        )
+        try:
+            out = await self.services.call_web(
+                kind, arguments, context, self.runtime, mode=mode
+            )
+        except (ValueError, PermissionError) as exc:
+            raise type(exc)(str(self.redact(str(exc)))) from None
+        except Exception as exc:
+            cleaned = str(self.redact(str(exc))) or "能力服务联网调用失败"
+            raise RuntimeError(cleaned) from None
+        return None if out is None else self.redact(out)
 
     async def _call_plugin_api_name(
         self,
@@ -1503,46 +1546,61 @@ class WebRouter:
             call_args = self.services.apply_web_mapping(arguments, binding)
         else:
             call_args = dict(arguments)
-        raw = await call_capability(
-            self.host,
-            "api.call",
-            timeout_ms=30000,
-            api_name=api_name,
-            version=version,
-            args=call_args,
-        )
+        try:
+            raw = await call_capability(
+                self.host,
+                "api.call",
+                timeout_ms=30000,
+                api_name=api_name,
+                version=version,
+                args=call_args,
+            )
+        except (ValueError, PermissionError) as exc:
+            raise type(exc)(str(self.redact(str(exc)))) from None
+        except Exception as exc:
+            cleaned = str(self.redact(str(exc))) or f"跨插件接口 {api_name} 调用失败"
+            raise RuntimeError(cleaned) from None
         if isinstance(raw, dict):
             if raw.get("success") is False:
-                raise RuntimeError(str(raw.get("error") or f"跨插件接口 {api_name} 调用失败"))
+                err_msg = str(
+                    self.redact(str(raw.get("error") or f"跨插件接口 {api_name} 调用失败"))
+                )
+                raise RuntimeError(err_msg)
             value = raw["result"] if ("success" in raw and "result" in raw) else raw
         else:
             value = raw
         value = self.redact(value)
         if isinstance(value, dict):
             items = value.get("items") if isinstance(value.get("items"), list) else value.get("results")
-            return {
-                "provider": api_name,
-                **value,
-                **({"items": items, "results": items} if isinstance(items, list) else {}),
-            }
+            return self.redact(
+                {
+                    "provider": api_name,
+                    **value,
+                    **({"items": items, "results": items} if isinstance(items, list) else {}),
+                }
+            )
         if kind == "fetch":
-            return {
+            return self.redact(
+                {
+                    "provider": api_name,
+                    "url": arguments["url"],
+                    "title": arguments["url"],
+                    "content": str(value)[:16000],
+                    "content_kind": "page_text",
+                    "service": f"plugin:{api_name}",
+                }
+            )
+        return self.redact(
+            {
                 "provider": api_name,
-                "url": arguments["url"],
-                "title": arguments["url"],
-                "content": str(value)[:16000],
-                "content_kind": "page_text",
+                "query": arguments["query"],
+                "items": [],
+                "results": [],
+                "summary": str(value)[:16000],
+                "content_kind": "search_results",
                 "service": f"plugin:{api_name}",
             }
-        return {
-            "provider": api_name,
-            "query": arguments["query"],
-            "items": [],
-            "results": [],
-            "summary": str(value)[:16000],
-            "content_kind": "search_results",
-            "service": f"plugin:{api_name}",
-        }
+        )
 
     async def _resolve_plugin_target(self, target: str, kind: str) -> tuple[str, str]:
         if self.host is not None and hasattr(self.host, "call_capability"):
@@ -1585,7 +1643,7 @@ class WebRouter:
         providers = (cfg.get("web") or {}).get("providers") or {}
         spec = providers.get(name)
         if not isinstance(spec, dict):
-            raise RuntimeError(f"未在 services.web.providers 中找到 {name}")
+            raise RuntimeError(str(self.redact(f"未在 services.web.providers 中找到 {name}")))
         pkind = spec.get("kind", "")
         if pkind == "host":
             cap = "web.search" if kind == "search" else "web.fetch"
@@ -1597,14 +1655,23 @@ class WebRouter:
             service = spec.get("service") or spec.get("target", "")
             srv_cfg = (cfg.get("servers") or {}).get(service)
             if not isinstance(srv_cfg, dict) or not srv_cfg.get("tools"):
-                raise RuntimeError(f"提供方 {name} 关联的 MCP 服务 {service} 未登记")
+                raise RuntimeError(
+                    str(self.redact(f"提供方 {name} 关联的 MCP 服务 {service} 未登记"))
+                )
             tool = spec.get("tool") or next(
                 (t for t in srv_cfg["tools"] if kind in t.lower()),
                 srv_cfg["tools"][0],
             )
-            return await self.services._call_web_mcp(
-                service, tool, kind, arguments, context, self.runtime, srv_cfg, binding=spec
-            )
+            try:
+                out = await self.services._call_web_mcp(
+                    service, tool, kind, arguments, context, self.runtime, srv_cfg, binding=spec
+                )
+                return None if out is None else self.redact(out)
+            except (ValueError, PermissionError) as exc:
+                raise type(exc)(str(self.redact(str(exc)))) from None
+            except Exception as exc:
+                cleaned = str(self.redact(str(exc))) or "自定义 MCP 联网调用失败"
+                raise RuntimeError(cleaned) from None
         if pkind in {"plugin_api", "plugin"}:
             api_id = spec.get("api")
             api_spec = (cfg.get("apis") or {}).get(api_id) if api_id else None
@@ -1616,11 +1683,11 @@ class WebRouter:
             )
             version = str(spec.get("version") or (api_spec or {}).get("version") or "")
             if not api_name:
-                raise RuntimeError(f"提供方 {name} 缺少目标插件 API 名称")
+                raise RuntimeError(str(self.redact(f"提供方 {name} 缺少目标插件 API 名称")))
             return await self._call_plugin_api_name(
                 api_name, kind, arguments, context, version=version, binding=spec
             )
-        raise RuntimeError(f"未知的自定义联网提供方类型 {pkind}")
+        raise RuntimeError(str(self.redact(f"未知的自定义联网提供方类型 {pkind}")))
 
     async def _dispatch(
         self,
@@ -1649,7 +1716,7 @@ class WebRouter:
             return await self._call_named_provider(
                 mode.split(":", 1)[1], kind, arguments, context
             )
-        return None
+        raise ValueError(str(self.redact(f"未知的联网提供方: {mode}")))
 
     async def search(
         self,
@@ -1717,7 +1784,7 @@ class WebRouter:
             )
         if mode != "auto":
             return await self.search(
-                query, max_results=max_results, context=ctx, provider=provider
+                query, max_results=max_results, context=ctx, provider=mode
             )
         try:
             return await self._call_host_web(
