@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta, timezone
+import html
 from html import escape
+from html.parser import HTMLParser
 import io
 import re
 from typing import Any
@@ -407,10 +409,10 @@ def encode_cover_data_uri(
 
 def _recompress_data_uri(data_uri: str, *, max_width: int = 800, quality: int = 68) -> str:
     """在 HTML 体积逼近 512KB 上限时进一步压小单张封面图。"""
-    if Image is None or not data_uri.startswith("data:image/"):
-        return data_uri
+    if Image is None or not is_safe_raster_data_uri(data_uri):
+        return data_uri if is_safe_raster_data_uri(data_uri) else ""
     try:
-        _, b64 = data_uri.split(",", 1)
+        _, b64 = data_uri.strip().split(",", 1)
         raw = base64.b64decode(b64)
         with Image.open(io.BytesIO(raw)) as im:
             rgb = _flatten_rgb(im)
@@ -423,6 +425,530 @@ def _recompress_data_uri(data_uri: str, *, max_width: int = 800, quality: int = 
             return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
     except Exception:
         return data_uri
+
+
+_SAFE_RASTER_DATA_URI_RE = re.compile(
+    r"^data:image/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$",
+    re.IGNORECASE,
+)
+_HEX_COLOR_RE = re.compile(
+    r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+)
+_RGB_COLOR_RE = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$")
+_RGBA_COLOR_RE = re.compile(
+    r"^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0|1|0?\.\d+|1\.0+)\s*\)$"
+)
+_GRADIENT_SAFE_RE = re.compile(r"^(?:radial|linear)-gradient\(\s*[a-zA-Z0-9%,.\s()-]+\)$")
+_UNSAFE_CSS_TOKEN_RE = re.compile(
+    r"(?:;|[{}<>\"'\\]|/\*|\*/|url\s*\(|expression\s*\(|var\s*\(|calc\s*\(|attr\s*\(|image\s*\(|@|javascript:|vbscript:)",
+    re.IGNORECASE,
+)
+
+
+def is_safe_raster_data_uri(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    cleaned = value.strip()
+    if not cleaned or len(cleaned) > 4_000_000:
+        return False
+    return bool(_SAFE_RASTER_DATA_URI_RE.fullmatch(cleaned))
+
+
+def _sanitize_css_color(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if not raw or len(raw) > 120 or _UNSAFE_CSS_TOKEN_RE.search(raw):
+        return ""
+    if raw.lower() == "transparent" or _HEX_COLOR_RE.fullmatch(raw):
+        return raw
+    m_rgb = _RGB_COLOR_RE.fullmatch(raw)
+    if m_rgb and all(int(g) <= 255 for g in m_rgb.groups()):
+        return raw
+    m_rgba = _RGBA_COLOR_RE.fullmatch(raw)
+    if (
+        m_rgba
+        and all(int(g) <= 255 for g in m_rgba.groups()[:3])
+        and float(m_rgba.group(4)) <= 1.0
+    ):
+        return raw
+    return ""
+
+
+def _sanitize_css_glow(value: Any) -> str:
+    color = _sanitize_css_color(value)
+    if color:
+        return color
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if not raw or len(raw) > 240 or _UNSAFE_CSS_TOKEN_RE.search(raw):
+        return ""
+    if not _GRADIENT_SAFE_RE.fullmatch(raw):
+        return ""
+    depth = 0
+    for ch in raw:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return ""
+    if depth != 0:
+        return ""
+    fn_names = re.findall(r"([a-zA-Z_-]+)\s*\(", raw)
+    allowed_fns = {"radial-gradient", "linear-gradient", "rgb", "rgba", "hsl", "hsla"}
+    if any(fn.lower() not in allowed_fns for fn in fn_names):
+        return ""
+    return raw
+
+
+_DROP_SUBTREE_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "iframe",
+        "frame",
+        "frameset",
+        "object",
+        "embed",
+        "applet",
+        "foreignobject",
+        "animate",
+        "animatemotion",
+        "animatetransform",
+        "set",
+        "handler",
+        "listener",
+        "meta",
+        "link",
+        "base",
+        "noscript",
+        "template",
+        "textarea",
+        "xmp",
+        "noembed",
+        "noframes",
+        "audio",
+        "video",
+        "source",
+        "track",
+        "canvas",
+        "form",
+        "button",
+        "select",
+        "option",
+        "use",
+        "image",
+        "feimage",
+    }
+)
+_VOID_HTML_TAGS = frozenset({"br", "hr", "img", "input", "col"})
+_ALLOWED_FRAG_TAGS = frozenset(
+    {
+        "div",
+        "span",
+        "p",
+        "br",
+        "hr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "strong",
+        "em",
+        "b",
+        "i",
+        "u",
+        "s",
+        "small",
+        "sub",
+        "sup",
+        "code",
+        "pre",
+        "blockquote",
+        "ul",
+        "ol",
+        "li",
+        "dl",
+        "dt",
+        "dd",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "th",
+        "td",
+        "caption",
+        "colgroup",
+        "col",
+        "section",
+        "article",
+        "header",
+        "footer",
+        "nav",
+        "aside",
+        "main",
+        "figure",
+        "figcaption",
+        "details",
+        "summary",
+        "label",
+        "input",
+        "img",
+        "a",
+        "svg",
+        "g",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "title",
+        "desc",
+        "defs",
+        "lineargradient",
+        "radialgradient",
+        "stop",
+        "clippath",
+        "pattern",
+        "mask",
+        "marker",
+    }
+)
+_CANONICAL_TAG_NAMES = {
+    "lineargradient": "linearGradient",
+    "radialgradient": "radialGradient",
+    "clippath": "clipPath",
+}
+_CANONICAL_ATTR_NAMES = {
+    "viewbox": "viewBox",
+    "preserveaspectratio": "preserveAspectRatio",
+    "gradientunits": "gradientUnits",
+    "gradienttransform": "gradientTransform",
+    "spreadmethod": "spreadMethod",
+    "markerwidth": "markerWidth",
+    "markerheight": "markerHeight",
+    "refx": "refX",
+    "refy": "refY",
+    "textlength": "textLength",
+}
+_ALLOWED_FRAG_ATTRS = frozenset(
+    {
+        "id",
+        "class",
+        "title",
+        "role",
+        "style",
+        "tabindex",
+        "dir",
+        "lang",
+        "type",
+        "name",
+        "value",
+        "checked",
+        "for",
+        "colspan",
+        "rowspan",
+        "scope",
+        "headers",
+        "alt",
+        "href",
+        "src",
+        "width",
+        "height",
+        "viewbox",
+        "preserveaspectratio",
+        "xmlns",
+        "d",
+        "fill",
+        "fill-opacity",
+        "fill-rule",
+        "stroke",
+        "stroke-width",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-opacity",
+        "opacity",
+        "x",
+        "y",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "cx",
+        "cy",
+        "r",
+        "rx",
+        "ry",
+        "dx",
+        "dy",
+        "points",
+        "transform",
+        "text-anchor",
+        "dominant-baseline",
+        "font-size",
+        "font-weight",
+        "font-family",
+        "offset",
+        "stop-color",
+        "stop-opacity",
+        "gradientunits",
+        "gradienttransform",
+        "spreadmethod",
+        "markerwidth",
+        "markerheight",
+        "refx",
+        "refy",
+        "textlength",
+    }
+)
+_SAFE_STYLE_PROPS = frozenset(
+    {
+        "width",
+        "min-width",
+        "max-width",
+        "height",
+        "min-height",
+        "max-height",
+        "top",
+        "right",
+        "bottom",
+        "left",
+        "margin",
+        "margin-top",
+        "margin-right",
+        "margin-bottom",
+        "margin-left",
+        "padding",
+        "padding-top",
+        "padding-right",
+        "padding-bottom",
+        "padding-left",
+        "display",
+        "flex",
+        "flex-direction",
+        "flex-wrap",
+        "flex-grow",
+        "flex-shrink",
+        "flex-basis",
+        "grid-template-columns",
+        "grid-template-rows",
+        "grid-column",
+        "grid-row",
+        "gap",
+        "row-gap",
+        "column-gap",
+        "align-items",
+        "align-self",
+        "justify-content",
+        "justify-items",
+        "color",
+        "background",
+        "background-color",
+        "background-image",
+        "border",
+        "border-top",
+        "border-right",
+        "border-bottom",
+        "border-left",
+        "border-color",
+        "border-width",
+        "border-style",
+        "border-radius",
+        "opacity",
+        "transform",
+        "text-align",
+        "font-size",
+        "font-weight",
+        "font-family",
+        "line-height",
+        "overflow",
+        "overflow-x",
+        "overflow-y",
+        "stroke",
+        "stroke-width",
+        "fill",
+        "visibility",
+        "vertical-align",
+        "white-space",
+        "box-sizing",
+        "order",
+    }
+)
+_STYLE_UNSAFE_VAL_RE = re.compile(
+    r"(?:url\s*\(|expression\s*\(|@|javascript:|vbscript:|behavior\s*:|-moz-binding|\\|[{}<>\"'])",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_inline_style(raw_style: str) -> str:
+    cleaned = re.sub(r"/\*.*?\*/", "", raw_style, flags=re.S)
+    kept: list[str] = []
+    for decl in cleaned.split(";"):
+        if ":" not in decl:
+            continue
+        prop, val = decl.split(":", 1)
+        prop_clean = prop.strip().lower()
+        val_clean = val.strip()
+        if not prop_clean or not val_clean:
+            continue
+        if not (prop_clean.startswith("--") or prop_clean in _SAFE_STYLE_PROPS):
+            continue
+        if prop_clean.startswith("--") and not re.fullmatch(r"--[a-z0-9_-]{1,48}", prop_clean):
+            continue
+        if _STYLE_UNSAFE_VAL_RE.search(val_clean):
+            continue
+        kept.append(f"{prop_clean}:{val_clean}")
+    return ";".join(kept)
+
+
+def _is_safe_href(raw_href: str) -> bool:
+    collapsed = re.sub(r"[\x00-\x20\x7f]+", "", html.unescape(raw_href or ""))
+    if not collapsed:
+        return False
+    if collapsed.startswith("#"):
+        return True
+    parsed = urlparse(collapsed)
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+class _VizFragmentSanitizer(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._drop_stack: list[str] = []
+        self._svg_depth = 0
+
+    def _clean_attrs(
+        self, tag_low: str, attrs: list[tuple[str, str | None]]
+    ) -> list[tuple[str, str]] | None:
+        attr_dict: dict[str, str] = {}
+        ordered_keys: list[str] = []
+        for raw_k, raw_v in attrs:
+            if not raw_k:
+                continue
+            k = raw_k.strip().lower()
+            if not k or k.startswith("on"):
+                continue
+            if not (k in _ALLOWED_FRAG_ATTRS or k.startswith(("aria-", "data-"))):
+                continue
+            v = "" if raw_v is None else str(raw_v)
+            if k == "xmlns":
+                if v.strip() != "http://www.w3.org/2000/svg":
+                    continue
+            elif k == "style":
+                v = _sanitize_inline_style(v)
+                if not v:
+                    continue
+            elif k == "href":
+                if tag_low != "a" or self._svg_depth > 0 or not _is_safe_href(v):
+                    continue
+            elif k == "src":
+                if tag_low != "img" or not is_safe_raster_data_uri(v):
+                    return None
+                v = v.strip()
+            if k not in attr_dict:
+                ordered_keys.append(k)
+            attr_dict[k] = v
+        if tag_low == "img" and "src" not in attr_dict:
+            return None
+        if tag_low == "input" and attr_dict.get("type", "").strip().lower() not in {
+            "radio",
+            "checkbox",
+        }:
+            return None
+        out: list[tuple[str, str]] = []
+        for k in ordered_keys:
+            out.append((_CANONICAL_ATTR_NAMES.get(k, k), attr_dict[k]))
+        return out
+
+    def _format_start(
+        self, tag_low: str, clean_attrs: list[tuple[str, str]], *, self_close: bool
+    ) -> str:
+        name = _CANONICAL_TAG_NAMES.get(tag_low, tag_low)
+        attr_str = "".join(
+            f' {k}="{escape(v, quote=True)}"' for k, v in clean_attrs
+        )
+        if self_close and tag_low not in _VOID_HTML_TAGS:
+            return f"<{name}{attr_str}/>"
+        return f"<{name}{attr_str}>"
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_low = tag.lower()
+        if self._drop_stack:
+            if tag_low in _DROP_SUBTREE_TAGS:
+                self._drop_stack.append(tag_low)
+            return
+        if tag_low in _DROP_SUBTREE_TAGS:
+            self._drop_stack.append(tag_low)
+            return
+        if tag_low not in _ALLOWED_FRAG_TAGS:
+            return
+        if tag_low == "a" and self._svg_depth > 0:
+            self._drop_stack.append(tag_low)
+            return
+        clean = self._clean_attrs(tag_low, attrs)
+        if clean is None:
+            return
+        if tag_low == "svg":
+            self._svg_depth += 1
+        self.parts.append(self._format_start(tag_low, clean, self_close=False))
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        tag_low = tag.lower()
+        if self._drop_stack or tag_low in _DROP_SUBTREE_TAGS:
+            return
+        if tag_low not in _ALLOWED_FRAG_TAGS:
+            return
+        if tag_low == "a" and self._svg_depth > 0:
+            return
+        clean = self._clean_attrs(tag_low, attrs)
+        if clean is None:
+            return
+        self.parts.append(self._format_start(tag_low, clean, self_close=True))
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_low = tag.lower()
+        if self._drop_stack:
+            if tag_low in self._drop_stack:
+                while self._drop_stack:
+                    popped = self._drop_stack.pop()
+                    if popped == tag_low:
+                        break
+            return
+        if tag_low in _VOID_HTML_TAGS or tag_low not in _ALLOWED_FRAG_TAGS:
+            return
+        if tag_low == "svg" and self._svg_depth > 0:
+            self._svg_depth -= 1
+        name = _CANONICAL_TAG_NAMES.get(tag_low, tag_low)
+        self.parts.append(f"</{name}>")
+
+    def handle_data(self, data: str) -> None:
+        if not self._drop_stack and data:
+            self.parts.append(escape(data, quote=False))
+
+
+def sanitize_html_fragment(fragment: str) -> str:
+    """Strict allowlist HTML/SVG sanitizer for untrusted viz fragments."""
+    raw = str(fragment or "")
+    if not raw.strip():
+        return ""
+    parser = _VizFragmentSanitizer()
+    parser.feed(raw)
+    parser.close()
+    return "".join(parser.parts)
 
 
 def match_sky(slot_label: str = "", *, now_ts: float | None = None) -> tuple[str, dict[str, Any]]:
@@ -894,9 +1420,11 @@ def _render_item_html(
         str(item.get("why") or item.get("note") or item.get("bridge") or "").strip()
     )
     cover_data = str(item.get("cover_data") or "").strip()
-    has_cover = cover_data.startswith("data:image/")
+    has_cover = is_safe_raster_data_uri(cover_data)
+    if not has_cover:
+        cover_data = ""
     cover_small = bool(item.get("cover_small"))
-    viz_frag = str(item.get("viz_frag") or "").strip()
+    viz_frag = sanitize_html_fragment(str(item.get("viz_frag") or "").strip())
 
     visual_html = ""
     if has_cover:
@@ -918,17 +1446,25 @@ def _render_item_html(
     summary_html = f'<p class="item-summary">{summary}</p>' if summary else ""
 
     pal = item.get("cover_tint") if (has_cover and isinstance(item.get("cover_tint"), dict)) else None
-    glow = pal.get("glow") if isinstance(pal, dict) else ""
-    card_style = f' style="--card-glow:{escape(str(glow), quote=True)};"' if glow else ""
+    glow = _sanitize_css_glow(pal.get("glow")) if isinstance(pal, dict) else ""
+    card_style = f' style="--card-glow:{escape(glow, quote=True)};"' if glow else ""
 
     why_html = ""
     if why_text:
         if is_lead:
             lead_pal = pal or sky
-            why_bg = escape(str(lead_pal.get("why_bg") or sky["why_bg"]), quote=True)
-            why_ink = escape(str(lead_pal.get("why_ink") or sky["why_ink"]), quote=True)
+            why_bg = (
+                _sanitize_css_color(lead_pal.get("why_bg"))
+                or _sanitize_css_color(sky.get("why_bg"))
+                or "#edf6fd"
+            )
+            why_ink = (
+                _sanitize_css_color(lead_pal.get("why_ink"))
+                or _sanitize_css_color(sky.get("why_ink"))
+                or "#0f4c8a"
+            )
             why_html = (
-                f'<p class="why" style="background:{why_bg};color:{why_ink};">'
+                f'<p class="why" style="background:{escape(why_bg, quote=True)};color:{escape(why_ink, quote=True)};">'
                 f'<span class="why-k">值得看</span>{why_text}</p>'
             )
         else:
@@ -1002,6 +1538,7 @@ def _build_html_once(
         "<head>\n"
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=600, initial-scale=1.0">\n'
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">\n'
         "<title>Maisya 资讯简报</title>\n"
         f"<style>{css}</style>\n"
         "</head>\n"
@@ -1082,8 +1619,10 @@ def build_card_html(
     if len(html_doc.encode("utf-8")) > 490_000:
         for it in working:
             cd = str(it.get("cover_data") or "")
-            if cd.startswith("data:image/"):
+            if is_safe_raster_data_uri(cd):
                 it["cover_data"] = _recompress_data_uri(cd, max_width=760, quality=66)
+            elif cd:
+                it["cover_data"] = ""
         html_doc = _build_html_once(
             working,
             sky_key=sky_key,

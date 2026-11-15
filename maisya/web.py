@@ -1,6 +1,7 @@
 """统一联网路由：宿主预设优先，未启用时兼容第三方搜索插件或已登记服务。"""
 
 import asyncio
+import http.client
 import importlib.util
 import ipaddress
 import json
@@ -168,27 +169,169 @@ def normalize_fetch_payload(
     }
 
 
-def _assert_public_host(url: str, *, proxy: str = "") -> str:
+def _is_global_ip(raw_ip: str) -> bool:
+    bare = raw_ip.split("%", 1)[0]
+    try:
+        ip = ipaddress.ip_address(bare)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+    except ValueError:
+        return False
+    return bool(
+        ip.is_global
+        and not ip.is_private
+        and not ip.is_loopback
+        and not ip.is_link_local
+        and not ip.is_multicast
+        and not ip.is_reserved
+        and not ip.is_unspecified
+    )
+
+
+def _resolve_public_ips(url: str, *, proxy: str = "") -> tuple[str, ...]:
     safe_url(url)
     if proxy:
-        return url
+        return ()
     parts = urlsplit(url)
     hostname = (parts.hostname or "").lower().rstrip(".")
     port = parts.port or (443 if parts.scheme == "https" else 80)
     try:
-        ipaddress.ip_address(hostname)
-        return url
-    except ValueError:
-        pass
+        bare = hostname.split("%", 1)[0]
+        ip = ipaddress.ip_address(bare)
+        if not _is_global_ip(str(ip)):
+            raise ValueError("不能读取内网或云元数据地址")
+        return (str(ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip),)
+    except ValueError as exc:
+        if "不能读取内网或云元数据地址" in str(exc):
+            raise
+    try:
+        packed = socket.inet_aton(hostname)
+    except OSError:
+        packed = None
+    if packed is not None:
+        ipv4 = ipaddress.IPv4Address(packed)
+        if not _is_global_ip(str(ipv4)):
+            raise ValueError("不能读取内网或云元数据地址")
+        return (str(ipv4),)
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except OSError:
-        return url
+        return ()
+    pinned: list[str] = []
+    seen: set[str] = set()
     for _family, _kind, _proto, _canon, sockaddr in infos:
         host_ip = str(sockaddr[0]).split("%", 1)[0]
-        if not ipaddress.ip_address(host_ip).is_global:
+        if not _is_global_ip(host_ip):
             raise ValueError("不能读取内网或云元数据地址")
+        if host_ip not in seen:
+            seen.add(host_ip)
+            pinned.append(host_ip)
+    return tuple(pinned)
+
+
+def _assert_public_host(url: str, *, proxy: str = "") -> str:
+    _resolve_public_ips(url, proxy=proxy)
     return url
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _connect_pinned_ips(
+    pinned_ips: tuple[str, ...],
+    port: int,
+    timeout: Any,
+    source_address: Any = None,
+) -> socket.socket:
+    last_err: OSError | None = None
+    sock_timeout = None if timeout is socket._GLOBAL_DEFAULT_TIMEOUT else timeout
+    for raw_ip in pinned_ips:
+        ip_str = raw_ip.split("%", 1)[0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+        sock: socket.socket | None = None
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            if sock_timeout is not None:
+                sock.settimeout(sock_timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            if ip_obj.version == 6:
+                sock.connect((str(ip_obj), port, 0, 0))
+            else:
+                sock.connect((str(ip_obj), port))
+            return sock
+        except OSError as err:
+            last_err = err
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+    if last_err is not None:
+        raise last_err
+    raise OSError("无法连接到已核验的公网 IP 地址")
+
+
+def _make_pinned_http_cls(pinned_ips: tuple[str, ...]):
+    class _PinnedHTTPConnection(http.client.HTTPConnection):
+        def connect(self) -> None:
+            self.sock = _connect_pinned_ips(
+                pinned_ips, self.port, self.timeout, self.source_address
+            )
+            if self._tunnel_host:
+                self._tunnel()
+
+    return _PinnedHTTPConnection
+
+
+def _make_pinned_https_cls(pinned_ips: tuple[str, ...]):
+    class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            raw_sock = _connect_pinned_ips(
+                pinned_ips, self.port, self.timeout, self.source_address
+            )
+            self.sock = raw_sock
+            try:
+                if self._tunnel_host:
+                    self._tunnel()
+                server_hostname = self._tunnel_host if self._tunnel_host else self.host
+                self.sock = self._context.wrap_socket(
+                    raw_sock, server_hostname=server_hostname
+                )
+            except BaseException:
+                try:
+                    raw_sock.close()
+                except OSError:
+                    pass
+                raise
+
+    return _PinnedHTTPSConnection
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ips: tuple[str, ...], debuglevel: int = 0) -> None:
+        super().__init__(debuglevel=debuglevel)
+        self._conn_cls = _make_pinned_http_cls(pinned_ips)
+
+    def http_open(self, req: urllib.request.Request):
+        return self.do_open(self._conn_cls, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(
+        self, pinned_ips: tuple[str, ...], debuglevel: int = 0, context: Any = None
+    ) -> None:
+        super().__init__(debuglevel=debuglevel, context=context)
+        self._conn_cls = _make_pinned_https_cls(pinned_ips)
+
+    def https_open(self, req: urllib.request.Request):
+        return self.do_open(self._conn_cls, req, context=self._context)
 
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -227,10 +370,6 @@ def _default_http_request(
     public_only: bool = True,
 ) -> tuple[int, dict[str, str], bytes, str]:
     proxy_url = _validated_proxy(proxy)
-    if public_only:
-        _assert_public_host(url, proxy=proxy_url)
-    else:
-        safe_url(url)
     body = (
         json.dumps(json_body, ensure_ascii=False).encode("utf-8")
         if json_body is not None
@@ -239,25 +378,51 @@ def _default_http_request(
     req_headers = dict(headers or {})
     if body is not None:
         req_headers.setdefault("Content-Type", "application/json")
-    request = urllib.request.Request(
-        url, data=body, headers=req_headers, method=method.upper()
-    )
     proxy_map = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler(proxy_map),
-        _SafeRedirectHandler(proxy=proxy_url),
-    )
-    try:
-        with opener.open(request, timeout=timeout) as response:
-            raw = response.read(max_bytes + 1)
-            if len(raw) > max_bytes:
-                raw = raw[:max_bytes]
-            resp_headers = {k.lower(): v for k, v in response.headers.items()}
-            return int(response.status), resp_headers, raw, str(response.geturl() or url)
-    except urllib.error.HTTPError as err:
-        err_body = err.read(65536) if err.fp else b""
-        resp_headers = {k.lower(): v for k, v in (err.headers or {}).items()}
-        return int(err.code), resp_headers, err_body, str(err.geturl() or url)
+
+    current = url
+    for _hop in range(5):
+        if public_only:
+            pinned_ips = _resolve_public_ips(current, proxy=proxy_url)
+        else:
+            safe_url(current)
+            pinned_ips = ()
+        request = urllib.request.Request(
+            current, data=body, headers=req_headers, method=method.upper()
+        )
+        handlers: list[Any] = [urllib.request.ProxyHandler(proxy_map)]
+        if public_only and not proxy_url:
+            handlers.append(_NoRedirectHandler())
+            if pinned_ips:
+                handlers.extend(
+                    [_PinnedHTTPHandler(pinned_ips), _PinnedHTTPSHandler(pinned_ips)]
+                )
+        else:
+            handlers.append(_SafeRedirectHandler(proxy=proxy_url))
+        opener = urllib.request.build_opener(*handlers)
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                status = int(response.status)
+                if public_only and not proxy_url and status in {301, 302, 303, 307, 308}:
+                    loc = response.headers.get("Location", "")
+                    if loc:
+                        current = urljoin(current, loc)
+                        continue
+                raw = response.read(max_bytes + 1)
+                if len(raw) > max_bytes:
+                    raw = raw[:max_bytes]
+                resp_headers = {k.lower(): v for k, v in response.headers.items()}
+                return status, resp_headers, raw, str(response.geturl() or current)
+        except urllib.error.HTTPError as err:
+            if public_only and not proxy_url and err.code in {301, 302, 303, 307, 308}:
+                loc = err.headers.get("Location", "") if err.headers else ""
+                if loc:
+                    current = urljoin(current, loc)
+                    continue
+            err_body = err.read(65536) if err.fp else b""
+            resp_headers = {k.lower(): v for k, v in (err.headers or {}).items()}
+            return int(err.code), resp_headers, err_body, str(err.geturl() or current)
+    raise ValueError("网页重定向次数过多")
 
 
 class _TextExtractor(HTMLParser):

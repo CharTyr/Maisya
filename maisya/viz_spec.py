@@ -60,7 +60,20 @@ LIMITS: dict[str, dict[str, int]] = {
     },
 }
 
-_NUM_RE = re.compile(r"(?<![0-9A-Za-z_.])\d[\d,]*(?:\.\d+)?")
+_NUM_RE = re.compile(
+    r"(?<![0-9A-Za-z_.])"
+    r"(?:[-−](?=\d))?"
+    r"(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)"
+    r"(?:\.\d+)?"
+)
+_NUM_WITH_UNIT_RE = re.compile(
+    r"(?<![0-9A-Za-z_.])"
+    r"((?:[-−](?=\d))?(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.\d+)?)"
+    r"\s*(%|％|亿万?|万|千|[kKwW](?![A-Za-z0-9]))?"
+)
+_ALNUM_CODENAME_RE = re.compile(
+    r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*\d+[A-Za-z0-9_.]*(?![A-Za-z0-9_])"
+)
 _FORBIDDEN_IMAGE_SCHEMES = ("http:", "https:", "data:", "file:", "javascript:")
 _SAFE_MIME_DATA_PREFIXES = (
     "data:image/png;base64,",
@@ -555,13 +568,58 @@ def texts_of(spec: dict[str, Any]) -> list[str]:
     return out
 
 
+def _clean_num_str(raw: str) -> str:
+    return raw.replace("\u2212", "-").replace(",", "").strip(".")
+
+
+def _add_decimal_and_rounded(
+    dec: Decimal, add: Callable[[float], None]
+) -> None:
+    try:
+        flt = float(dec)
+    except (ValueError, OverflowError):
+        return
+    add(flt)
+    for digits in (0, 1, 2, 3):
+        add(round(flt, digits))
+        try:
+            quant = Decimal("1") if digits == 0 else Decimal(f"1e-{digits}")
+            add(float(dec.quantize(quant, rounding=ROUND_HALF_UP)))
+        except (InvalidOperation, ValueError):
+            pass
+
+
+def _norm_codename_text(text: str) -> str:
+    return re.sub(
+        r"(?<=[A-Za-z])[-_\s]+(?=\d)|(?<=\d)[-_\s]+(?=[A-Za-z])",
+        "",
+        text or "",
+    ).lower()
+
+
+def _missing_codenames(items: Iterable[str], source_text: str) -> list[str]:
+    norm_src = _norm_codename_text(source_text or "")
+    missing: list[str] = []
+    seen: set[str] = set()
+    for text in items:
+        for tok in _ALNUM_CODENAME_RE.findall(text or ""):
+            norm_tok = _norm_codename_text(tok)
+            if not norm_tok or norm_tok in seen:
+                continue
+            pattern = r"(?<![a-z0-9])" + re.escape(norm_tok) + r"(?![a-z0-9])"
+            if not re.search(pattern, norm_src):
+                seen.add(norm_tok)
+                missing.append(tok)
+    return missing
+
+
 def numbers_in(text: str) -> list[float]:
-    """Extract numeric magnitudes from mixed Chinese/English text."""
+    """Extract numeric magnitudes (preserving negative signs) from mixed text."""
     if not text:
         return []
     out: list[float] = []
     for match in _NUM_RE.findall(text):
-        cleaned = match.replace(",", "").strip(".")
+        cleaned = _clean_num_str(match)
         if not cleaned:
             continue
         try:
@@ -582,58 +640,120 @@ def _allowed_numbers(source_text: str) -> list[float]:
             seen.add(val)
             allowed.append(val)
 
-    for raw in _NUM_RE.findall(source_text or ""):
-        cleaned = raw.replace(",", "").strip(".")
+    for raw, unit in _NUM_WITH_UNIT_RE.findall(source_text or ""):
+        cleaned = _clean_num_str(raw)
         if not cleaned:
             continue
         try:
             dec = Decimal(cleaned)
-            flt = float(dec)
         except (InvalidOperation, ValueError):
             continue
-        add(flt)
-        for digits in (0, 1, 2, 3):
-            add(round(flt, digits))
-            try:
-                quant = Decimal("1") if digits == 0 else Decimal(f"1e-{digits}")
-                add(float(dec.quantize(quant, rounding=ROUND_HALF_UP)))
-            except (InvalidOperation, ValueError):
-                pass
+        _add_decimal_and_rounded(dec, add)
+        u = (unit or "").strip().lower()
+        if u in {"%", "％"}:
+            _add_decimal_and_rounded(dec / Decimal("100"), add)
+        elif "." in cleaned and Decimal("0") < abs(dec) < Decimal("1"):
+            _add_decimal_and_rounded(dec * Decimal("100"), add)
+        elif u in {"千", "k"}:
+            _add_decimal_and_rounded(dec * Decimal("1000"), add)
+            _add_decimal_and_rounded(dec / Decimal("10"), add)  # -> 万
+        elif u in {"万", "w"}:
+            _add_decimal_and_rounded(dec * Decimal("10000"), add)
+            _add_decimal_and_rounded(dec * Decimal("10"), add)  # -> k/千
+            _add_decimal_and_rounded(dec / Decimal("10000"), add)  # -> 亿
+        elif u == "亿":
+            _add_decimal_and_rounded(dec * Decimal("100000000"), add)
+            _add_decimal_and_rounded(dec * Decimal("10000"), add)  # -> 万
+        elif not u and abs(dec) >= Decimal("1000"):
+            if abs(dec) >= Decimal("1000"):
+                _add_decimal_and_rounded(dec / Decimal("1000"), add)
+            if abs(dec) >= Decimal("10000"):
+                _add_decimal_and_rounded(dec / Decimal("10000"), add)
+            if abs(dec) >= Decimal("100000000"):
+                _add_decimal_and_rounded(dec / Decimal("100000000"), add)
     return allowed
 
 
-def _is_number_allowed(num: float, allowed: list[float]) -> bool:
-    if num <= 10.0:
+def _is_number_allowed(
+    num: float, allowed: list[float], *, allow_small: bool = True
+) -> bool:
+    exact_match = any(
+        math.isclose(num, cand, rel_tol=1e-9, abs_tol=1e-9) for cand in allowed
+    )
+    if exact_match:
         return True
-    for cand in allowed:
-        if math.isclose(num, cand, rel_tol=1e-9, abs_tol=1e-9):
-            return True
+    if allow_small and 0.0 <= num <= 10.0:
+        if num > 0.0 and any(
+            math.isclose(-num, cand, rel_tol=1e-9, abs_tol=1e-9) for cand in allowed
+        ):
+            return False
+        return True
     return False
 
 
+def _claim_number_candidates(raw: str, unit: str) -> list[float]:
+    cleaned = _clean_num_str(raw)
+    if not cleaned:
+        return []
+    try:
+        dec = Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return []
+    cands: list[float] = []
+    try:
+        cands.append(float(dec))
+    except (ValueError, OverflowError):
+        return []
+    u = (unit or "").strip().lower()
+    if u in {"%", "％"}:
+        cands.append(float(dec / Decimal("100")))
+    elif u in {"千", "k"}:
+        cands.append(float(dec * Decimal("1000")))
+    elif u in {"万", "w"}:
+        cands.append(float(dec * Decimal("10000")))
+    elif u == "亿":
+        cands.append(float(dec * Decimal("100000000")))
+    return cands
+
+
 def check_numbers(texts: Iterable[str] | str, source_text: str) -> tuple[bool, str]:
-    """Verify every displayed number > 10 appears (exactly or via rounding) in source_text."""
+    """Verify numbers (sign-strict, unit-aware) and alphanumeric codenames against source_text."""
     items = [texts] if isinstance(texts, str) else list(texts)
     allowed = _allowed_numbers(source_text or "")
     missing: list[str] = []
     seen_missing: set[str] = set()
     for text in items:
-        for num in numbers_in(text):
-            if not _is_number_allowed(num, allowed):
-                disp = _fmt_num(num)
+        for raw, unit in _NUM_WITH_UNIT_RE.findall(text or ""):
+            cands = _claim_number_candidates(raw, unit)
+            if not cands:
+                continue
+            if not (
+                _is_number_allowed(cands[0], allowed, allow_small=True)
+                or any(
+                    _is_number_allowed(c, allowed, allow_small=False)
+                    for c in cands[1:]
+                )
+            ):
+                disp = _fmt_num(cands[0])
                 if disp not in seen_missing:
                     seen_missing.add(disp)
                     missing.append(disp)
+    bad_codes = _missing_codenames(items, source_text or "")
     if missing:
         return (
             False,
-            f"展示数字超过 10 但未在 source_text 中核实（含四舍五入容差）: {', '.join(missing)}",
+            f"展示数字未在 source_text 中核实（含正负号与四舍五入容差）: {', '.join(missing)}",
+        )
+    if bad_codes:
+        return (
+            False,
+            f"展示型号或字母数字代号未在 source_text 中核实: {', '.join(bad_codes)}",
         )
     return True, ""
 
 
 def check_spec_numbers(spec: dict[str, Any], source_text: str) -> tuple[bool, str]:
-    """Verify every displayed number > 10 inside spec appears in source_text."""
+    """Verify every displayed number and codename inside spec appears in source_text."""
     return check_numbers(texts_of(spec), source_text)
 
 
@@ -676,24 +796,69 @@ def _render_bars(block: dict[str, Any]) -> str:
     items = block["items"]
     global_unit = _opt_str(block, "unit")
     vals = [float(item["value"]) for item in items]
-    max_abs = max((abs(v) for v in vals), default=1.0) or 1.0
+    has_negative = any(v < 0.0 for v in vals)
     cols: list[str] = []
-    for item, val in zip(items, vals):
-        pct = max(0.0, min(100.0, (abs(val) / max_abs) * 100.0))
-        unit = _opt_str(item, "unit") or global_unit
-        disp = _opt_str(item, "display") or f"{_fmt_num(val)}{unit}"
-        tone = _opt_str(item, "tone")
-        tone_cls = f" tone-{tone}" if tone in {"green", "red", "amber", "purple", "teal", "muted"} else ""
-        label = _esc(item["label"])
-        cols.append(
-            '<div class="vs-bar">'
-            f'<div class="vs-bar-v">{_esc(disp)}</div>'
-            '<div class="vs-bar-t">'
-            f'<div class="vs-bar-b{tone_cls}" style="height:{pct:.1f}%"></div>'
-            "</div>"
-            f'<div class="vs-bar-l" title="{label}">{label}</div>'
-            "</div>"
-        )
+
+    if has_negative:
+        max_pos = max((v for v in vals if v > 0.0), default=0.0)
+        max_neg = max((-v for v in vals if v < 0.0), default=0.0)
+        span = (max_pos + max_neg) or 1.0
+        zero_bottom_pct = max(0.0, min(100.0, (max_neg / span) * 100.0))
+        zero_top_pct = 100.0 - zero_bottom_pct
+        for item, val in zip(items, vals):
+            unit = _opt_str(item, "unit") or global_unit
+            disp = _opt_str(item, "display") or f"{_fmt_num(val)}{unit}"
+            tone = _opt_str(item, "tone")
+            tone_cls = (
+                f" tone-{tone}"
+                if tone in {"green", "red", "amber", "purple", "teal", "muted"}
+                else ""
+            )
+            label = _esc(item["label"])
+            if val < 0.0:
+                pct = max(0.0, min(zero_bottom_pct, (abs(val) / span) * 100.0))
+                bar_html = (
+                    f'<div class="vs-bar-b is-neg{tone_cls}" '
+                    f'style="top:{zero_top_pct:.1f}%;bottom:auto;height:{pct:.1f}%"></div>'
+                )
+            else:
+                pct = max(0.0, min(100.0 - zero_bottom_pct, (val / span) * 100.0))
+                bar_html = (
+                    f'<div class="vs-bar-b is-pos{tone_cls}" '
+                    f'style="bottom:{zero_bottom_pct:.1f}%;height:{pct:.1f}%"></div>'
+                )
+            cols.append(
+                '<div class="vs-bar">'
+                f'<div class="vs-bar-v">{_esc(disp)}</div>'
+                '<div class="vs-bar-t is-signed">'
+                f'<div class="vs-bar-zero" style="bottom:{zero_bottom_pct:.1f}%"></div>'
+                f"{bar_html}"
+                "</div>"
+                f'<div class="vs-bar-l" title="{label}">{label}</div>'
+                "</div>"
+            )
+    else:
+        max_abs = max((abs(v) for v in vals), default=1.0) or 1.0
+        for item, val in zip(items, vals):
+            pct = max(0.0, min(100.0, (abs(val) / max_abs) * 100.0))
+            unit = _opt_str(item, "unit") or global_unit
+            disp = _opt_str(item, "display") or f"{_fmt_num(val)}{unit}"
+            tone = _opt_str(item, "tone")
+            tone_cls = (
+                f" tone-{tone}"
+                if tone in {"green", "red", "amber", "purple", "teal", "muted"}
+                else ""
+            )
+            label = _esc(item["label"])
+            cols.append(
+                '<div class="vs-bar">'
+                f'<div class="vs-bar-v">{_esc(disp)}</div>'
+                '<div class="vs-bar-t">'
+                f'<div class="vs-bar-b{tone_cls}" style="height:{pct:.1f}%"></div>'
+                "</div>"
+                f'<div class="vs-bar-l" title="{label}">{label}</div>'
+                "</div>"
+            )
     return _render_block_header(block) + f'<div class="vs-bars"><div class="vs-bars-row">{"".join(cols)}</div></div>'
 
 
