@@ -1029,3 +1029,148 @@ async def test_wave2_cross_branch_rpc_alignment_fixes(tmp_path: Path) -> None:
         assert "Summary" in art_inferred["text"]
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_cold_start_onboarding_from_plugin_disabled_to_complete(
+    tmp_path: Path,
+) -> None:
+    async def ok_probe(cap: str, kwargs: dict[str, Any] | None = None, **_kw: Any) -> dict[str, Any]:
+        return {"success": True, "response": "OK"}
+
+    plugin = await _load_plugin(
+        tmp_path,
+        host_config={"plugin": {"permission": []}},
+        plugin_config={"plugin": {"enabled": False}, "enabled_chats": [], "admins": []},
+        call_capability_fn=ok_probe,
+        write_model_toml=True,
+    )
+    try:
+        assert plugin.settings.plugin.enabled is False
+
+        ob0 = await plugin.manage_read("onboarding", "{}")
+        assert ob0["success"] is True
+        assert ob0["plugin_enabled"] is False
+        assert ob0["usable"] is False
+        assert ob0["show"] is True
+        chats_item = next(it for it in ob0["items"] if it["key"] == "chats")
+        assert chats_item["state"] == "off"
+
+        snap0 = await plugin.console_query()
+        assert snap0["plugin_enabled"] is False
+        set0 = await plugin.manage_read("settings", "{}")
+        assert set0["plugin_enabled"] is False
+
+        premature = await plugin.manage_write(
+            "onboarding_complete",
+            json.dumps({"run_id": ob0["run_id"], "sequence": ob0["sequence"]}),
+        )
+        assert premature["success"] is True
+        assert premature["completed"] is False
+
+        adv_hello = await plugin.manage_write(
+            "onboarding_advance",
+            json.dumps(
+                {
+                    "step": "hello",
+                    "target_step": "admins",
+                    "run_id": ob0["run_id"],
+                    "sequence": ob0["sequence"],
+                }
+            ),
+        )
+        assert adv_hello["current_step"] == "admins"
+
+        adv_admins = await plugin.manage_write(
+            "onboarding_advance",
+            json.dumps(
+                {
+                    "step": "admins",
+                    "target_step": "chats",
+                    "run_id": adv_hello["run_id"],
+                    "sequence": adv_hello["sequence"],
+                    "data": {"admins": [f"qq:{TEST_ADMIN_ID}"]},
+                }
+            ),
+        )
+        assert adv_admins["current_step"] == "chats"
+
+        adv_chats = await plugin.manage_write(
+            "onboarding_advance",
+            json.dumps(
+                {
+                    "step": "chats",
+                    "target_step": "runtime",
+                    "run_id": adv_admins["run_id"],
+                    "sequence": adv_admins["sequence"],
+                    "data": {
+                        "plugin_enabled": True,
+                        "plugin": {"enabled": True},
+                        "enabled_chats": [f"qq:group:{TEST_GROUP_ID}"],
+                    },
+                }
+            ),
+        )
+        assert adv_chats["current_step"] == "runtime"
+        assert adv_chats["plugin_enabled"] is True
+        assert adv_chats["onboarding"]["plugin_enabled"] is True
+        assert plugin.settings.plugin.enabled is True
+
+        ver_ok = await plugin.manage_write(
+            "onboarding_verify_model",
+            json.dumps(
+                {
+                    "run_id": adv_chats["run_id"],
+                    "sequence": adv_chats["sequence"],
+                    "model_name": "main-chat-model",
+                }
+            ),
+        )
+        assert ver_ok["success"] is True
+        assert ver_ok["model_verify"]["state"] == "ok"
+
+        adv_rt = await plugin.manage_write(
+            "onboarding_advance",
+            json.dumps(
+                {
+                    "step": "runtime",
+                    "target_step": "done",
+                    "run_id": ver_ok["run_id"],
+                    "sequence": ver_ok["sequence"],
+                    "data": {
+                        "default_model": "main-chat-model",
+                        "permission_mode": "ask_risky",
+                        "sandbox_enabled": False,
+                    },
+                }
+            ),
+        )
+        assert adv_rt["current_step"] == "done"
+        assert adv_rt["usable"] is True
+
+        done = await plugin.manage_write(
+            "onboarding_complete",
+            json.dumps({"run_id": adv_rt["run_id"], "sequence": adv_rt["sequence"]}),
+        )
+        assert done["success"] is True
+        assert done["completed"] is True
+        assert done["status"] == "completed"
+        assert done["show"] is False
+
+        # settings_update toggles plugin_enabled / nested plugin cleanly while keeping config_version
+        off_res = await plugin.manage_write(
+            "settings_update", json.dumps({"plugin_enabled": False})
+        )
+        assert off_res["success"] is True
+        assert off_res["plugin_enabled"] is False
+        assert off_res["settings"]["plugin"]["enabled"] is False
+        assert off_res["settings"]["plugin"]["config_version"]
+
+        on_res = await plugin.manage_write(
+            "settings_update", json.dumps({"plugin": {"enabled": True}})
+        )
+        assert on_res["success"] is True
+        assert on_res["plugin_enabled"] is True
+        assert on_res["settings"]["plugin"]["enabled"] is True
+    finally:
+        await plugin.on_unload()

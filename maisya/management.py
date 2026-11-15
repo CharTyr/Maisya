@@ -937,6 +937,9 @@ class Management:
         handles = self.plugin.vault.handles()
         vault_meta = self.plugin.vault.list_meta()
         docker = self._docker_status()
+        plugin_enabled = bool(
+            getattr(getattr(self.plugin.settings, "plugin", None), "enabled", False)
+        )
         return {
             "settings": settings,
             "version": self._version(settings),
@@ -944,6 +947,7 @@ class Management:
             "admins_info": admins_info,
             "permission_mode": settings.get("permission_mode", "ask_risky"),
             "ui_style": settings["ui_style"],
+            "plugin_enabled": plugin_enabled,
             "sandbox_enabled": bool(docker.get("enabled", False)),
             "handles": handles,
             "vault_handles": handles,
@@ -2072,6 +2076,9 @@ class Management:
         out["recent_dms"] = []
         out["default_model"] = str(self.plugin.settings.default_model or "")
         out["permission_mode"] = str(self.plugin.settings.permission_mode or "ask_risky")
+        out["plugin_enabled"] = bool(
+            getattr(getattr(self.plugin.settings, "plugin", None), "enabled", False)
+        )
         out["sandbox_enabled"] = bool(getattr(self.plugin.settings.sandbox, "enabled", False))
         models = out.get("models")
         out["available_models"] = (
@@ -2219,6 +2226,9 @@ class Management:
                 "chat_sources": chat_sources,
                 "chat_meta": chat_sources,
                 "default_model": str(self.plugin.settings.default_model or ""),
+                "plugin_enabled": bool(
+                    getattr(getattr(self.plugin.settings, "plugin", None), "enabled", False)
+                ),
                 "sandbox_enabled": bool(getattr(self.plugin.settings.sandbox, "enabled", False)),
                 "thread_id": tid or (sel.get("thread_id") if isinstance(sel, dict) else ""),
                 "thread": sel,
@@ -3127,6 +3137,19 @@ class Management:
             raise ValueError("settings 必须是对象")
         base_dump = self.plugin.settings.model_dump()
         merged = {**base_dump, **raw_settings}
+        if isinstance(raw_settings.get("plugin"), dict) or "plugin_enabled" in raw_settings:
+            pl_merged = {
+                **dict(base_dump.get("plugin") or {}),
+                **(
+                    dict(raw_settings["plugin"])
+                    if isinstance(raw_settings.get("plugin"), dict)
+                    else {}
+                ),
+            }
+            if raw_settings.get("plugin_enabled") is not None:
+                pl_merged["enabled"] = bool(raw_settings["plugin_enabled"])
+            merged["plugin"] = pl_merged
+        merged.pop("plugin_enabled", None)
         if isinstance(raw_settings.get("sandbox"), dict) or "sandbox_enabled" in raw_settings:
             sb_merged = {
                 **dict(base_dump.get("sandbox") or {}),
@@ -3295,11 +3318,20 @@ class Management:
                         "default_model",
                         "permission_mode",
                         "sandbox",
+                        "plugin",
                         "ui_style",
                         "sleep_window",
                     )
                     if k in data and data[k] is not None
                 }
+                if data.get("plugin_enabled") is not None:
+                    pl_patch = dict(
+                        patch_keys.get("plugin")
+                        if isinstance(patch_keys.get("plugin"), dict)
+                        else {}
+                    )
+                    pl_patch["enabled"] = bool(data["plugin_enabled"])
+                    patch_keys["plugin"] = pl_patch
                 if data.get("sandbox_enabled") is not None:
                     sb_patch = dict(
                         patch_keys.get("sandbox")

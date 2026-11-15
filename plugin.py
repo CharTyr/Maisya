@@ -722,6 +722,9 @@ class MaisyaPlugin(MaiBotPlugin):
         out["recent_dms"] = self._recent_dms_sync()
         out["default_model"] = str(self.settings.default_model or "")
         out["permission_mode"] = str(self.settings.permission_mode or "ask_risky")
+        out["plugin_enabled"] = bool(
+            getattr(getattr(self.settings, "plugin", None), "enabled", False)
+        )
         out["sandbox_enabled"] = bool(getattr(self.settings.sandbox, "enabled", False))
         models = out.get("models")
         if isinstance(models, list):
@@ -5407,6 +5410,9 @@ class MaisyaPlugin(MaiBotPlugin):
             result["ui_style"] = canonical_ui_style(self.settings.ui_style)
             result["permission_mode"] = self.settings.permission_mode
             result["default_model"] = str(self.settings.default_model or "")
+            result["plugin_enabled"] = bool(
+                getattr(getattr(self.settings, "plugin", None), "enabled", False)
+            )
             result["sandbox_enabled"] = bool(
                 getattr(self.settings.sandbox, "enabled", False)
             )
