@@ -1,18 +1,65 @@
+import base64
 import json
 import sys
-from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from test_foundation import loaded
+
+from maisya.abilities import Profiles
+from maisya.maker import AgentRuntime
+from maisya.memory import MemoryLayers
+from maisya.sandbox import SandboxSettings
+from maisya.services import Services, validate_endpoint_targets
+from maisya.threads import ThreadEngine, ThreadStore
+from maisya.vault import Vault
+
+
+class _Harness:
+    def __init__(self, tmp_path: Path):
+        self.data_root = tmp_path / "data"
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        (self.data_root / "abilities").mkdir(parents=True, exist_ok=True)
+        self.vault = Vault(self.data_root / "vault")
+        self.store = ThreadStore(self.data_root / "maisya.db")
+        self.profiles = Profiles(
+            self.data_root / "profiles", contains_secret=self.vault.contains_secret
+        )
+
+        async def _call_capability(name, **arguments):
+            return {"response": "ok", "tool_calls": []}
+
+        self.ctx = SimpleNamespace(call_capability=_call_capability)
+        self.runtime = AgentRuntime(
+            self.ctx,
+            self.data_root,
+            self.store,
+            SandboxSettings(enabled=False),
+            self.vault,
+            authorized=lambda context: True,
+        )
+        self.runtime.memory = MemoryLayers(
+            self.data_root, self.store, self.profiles, self.vault
+        )
+        self.engine = ThreadEngine(
+            self.store,
+            self.runtime,
+            redact=self.vault.redact,
+        )
+
+    async def close(self):
+        await self.runtime.services.close()
+        await self.runtime.sandbox.close()
 
 
 @pytest.mark.asyncio
 async def test_real_stdio_mcp_keeps_keys_and_sessions_out_of_model(tmp_path):
-    plugin = await loaded(tmp_path)
+    h = _Harness(tmp_path)
     secret = "mcp-key-do-not-publish-12345"
-    plugin.vault.set("drawing", secret)
+    h.vault.set("drawing", secret)
     server = tmp_path / "server.py"
-    server.write_text("""import json, os, sys
+    server.write_text(
+        """import json, os, sys
 count = 0
 for line in sys.stdin:
  request = json.loads(line)
@@ -25,7 +72,9 @@ for line in sys.stdin:
   result = {'content':[{'type':'text','text':str(count)+' '+os.environ['DRAWING_KEY']}]}
  else: result = {}
  print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     config = {
         "servers": {
             "drawing": {
@@ -35,15 +84,12 @@ for line in sys.stdin:
                 "readonly": True,
             }
         },
-        "templates": {},
     }
-    (plugin.data_root / "abilities/services.json").write_text(json.dumps(config), encoding="utf-8")
-    from maisya.services import Services
-
-    plugin.runtime.services = Services(
-        plugin.data_root / "abilities/services.json", plugin.vault
+    (h.data_root / "abilities/services.json").write_text(
+        json.dumps(config), encoding="utf-8"
     )
-    profile_file = plugin.profiles.path / "scout/profile.toml"
+    h.runtime.services = Services(h.data_root / "abilities/services.json", h.vault)
+    profile_file = h.profiles.path / "scout/profile.toml"
     profile_text = "\n".join(
         line
         for line in profile_file.read_text(encoding="utf-8").splitlines()
@@ -53,57 +99,58 @@ for line in sys.stdin:
         profile_text + '\ntools = ["mcp_call"]\nmcp = ["drawing"]\n',
         encoding="utf-8",
     )
-    profile = plugin.profiles.get("scout")
-    row = plugin.threads.create(
-        profile, "draw", chat_id="chat", platform="qq", user_id=""
-    )
+    profile = h.profiles.get("scout")
+    row = h.store.create(profile, "draw", chat_id="chat", platform="qq", user_id="")
     arguments = {"service": "drawing", "tool": "draw", "arguments": {"prompt": "山"}}
     try:
-        first = await plugin.runtime.call(
+        first = await h.runtime.call(
             "mcp_call", arguments, {**row, "_tool_call_id": "a"}
         )
         assert secret not in str(first) and "REDACTED" in str(first)
-        other = plugin.threads.create(
+        other = h.store.create(
             profile, "draw", chat_id="other", platform="qq", user_id=""
         )
-        second = await plugin.runtime.call(
+        second = await h.runtime.call(
             "mcp_call", arguments, {**other, "_tool_call_id": "b"}
         )
         assert first == second
         with pytest.raises((ValueError, PermissionError)):
-            await plugin.runtime.call(
+            await h.runtime.call(
                 "mcp_call",
                 {**arguments, "tool": "delete_all"},
                 {**row, "_tool_call_id": "c"},
             )
         with pytest.raises(ValueError):
-            await plugin.runtime.call(
+            await h.runtime.call(
                 "mcp_call",
                 {**arguments, "arguments": {"unexpected": True}},
                 {**row, "_tool_call_id": "d"},
             )
-        (plugin.data_root / "abilities/services.json").write_text(
-            json.dumps({"servers": {}, "templates": {}}),
+        # Upgrade compatibility: legacy "templates" field on disk is discarded, not executed
+        (h.data_root / "abilities/services.json").write_text(
+            json.dumps({"servers": {}, "templates": {"legacy": {}}}),
             encoding="utf-8",
         )
+        loaded_cfg = h.runtime.services.load()
+        assert "templates" not in loaded_cfg
+        assert not hasattr(h.runtime.services, "credential")
         with pytest.raises(PermissionError):
-            await plugin.runtime.call(
+            await h.runtime.call(
                 "mcp_call", arguments, {**row, "_tool_call_id": "e"}
             )
     finally:
-        await plugin.on_unload()
+        await h.close()
 
 
 @pytest.mark.asyncio
 async def test_file_ref_input_uses_registered_real_stdio_reader_and_never_inlines_binary(
     tmp_path,
 ):
-    import base64
-
-    plugin = await loaded(tmp_path)
-    plugin.runtime.sandbox.ready = True
+    h = _Harness(tmp_path)
+    h.runtime.sandbox.ready = True
     server = tmp_path / "reader.py"
-    server.write_text("""import json,sys,base64
+    server.write_text(
+        """import json,sys,base64
 for line in sys.stdin:
  request=json.loads(line)
  if 'id' not in request:continue
@@ -114,7 +161,9 @@ for line in sys.stdin:
   assert request['params']['arguments']['file_ref']=='opaque-platform-reference'
   result={'content':[{'type':'resource','resource':{'uri':'file:///input.csv','mimeType':'text/csv','blob':base64.b64encode(b'a,b\\n1,2').decode()}}]}
  print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     configuration = {
         "servers": {
             "files": {
@@ -123,11 +172,10 @@ for line in sys.stdin:
                 "readonly": True,
             }
         },
-        "templates": {},
         "inputs": {"qq": {"service": "files", "tool": "read_file"}},
     }
-    plugin.runtime.services.path.write_text(json.dumps(configuration), encoding="utf-8")
-    profile_file = plugin.profiles.path / "maker/profile.toml"
+    h.runtime.services.path.write_text(json.dumps(configuration), encoding="utf-8")
+    profile_file = h.profiles.path / "maker/profile.toml"
     profile_file.write_text(
         profile_file.read_text(encoding="utf-8")
         .replace('"result_attach"', '"result_attach", "mcp_call"')
@@ -154,23 +202,32 @@ for line in sys.stdin:
         prompts.append(arguments["prompt"])
         return {"response": "read", "tool_calls": []}
 
-    plugin.ctx.call_capability = capability
+    h.ctx.call_capability = capability
     try:
-        result = await plugin.agent_tool(
-            action="start",
-            profile="maker",
-            workspace="file-reader",
-            message="read file",
-            ref_msg_ids=["file-message"],
+        profile = h.profiles.get("maker")
+        result = await h.engine.start(
+            profile,
+            "read file",
             chat_id="chat",
             platform="qq",
+            user_id="",
+            workspace="file-reader",
+            references=["file-message"],
+            wait_seconds=10,
         )
-        assert result["success"] and "error" not in result["result"], result
-        row = plugin.threads.get(result["thread_id"], "chat")
-        with plugin.runtime.files.activity(row) as work:
+        assert "error" not in result.get("result", {}), result
+        row = h.store.get(result["thread_id"], "chat")
+        with h.runtime.files.activity(row) as work:
             files = work.listing()["files"]
             assert any(file["path"].endswith("input.csv") for file in files)
         assert base64.b64encode(b"a,b\n1,2").decode() not in str(prompts)
-        assert not result["result"].get("attachments")
+        assert not result.get("result", {}).get("attachments")
     finally:
-        await plugin.on_unload()
+        await h.close()
+
+
+def test_endpoint_target_ssrf_allowlist(tmp_path):
+    assert validate_endpoint_targets(["93.184.216.34:443"]) == [("93.184.216.34", 443)]
+    for blocked in ("127.0.0.1:8080", "169.254.169.254:80", "224.0.0.1:80"):
+        with pytest.raises(ValueError):
+            validate_endpoint_targets([blocked])

@@ -13,6 +13,7 @@ import uuid
 from .trust import STREAM_SPEC_RE, format_stream_spec, parse_stream_spec
 
 KINDS = {"return", "proactive", "silent"}
+MODES = {"schedule", "once", "recurring", "afterthought", "watch"}
 SOURCES = {
     "thread",
     "afterglow",
@@ -21,6 +22,7 @@ SOURCES = {
     "later",
     "webhook",
     "workflow",
+    "watch",
 }
 CHAT_TARGET = re.compile(
     r"^chat:(?:[^\s:][^\s]{0,255}|[a-z][a-z0-9_-]{0,31}:(?:group|private):[^\s:][^\s]{0,199})$"
@@ -130,7 +132,10 @@ class Intents:
                 "intent_id TEXT PRIMARY KEY, kind TEXT, source TEXT, target TEXT, "
                 "due_at REAL, reason TEXT, thread_id TEXT, payload TEXT, "
                 "status TEXT, wake_status TEXT, created REAL, handled REAL, "
-                "bypass_limits INTEGER NOT NULL DEFAULT 0)"
+                "bypass_limits INTEGER NOT NULL DEFAULT 0, "
+                "mode TEXT NOT NULL DEFAULT 'schedule', "
+                "condition TEXT NOT NULL DEFAULT '', "
+                "last_checked_at REAL, last_triggered_at REAL)"
             )
             intent_cols = {
                 row[1] for row in db.execute("PRAGMA table_info(intents)").fetchall()
@@ -139,15 +144,24 @@ class Intents:
                 db.execute(
                     "ALTER TABLE intents ADD COLUMN bypass_limits INTEGER NOT NULL DEFAULT 0"
                 )
+            if "mode" not in intent_cols:
+                db.execute(
+                    "ALTER TABLE intents ADD COLUMN mode TEXT NOT NULL DEFAULT 'schedule'"
+                )
+            if "condition" not in intent_cols:
+                db.execute(
+                    "ALTER TABLE intents ADD COLUMN condition TEXT NOT NULL DEFAULT ''"
+                )
+            if "last_checked_at" not in intent_cols:
+                db.execute("ALTER TABLE intents ADD COLUMN last_checked_at REAL")
+            if "last_triggered_at" not in intent_cols:
+                db.execute("ALTER TABLE intents ADD COLUMN last_triggered_at REAL")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS intent_due ON intents(status, kind, due_at)"
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS social_state (chat_id TEXT PRIMARY KEY, "
                 "locked INTEGER DEFAULT 0, last_proactive REAL DEFAULT 0)"
-            )
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS incoming_events (event_key TEXT PRIMARY KEY,digest TEXT,intent_id TEXT)"
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS session_routes ("
@@ -182,6 +196,10 @@ class Intents:
     def _intent(self, row):
         result = dict(row)
         result["payload"] = _parse_payload(result.get("payload"))
+        result["mode"] = str(result.get("mode") or "schedule") or "schedule"
+        result["condition"] = str(result.get("condition") or "")
+        result.setdefault("last_checked_at", None)
+        result.setdefault("last_triggered_at", None)
         return result
 
     def get(self, intent_id):
@@ -218,7 +236,12 @@ class Intents:
         return [self._intent(row) for row in rows]
 
     def cancel_matching_workflows(
-        self, target: str, *, profile: str, workspace: str = ""
+        self,
+        target: str,
+        *,
+        profile: str,
+        workspace: str = "",
+        is_admin: bool | None = None,
     ) -> list[str]:
         if not target or not profile:
             return []
@@ -227,12 +250,14 @@ class Intents:
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
-                "SELECT intent_id, payload FROM intents WHERE target=? AND status='pending'",
+                "SELECT intent_id, payload FROM intents WHERE target=? AND status IN ('pending', 'paused')",
                 (target,),
             ).fetchall()
             for row in rows:
                 payload = _parse_payload(row["payload"])
                 if not payload:
+                    continue
+                if is_admin is False and payload.get("scheduled_admin") is True:
                     continue
                 if not (payload.get("every_seconds") or payload.get("daily_at")):
                     continue
@@ -241,7 +266,7 @@ class Intents:
                 if workspace and str(payload.get("workspace") or "") != workspace:
                     continue
                 db.execute(
-                    "UPDATE intents SET status='cancelled', handled=? WHERE intent_id=? AND status='pending'",
+                    "UPDATE intents SET status='cancelled', handled=? WHERE intent_id=? AND status IN ('pending', 'paused')",
                     (now, row["intent_id"]),
                 )
                 cancelled.append(row["intent_id"])
@@ -258,13 +283,28 @@ class Intents:
         thread_id="",
         payload=None,
         bypass_limits=False,
-        event_key="",
-        event_digest="",
+        mode="",
+        condition="",
+        last_checked_at=None,
+        last_triggered_at=None,
     ):
         if kind not in KINDS or source not in SOURCES or not CHAT_TARGET.fullmatch(target):
             raise ValueError("意图类型、来源或目标无效")
         if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
             raise ValueError("意图需要一句 500 字符以内的理由")
+        norm_mode = str(mode or ("watch" if source == "watch" else "schedule")).strip().lower()
+        if norm_mode not in MODES:
+            raise ValueError("意图模式无效")
+        if condition is None:
+            norm_condition = ""
+        elif isinstance(condition, str):
+            norm_condition = condition.strip()
+        else:
+            raise ValueError("盯梢条件必须是字符串")
+        if len(norm_condition) > 500:
+            raise ValueError("盯梢条件需在 500 字符以内")
+        checked_ts = float(last_checked_at) if last_checked_at is not None else None
+        triggered_ts = float(last_triggered_at) if last_triggered_at is not None else None
         now = self.clock()
         try:
             due_at = float(due_at)
@@ -275,20 +315,11 @@ class Intents:
         intent_id = "in_" + uuid.uuid4().hex[:16]
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
-            if event_key:
-                old = db.execute(
-                    "SELECT digest,intent_id FROM incoming_events WHERE event_key=?",
-                    (event_key,),
-                ).fetchone()
-                if old:
-                    if old["digest"] != event_digest:
-                        raise ValueError("同一事件编号已绑定另一份内容")
-                    return self.get(old["intent_id"])
             payload_dict = payload if isinstance(payload, dict) else {}
             effective_bypass = bool(bypass_limits) and not is_profileless_daily(
                 source, payload_dict
             )
-            if kind == "proactive" and not effective_bypass:
+            if kind == "proactive" and not effective_bypass and norm_mode != "watch":
                 limit = int(self.daily_proactive_limit)
                 start, end = self._day_bounds(due_at)
                 arena = self._target_arena(db, target, payload_dict or None)
@@ -296,8 +327,8 @@ class Intents:
                 if limit <= 0 or counts[arena] >= limit:
                     raise ValueError("普通惦记已达到每日上限")
             db.execute(
-                "INSERT INTO intents (intent_id, kind, source, target, due_at, reason, thread_id, payload, status, wake_status, created, handled, bypass_limits) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL, ?)",
+                "INSERT INTO intents (intent_id, kind, source, target, due_at, reason, thread_id, payload, status, wake_status, created, handled, bypass_limits, mode, condition, last_checked_at, last_triggered_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL, ?, ?, ?, ?, ?)",
                 (
                     intent_id,
                     kind,
@@ -309,25 +340,124 @@ class Intents:
                     encode(payload or {}),
                     now,
                     1 if effective_bypass else 0,
+                    norm_mode,
+                    norm_condition,
+                    checked_ts,
+                    triggered_ts,
                 ),
             )
-            if event_key:
-                db.execute(
-                    "INSERT INTO incoming_events VALUES (?,?,?)",
-                    (event_key, event_digest, intent_id),
-                )
         return self.get(intent_id)
 
-    def cancel(self, intent_id, target):
+    def _require_modifiable_intent(self, db, intent_id: str, target: str, *, statuses: tuple[str, ...], is_admin: bool | None):
+        placeholders = ",".join("?" for _ in statuses)
+        row = db.execute(
+            f"SELECT * FROM intents WHERE intent_id=? AND target=? AND status IN ({placeholders})",
+            (intent_id, target, *statuses),
+        ).fetchone()
+        if row is None:
+            raise ValueError("意图不存在或已处理")
+        payload = _parse_payload(row["payload"])
+        if is_admin is False and payload.get("scheduled_admin") is True:
+            raise PermissionError("管理员排定的定时或盯梢工作流不可由非管理员修改或取消")
+        return row
+
+    def cancel(self, intent_id, target, *, is_admin: bool | None = None):
         with self.store.connect() as db, db:
-            cursor = db.execute(
+            db.execute("BEGIN IMMEDIATE")
+            self._require_modifiable_intent(
+                db, intent_id, target, statuses=("pending", "paused"), is_admin=is_admin
+            )
+            db.execute(
                 "UPDATE intents SET status='cancelled', handled=? "
-                "WHERE intent_id=? AND target=? AND status='pending'",
+                "WHERE intent_id=? AND target=? AND status IN ('pending', 'paused')",
                 (self.clock(), intent_id, target),
             )
-            if not cursor.rowcount:
-                raise ValueError("意图不存在或已处理")
         return {"intent_id": intent_id, "status": "cancelled"}
+
+    def pause(self, intent_id, target, *, is_admin: bool | None = None):
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            self._require_modifiable_intent(
+                db, intent_id, target, statuses=("pending",), is_admin=is_admin
+            )
+            db.execute(
+                "UPDATE intents SET status='paused' WHERE intent_id=? AND target=? AND status='pending'",
+                (intent_id, target),
+            )
+        return self.get(intent_id)
+
+    def resume(self, intent_id, target, *, is_admin: bool | None = None):
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._require_modifiable_intent(
+                db, intent_id, target, statuses=("paused",), is_admin=is_admin
+            )
+            due_at = max(float(row["due_at"] or 0.0), self.clock())
+            db.execute(
+                "UPDATE intents SET status='pending', due_at=? WHERE intent_id=? AND target=? AND status='paused'",
+                (due_at, intent_id, target),
+            )
+        return self.get(intent_id)
+
+    def record_watch_check(
+        self,
+        intent_id: str,
+        *,
+        checked_at: float | None = None,
+        triggered: bool = False,
+        triggered_at: float | None = None,
+        next_due_at: float | None = None,
+        wake_status: str = "",
+        payload: dict | None = None,
+        thread_id: str | None = None,
+    ) -> dict:
+        now = float(self.clock() if checked_at is None else checked_at)
+        trig_val = (
+            float(now if triggered_at is None else triggered_at) if triggered else None
+        )
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM intents WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("意图不存在")
+            final_trig = trig_val if triggered else row["last_triggered_at"]
+            next_payload = (
+                encode(payload) if payload is not None else row["payload"]
+            )
+            next_tid = row["thread_id"] if thread_id is None else thread_id
+            if next_due_at is not None:
+                db.execute(
+                    "UPDATE intents SET status='pending', due_at=?, handled=NULL, "
+                    "wake_status=?, last_checked_at=?, last_triggered_at=?, payload=?, thread_id=? "
+                    "WHERE intent_id=?",
+                    (
+                        float(next_due_at),
+                        wake_status or ("watch_triggered" if triggered else "watch_unmet"),
+                        now,
+                        final_trig,
+                        next_payload,
+                        next_tid,
+                        intent_id,
+                    ),
+                )
+            else:
+                db.execute(
+                    "UPDATE intents SET status='done', handled=?, "
+                    "wake_status=?, last_checked_at=?, last_triggered_at=?, payload=?, thread_id=? "
+                    "WHERE intent_id=?",
+                    (
+                        now,
+                        wake_status or ("accepted" if triggered else "watch_unmet"),
+                        now,
+                        final_trig,
+                        next_payload,
+                        next_tid,
+                        intent_id,
+                    ),
+                )
+        return self.get(intent_id)
 
     def due(self, enabled, *, limit=8):
         now = self.clock()
@@ -530,18 +660,6 @@ class Intents:
                 (chat_id,),
             ).fetchone()
         return route is not None
-
-    def event_exists(self, event_key, event_digest):
-        with self.store.connect() as db:
-            old = db.execute(
-                "SELECT digest, intent_id FROM incoming_events WHERE event_key=?",
-                (event_key,),
-            ).fetchone()
-        if not old:
-            return None
-        if old["digest"] != event_digest:
-            raise ValueError("同一事件编号已绑定另一份内容")
-        return self.get(old["intent_id"])
 
     def _target_arena(self, db, target: str, payload: dict | None = None) -> str:
         raw_target = str(target or "").strip()

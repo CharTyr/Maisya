@@ -1,4 +1,4 @@
-"""管理员登记的 MCP stdio 服务池和固定凭据模板。"""
+"""管理员登记的 MCP stdio 服务池、只读联网策略与跨插件 API 连接器。"""
 
 import asyncio
 import base64
@@ -386,7 +386,7 @@ class Services:
         self.locks = {}
         self.active_uids = set()
         self.digest = ""
-        self.configuration = {"servers": {}, "templates": {}}
+        self.configuration = {"servers": {}}
         self.closed = False
         self.cgroup_name = "maisya-mcp-" + uuid.uuid4().hex[:16]
         self.group_lock = asyncio.Lock()
@@ -394,27 +394,28 @@ class Services:
 
     def load(self):
         if not self.path.exists():
-            raw = b'{"servers":{},"templates":{}}'
+            raw = b'{"servers":{}}'
         else:
             if path_is_link_like(self.path) or self.path.stat().st_size > 262144:
                 raise ValueError("能力服务登记文件无效")
             raw = self.path.read_bytes()
         configuration = json.loads(raw)
+        if isinstance(configuration, dict):
+            # 升级兼容：静默丢弃已废弃的 templates 字段，不再加载或执行固定 HTTP 模板。
+            configuration.pop("templates", None)
         if not isinstance(configuration, dict) or set(configuration) - {
             "servers",
-            "templates",
             "inputs",
             "apis",
             "web",
         }:
             raise ValueError("能力服务登记格式无效")
         digest = hashlib.sha256(raw).hexdigest()
-        for group in ("servers", "templates"):
-            if not isinstance(configuration.get(group, {}), dict):
-                raise TypeError("能力服务登记格式无效")
-            for name in configuration.get(group, {}):
-                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
-                    raise ValueError("能力服务编号无效")
+        if not isinstance(configuration.get("servers", {}), dict):
+            raise TypeError("能力服务登记格式无效")
+        for name in configuration.get("servers", {}):
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
+                raise ValueError("能力服务编号无效")
         apis = configuration.get("apis", {})
         if not isinstance(apis, dict) or len(apis) > 32:
             raise ValueError("跨插件 API 登记数量或格式无效")
@@ -968,47 +969,6 @@ class Services:
                 await completed_thread(rmtree_safe, secret_directory)
             else:
                 await completed_thread(rmtree_safe, secret_directory)
-
-    async def credential(self, profile, arguments, context, runtime):
-        config = self.load().get("templates", {}).get(profile.template)
-        if (
-            not isinstance(config, dict)
-            or not profile.secrets
-            or profile.access != "admins"
-            or not await completed_thread(runtime.authorized, context)
-        ):
-            raise PermissionError("私有凭据执行模板未绑定或缺少当前授权")
-        await completed_thread(validate, config.get("schema", {}), arguments)
-        program = config.get("argv")
-        if (
-            not isinstance(program, list)
-            or not program
-            or not all(isinstance(value, str) and "\x00" not in value for value in program)
-            or not _is_native_absolute_program_path(program[0])
-        ):
-            raise ValueError("凭据模板程序必须是有效的绝对路径")
-        if set(profile.secrets) != set(config.get("secrets", [])):
-            raise PermissionError("档案凭据与固定模板绑定不一致")
-        targets = config.get("targets") or list(profile.sandbox_targets)
-        endpoints = await completed_thread(validate_endpoint_targets, targets)
-        blank = {**context, "workspace_id": "ws_" + os.urandom(12).hex()}
-        manager = runtime.files.activity(blank)
-        work = await completed_thread(manager.__enter__)
-        try:
-            async with self.mount_secrets(runtime, profile.secrets, work=work) as secrets:
-                result = await runtime.sandbox.execute(
-                    context,
-                    work,
-                    "fixed-template",
-                    call_id=context["_tool_call_id"],
-                    mode="restricted",
-                    targets=endpoints,
-                    secrets=secrets,
-                    entrypoint=[*program, json.dumps(arguments, ensure_ascii=False)],
-                )
-            return self.vault.redact(result)
-        finally:
-            await completed_thread(manager.__exit__, None, None, None)
 
     async def release_quarantines(self):
         for volume, path in list(self.quarantines):
