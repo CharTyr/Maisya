@@ -32,7 +32,7 @@ from .context_budget import (
     prune_tool_outputs,
     resolve_context_budget,
 )
-from .pathsafe import safe_chmod
+from .pathsafe import rmtree_safe, safe_chmod
 from .scout import validate_arguments
 from .workspaces import completed_thread
 
@@ -88,6 +88,68 @@ def _summarize_tool_calls(calls: list) -> str:
             detail = str(args["action"])[:24]
         parts.append(f"{name}({detail})" if detail else name)
     return ", ".join(parts)
+
+
+def _implicit_ws_has_out(
+    workspace_root: Path | None, thread_id: str
+) -> tuple[Path | None, bool]:
+    """检查未绑定持久工作区的临时线程目录是否已产出过 out/ 文件，避免误删。"""
+    if workspace_root is None or not thread_id:
+        return None, False
+    ws_id = "ws_" + hashlib.sha256(thread_id.encode()).hexdigest()[:24]
+    ws_dir = workspace_root / ws_id
+    if not ws_dir.exists() or ws_dir.is_symlink() or not ws_dir.is_dir():
+        return None, False
+    ptr = ws_dir / "current.json"
+    if not ptr.is_file() or ptr.is_symlink():
+        return ws_dir, False
+    try:
+        version = json.loads(ptr.read_text(encoding="utf-8")).get("version", "")
+    except (OSError, TypeError, ValueError):
+        return ws_dir, False
+    if not isinstance(version, str) or not re.fullmatch(r"v_[a-f0-9]{32}", version):
+        return ws_dir, False
+    out_dir = ws_dir / version / "out"
+    if not out_dir.exists() or out_dir.is_symlink() or not out_dir.is_dir():
+        return ws_dir, False
+    has_files = any(p.is_file() and not p.is_symlink() for p in out_dir.rglob("*"))
+    return ws_dir, has_files
+
+
+def _is_junk_thread_row(
+    row,
+    *,
+    delivered_ids: set[str],
+    named_ws_ids: set[str],
+    attachment_ids: set[str],
+    workspace_root: Path | None = None,
+) -> bool:
+    """判断线程是否属于可批量清理的废记录（已停未交付、报错、空结果且无附件/工作区/out）。"""
+    tid = row["thread_id"]
+    state = str(row["state"] or "")
+    if (
+        state in {"active", "waiting"}
+        or tid in named_ws_ids
+        or tid in attachment_ids
+        or tid in delivered_ids
+    ):
+        return False
+    _ws_dir, has_out = _implicit_ws_has_out(workspace_root, tid)
+    if has_out:
+        return False
+    if state == "closed":
+        return True
+    try:
+        raw = row["result"]
+        parsed = json.loads(raw or "{}") if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return True
+    if not isinstance(parsed, dict) or "error" in parsed:
+        return True
+    text = str(parsed.get("text") or "").strip()
+    atts = parsed.get("attachments")
+    has_atts = isinstance(atts, list) and len(atts) > 0
+    return not (text or has_atts)
 
 
 class ThreadStore:
@@ -488,6 +550,142 @@ class ThreadStore:
                 (time.time(), thread_id),
             )
             return cursor.rowcount > 0
+
+    @staticmethod
+    def _named_workspace_thread_ids(db) -> set[str]:
+        return {
+            row["thread_id"]
+            for row in db.execute(
+                "SELECT thread_id FROM agent_workspaces WHERE thread_id IS NOT NULL "
+                "UNION SELECT c.thread_id FROM thread_context c "
+                "JOIN agent_workspaces w ON w.workspace_id=c.workspace_id "
+                "WHERE c.thread_id IS NOT NULL"
+            ).fetchall()
+            if row["thread_id"]
+        }
+
+    @staticmethod
+    def _delete_threads_tx(db, thread_ids: list[str]) -> None:
+        if not thread_ids:
+            return
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        core_tables = ("thread_events", "thread_search", "thread_context", "agent_threads")
+        opt_tables = (
+            "result_deliveries",
+            "executions",
+            "learning_receipts",
+            "experience_receipts",
+        )
+        for tid in thread_ids:
+            for tbl in core_tables:
+                db.execute(f"DELETE FROM {tbl} WHERE thread_id=?", (tid,))
+            for tbl in opt_tables:
+                if tbl in tables:
+                    db.execute(f"DELETE FROM {tbl} WHERE thread_id=?", (tid,))
+            if "intents" in tables:
+                db.execute(
+                    "UPDATE intents SET status='cancelled' WHERE thread_id=? AND status='pending'",
+                    (tid,),
+                )
+            if "return_intents" in tables:
+                db.execute(
+                    "UPDATE return_intents SET consumed=1 WHERE thread_id=? AND consumed=0",
+                    (tid,),
+                )
+
+    def delete_thread(
+        self, thread_id: str, *, workspace_root: Path | None = None
+    ) -> dict:
+        """删除单条非运行且未绑定持久工作区的活动记录，保留 attachments 产物。"""
+        if not isinstance(thread_id, str) or not re.fullmatch(
+            r"th_[a-f0-9]{16}", thread_id
+        ):
+            raise ValueError("线程编号无效")
+        with self.connect() as db, db:
+            row = db.execute(
+                "SELECT thread_id,chat_id,state FROM agent_threads WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("活动记录不存在")
+            if row["state"] in {"active", "waiting"}:
+                raise ValueError("运行中或等待中的活动不能直接删除，请先停止线程")
+            if thread_id in self._named_workspace_thread_ids(db):
+                raise ValueError("该活动绑定了持久工作区，不能直接删除记录")
+            self._delete_threads_tx(db, [thread_id])
+        ws_dir, has_out = _implicit_ws_has_out(workspace_root, thread_id)
+        if ws_dir is not None and not has_out:
+            rmtree_safe(ws_dir, ignore_errors=True)
+        return {"deleted": thread_id, "chat_id": row["chat_id"]}
+
+    def prune_junk_threads(
+        self,
+        *,
+        chat_ids: set[str] | list[str] | None = None,
+        workspace_root: Path | None = None,
+    ) -> dict:
+        """批量清理废记录（已停止未交付、报错结束、空结果且无附件/持久工作区/out）。"""
+        scope = [c for c in (chat_ids or []) if isinstance(c, str) and c]
+        with self.connect() as db, db:
+            if scope:
+                placeholders = ",".join("?" * len(scope))
+                rows = db.execute(
+                    f"SELECT thread_id,chat_id,state,result FROM agent_threads WHERE chat_id IN ({placeholders})",
+                    tuple(scope),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT thread_id,chat_id,state,result FROM agent_threads"
+                ).fetchall()
+            tables = {
+                row[0]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            named_ws_ids = self._named_workspace_thread_ids(db)
+            delivered_ids = (
+                {
+                    row["thread_id"]
+                    for row in db.execute(
+                        "SELECT DISTINCT thread_id FROM result_deliveries"
+                    ).fetchall()
+                }
+                if "result_deliveries" in tables
+                else set()
+            )
+            attachment_ids = (
+                {
+                    row["thread_id"]
+                    for row in db.execute(
+                        "SELECT DISTINCT thread_id FROM attachments WHERE thread_id IS NOT NULL"
+                    ).fetchall()
+                }
+                if "attachments" in tables
+                else set()
+            )
+            targets = [
+                row["thread_id"]
+                for row in rows
+                if _is_junk_thread_row(
+                    row,
+                    delivered_ids=delivered_ids,
+                    named_ws_ids=named_ws_ids,
+                    attachment_ids=attachment_ids,
+                    workspace_root=workspace_root,
+                )
+            ]
+            self._delete_threads_tx(db, targets)
+        for tid in targets:
+            ws_dir, has_out = _implicit_ws_has_out(workspace_root, tid)
+            if ws_dir is not None and not has_out:
+                rmtree_safe(ws_dir, ignore_errors=True)
+        return {"deleted": targets, "count": len(targets)}
 
     @staticmethod
     def _truncate_tool_block(block, *, target_chars: int, archive_seq: int):

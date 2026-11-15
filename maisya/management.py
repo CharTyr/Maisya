@@ -2191,6 +2191,53 @@ class Management:
             result = await completed_thread(self._import_recipe, options)
         elif action == "import":
             result = await completed_thread(self._upload, options)
+        elif action == "delete_thread":
+            tid = str(options.get("thread_id") or "").strip()
+            ws_root = (
+                plugin.runtime.files.root
+                if getattr(plugin, "runtime", None) is not None
+                else None
+            )
+            result = await completed_thread(
+                plugin.threads.delete_thread, tid, workspace_root=ws_root
+            )
+            locks = getattr(getattr(plugin, "engine", None), "locks", None)
+            if isinstance(locks, dict):
+                lock = locks.get(tid)
+                if lock is not None and not lock.locked():
+                    locks.pop(tid, None)
+        elif action == "prune_threads":
+            raw_chat = str(options.get("chat_id") or "").strip()
+
+            def _prune():
+                chat_ids = None
+                if raw_chat:
+                    resolved = (
+                        plugin.resolve_known_session_id(raw_chat)
+                        if raw_chat != "self"
+                        else "self"
+                    )
+                    chat_ids = (
+                        {raw_chat, resolved}
+                        | plugin.chat_aliases_for(raw_chat)
+                        | plugin.chat_aliases_for(resolved)
+                    )
+                ws_root = (
+                    plugin.runtime.files.root
+                    if getattr(plugin, "runtime", None) is not None
+                    else None
+                )
+                return plugin.threads.prune_junk_threads(
+                    chat_ids=chat_ids, workspace_root=ws_root
+                )
+
+            result = await completed_thread(_prune)
+            locks = getattr(getattr(plugin, "engine", None), "locks", None)
+            if isinstance(locks, dict):
+                for dead in result.get("deleted") or ():
+                    lock = locks.get(dead)
+                    if lock is not None and not lock.locked():
+                        locks.pop(dead, None)
         else:
             raise ValueError("未知管理操作")
         return {"success": True, **plugin.vault.redact(result)}

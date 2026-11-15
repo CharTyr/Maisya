@@ -4293,6 +4293,12 @@ html.dark .out-ico--ws { color: #fde047; }
       await Promise.resolve(window.maibot?.ready);
       if (sig?.aborted) return;
       applyTheme();
+      if (typeof pendingAbilityTarget !== "undefined" && pendingAbilityTarget?.profile) {
+        selectedProfile = pendingAbilityTarget.profile;
+        viewMode = "roles";
+        if ($("#document")) $("#document").value = "profile";
+        pendingAbilityTarget = null;
+      }
       await loadCatalog();
       if (sig?.aborted) return;
       await loadAsset(false);

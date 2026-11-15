@@ -11,6 +11,7 @@ from .context_budget import (
     estimate_tokens,
     resolve_context_budget,
 )
+from .threads import _is_junk_thread_row
 
 
 def _excerpt_of(raw_result, redact, limit=140):
@@ -72,6 +73,7 @@ def snapshot(
     model_catalog=None,
     redact=lambda value: value,
     memory=None,
+    workspace_root=None,
 ):
     if (
         not isinstance(thread_id, str)
@@ -95,11 +97,15 @@ def snapshot(
             ws_map = {
                 r["thread_id"]: r["name"]
                 for r in db.execute(
-                    "SELECT thread_id,name FROM agent_workspaces"
+                    "SELECT thread_id,name FROM agent_workspaces WHERE thread_id IS NOT NULL "
+                    "UNION SELECT c.thread_id,w.name FROM thread_context c "
+                    "JOIN agent_workspaces w ON w.workspace_id=c.workspace_id "
+                    "WHERE c.thread_id IS NOT NULL"
                 ).fetchall()
             }
         except sqlite3.OperationalError:
             ws_map = {}
+        named_ws_ids = set(ws_map.keys())
         try:
             delivered_ids = {
                 r["thread_id"]
@@ -109,6 +115,15 @@ def snapshot(
             }
         except sqlite3.OperationalError:
             delivered_ids = set()
+        try:
+            attachment_ids = {
+                r["thread_id"]
+                for r in db.execute(
+                    "SELECT DISTINCT thread_id FROM attachments WHERE thread_id IS NOT NULL"
+                ).fetchall()
+            }
+        except sqlite3.OperationalError:
+            attachment_ids = set()
         threads = [
             {
                 key: row[key]
@@ -127,13 +142,29 @@ def snapshot(
                 "excerpt": _excerpt_of(row["result"], redact),
                 "workspace": ws_map.get(row["thread_id"], ""),
                 "delivered": row["thread_id"] in delivered_ids,
+                "junk": _is_junk_thread_row(
+                    row,
+                    delivered_ids=delivered_ids,
+                    named_ws_ids=named_ws_ids,
+                    attachment_ids=attachment_ids,
+                    workspace_root=workspace_root,
+                ),
+                "can_delete": (
+                    row["state"] not in {"active", "waiting"}
+                    and row["thread_id"] not in named_ws_ids
+                ),
             }
             for row in rows
         ]
         selected = None
         events = []
         if not thread_id and threads:
-            thread_id = threads[0]["thread_id"]
+            preferred = (
+                next((t for t in threads if t["state"] in {"active", "waiting"}), None)
+                or next((t for t in threads if not t["junk"]), None)
+                or threads[0]
+            )
+            thread_id = preferred["thread_id"]
         if thread_id:
             target = db.execute(
                 "SELECT chat_id FROM agent_threads WHERE thread_id=?", (thread_id,)
@@ -154,6 +185,10 @@ def snapshot(
                 )
             }
             selected["workspace"] = ws_map.get(thread_id, "")
+            selected["can_delete"] = (
+                row["state"] not in {"active", "waiting"}
+                and thread_id not in named_ws_ids
+            )
             selected["result"] = {
                 key: str(redact(value))[:16000] for key, value in row["result"].items()
             }

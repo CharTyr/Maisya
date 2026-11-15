@@ -467,6 +467,14 @@ async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_pat
 
     monkeypatch.setattr(digest_mod, "fetch_public_bytes", _offline_fetch)
     now = 1_794_480_000.0
+    orig_dw_init = DigestWorkspace.__init__
+    monkeypatch.setattr(
+        DigestWorkspace,
+        "__init__",
+        lambda self, work, *, fetcher=None, clock=None: orig_dw_init(
+            self, work, fetcher=fetcher, clock=clock or (lambda: now)
+        ),
+    )
     plugin = await loaded(tmp_path)
     try:
         profile = plugin.profiles.get("digest")
@@ -1035,6 +1043,14 @@ def test_cover_filter_palette_and_apple_weather_card_themes():
 @pytest.mark.asyncio
 async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers(tmp_path, monkeypatch):
     now = 1_794_480_000.0
+    orig_dw_init = DigestWorkspace.__init__
+    monkeypatch.setattr(
+        DigestWorkspace,
+        "__init__",
+        lambda self, work, *, fetcher=None, clock=None: orig_dw_init(
+            self, work, fetcher=fetcher, clock=clock or (lambda: now)
+        ),
+    )
     pub_rfc = formatdate(now - 3600, usegmt=True)
     photo_ok = _make_photo_bytes(800, 450, hue_shift=15)
     photo_og = _make_photo_bytes(320, 180, hue_shift=90)

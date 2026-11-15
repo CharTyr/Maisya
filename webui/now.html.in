@@ -624,6 +624,7 @@
 }
 
 .thread-row {
+  box-sizing: border-box;
   width: 100%;
   text-align: left;
   border: 0;
@@ -683,6 +684,30 @@
 :root[data-ui-style="millennium"] .thread-row.on .thread-excerpt {
   color: var(--mil-on-ink);
   opacity: 0.88;
+}
+.thread-del {
+  border: 1px solid var(--mil-line-soft, var(--mil-rule));
+  background: transparent;
+  color: var(--mil-muted);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+:root[data-ui-style="millennium"] .thread-del {
+  border-radius: 0;
+}
+.thread-row.on .thread-del {
+  color: inherit;
+  opacity: 0.85;
+}
+@media (hover: hover) and (pointer: fine) {
+  .thread-del:hover {
+    color: var(--mil-bad, #b42318);
+    border-color: currentColor;
+  }
 }
 
 .inspector-h2 {
@@ -963,6 +988,7 @@
             <button type="button" class="mil-key mil-key--sm" data-th-filter="delivered" aria-pressed="false">已交付</button>
             <button type="button" class="mil-key mil-key--sm" data-th-filter="error" aria-pressed="false">异常</button>
           </div>
+          <button type="button" class="mil-key mil-key--sm" id="prune-junk-threads" hidden>清理废记录</button>
           <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         </div>
       </div>
@@ -1020,6 +1046,7 @@
           <div class="mil-row">
             <button type="button" class="mil-key mil-key--hot" id="send-note">引导</button>
             <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
+            <button type="button" class="mil-key" id="delete-thread" hidden>删除记录</button>
           </div>
         </div>
         <div class="mil-feedback" id="feedback" data-feedback-slot="now" aria-live="polite"></div>
@@ -1165,6 +1192,8 @@
   let state = {
     threadId: "",
     chatFilter: "",
+    profileFilter: "",
+    userPickedThread: false,
     thFilter: "all",
     ctxView: "map",
     ctxCat: "all",
@@ -1192,6 +1221,7 @@
   let lastTriggerTarget = null;
   let lastSnapshotAt = 0;
   let pendingOutputTarget = null;
+  let pendingAbilityTarget = null;
 
   // 读请求按单通道串行，读写合计严格 <= 2 个并发排队
   let activeQueue = 0;
@@ -1511,6 +1541,12 @@
     return `<span class="mil-avatar${small ? " mil-avatar--sm" : ""}" aria-hidden="true">${esc(meta.mono)}${meta.safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(meta.safeAv)}')"></span>` : ""}</span>`;
   }
 
+  function selectedForView(snap) {
+    const rawSel = snap?.selected || null;
+    if (state.profileFilter && rawSel && rawSel.profile !== state.profileFilter) return null;
+    return rawSel;
+  }
+
   function renderFlow(snap) {
     const threads = snap.threads || [];
     const pulse = snap.pulse || {};
@@ -1530,24 +1566,35 @@
     threads.forEach((t) => { if (t.chat_id) pushChat(t.chat_id); });
     const chats = [...dedupMap.values()].slice(0, 8);
     $("#fl-cnt-chat").textContent = String(chats.length);
-    $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter));
+    $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter && !state.profileFilter));
     const filterHint = $("#flow-filter-hint");
-    const filterMeta = state.chatFilter ? chatMeta(snap, state.chatFilter) : null;
-    const filterLabel = filterMeta?.name || "";
+    const filterParts = [];
     if (state.chatFilter) {
-      filterHint.hidden = false;
+      const filterMeta = chatMeta(snap, state.chatFilter);
+      const filterLabel = filterMeta?.name || "";
       const specSuffix = filterMeta?.spec || state.chatFilter;
-      filterHint.textContent = filterLabel === specSuffix
-        ? `筛选：${specSuffix}`
-        : `筛选：${filterLabel} · ${specSuffix}`;
+      filterParts.push(filterLabel === specSuffix ? specSuffix : `${filterLabel} · ${specSuffix}`);
+    }
+    if (state.profileFilter) {
+      const pCard = cards.find((c) => c.id === state.profileFilter);
+      filterParts.push(
+        pCard?.title && pCard.title !== state.profileFilter
+          ? `${pCard.title} (${state.profileFilter})`
+          : state.profileFilter
+      );
+    }
+    if (filterParts.length) {
+      filterHint.hidden = false;
+      filterHint.textContent = `筛选：${filterParts.join(" · ")}`;
     } else {
       filterHint.hidden = true;
       filterHint.textContent = "";
     }
 
-    const selThread = threads.find((t) => t.thread_id === state.threadId) || snap.selected || null;
+    const rawSelThread = threads.find((t) => t.thread_id === state.threadId) || snap.selected || null;
+    const selThread = state.profileFilter && rawSelThread?.profile !== state.profileFilter ? null : rawSelThread;
     const selChat = state.chatFilter || selThread?.chat_id || "";
-    const selProf = selThread?.profile || "";
+    const selProf = state.profileFilter || selThread?.profile || "";
 
     $("#fl-chats").innerHTML = chats.length
       ? chats.map((cid) => {
@@ -1586,20 +1633,22 @@
     $("#fl-cnt-prof").textContent = String(cards.filter((p) => p.enabled !== false).length);
     $("#fl-profiles").innerHTML = orderedCards.slice(0, 6).map((p) => {
       const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
-      const selectedMatch = selProf === p.id;
+      const selectedMatch = state.profileFilter ? state.profileFilter === p.id : selProf === p.id;
       const isOff = p.enabled === false;
       const cls = isOff ? "mil-fish--off" : "";
       const fish = roleFishHtml(p.id, p.fish_seed || "", 26, running ? {} : { still: true }, cls);
       const chain = Array.isArray(p.model_list) && p.model_list.length ? p.model_list : (p.model_name ? [p.model_name] : []);
       const modelLabel = chain.length ? (chain.length > 1 ? `${chain[0]} +${chain.length - 1}` : chain[0]) : (p.task || "utils");
-      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" style="${isOff ? "opacity:0.65" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}">
+      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" style="${isOff ? "opacity:0.65" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}" aria-pressed="${String(state.profileFilter === p.id)}">
         <span class="fl-node-top"><span class="mil-row" style="gap:6px;min-width:0;flex:1;flex-wrap:nowrap">${fish}<span class="fl-node-name">${esc(p.title || p.id)}</span></span><span class="mil-tag ${isOff ? "mil-tag--off" : ""}">${esc(isOff ? "已停用" : (p.environment === "sandbox" ? "沙箱" : "只读"))}</span></span>
         <span class="fl-node-sub mono">${esc(p.id)} · ${esc(modelLabel)}${isOff ? " · 停用" : p.autonomous ? "" : " · 需授权"}</span>
       </button>`;
     }).join("");
 
-    const shownThreads = threads.slice(0, 5);
-    $("#fl-cnt-th").textContent = String(threads.length);
+    const roleScoped = state.profileFilter ? threads.filter((t) => t.profile === state.profileFilter) : threads;
+    const cleanThreads = roleScoped.filter((t) => !t.junk || (state.userPickedThread && t.thread_id === state.threadId));
+    const shownThreads = cleanThreads.slice(0, 5);
+    $("#fl-cnt-th").textContent = String(cleanThreads.length);
     $("#fl-threads").innerHTML = shownThreads.length
       ? shownThreads.map((t) => {
           const st = STATE_LABEL[t.state] || ["未知", "", ""];
@@ -1609,7 +1658,16 @@
             <span class="fl-node-sub">${esc(t.profile)} · ${t.delivered ? "已交付" : st[0]}</span>
           </button>`;
         }).join("")
-      : `<div class="fl-node fl-node--static" data-port-in="1"><span class="fl-node-name">暂无线程</span><span class="fl-node-sub">下方可随时发起</span></div>`;
+      : state.profileFilter
+        ? `<div class="fl-node fl-node--static on" data-port-in="1" data-prof="${esc(state.profileFilter)}">
+            <span class="fl-node-name">该角色暂无在场活动</span>
+            <span class="fl-node-sub">${roleScoped.length ? `下方有 ${roleScoped.length} 条历史废记录` : "可直接点名唤醒或调整角色设定"}</span>
+            <div class="mil-row" style="gap:6px;margin-top:6px">
+              <button type="button" class="mil-key mil-key--sm mil-key--hot" data-wake-profile="${esc(state.profileFilter)}">用该角色发起</button>
+              <button type="button" class="mil-key mil-key--sm" data-config-profile="${esc(state.profileFilter)}">去配置该角色</button>
+            </div>
+          </div>`
+        : `<div class="fl-node fl-node--static" data-port-in="1"><span class="fl-node-name">暂无在场活动</span><span class="fl-node-sub">下方可随时发起</span></div>`;
 
     requestAnimationFrame(() => {
       drawFlowLines();
@@ -1849,12 +1907,13 @@
   }
 
   function renderContext(snap) {
-    const threads = snap.threads || [];
+    const allThreads = snap.threads || [];
+    const threads = state.profileFilter ? allThreads.filter((t) => t.profile === state.profileFilter) : allThreads;
     $("#ctx-threads").innerHTML = threads.slice(0, 8).map((t) =>
       `<button type="button" class="mil-key mil-key--sm" data-ctx-thread="${esc(t.thread_id)}" aria-pressed="${String(t.thread_id === state.threadId)}">${esc(t.profile)} · ${esc(String(t.title || t.thread_id).slice(0, 14))}</button>`
     ).join("") || `<span class="mil-hint">暂无可选线程</span>`;
 
-    const sel = snap.selected;
+    const sel = selectedForView(snap);
     const ctx = sel?.context;
     if (!sel || !ctx) {
       $("#ctx-readout").textContent = "0 / 262.1K tokens (0%)";
@@ -1994,7 +2053,14 @@
 
   function renderThreads(snap) {
     const all = snap.threads || [];
+    const junkCount = all.filter((t) => t.junk).length;
+    const pruneBtn = $("#prune-junk-threads");
+    if (pruneBtn) {
+      pruneBtn.hidden = junkCount === 0;
+      pruneBtn.textContent = `清理废记录 (${junkCount})`;
+    }
     const list = all.filter((t) => {
+      if (state.profileFilter && t.profile !== state.profileFilter) return false;
       if (state.thFilter === "active") return t.state === "active" || t.state === "waiting";
       if (state.thFilter === "delivered") return Boolean(t.delivered);
       if (state.thFilter === "error") return Boolean(t.has_error);
@@ -2002,7 +2068,7 @@
     });
     const host = $("#threads");
     if (!list.length) {
-      const hasFilter = Boolean(state.chatFilter || state.thFilter !== "all");
+      const hasFilter = Boolean(state.chatFilter || state.profileFilter || state.thFilter !== "all");
       host._lastHtml = "";
       host.innerHTML = `<div style="padding:10px">
         <p class="mil-hint">${all.length || hasFilter ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>
@@ -2015,7 +2081,7 @@
       const on = t.thread_id === state.threadId;
       const cm = chatMeta(snap, t.chat_id);
       const chatDisp = cm.name && cm.name !== (cm.spec || t.chat_id) ? `${cm.name} (${cm.spec || t.chat_id})` : (cm.spec || t.chat_id);
-      return `<button type="button" class="thread-row${on ? " on" : ""}" data-thread="${esc(t.thread_id)}">
+      return `<div role="button" tabindex="0" class="thread-row${on ? " on" : ""}" data-thread="${esc(t.thread_id)}">
         <div class="mil-row" style="justify-content:space-between;gap:6px">
           <div class="mil-row" style="gap:6px;min-width:0">
             <span class="mil-led ${t.has_error ? "mil-led--bad" : st[2]}"></span>
@@ -2024,11 +2090,14 @@
           <span class="mil-tag ${st[1]}">${st[0]}</span>
         </div>
         ${t.excerpt ? `<div class="thread-excerpt">${esc(t.excerpt)}</div>` : ""}
-        <div class="mil-row" style="justify-content:space-between;font-size:11px">
-          <span class="mil-row mono" style="gap:5px">${roleFishHtml(t.profile, snapFishSeed(snap, t.profile), 18, (t.state === "active" || t.state === "waiting") ? {} : { still: true })}<span>${esc(t.profile)} · ${esc(chatDisp)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span></span>
-          <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
+        <div class="mil-row" style="justify-content:space-between;font-size:11px;gap:6px">
+          <span class="mil-row mono" style="gap:5px;min-width:0">${roleFishHtml(t.profile, snapFishSeed(snap, t.profile), 18, (t.state === "active" || t.state === "waiting") ? {} : { still: true })}<span>${esc(t.profile)} · ${esc(chatDisp)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span></span>
+          <span class="mil-row" style="gap:6px;flex-wrap:nowrap;flex-shrink:0">
+            <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
+            ${t.can_delete ? `<button type="button" class="thread-del" data-del-thread="${esc(t.thread_id)}" title="删除该条记录">删除</button>` : ""}
+          </span>
         </div>
-      </button>`;
+      </div>`;
     }).join("");
     if (host._lastHtml !== threadsHtml) {
       host._lastHtml = threadsHtml;
@@ -2037,8 +2106,9 @@
   }
 
   function renderInspector(snap) {
-    const sel = snap.selected;
+    const sel = selectedForView(snap);
     const stopBtn = $("#stop");
+    const delBtn = $("#delete-thread");
     const insFish = $("#ins-role-fish");
     if (!sel) {
       if (insFish) { insFish.hidden = true; insFish.innerHTML = ""; insFish.className = "mil-fish mil-fish--well"; }
@@ -2051,6 +2121,7 @@
       $("#deliveries-row").innerHTML = "";
       $("#events").innerHTML = `<p class="mil-hint">选择一条线程后展示执行事件。</p>`;
       stopBtn.disabled = true;
+      if (delBtn) { delBtn.hidden = true; delBtn.disabled = true; }
       return;
     }
 
@@ -2082,6 +2153,10 @@
       `<span class="mil-tag">工具 ${(sel.tools || []).length} 个</span>`,
     ].filter(Boolean).join("");
     stopBtn.disabled = sel.state === "closed";
+    if (delBtn) {
+      delBtn.hidden = !sel.can_delete;
+      delBtn.disabled = !sel.can_delete;
+    }
 
     const resBox = $("#result-box");
     const resText = sel.result?.error ? `错误：${sel.result.error}` : (sel.result?.text || "");
@@ -2215,7 +2290,15 @@
     }
     lastSnapshotAt = Date.now();
     state.lastSnap = snap;
-    const firstId = snap.threads?.[0]?.thread_id || "";
+    const scopedThreads = state.profileFilter
+      ? (snap.threads || []).filter((t) => t.profile === state.profileFilter)
+      : (snap.threads || []);
+    const firstId =
+      (!state.profileFilter && snap.selected?.thread_id) ||
+      scopedThreads.find((t) => t.state === "active" || t.state === "waiting")?.thread_id ||
+      scopedThreads.find((t) => !t.junk)?.thread_id ||
+      scopedThreads[0]?.thread_id ||
+      "";
     if (!state.threadId && firstId) {
       switchThread(firstId);
       if (snap.selected?.thread_id === firstId) {
@@ -2255,17 +2338,65 @@
     }
   }, { signal: shellSig });
 
+  async function deleteThreadById(tid) {
+    if (!tid) return;
+    const r = await hostRpc("write", "delete_thread", { thread_id: tid });
+    if (activePage !== "now") return;
+    if (!r?.success) {
+      setNowFeedback(r?.error || "删除失败", "mil-feedback mil-feedback--err");
+      return;
+    }
+    if (state.threadId === tid) {
+      state.userPickedThread = false;
+      switchThread("");
+    }
+    await refresh(true);
+    setNowFeedback("记录已删除。", "mil-feedback mil-feedback--ok");
+  }
+
+  $("#ms-now-view").addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    const row = ev.target.closest?.(".thread-row[data-thread]");
+    if (row && ev.target === row) {
+      ev.preventDefault();
+      row.click();
+    }
+  });
+
   $("#ms-now-view").addEventListener("click", (ev) => {
+    const delTh = ev.target.closest("[data-del-thread]");
+    if (delTh) {
+      ev.stopPropagation();
+      deleteThreadById(delTh.dataset.delThread);
+      return;
+    }
+    const wakeProf = ev.target.closest("[data-wake-profile]");
+    if (wakeProf) {
+      $("#launch-profile").value = wakeProf.dataset.wakeProfile;
+      const lp = $("#launch-panel");
+      if (lp) lp.open = true;
+      $("#launch-prompt")?.focus();
+      return;
+    }
+    const cfgProf = ev.target.closest("[data-config-profile]");
+    if (cfgProf) {
+      pendingAbilityTarget = { profile: cfgProf.dataset.configProfile };
+      switchWorkspaceTab("abilities");
+      return;
+    }
     const flowChat = ev.target.closest("[data-flow-chat]");
     if (flowChat) {
       const cid = flowChat.dataset.flowChat;
       state.chatFilter = state.chatFilter === cid ? "" : cid;
+      state.userPickedThread = false;
       switchThread("");
       refresh(true);
       return;
     }
     if (ev.target.closest("#flow-all-chats") || ev.target.closest("#clear-th-filters")) {
       state.chatFilter = "";
+      state.profileFilter = "";
+      state.userPickedThread = false;
       state.thFilter = "all";
       document.querySelectorAll("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.thFilter === "all")));
       switchThread("");
@@ -2276,19 +2407,41 @@
     if (flowProf) {
       const pid = flowProf.dataset.flowProfile;
       $("#launch-profile").value = pid;
-      const match = (state.lastSnap?.threads || []).find((t) => t.profile === pid);
+      state.profileFilter = state.profileFilter === pid ? "" : pid;
+      state.userPickedThread = false;
+      if (!state.profileFilter) {
+        switchThread("");
+        refresh(true);
+        return;
+      }
+      const roleThreads = (state.lastSnap?.threads || []).filter((t) => t.profile === pid);
+      const match =
+        roleThreads.find((t) => t.state === "active" || t.state === "waiting") ||
+        roleThreads.find((t) => !t.junk) ||
+        roleThreads[0];
       if (match) {
         switchThread(match.thread_id);
         refresh(true);
+      } else {
+        switchThread("");
+        if (state.lastSnap) {
+          renderFlow(state.lastSnap);
+          renderContext({ ...state.lastSnap, selected: null });
+          renderThreads(state.lastSnap);
+          renderInspector({ ...state.lastSnap, selected: null });
+        }
       }
       return;
     }
     const flowTh = ev.target.closest("[data-flow-thread],[data-thread],[data-ctx-thread]");
     if (flowTh) {
       const tid = flowTh.dataset.flowThread || flowTh.dataset.thread || flowTh.dataset.ctxThread;
+      state.userPickedThread = true;
       if (tid && tid !== state.threadId) {
         switchThread(tid);
         refresh(true);
+      } else if (state.lastSnap) {
+        renderFlow(state.lastSnap);
       }
       return;
     }
@@ -2461,6 +2614,27 @@
       }
       refresh(false);
     });
+
+    const delBtn = $("#delete-thread");
+    if (delBtn) delBtn.onclick = () => {
+      if (state.threadId) deleteThreadById(state.threadId);
+    };
+
+    const pruneBtn = $("#prune-junk-threads");
+    if (pruneBtn) pruneBtn.onclick = async () => {
+      const r = await hostRpc("write", "prune_threads", { chat_id: state.chatFilter || "" });
+      if (activePage !== "now") return;
+      if (!r?.success) {
+        setNowFeedback(r?.error || "清理失败", "mil-feedback mil-feedback--err");
+        return;
+      }
+      if (Array.isArray(r.deleted) && r.deleted.includes(state.threadId)) {
+        state.userPickedThread = false;
+        switchThread("");
+      }
+      await refresh(true);
+      setNowFeedback(`已清理 ${r.count || 0} 条废记录。`, "mil-feedback mil-feedback--ok");
+    };
 
     const launchBtn = $("#launch-run");
     if (launchBtn) launchBtn.onclick = () => enqueueAction(async () => {
