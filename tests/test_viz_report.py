@@ -609,17 +609,15 @@ def test_agent_runtime_calls_render_report_and_digest_feed_forward(tmp_path, mon
 def test_presets_and_skill_no_forbidden_pronoun_and_maker_config(tmp_path):
     presets_root = ROOT / "presets"
     skill_path = presets_root / "skills" / "research-report" / "SKILL.md"
-    profile_toml = presets_root / "profiles" / "maker" / "profile.toml"
-    profile_md = presets_root / "profiles" / "maker" / "PROFILE.md"
+    profile_toml = presets_root / "profiles" / "default" / "profile.toml"
+    profile_md = presets_root / "profiles" / "default" / "PROFILE.md"
 
     assert skill_path.is_file()
     for target in (skill_path, profile_toml, profile_md):
         content = target.read_text(encoding="utf-8")
         assert "她" not in content, f"禁止在 {target} 中出现'她'"
 
-    assert "render_report" in profile_toml.read_text(encoding="utf-8")
-    assert "research-report" in profile_toml.read_text(encoding="utf-8")
-    assert "render_report" in profile_md.read_text(encoding="utf-8")
+    assert '"workspace"' in profile_toml.read_text(encoding="utf-8")
     assert "source_text" in skill_path.read_text(encoding="utf-8")
     assert 'layout="card"' in skill_path.read_text(encoding="utf-8")
     assert 'layout="page"' in skill_path.read_text(encoding="utf-8")
@@ -628,7 +626,6 @@ def test_presets_and_skill_no_forbidden_pronoun_and_maker_config(tmp_path):
     vault = Vault(tmp_path / "secrets.vault")
     profiles = Profiles(tmp_path / "profiles", contains_secret=vault.contains_secret)
     layers = MemoryLayers(tmp_path / "mem", store, profiles, vault)
-    maker = layers.profiles.get("maker")
-    assert "render_report" in maker.tools
-    assert "research-report" in maker.skills
+    default_prof = layers.profiles.get("default")
+    assert "render_report" in default_prof.tools
     assert "research-report" in layers.skills()

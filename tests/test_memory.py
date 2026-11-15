@@ -55,46 +55,46 @@ def test_global_methods_reject_conversation_details_secrets_and_unsafe_paths(tmp
             memory.write("skill", content, target="export", chat_id="chat")
     with pytest.raises(ValueError):
         memory.write("skill", "safe", target="../../outside", chat_id="chat")
-    original = memory.read("profile", target="scout")
+    original = memory.read("profile", target="default")
     with pytest.raises(ValueError):
         memory.write(
             "profile",
-            'environment="readonly"\ntools=["sandbox_exec"]',
-            target="scout",
+            'environment="readonly"\ntools=["unknown_tool"]',
+            target="default",
             document="profile.toml",
             expected_version=memory.read(
-                "profile", target="scout", document="profile.toml"
+                "profile", target="default", document="profile.toml"
             )["version"],
         )
-    assert memory.read("profile", target="scout")["content"] == original["content"]
+    assert memory.read("profile", target="default")["content"] == original["content"]
 
 
 def test_methods_reload_and_external_edits_are_versioned(tmp_path):
     memory, _vault = layers(tmp_path)
     memory.write("skill", "导出前检查中文字体。", target="fonts")
-    settings = memory.read("profile", target="scout", document="profile.toml")
+    settings = memory.read("profile", target="default", document="profile.toml")
     memory.write(
         "profile",
         settings["content"] + '\nskills=["fonts"]\n',
-        target="scout",
+        target="default",
         document="profile.toml",
         expected_version=settings["version"],
     )
-    memory.write("notes", "发现字体缺失时先检查字体列表。", target="scout")
-    profile = memory.profiles.get("scout")
+    memory.write("notes", "发现字体缺失时先检查字体列表。", target="default")
+    profile = memory.profiles.get("default")
     assert profile.skills == ("fonts",)
     assert "中文字体" in memory.methods(profile)
     assert "检查字体列表" in memory.methods(profile)
-    path = memory.profiles.path / "scout/NOTES.md"
+    path = memory.profiles.path / "default/NOTES.md"
     path.write_text("先检查字体文件是否存在。", encoding="utf-8")
-    assert memory.read("notes", target="scout")["content"] == "先检查字体文件是否存在。"
-    assert len(memory.history("notes", target="scout")) == 3
+    assert memory.read("notes", target="default")["content"] == "先检查字体文件是否存在。"
+    assert len(memory.history("notes", target="default")) == 3
 
 
 def test_journal_expires_and_never_imports_chat_results(tmp_path):
     now = [1794499200.0]
     memory, _vault = layers(tmp_path, clock=lambda: now[0])
-    profile = memory.profiles.get("scout")
+    profile = memory.profiles.get("default")
     chat = memory.store.create(
         profile, "group trip", chat_id="chat", platform="qq", user_id=""
     )
@@ -125,9 +125,10 @@ async def test_admin_shape_is_live_and_recall_keeps_chat_memory_scoped(tmp_path)
     plugin.ctx.call_capability = capability
     try:
         denied = await plugin.shape_tool(
-            action="write",
-            kind="notes",
-            target="scout",
+            action="file",
+            op="write",
+            kind="profile",
+            target="default",
             content="先检查来源。",
             chat_id="chat",
             platform="qq",
@@ -136,23 +137,20 @@ async def test_admin_shape_is_live_and_recall_keeps_chat_memory_scoped(tmp_path)
         assert not denied["success"]
         await plugin.after_receive(message=event())
         source = event()["message_id"]
-        saved = await plugin.shape_tool(
-            action="write",
-            kind="notes",
-            target="scout",
-            content="先核实来源再回答。",
-            source_msg_id=source,
-            chat_id="chat",
-            platform="qq",
+        saved = plugin.memory.write(
+            "notes",
+            "先核实来源再回答。",
+            target="default",
             expected_version=0,
         )
-        assert saved["success"], saved
+        assert saved["version"] == 1
         await plugin.agent_tool(
             action="start", message="查证", chat_id="chat", platform="qq"
         )
         assert "先核实来源再回答" in str(prompts[-1]["prompt"])
         saved = await plugin.shape_tool(
-            action="write",
+            action="file",
+            op="write",
             kind="memory",
             content="群名：玄武厅",
             source_msg_id=source,
@@ -167,7 +165,8 @@ async def test_admin_shape_is_live_and_recall_keeps_chat_memory_scoped(tmp_path)
         assert found["success"] and found["memories"]
         assert plugin.memory.search("玄武厅", "other") == []
         readonly = await plugin.shape_tool(
-            action="write",
+            action="file",
+            op="write",
             kind="memory",
             content="forged",
             source_msg_id="forged",
@@ -188,7 +187,7 @@ async def test_learning_extracts_only_generic_statuses_after_actual_recovery(tmp
 
     memory, _vault = layers(tmp_path)
     row = memory.store.create(
-        memory.profiles.get("scout"),
+        memory.profiles.get("default"),
         "玄武厅 private input",
         chat_id="chat",
         platform="qq",
@@ -254,7 +253,7 @@ async def test_learning_extracts_only_generic_statuses_after_actual_recovery(tmp
             )
         await learning.schedule(row)
         await learning.drain()
-        notes = memory.read("notes", target="scout")
+        notes = memory.read("notes", target="default")
         assert "输入结构" in notes["content"] and notes["version"] == 1
         await learning.schedule(row)
         await learning.drain()
@@ -290,7 +289,7 @@ async def test_skipped_tool_is_not_counted_as_recovery(tmp_path):
 
     memory, _vault = layers(tmp_path)
     row = memory.store.create(
-        memory.profiles.get("scout"), "check", chat_id="chat", platform="qq", user_id=""
+        memory.profiles.get("default"), "check", chat_id="chat", platform="qq", user_id=""
     )
     row.update(result={"text": "done"}, completed_revision=1)
 
@@ -367,10 +366,10 @@ async def test_recovery_learning_and_self_journal_are_connected_to_real_thread_l
         assert result["success"] and result["state"] == "idle"
         await plugin.runtime.learning.drain()
         assert len(extraction) == 1 and "private fixture query" not in str(extraction)
-        assert "核对参数" in plugin.memory.read("notes", target="scout")["content"]
+        assert "核对参数" in plugin.memory.read("notes", target="default")["content"]
         assert plugin.memory.context("chat")["journal"] == ""
         await plugin.engine.start(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             "自己的散步",
             chat_id="",
             platform="self",
@@ -436,7 +435,7 @@ async def test_profile_correction_applies_to_existing_thread_and_restricted_acce
         plugin.memory.write(
             "profile",
             "先用原始来源交叉核实，再给出答案。",
-            target="scout",
+            target="default",
             expected_version=0,
         )
         resumed = await plugin.agent_tool(
@@ -448,12 +447,12 @@ async def test_profile_correction_applies_to_existing_thread_and_restricted_acce
         )
         assert resumed["state"] == "idle" and "交叉核实" in str(prompts[-1])
         settings = plugin.memory.read(
-            "profile", target="scout", document="profile.toml"
+            "profile", target="default", document="profile.toml"
         )
         plugin.memory.write(
             "profile",
             settings["content"].replace('access = "everyone"', 'access = "admins"'),
-            target="scout",
+            target="default",
             document="profile.toml",
             expected_version=settings["version"],
         )

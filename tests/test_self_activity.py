@@ -49,7 +49,7 @@ async def test_self_activity_is_global_can_resume_and_pulse_advances_it(tmp_path
         stopped = await plugin.agent_tool(
             action="stop", thread_id=first["thread_id"], chat_id="chat", platform="qq"
         )
-        assert stopped["success"] and stopped["state"] == "closed"
+        assert stopped["success"] and stopped["state"] == "idle"
     finally:
         await plugin.on_unload()
 
@@ -185,7 +185,7 @@ async def test_multiple_explicit_revisions_trigger_one_bounded_generic_note(tmp_
         assert result["state"] == "idle"
         await plugin.runtime.learning.drain()
         assert len(extracted) == 1 and "multiple_redirects" in str(extracted)
-        assert "确认目标" in plugin.memory.read("notes", target="scout")["content"]
+        assert "确认目标" in plugin.memory.read("notes", target="default")["content"]
     finally:
         await plugin.on_unload()
 

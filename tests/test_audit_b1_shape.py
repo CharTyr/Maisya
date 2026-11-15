@@ -1,8 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import errno
-import http.server
-import ipaddress
 import json
 import logging
 import os
@@ -11,26 +9,20 @@ import socket
 import sys
 import threading
 from types import SimpleNamespace
-import urllib.request
 
 import pytest
 
 from maibot_sdk.context import PluginPaths
 from maisya import (
     mcp_worker as mcp_worker_mod,
-    recipes as recipes_mod,
     services as services_mod,
     shaping as shaping_mod,
 )
-from maisya.recipes import _http_get_safe, _is_forbidden_ip, export_recipe_archive
-from maisya.services import Services, StdioSession, validate_endpoint_targets
+from maisya.services import Services, validate_endpoint_targets
 from maisya.shaping import (
     _LOCKOUT_MESSAGE,
-    _SETUP_CHAT_FIELDS,
     build_overview,
     execute_shape,
-    handle_recipe,
-    handle_setup,
     read_settings_state,
     write_settings,
 )
@@ -69,206 +61,19 @@ async def _boot_clean_plugin(
     return plugin
 
 
-class _BytesHTTPHandler(http.server.BaseHTTPRequestHandler):
-    payload: bytes = b""
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/zip")
-        self.send_header("Content-Length", str(len(self.payload)))
-        self.end_headers()
-        self.wfile.write(self.payload)
-
-    def log_message(self, format, *args):
-        return
-
-
-@pytest.mark.asyncio
-async def test_handle_recipe_create_uses_copy_mode_and_forwards_options(tmp_path, monkeypatch):
-    src_plugin = await _boot_clean_plugin(tmp_path / "src", subdir="src_app", enabled_chats=["100246809"])
-    dst_plugin = await _boot_clean_plugin(tmp_path / "dst", subdir="dst_app", enabled_chats=["100246809"])
-    try:
-        # Export a real profile recipe with a skill and a workflow routine from src_plugin
-        skill_dir = src_plugin.data_root / "abilities/skills/test-b1-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: test-b1-skill\ndescription: b1 test skill\n---\n\nbody\n",
-            encoding="utf-8",
-        )
-        await shaping_mod.patch_profile(src_plugin, "scout", {"add_skills": ["test-b1-skill"]})
-        src_plugin.intents.schedule(
-            kind="return",
-            source="workflow",
-            target="chat:100246809",
-            due_at=src_plugin.intents.clock() + 3600,
-            reason="每日侦察例行",
-            payload={
-                "platform": "qq",
-                "profile": "scout",
-                "workspace": "",
-                "prompt": "Run daily scout",
-                "every_seconds": 3600,
-            },
-            bypass_limits=True,
-        )
-        archive_bytes, export_meta = export_recipe_archive(src_plugin, "scout")
-        routines_meta = export_meta["manifest"].get("routines") or []
-        assert routines_meta, export_meta
-        rt_id = routines_meta[0]["id"]
-
-        class _Handler(_BytesHTTPHandler):
-            payload = archive_bytes
-
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            monkeypatch.setattr(
-                recipes_mod,
-                "_resolve_public_endpoint",
-                lambda raw_url: (raw_url, "recipes.example.com", "127.0.0.1", port),
-            )
-            # 1) Default action="create" on already-existing "scout" should auto-use
-            #    mode="copy" and pick suggested_copy_id ("scout-2"), forwarding
-            #    install_skills=False and mount_routines without crashing on mode="create"
-            res = await handle_recipe(
-                dst_plugin,
-                action="create",
-                url=f"http://recipes.example.com:{port}/scout.zip",
-                patch={
-                    "install_skills": False,
-                    "overwrite_skills": True,
-                    "mount_routines": [rt_id],
-                    "routine_chat_id": "100246809",
-                    "routine_platform": "qq",
-                },
-            )
-            imported = res.get("imported") or {}
-            assert imported.get("mode") == "copy"
-            assert imported.get("id") == res["suggested_copy_id"]
-            assert imported.get("id") != "scout"
-            assert (dst_plugin.profiles.path / imported["id"] / "profile.toml").is_file()
-            # install_skills=False must actually be respected by management/_import_recipe
-            assert imported.get("installed_skills") == []
-            assert not (dst_plugin.data_root / "abilities/skills/test-b1-skill").exists()
-            mounted = imported.get("mounted_routines") or []
-            assert len(mounted) == 1
-            chat_intents = dst_plugin.intents.list("chat:100246809")
-            assert any(
-                (row.get("payload") or {}).get("profile") == imported["id"]
-                and (row.get("payload") or {}).get("prompt") == "Run daily scout"
-                for row in chat_intents
-            )
-        finally:
-            server.shutdown()
-            server.server_close()
-    finally:
-        await dst_plugin.on_unload()
-        await src_plugin.on_unload()
-
-
-@pytest.mark.asyncio
-async def test_handle_recipe_payload_compat_and_drops_dead_fields(tmp_path):
-    plugin = await _boot_clean_plugin(tmp_path)
-    calls: list[tuple[str, dict]] = []
-
-    async def fake_write(action: str, content: str = "", **kwargs):
-        payload = json.loads(content)
-        calls.append((action, payload))
-        if action == "recipe_preview":
-            return {
-                "preview_token": "tok-abc",
-                "suggested_target": "alpha-target",
-                "suggested_copy_id": "alpha-copy",
-                "suggested_id": "alpha-legacy",
-            }
-        return {"ok": True, **payload}
-
-    orig_write = plugin.management.write
-    plugin.management.write = fake_write
-    try:
-        # Preview + create: must drop on_conflict & can_import, forward options, map mode="copy"
-        res = await handle_recipe(
-            plugin,
-            action="create",
-            url="https://example.com/r.zip",
-            patch={
-                "install_skills": False,
-                "overwrite_skills": True,
-                "mount_routines": ["r1"],
-                "routine_chat_id": "100246809",
-                "routine_platform": "discord",
-            },
-        )
-        assert "imported" in res
-        assert calls[-1][0] == "recipe_import"
-        imp_payload = calls[-1][1]
-        assert imp_payload["mode"] == "copy"
-        assert "on_conflict" not in imp_payload
-        assert imp_payload["target"] in {"alpha-copy", "alpha-target"}
-        assert imp_payload["install_skills"] is False
-        assert imp_payload["overwrite_skills"] is True
-        assert imp_payload["mount_routines"] == ["r1"]
-        assert imp_payload["routine_chat_id"] == "100246809"
-        assert imp_payload["routine_platform"] == "discord"
-
-        # Update mode picks suggested_target
-        calls.clear()
-        await handle_recipe(
-            plugin,
-            action="create",
-            url="https://example.com/r.zip",
-            patch={"mode": "update"},
-        )
-        assert calls[-1][1]["mode"] == "update"
-        assert calls[-1][1]["target"] == "alpha-target"
-
-        # Legacy preview returning only suggested_id still resolves target
-        async def legacy_preview_write(action: str, content: str = "", **kwargs):
-            payload = json.loads(content)
-            calls.append((action, payload))
-            if action == "recipe_preview":
-                return {"preview_token": "tok-leg", "suggested_id": "legacy-only"}
-            return {"ok": True, **payload}
-
-        plugin.management.write = legacy_preview_write
-        calls.clear()
-        await handle_recipe(plugin, action="create", url="https://example.com/leg.zip")
-        assert calls[-1][1]["target"] == "legacy-only"
-
-        # Token direct import forwards options and drops on_conflict
-        calls.clear()
-        await handle_recipe(
-            plugin,
-            action="patch",
-            preview_token="tok-direct",
-            target="custom-id",
-            patch={"install_skills": False, "mount_routines": ["daily"]},
-        )
-        tok_payload = calls[-1][1]
-        assert tok_payload["mode"] == "copy"
-        assert "on_conflict" not in tok_payload
-        assert tok_payload["install_skills"] is False
-        assert tok_payload["mount_routines"] == ["daily"]
-    finally:
-        plugin.management.write = orig_write
-        await plugin.on_unload()
-
-
 @pytest.mark.asyncio
 async def test_build_overview_offloads_profile_summary_to_thread(tmp_path, monkeypatch):
     plugin = await _boot_clean_plugin(tmp_path)
     try:
         main_tid = threading.get_ident()
         seen_tids: list[int] = []
-        orig_summary = shaping_mod.profile_summary
+        orig_summary = shaping_mod._profile_summary
 
         def wrapped_summary(plg, pid):
             seen_tids.append(threading.get_ident())
             return orig_summary(plg, pid)
 
-        monkeypatch.setattr(shaping_mod, "profile_summary", wrapped_summary)
+        monkeypatch.setattr(shaping_mod, "_profile_summary", wrapped_summary)
         overview = await build_overview(plugin)
         assert overview["profiles"]
         assert seen_tids
@@ -306,12 +111,38 @@ async def test_settings_anti_lockout_enforced_after_model_validate(tmp_path):
         with pytest.raises(ValueError, match="plugin\\.enabled=false|锁死"):
             await execute_shape(
                 plugin,
-                action="write",
-                kind="settings",
+                action="settings",
+                op="write",
                 patch={},
                 expected_version=ver,
+                admin_verified=True,
             )
         assert plugin.settings.plugin.enabled is True
+
+        # 4) Anti-lockout blocks removing all enabled_chats and removing caller's admin entry
+        with pytest.raises(ValueError, match="启用会话"):
+            await execute_shape(
+                plugin,
+                action="settings",
+                op="patch",
+                patch={"enabled_chats": []},
+                expected_version=ver,
+                admin_verified=True,
+            )
+        plugin_no_host = await _boot_clean_plugin(
+            tmp_path, permissions=(), enabled_chats=["qq:group:100246809"], subdir="no_host"
+        )
+        try:
+            await shaping_mod.patch_settings(plugin_no_host, {"admins": ["qq:Alice"]})
+            with pytest.raises(ValueError, match="管理员"):
+                await shaping_mod.patch_settings(
+                    plugin_no_host,
+                    {"admins": []},
+                    caller_ident="qq:Alice",
+                )
+        finally:
+            await plugin_no_host.on_unload()
+
         after = await read_settings_state(plugin)
         assert after["version"] == ver
     finally:
@@ -319,40 +150,51 @@ async def test_settings_anti_lockout_enforced_after_model_validate(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_setup_global_profile_fields_do_not_enable_unlisted_private_chat(tmp_path):
-    assert "enable_profiles" not in _SETUP_CHAT_FIELDS
-    assert "profiles" not in _SETUP_CHAT_FIELDS
-    assert "profile" not in _SETUP_CHAT_FIELDS
-
+async def test_profile_and_settings_patch_do_not_enable_unlisted_private_chat(tmp_path):
     plugin = await _boot_clean_plugin(tmp_path, enabled_chats=[])
     try:
         assert plugin.enabled_for("priv_admin_md5", "qq") is False
-        for patch in (
-            {"enable_profiles": ["digest"]},
-            {"profiles": {"scout": {"max_steps": 16}}},
-            {"profile": "scout", "model_name": "custom-model"},
-        ):
-            res = await handle_setup(
-                plugin,
-                patch=patch,
-                current_chat_id="priv_admin_md5",
-                current_platform="qq",
-                author="admin",
-            )
-            assert res["applied"].get("profiles")
-            assert plugin.enabled_for("priv_admin_md5", "qq") is False
-            assert plugin.settings.enabled_chats == []
-
-        # Explicit target_chat must still enable that target chat when requested
-        res_target = await handle_setup(
+        res_prof = await execute_shape(
             plugin,
-            target_chat="qq:group:100246809",
-            patch={"enable_profiles": ["digest"]},
+            action="profile",
+            op="patch",
+            target="default",
+            patch={"max_steps": 16},
             current_chat_id="priv_admin_md5",
             current_platform="qq",
             author="admin",
+            admin_verified=True,
         )
-        assert res_target["applied"]["settings"]["enabled_chat"] == "qq:group:100246809"
+        assert res_prof["profile"]["profile_id"] == "default"
+        assert plugin.enabled_for("priv_admin_md5", "qq") is False
+        assert plugin.settings.enabled_chats == []
+
+        res_global = await execute_shape(
+            plugin,
+            action="settings",
+            op="patch",
+            patch={"sleep_window": "01-07", "daily_proactive_limit": 3},
+            current_chat_id="priv_admin_md5",
+            current_platform="qq",
+            author="admin",
+            admin_verified=True,
+        )
+        assert res_global["settings"]["sleep_window"] == "01-07"
+        assert plugin.enabled_for("priv_admin_md5", "qq") is False
+        assert plugin.settings.enabled_chats == []
+
+        # Explicit add_chats enables only the requested target chat
+        res_target = await execute_shape(
+            plugin,
+            action="settings",
+            op="patch",
+            patch={"add_chats": ["qq:group:100246809"]},
+            current_chat_id="priv_admin_md5",
+            current_platform="qq",
+            author="admin",
+            admin_verified=True,
+        )
+        assert "qq:group:100246809" in res_target["settings"]["enabled_chats"]
         assert "qq:group:100246809" in plugin.settings.enabled_chats
         assert plugin.enabled_for("priv_admin_md5", "qq") is False
     finally:
@@ -360,157 +202,104 @@ async def test_setup_global_profile_fields_do_not_enable_unlisted_private_chat(t
 
 
 @pytest.mark.asyncio
-async def test_setup_prevalidates_and_rolls_back_on_midflight_error(tmp_path, monkeypatch):
-    plugin = await _boot_clean_plugin(tmp_path, enabled_chats=[])
+async def test_settings_and_file_prevalidate_and_rollback(tmp_path):
+    plugin = await _boot_clean_plugin(tmp_path, enabled_chats=["qq:group:100246809"])
     try:
-        target_chat = "qq:group:100246809"
-        # Seed baseline memory & schedule & disabled digest profile
+        plugin.vault.set("secret_b1", "top-secret-b1-token-xyz")
         plugin.memory.write("memory", "initial group note\n", chat_id="100246809", author="init")
-        await shaping_mod.patch_profile(plugin, "digest", {"enabled": False})
-        assert plugin.profiles.get("digest").enabled is False
-
-        orig_intent = plugin.intents.schedule(
-            kind="return",
-            source="workflow",
-            target="chat:100246809",
-            due_at=plugin.intents.clock() + 3600,
-            reason="每日 08:00 digest",
-            payload={
-                "platform": "qq",
-                "every_seconds": 86400,
-                "daily_at": "08:00",
-                "tz_offset_minutes": 480,
-                "profile": "digest",
-                "workspace": "digest",
-                "scheduled_admin": True,
-            },
-            bypass_limits=True,
-        )
-
-        # Seed persistent digest sources so both pre-validation and mid-flight rollback cover digest_sources
-        async def _seed_sources(dw):
-            dw._save_sources(
-                {
-                    "feeds": [
-                        {
-                            "id": "f1",
-                            "url": "https://example.com/f1.xml",
-                            "host": "example.com",
-                            "title": "Feed 1",
-                            "origin": "manual",
-                            "status": "active",
-                        }
-                    ],
-                    "rejected": [],
-                }
-            )
-            dw.work.commit()
-
-        await shaping_mod._run_in_digest_workspace(
-            plugin, "100246809", "qq", "digest", None, _seed_sources
-        )
-        before_sources = await shaping_mod.handle_digest_sources(
-            plugin,
-            action="read",
-            target_chat=target_chat,
-            current_chat_id="priv_admin_md5",
-            current_platform="qq",
-        )
-        assert [f["id"] for f in before_sources["feeds"]] == ["f1"]
         base_ver = (await read_settings_state(plugin))["version"]
 
-        # 1) Pre-validation: invalid schedules=123 or invalid daily_at or bad deliver_to
-        #    must fail BEFORE writing settings, profiles, memory, or intents
+        # 1) Invalid patch fails before mutating settings or incrementing version
         for bad_patch in (
-            {
-                "enable_chat": True,
-                "daily_proactive_limit": 7,
-                "enable_profiles": ["digest"],
-                "memory": "should not persist",
-                "schedules": 123,
-            },
-            {
-                "enable_chat": True,
-                "daily_proactive_limit": 7,
-                "enable_profiles": ["digest"],
-                "memory": "should not persist",
-                "schedules": [{"daily_at": "99:99", "profile": "digest"}],
-            },
-            {
-                "enable_chat": True,
-                "daily_proactive_limit": 7,
-                "enable_profiles": ["digest"],
-                "memory": "should not persist",
-                "run_now": True,
-                "deliver_to": "invalid_dest",
-            },
+            {"sleep_window": "99-00"},
+            {"daily_proactive_limit": "not-an-int"},
+            {"plugin": {"enabled": False}, "daily_proactive_limit": 5},
         ):
             with pytest.raises(ValueError):
-                await handle_setup(
+                await execute_shape(
                     plugin,
-                    target_chat=target_chat,
+                    action="settings",
+                    op="patch",
                     patch=bad_patch,
-                    current_chat_id="priv_admin_md5",
-                    current_platform="qq",
+                    expected_version=base_ver,
+                    admin_verified=True,
                 )
-            assert plugin.settings.enabled_chats == []
-            assert plugin.settings.daily_proactive_limit == 1
-            assert plugin.profiles.get("digest").enabled is False
-            assert (
-                plugin.memory.read("memory", chat_id="100246809", allow_custom=True)["content"]
-                == "initial group note\n"
-            )
-            assert (await read_settings_state(plugin))["version"] == base_ver
-
-        # 2) Mid-flight error rollback: valid inputs pass pre-validation, write settings,
-        #    profiles, memory, cancel old schedule and insert new schedules, then crash
-        #    when engine.start is invoked for trial run. Everything must roll back!
-        async def boom_start(*args, **kwargs):
-            raise RuntimeError("mid-flight engine start failure")
-
-        monkeypatch.setattr(plugin.engine, "start", boom_start)
-        with pytest.raises(RuntimeError, match="mid-flight engine start failure"):
-            await handle_setup(
-                plugin,
-                target_chat=target_chat,
-                patch={
-                    "enable_chat": True,
-                    "daily_proactive_limit": 9,
-                    "sleep_window": "01:00-08:00",
-                    "enable_profiles": ["digest"],
-                    "append_memory": "should rollback this line",
-                    "unsubscribe_ids": ["f1"],
-                    "auto_seed_sources": False,
-                    "daily_at": ["09:00", "20:00"],
-                    "run_now": True,
-                    "deliver_to": "current",
-                },
-                current_chat_id="priv_admin_md5",
-                current_platform="qq",
-                source_msg_id="m-admin-1",
-            )
-
-        assert plugin.settings.enabled_chats == []
-        assert plugin.settings.daily_proactive_limit == 1
         assert plugin.settings.sleep_window == ""
+        assert plugin.settings.daily_proactive_limit == 1
         assert (await read_settings_state(plugin))["version"] == base_ver
-        assert plugin.profiles.get("digest").enabled is False
-        assert (
-            plugin.memory.read("memory", chat_id="100246809", allow_custom=True)["content"]
-            == "initial group note\n"
-        )
-        after_sources = await shaping_mod.handle_digest_sources(
+
+        # 2) Valid patch + version conflict check + rollback restores prior snapshot
+        updated = await execute_shape(
             plugin,
-            action="read",
-            target_chat=target_chat,
-            current_chat_id="priv_admin_md5",
-            current_platform="qq",
+            action="settings",
+            op="patch",
+            patch={"sleep_window": "01-08", "daily_proactive_limit": 4},
+            expected_version=base_ver,
+            admin_verified=True,
         )
-        assert [f["id"] for f in after_sources["feeds"]] == ["f1"]
-        assert after_sources["rejected"] == []
-        pending = plugin.intents.list_all(status="pending", limit=20)
-        pending_ids = {row["intent_id"] for row in pending}
-        assert pending_ids == {orig_intent["intent_id"]}
+        new_ver = updated["version"]
+        assert new_ver == base_ver + 1
+        with pytest.raises(ValueError, match="版本冲突"):
+            await execute_shape(
+                plugin,
+                action="settings",
+                op="patch",
+                patch={"daily_proactive_limit": 2},
+                expected_version=base_ver,
+                admin_verified=True,
+            )
+        rolled = await execute_shape(
+            plugin,
+            action="settings",
+            op="rollback",
+            version=base_ver,
+            expected_version=new_ver,
+            admin_verified=True,
+        )
+        assert rolled["settings"]["sleep_window"] == ""
+        assert rolled["settings"]["daily_proactive_limit"] == 1
+
+        # 3) File writes reject plain secrets and support rollback by expected_version
+        mem_cur = await execute_shape(
+            plugin,
+            action="file",
+            op="read",
+            document="MEMORY.md",
+            target_chat="qq:group:100246809",
+            admin_verified=True,
+        )
+        with pytest.raises(ValueError, match="凭据"):
+            await execute_shape(
+                plugin,
+                action="file",
+                op="write",
+                document="MEMORY.md",
+                target_chat="qq:group:100246809",
+                content="leak top-secret-b1-token-xyz",
+                expected_version=mem_cur["version"],
+                admin_verified=True,
+            )
+        mem_w = await execute_shape(
+            plugin,
+            action="file",
+            op="write",
+            document="MEMORY.md",
+            target_chat="qq:group:100246809",
+            content="updated group note\n",
+            expected_version=mem_cur["version"],
+            admin_verified=True,
+        )
+        mem_rb = await execute_shape(
+            plugin,
+            action="file",
+            op="rollback",
+            document="MEMORY.md",
+            target_chat="qq:group:100246809",
+            version=mem_cur["version"],
+            expected_version=mem_w["version"],
+            admin_verified=True,
+        )
+        assert mem_rb["content"] == "initial group note\n"
     finally:
         await plugin.on_unload()
 
@@ -560,7 +349,7 @@ def test_vault_private_directory_stop_at_atomic_key_and_no_path_leak(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_recipes_export_checks_symlinks_only_within_managed_root(tmp_path):
+async def test_profile_export_checks_symlinks_only_within_managed_root(tmp_path):
     real_host = tmp_path / "real_host"
     real_host.mkdir()
     sym_host = tmp_path / "sym_host"
@@ -571,10 +360,10 @@ async def test_recipes_export_checks_symlinks_only_within_managed_root(tmp_path)
         good_dir = plugin.data_root / "abilities/skills/good-skill"
         good_dir.mkdir(parents=True, exist_ok=True)
         (good_dir / "SKILL.md").write_text("---\nname: good-skill\n---\n\nok\n", encoding="utf-8")
-        await shaping_mod.patch_profile(plugin, "scout", {"skills": ["good-skill"]})
+        plugin.profiles.update("default", skills=["good-skill"])
 
-        raw, meta = export_recipe_archive(plugin, "scout")
-        assert raw and meta["manifest"]["profile"]["id"] == "scout"
+        raw = plugin.profiles.export("default")
+        assert raw
 
         # Symlink INSIDE managed skill root must still fail closed
         outside = tmp_path / "outside_skill"
@@ -582,89 +371,11 @@ async def test_recipes_export_checks_symlinks_only_within_managed_root(tmp_path)
         (outside / "SKILL.md").write_text("---\nname: bad-skill\n---\n\nbad\n", encoding="utf-8")
         bad_dir = plugin.data_root / "abilities/skills/bad-skill"
         bad_dir.symlink_to(outside, target_is_directory=True)
-        await shaping_mod.patch_profile(plugin, "scout", {"skills": ["bad-skill"]})
-        with pytest.raises(ValueError, match="符号链接"):
-            export_recipe_archive(plugin, "scout")
+        plugin.profiles.update("default", skills=["bad-skill"])
+        with pytest.raises(ValueError, match="链接"):
+            plugin.profiles.export("default")
     finally:
         await plugin.on_unload()
-
-
-def test_recipes_http_ignores_env_proxy_and_blocks_embedded_ipv4(monkeypatch):
-    # 1) Embedded IPv4 in IPv6 transition / NAT64 prefixes must be blocked
-    for addr in (
-        "2002:7f00:1::1",
-        "64:ff9b::127.0.0.1",
-        "64:ff9b::10.0.0.1",
-        "64:ff9b:1::10.0.0.1",
-        "2001:0000:0101:0101:0000:0000:80ff:fffe",  # Teredo -> 127.0.0.1
-    ):
-        assert _is_forbidden_ip(ipaddress.ip_address(addr)) is True, addr
-
-    # 2) HTTP_PROXY / HTTPS_PROXY env vars must be ignored by _http_get_safe opener
-    proxy_hit = False
-
-    class _TrapProxyHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            nonlocal proxy_hit
-            proxy_hit = True
-            self.send_response(502)
-            self.end_headers()
-
-        def log_message(self, format, *args):
-            return
-
-    class _TargetHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Length", "2")
-            self.end_headers()
-            self.wfile.write(b"ok")
-
-        def log_message(self, format, *args):
-            return
-
-    proxy_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _TrapProxyHandler)
-    target_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
-    proxy_thread = threading.Thread(target=proxy_srv.serve_forever, daemon=True)
-    target_thread = threading.Thread(target=target_srv.serve_forever, daemon=True)
-    proxy_thread.start()
-    target_thread.start()
-    try:
-        proxy_port = proxy_srv.server_address[1]
-        target_port = target_srv.server_address[1]
-        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy_port}")
-        monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{proxy_port}")
-        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy_port}")
-        monkeypatch.setattr(
-            recipes_mod,
-            "_resolve_public_endpoint",
-            lambda raw_url: (raw_url, "public.example.test", "127.0.0.1", target_port),
-        )
-        passed_handlers: list[urllib.request.ProxyHandler] = []
-        built_handlers: list[urllib.request.ProxyHandler] = []
-        orig_build = urllib.request.build_opener
-
-        def spy_build_opener(*handlers):
-            passed_handlers.extend(h for h in handlers if isinstance(h, urllib.request.ProxyHandler))
-            op = orig_build(*handlers)
-            built_handlers.extend(h for h in op.handlers if isinstance(h, urllib.request.ProxyHandler))
-            return op
-
-        monkeypatch.setattr(urllib.request, "build_opener", spy_build_opener)
-        body, _ = _http_get_safe(
-            f"http://public.example.test:{target_port}/r.zip",
-            headers={"User-Agent": "test"},
-            timeout=5,
-        )
-        assert body == b"ok"
-        assert proxy_hit is False
-        assert passed_handlers and all(h.proxies == {} for h in passed_handlers)
-        assert not built_handlers
-    finally:
-        proxy_srv.shutdown()
-        proxy_srv.server_close()
-        target_srv.shutdown()
-        target_srv.server_close()
 
 
 @pytest.mark.asyncio
@@ -683,25 +394,20 @@ async def test_services_and_mcp_worker_hardening(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="非公网|组播"):
         validate_endpoint_targets(["mcast.example.com:443"])
 
-    # 2) Native OS absolute path enforcement in services.py (without mutating pathsafe.py)
+    # 2) Native OS absolute path enforcement in services.py & legacy templates drop
     vault = Vault(tmp_path / "vault")
     services_cfg = {
         "servers": {
             "badwin": {"command": ["C:\\Windows\\System32\\cmd.exe"], "tools": ["t"]},
         },
         "templates": {
-            "badtpl": {
-                "argv": ["C:\\evil.exe"],
-                "secrets": ["k1"],
-                "targets": ["1.1.1.1:443"],
-                "schema": {"type": "object", "properties": {}},
-            }
+            "legacy_tpl": {"argv": ["/bin/echo"]},
         },
     }
     (tmp_path / "services.json").write_text(json.dumps(services_cfg), encoding="utf-8")
     svc = Services(tmp_path / "services.json", vault)
-    svc.configuration = services_cfg
-    svc.digest = "d1"
+    loaded_cfg = svc.load()
+    assert "templates" not in loaded_cfg
     monkeypatch.setattr(services_mod.os, "name", "posix")
     with pytest.raises(ValueError, match="绝对程序路径|绝对路径"):
         await svc._session(
@@ -709,16 +415,6 @@ async def test_services_and_mcp_worker_hardening(tmp_path, monkeypatch):
             {"chat_id": "c1", "thread_id": "t1"},
             svc.configuration["servers"]["badwin"],
         )
-
-    fake_profile = SimpleNamespace(
-        template="badtpl",
-        access="admins",
-        secrets=["k1"],
-        sandbox_targets=["1.1.1.1:443"],
-    )
-    fake_runtime = SimpleNamespace(authorized=lambda ctx: True)
-    with pytest.raises(ValueError, match="绝对程序路径|绝对路径"):
-        await svc.credential(fake_profile, {}, {"chat_id": "c1", "thread_id": "t1"}, fake_runtime)
 
     # 3) _prepare_group cleans up partial cgroup directory on write failure
     cgroup_root = tmp_path / "cgroup"

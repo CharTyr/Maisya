@@ -65,6 +65,17 @@ async def _boot_plugin(
     cfg["enabled_chats"] = list(enabled_chats)
     plg.set_plugin_config(cfg)
     await plg.on_load()
+    if not (plg.profiles.path / "digest").is_dir():
+        plg.profiles.clone("default", "digest")
+        cur = plg.memory.read("profile", target="digest", document="profile.toml")
+        plg.memory.write(
+            "profile",
+            cur["content"].replace("enabled = true", "enabled = false"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
     return plg
 
 
@@ -150,6 +161,7 @@ def test_compact_never_drops_latest_oversized_tool_block(tmp_path, max_chars):
 async def test_digest_collect_bounds_payload_and_concurrent_add_feed_no_clobber(tmp_path):
     plugin = await loaded(tmp_path / "digest_bounds")
     try:
+        plugin.profiles.clone("default", "digest")
         cur = plugin.memory.read("profile", target="digest", document="profile.toml")
         plugin.memory.write(
             "profile",
@@ -247,45 +259,56 @@ async def test_setup_trial_submits_bridge_route_and_emits_plan_a_reply_hint(tmp_
         orig_add = DigestWorkspace.add_feed
         DigestWorkspace.add_feed = _fake_add_feed
         try:
-            # First test concurrent handle_digest_sources speed
+            # First test concurrent add_feed helper speed
+            work = await plg.runtime._work(
+                plg.threads.create(
+                    plg.profiles.get("digest"),
+                    "seed feeds",
+                    chat_id="10001",
+                    platform="qq",
+                    user_id="Alice",
+                    workspace="digest",
+                )
+            )
+            dw = DigestWorkspace(work)
             t0 = time.monotonic()
-            src_res = await execute_shape(
-                plg,
-                action="patch",
-                kind="digest_sources",
-                target_chat="qq:group:10001",
-                current_chat_id="priv_admin_md5",
-                current_platform="qq",
-                source_msg_id="m-setup-1",
-                patch={
-                    "rss_urls": [f"https://rss{i}.example.org/feed.xml" for i in range(6)]
-                },
+            src_results = await asyncio.gather(
+                *(
+                    dw.add_feed(f"https://rss{i}.example.org/feed.xml")
+                    for i in range(6)
+                )
             )
             elapsed_sources = time.monotonic() - t0
-            assert len(src_res["added"]) == 6
+            assert len(src_results) == 6
             assert elapsed_sources < 0.35
 
             async def _fake_start(*args, **kwargs):
                 return {"thread_id": "th_demo1", "state": "active", "result": {}}
 
             plg.engine.start = _fake_start
-            setup_res = await execute_shape(
+            prof_res = await execute_shape(
                 plg,
-                action="setup",
-                kind="setup",
-                target_chat="qq:group:10001",
+                action="profile",
+                op="patch",
+                target="digest",
                 current_chat_id="priv_admin_md5",
                 current_platform="qq",
                 source_msg_id="m-setup-1",
-                patch={
-                    "enable_chat": True,
-                    "enable_profiles": ["digest"],
-                    "auto_seed_sources": False,
-                    "run_now": True,
-                    "deliver_to": "current",
-                },
+                patch={"enabled": True},
             )
-            assert setup_res["trial_thread_id"] == "th_demo1"
+            assert prof_res["profile"]["enabled"] is True, prof_res
+            setup_res = await plg.agent_tool(
+                action="start",
+                profile="digest",
+                target_chat="qq:group:10001",
+                deliver_to="current",
+                message="试跑独立游戏资讯",
+                wait_seconds=0,
+                source_msg_id="m-setup-1",
+                chat_id="priv_admin_md5",
+                platform="qq",
+            )
+            assert setup_res["thread_id"] == "th_demo1"
             assert "next_step" in setup_res
             assert "reply" in setup_res["next_step"]
             assert "wait" in setup_res["next_step"]
@@ -349,6 +372,7 @@ async def test_agent_and_recall_anti_polling_and_digest_fast_wait(tmp_path):
             target_chat="qq:group:10001",
             deliver_to="current",
             message="按独立游戏口味试跑一期",
+            wait_seconds=2,
             chat_id="priv_admin_md5",
             platform="qq",
         )
@@ -385,6 +409,7 @@ async def test_agent_and_recall_anti_polling_and_digest_fast_wait(tmp_path):
             target_chat="qq:group:10001",
             deliver_to="current",
             message="快速完成验证",
+            wait_seconds=2,
             chat_id="priv_admin_md5",
             platform="qq",
         )
@@ -946,12 +971,16 @@ async def test_share_auto_includes_declared_result_attachments_when_handles_omit
         work.write_bytes("out/digest-card.png", png_bytes)
         work.commit()
         atts = plg.runtime.files.attach(row, work, ["out/digest-card.html", "out/digest-card.png"])
-        plg.threads.finish(
-            tid,
-            "10001",
-            {"text": "今日独立游戏简报 https://indie.example/game1", "attachments": atts},
-            [],
-            row["revision"],
+        rev = plg.threads.enqueue(tid, "自动携带成果图片附件", "10001")
+        assert (
+            plg.threads.finish(
+                tid,
+                "10001",
+                {"text": "今日独立游戏简报 https://indie.example/game1", "attachments": atts},
+                [],
+                rev,
+            )
+            is True
         )
         plg.bridge.stage(plg.threads.get(tid, "10001"), "10001")
 

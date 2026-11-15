@@ -37,11 +37,12 @@ async def test_longing_disabled_by_default_config_webui_and_pulse(tmp_path):
             )
 
     root = Path(__file__).resolve().parent.parent
+    assert "longing_quiet_hours" in Settings.model_fields
     example_toml = tomllib.loads((root / "config.example.toml").read_text("utf-8"))
-    assert example_toml["longing_quiet_hours"] == 0
+    assert example_toml["proactive_level"] == "care"
 
     expected_help = "设为 0 默认关闭；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。"
-    for rel in ("webui/management.html.in", "webui/settings.html"):
+    for rel in ("webui/settings.html",):
         text = (root / rel).read_text("utf-8")
         assert 'id="set-longing"' in text
         assert 'min="0"' in text

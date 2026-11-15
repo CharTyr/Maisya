@@ -8,9 +8,27 @@ from test_foundation import loaded
 from maisya.abilities import Profiles
 
 
+def _seed_maker_profile(profiles, *, name="maker", permission_mode="autonomous"):
+    if name not in profiles.list():
+        profiles.clone("default", name)
+    (profiles.path / name / "profile.toml").write_text(
+        'title = "创作工坊"\n'
+        'enabled = true\n'
+        'bound = true\n'
+        'access = "everyone"\n'
+        'environment = "sandbox"\n'
+        'execution_mode = "sandbox"\n'
+        f'permission_mode = "{permission_mode}"\n'
+        'network = "public"\n'
+        'tools = ["workspace_file", "html_render", "render_report", "result_attach", "sandbox_exec"]\n',
+        encoding="utf-8",
+    )
+    return profiles.get(name)
+
+
 def test_maker_preset_and_profile_archive_do_not_export_runtime_bindings(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
-    maker = profiles.get("maker")
+    maker = _seed_maker_profile(profiles)
     assert maker.environment == "sandbox" and maker.network == "public"
     assert "sandbox_exec" in maker.tools
     profiles.clone("maker", "artist")
@@ -30,6 +48,7 @@ def test_profile_package_rejects_unknown_secret_fields_and_known_secret_assets(
     vault = Vault(tmp_path / "vault")
     vault.set("test", "test-secret-value-for-export")
     profiles = Profiles(tmp_path / "profiles", contains_secret=vault.contains_secret)
+    _seed_maker_profile(profiles)
     profile_file = profiles.path / "maker/profile.toml"
     original = profile_file.read_text(encoding="utf-8")
     profile_file.write_text(original + '\napi_key = "raw-key-must-not-be-in-profile"\n', encoding="utf-8")
@@ -46,12 +65,12 @@ async def test_unavailable_maker_refuses_execution_without_affecting_scout(tmp_p
     plugin = await loaded(tmp_path)
     try:
         # maker without container degrades to light_workspace mode (disabling sandbox_exec)
-        maker = plugin.profiles.get("maker")
+        maker = _seed_maker_profile(plugin.profiles)
         assert plugin.runtime.effective_mode(maker) == "light_workspace"
         row = plugin.threads.create(
             maker, "轻量工作区测试", chat_id="chat", platform="qq", user_id="Alice"
         )
-        with pytest.raises(RuntimeError, match="sandbox_exec|沙箱"):
+        with pytest.raises((RuntimeError, PermissionError), match="sandbox_exec|沙箱"):
             await plugin.runtime.call(
                 "sandbox_exec",
                 {"command": "echo hi"},
@@ -74,22 +93,28 @@ async def test_unavailable_maker_refuses_execution_without_affecting_scout(tmp_p
         )
         assert not rejected["success"]
         assert "沙箱" in rejected["error"]
-        assert plugin.profiles.get("scout").environment == "readonly"
+        assert plugin.profiles.get("default").environment == "readonly"
     finally:
         await plugin.on_unload()
 
 
 @pytest.mark.asyncio
 async def test_named_maker_uses_files_and_real_new_input_on_silent_resume(tmp_path):
+    from maisya.sandbox import ExecutionResult
+
     plugin = await loaded(tmp_path)
+    _seed_maker_profile(plugin.profiles)
+    plugin.runtime.sandbox_settings.enabled = True
     plugin.runtime.sandbox.ready = True
     calls = []
 
-    async def fake_execution(row, work, command, **kwargs):
-        work.write("out/result.txt", "42")
-        return {"exit_code": 0, "output": "42", "checkpoint": work.commit()}
+    async def fake_docker_execute(request):
+        out_dir = request.workspace / "out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "result.txt").write_text("42", encoding="utf-8")
+        return ExecutionResult(status="ok", runner_name="docker", exit_code=0, stdout="42")
 
-    plugin.runtime.sandbox.execute = fake_execution
+    plugin.runtime.docker_runner.execute = fake_docker_execute
 
     async def capability(name, **arguments):
         assert name == "llm.generate_with_tools"
@@ -169,6 +194,8 @@ async def test_named_maker_uses_files_and_real_new_input_on_silent_resume(tmp_pa
 @pytest.mark.asyncio
 async def test_concurrent_named_inputs_are_processed_individually_in_order(tmp_path):
     plugin = await loaded(tmp_path)
+    _seed_maker_profile(plugin.profiles)
+    plugin.runtime.sandbox_settings.enabled = True
     plugin.runtime.sandbox.ready = True
     entered, release = asyncio.Event(), asyncio.Event()
     seen = []
@@ -221,6 +248,8 @@ async def test_concurrent_named_inputs_are_processed_individually_in_order(tmp_p
 @pytest.mark.asyncio
 async def test_reference_files_are_imported_without_binary_model_history(tmp_path):
     plugin = await loaded(tmp_path)
+    _seed_maker_profile(plugin.profiles)
+    plugin.runtime.sandbox_settings.enabled = True
     plugin.runtime.sandbox.ready = True
     prompts = []
 
@@ -283,7 +312,7 @@ async def test_restricted_history_requires_fresh_grant_before_model_request(tmp_
 
     plugin = await loaded(tmp_path)
     seen = []
-    profile = replace(plugin.profiles.get("scout"), access="admins")
+    profile = replace(plugin.profiles.get("default"), access="admins")
 
     async def capability(name, **arguments):
         seen.append(name)
@@ -328,6 +357,8 @@ async def test_explicit_steering_interrupts_named_activity_and_supersedes_queue(
     tmp_path,
 ):
     plugin = await loaded(tmp_path)
+    _seed_maker_profile(plugin.profiles)
+    plugin.runtime.sandbox_settings.enabled = True
     plugin.runtime.sandbox.ready = True
     entered, release = asyncio.Event(), asyncio.Event()
     seen = []

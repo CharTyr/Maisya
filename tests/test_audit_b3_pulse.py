@@ -27,43 +27,6 @@ def _ts(year: int, month: int, day: int, hour: int, minute: int = 0, offset_minu
     ).timestamp()
 
 
-HISTORICAL_SCOUT_TOML = (
-    'title = "探索者"\n'
-    'model = ""\n'
-    "fallback_models = []\n"
-    'environment = "readonly"\n'
-    'access = "everyone"\n'
-    'tools = ["web_search", "web_fetch", "chat_read", "message_read", "memory_read", "image_read"]\n'
-)
-
-HISTORICAL_MAKER_TOML = (
-    'title = "创作者"\n'
-    'model = ""\n'
-    "fallback_models = []\n"
-    'environment = "sandbox"\n'
-    'network = "public"\n'
-    'access = "everyone"\n'
-    'tools = ["web_search", "web_fetch", "chat_read", "message_read", "memory_read", '
-    '"image_read", "workspace_file", "sandbox_exec", "result_attach"]\n'
-    "mcp = []\n"
-    "secrets = []\n"
-)
-
-HISTORICAL_DIGEST_TOML = (
-    'title = "资讯简报"\n'
-    "enabled = false\n"
-    'task = "planner"\n'
-    "max_tokens = 2500\n"
-    "temperature = 0.2\n"
-    "max_steps = 12\n"
-    'environment = "readonly"\n'
-    'access = "everyone"\n'
-    'network = "none"\n'
-    'tools = ["chat_read", "message_read", "memory_read", "web_search", "web_fetch", '
-    '"digest_feed", "workspace_file", "html_render", "result_attach"]\n'
-    'skills = ["news-digest"]\n'
-)
-
 
 def test_intents_tz_offset_day_bounds_and_minute_sleep_window(tmp_path):
     store = ThreadStore(tmp_path / "tz_intents.db")
@@ -398,54 +361,28 @@ def test_all_bundled_presets_auto_upgrade_and_preserve_manual_edits(
 ):
     presets_root = Path(__file__).resolve().parents[1] / "presets"
 
-    # Part 1: Profiles (scout, maker, digest) old legacy profile.toml upgrade vs manual edits
+    # Part 1: Unique default preset loads complete toolsets and preserves manual profile.toml edits
     profiles_dir = tmp_path / "abilities/profiles"
-    for pid, old_toml in (
-        ("scout", HISTORICAL_SCOUT_TOML),
-        ("maker", HISTORICAL_MAKER_TOML),
-        ("digest", HISTORICAL_DIGEST_TOML),
-    ):
-        d = profiles_dir / pid
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "profile.toml").write_text(old_toml, encoding="utf-8")
-        (d / "PROFILE.md").write_text(
-            f"# legacy {pid}\n",
-            encoding="utf-8",
-        )
-
     upgraded_profiles = Profiles(profiles_dir)
-    scout = upgraded_profiles.get("scout")
-    maker = upgraded_profiles.get("maker")
-    digest = upgraded_profiles.get("digest")
+    assert [p.id for p in upgraded_profiles.list_profiles()] == ["default"]
+    default_prof = upgraded_profiles.get("default")
+    assert "person_read" in default_prof.tools and "recall_read" in default_prof.tools
+    assert "render_report" in default_prof.tools and "workspace_file" in default_prof.tools
+    assert default_prof.skills == ()
 
-    assert "person_read" in scout.tools and "recall_read" in scout.tools
-    assert scout.skills == ()
-    assert "render_report" in maker.tools and "research-report" in maker.skills
-    assert digest.max_steps == 20 and digest.max_tokens == 4500
-
-    # Manual customization on scout/maker/digest profile.toml MUST be preserved
-    custom_scout_toml = (
-        'title = "我的定制探索者"\n'
+    # Manual customization on default/profile.toml MUST be preserved
+    custom_default_toml = (
+        'title = "我的定制默认助手"\n'
         "enabled = false\n"
         'environment = "readonly"\n'
         'access = "everyone"\n'
         'tools = ["web_search"]\n'
     )
-    (profiles_dir / "scout/profile.toml").write_text(custom_scout_toml, encoding="utf-8")
-    custom_maker_toml = (
-        'title = "定制创作者"\n'
-        'environment = "sandbox"\n'
-        'network = "public"\n'
-        'access = "everyone"\n'
-        'tools = ["web_search", "workspace_file"]\n'
-    )
-    (profiles_dir / "maker/profile.toml").write_text(custom_maker_toml, encoding="utf-8")
+    (profiles_dir / "default/profile.toml").write_text(custom_default_toml, encoding="utf-8")
     reloaded_profiles = Profiles(profiles_dir)
-    assert (profiles_dir / "scout/profile.toml").read_text("utf-8") == custom_scout_toml
-    assert reloaded_profiles.get("scout").tools == ("web_search",)
-    assert reloaded_profiles.get("scout").enabled is False
-    assert (profiles_dir / "maker/profile.toml").read_text("utf-8") == custom_maker_toml
-    assert reloaded_profiles.get("maker").tools == ("web_search", "workspace_file")
+    assert (profiles_dir / "default/profile.toml").read_text("utf-8") == custom_default_toml
+    assert reloaded_profiles.get("default").tools == ("web_search",)
+    assert reloaded_profiles.get("default").enabled is False
 
     # Part 2: MemoryLayers upgrades ALL bundled profiles/*/PROFILE.md and ALL skills/*/SKILL.md
     # when unmodified (no version >= 1), and preserves ANY customized asset (version >= 1)
@@ -456,9 +393,8 @@ def test_all_bundled_presets_auto_upgrade_and_preserve_manual_edits(
     vault = Vault(root / "vault")
 
     # Simulate pre-upgrade files for ALL bundled profiles and skills (no version >= 1 in DB)
-    for pid in ("scout", "maker", "digest"):
-        p_md = profiles.path / pid / "PROFILE.md"
-        p_md.write_text(f"# 老版本 {pid} 说明\n", encoding="utf-8")
+    p_md = profiles.path / "default" / "PROFILE.md"
+    p_md.write_text("# 老版本 default 说明\n", encoding="utf-8")
     # Historical unedited HEARTBEAT.md (exact commit 9d35d476 hash) should also auto-upgrade
     historical_heartbeat = (
         "## 气质与分寸\n"
@@ -487,10 +423,9 @@ def test_all_bundled_presets_auto_upgrade_and_preserve_manual_edits(
     )
     mem_pre = MemoryLayers(root, store, profiles, vault, clock=lambda: 1000.0)
 
-    # All bundled PROFILE.md and SKILL.md and unedited HEARTBEAT.md should now equal current presets
-    for pid in ("scout", "maker", "digest"):
-        expected = (presets_root / f"profiles/{pid}/PROFILE.md").read_text("utf-8")
-        assert (profiles.path / pid / "PROFILE.md").read_text("utf-8") == expected
+    # Bundled default PROFILE.md, all SKILL.md, and unedited HEARTBEAT.md should now equal current presets
+    expected_default_md = (presets_root / "profiles/default/PROFILE.md").read_text("utf-8")
+    assert (profiles.path / "default/PROFILE.md").read_text("utf-8") == expected_default_md
     for skill_dir in sorted((presets_root / "skills").iterdir()):
         if not skill_dir.is_dir():
             continue
@@ -500,20 +435,20 @@ def test_all_bundled_presets_auto_upgrade_and_preserve_manual_edits(
         presets_root / "memory/HEARTBEAT.md"
     ).read_text("utf-8")
 
-    # User customizes scout PROFILE.md, HEARTBEAT.md, and source-checking SKILL.md (creating version >= 1)
+    # User customizes default PROFILE.md, HEARTBEAT.md, and source-checking SKILL.md (creating version >= 1)
     v_hb = mem_pre.read("heartbeat")["version"]
     mem_pre.write(
         "heartbeat",
         "## 气质与分寸\n保持安静。\n\n## 自主探索方向\n- 关注本地天文动态\n",
         expected_version=v_hb,
     )
-    v_scout = mem_pre.read("profile", target="scout", document="PROFILE.md", allow_custom=True)["version"]
+    v_default = mem_pre.read("profile", target="default", document="PROFILE.md", allow_custom=True)["version"]
     mem_pre.write(
         "profile",
-        "# 用户手工定制的探索者规则\n",
-        target="scout",
+        "# 用户手工定制的默认助手规则\n",
+        target="default",
         document="PROFILE.md",
-        expected_version=v_scout,
+        expected_version=v_default,
         allow_custom=True,
     )
     v_sc = mem_pre.read("skill", target="source-checking")["version"]
@@ -526,20 +461,20 @@ def test_all_bundled_presets_auto_upgrade_and_preserve_manual_edits(
 
     mem_post = MemoryLayers(root, store, profiles, vault, clock=lambda: 2000.0)
     assert "关注本地天文动态" in (root / "memory/self/HEARTBEAT.md").read_text("utf-8")
-    assert "用户手工定制的探索者规则" in (profiles.path / "scout/PROFILE.md").read_text("utf-8")
+    assert "用户手工定制的默认助手规则" in (profiles.path / "default/PROFILE.md").read_text("utf-8")
     assert "用户定制核验清单" in mem_post.read("skill", target="source-checking")["content"]
 
     # Future preset skill with companion file + edited skill protection
     import maisya.memory as mem_mod
 
     synth_presets = tmp_path / "synth_presets"
-    for sub in ("memory", "profiles/scout", "skills/future-tool/references"):
+    for sub in ("memory", "profiles/default", "skills/future-tool/references"):
         (synth_presets / sub).mkdir(parents=True, exist_ok=True)
     (synth_presets / "memory/HEARTBEAT.md").write_text(
         (presets_root / "memory/HEARTBEAT.md").read_text("utf-8"), encoding="utf-8"
     )
-    (synth_presets / "profiles/scout/PROFILE.md").write_text(
-        "# new scout preset\n", encoding="utf-8"
+    (synth_presets / "profiles/default/PROFILE.md").write_text(
+        "# new default preset\n", encoding="utf-8"
     )
     (synth_presets / "skills/future-tool/SKILL.md").write_text(
         "---\nname: future-tool\ndescription: new\n---\n# v2\n", encoding="utf-8"

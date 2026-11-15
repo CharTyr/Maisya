@@ -442,7 +442,6 @@ for line in sys.stdin:
                     "readonly": True,
                 }
             },
-            "templates": {},
             "apis": {
                 "admin_search": {
                     "api_name": "third.search",

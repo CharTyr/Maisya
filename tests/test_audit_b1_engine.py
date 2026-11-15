@@ -231,7 +231,7 @@ async def test_b1_drive_cancel_before_try_does_not_leak_slots_or_hang_waiters(
         await asyncio.sleep(0.01)
         release_first_get.set()
         stopped = await asyncio.wait_for(stop_task, timeout=3.0)
-        assert stopped["state"] == "closed"
+        assert stopped["state"] == "idle"
         assert tid2 not in engine.tasks
         assert tid2 not in engine.background_tasks
     finally:
@@ -402,12 +402,17 @@ def test_b1_store_search_cross_chat_and_alias_reads_history_without_permission_e
         platform="qq",
         user_id="Bob",
     )
+    f_rev = store.enqueue(
+        foreign["thread_id"],
+        "investigate alpha_cross_chat_marker",
+        "qq:group:999888777",
+    )
     store.finish(
         foreign["thread_id"],
         "qq:group:999888777",
         {"text": "found alpha_cross_chat_marker"},
         [{"role": "assistant", "content": "found alpha_cross_chat_marker"}],
-        foreign["revision"],
+        f_rev,
     )
     legacy = store.create(
         Profile(),
@@ -416,12 +421,17 @@ def test_b1_store_search_cross_chat_and_alias_reads_history_without_permission_e
         platform="qq",
         user_id="Alice",
     )
+    l_rev = store.enqueue(
+        legacy["thread_id"],
+        "investigate alpha_alias_marker",
+        "legacy_grp_alias",
+    )
     store.finish(
         legacy["thread_id"],
         "legacy_grp_alias",
         {"text": "found alpha_alias_marker"},
         [{"role": "assistant", "content": "found alpha_alias_marker"}],
-        legacy["revision"],
+        l_rev,
     )
 
     with pytest.raises(PermissionError):
@@ -748,12 +758,17 @@ async def test_b1_maker_enforces_listed_profile_allowlist_on_from_threads(
         platform="qq",
         user_id="Alice",
     )
+    p_rev = store.enqueue(
+        prev["thread_id"],
+        "alice only listed work",
+        "qq:group:100246809",
+    )
     store.finish(
         prev["thread_id"],
         "qq:group:100246809",
         {"text": "ALICE_LISTED_SECRET"},
         [{"role": "assistant", "content": "ALICE_LISTED_SECRET"}],
-        prev["revision"],
+        p_rev,
     )
 
     # Unlisted user Bob in same group MUST be rejected

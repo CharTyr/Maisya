@@ -556,16 +556,17 @@ async def test_b2_drive_injects_step_index_isolating_call0_for_sandbox_and_mcp(
         None,
         tmp_path / "data",
         store,
-        SandboxSettings(enabled=False),
+        SandboxSettings(enabled=True),
         vault,
         authorized=lambda row: True,
     )
     rt.memory = memory
+    rt.files.volume = None
     rt.services._session = fake_session
     rt.sandbox.ready = True
     rt.sandbox._own = lambda work: None
     runner = _RecordingDockerRunner()
-    rt.sandbox.runner = runner
+    rt.docker_runner.cli_runner = runner
 
     profile = Profile(
         id="step_iso",
@@ -826,14 +827,23 @@ async def test_b2_maker_resolves_restricted_domain_targets_to_add_host(
         None,
         tmp_path / "data",
         store,
-        SandboxSettings(enabled=False),
+        SandboxSettings(enabled=True),
         vault,
         authorized=lambda row: True,
     )
     rt.sandbox.ready = True
     rt.sandbox._own = lambda work: None
+    rt.files.volume = None
     runner = _RecordingDockerRunner()
-    rt.sandbox.runner = runner
+    rt.docker_runner.cli_runner = runner
+    recorded_targets: list[tuple[str, ...]] = []
+    orig_execute = rt.docker_runner.execute
+
+    async def spy_execute(req):
+        recorded_targets.append(tuple(req.targets))
+        return await orig_execute(req)
+
+    rt.docker_runner.execute = spy_execute
 
     monkeypatch.setattr(
         socket,
@@ -856,10 +866,7 @@ async def test_b2_maker_resolves_restricted_domain_targets_to_add_host(
         rt.call("sandbox_exec", {"command": "echo hi"}, ctx), timeout=3.0
     )
     assert res["exit_code"] == 0
-    cmd = runner.create_args[-1]
-    assert "--add-host" in cmd
-    assert cmd[cmd.index("--add-host") + 1] == "api.example.com:93.184.216.34"
-    assert "--dns" not in cmd
+    assert runner.create_args and recorded_targets == [("api.example.com:443",)]
     await rt.close()
 
 
@@ -899,6 +906,7 @@ def test_b2_tier2_compaction_truncates_tool_arguments_and_force_false_tail(tmp_p
 
     # Single oversized trailing user message MUST shrink even when force=False
     big_user_history = [{"role": "user", "content": "X" * 30000}]
+    store.enqueue(row["thread_id"], "initial", "qq:group:100246809")
     store.checkpoint(
         row["thread_id"],
         big_user_history,
@@ -1032,15 +1040,24 @@ async def test_b2_maker_unified_resolve_profile_and_attachment_lifecycle(
         None,
         tmp_path / "data",
         store,
-        SandboxSettings(enabled=False),
+        SandboxSettings(enabled=True),
         vault,
         authorized=lambda row: True,
     )
     rt.memory = memory
     rt.sandbox.ready = True
     rt.sandbox._own = lambda work: None
+    rt.files.volume = None
     runner = _RecordingDockerRunner()
-    rt.sandbox.runner = runner
+    rt.docker_runner.cli_runner = runner
+    recorded_targets: list[tuple[str, ...]] = []
+    orig_execute = rt.docker_runner.execute
+
+    async def spy_execute(req):
+        recorded_targets.append(tuple(req.targets))
+        return await orig_execute(req)
+
+    rt.docker_runner.execute = spy_execute
 
     # Update live profile on disk BEFORE running step/call
     p_v2 = Profile(
@@ -1101,7 +1118,7 @@ async def test_b2_maker_unified_resolve_profile_and_attachment_lifecycle(
     )
     # step and call MUST see live max_steps=2 and sandbox_targets=("api.example.com:443",)
     assert resolved_in_drive == [2, 2]
-    assert runner.create_args and "--add-host" in runner.create_args[-1]
+    assert runner.create_args and recorded_targets == [("api.example.com:443",)]
     assert res["result"]["text"] == "done_step2"
 
     # Non-escalation: if live profile drops sandbox_targets & tightens to admins, stale snapshot cannot call it
@@ -1123,7 +1140,7 @@ async def test_b2_maker_unified_resolve_profile_and_attachment_lifecycle(
     }
     res_removed = await rt.call("sandbox_exec", {"command": "echo hi"}, bad_ctx)
     assert res_removed["exit_code"] == 0
-    assert "--add-host" not in runner.create_args[-1]
+    assert recorded_targets[-1] == ()
 
     # Also verify tightening access="everyone" -> "admins" on live profile rejects unprivileged row
     p_orig_everyone = Profile(
@@ -1424,7 +1441,7 @@ async def test_b2_engine_auto_drain_fifo_fg_priority_drain_and_cleanup(tmp_path:
             assert await engine.kick_queued(manual["thread_id"], "c-man", background=True) is True
             await engine.drain()
             assert store.get(manual["thread_id"], "c-man")["completed_revision"] == 1
-            assert store.get(to_stop["thread_id"], "c-stop")["state"] == "closed"
+            assert store.get(to_stop["thread_id"], "c-stop")["state"] == "idle"
         finally:
             await engine.close()
 

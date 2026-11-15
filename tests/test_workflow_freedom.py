@@ -183,15 +183,6 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
                     "description": "可写跨插件 API",
                 }
             },
-            "templates": {
-                "custom_tpl": {
-                    "description": "自定义脚本模板",
-                    "access": "admins",
-                    "argv": ["/workspace/run.py"],
-                    "secrets": ["api_token"],
-                    "targets": ["1.1.1.1:443"],
-                }
-            },
         }
         saved = await plugin.manage_write(
             "services",
@@ -206,27 +197,44 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
         (pdir / "profile.toml").write_text(
             'environment = "sandbox"\n'
             'access = "admins"\n'
+            'permission_mode = "autonomous"\n'
             'network = "restricted"\n'
             'secrets = ["api_token"]\n'
             'sandbox_targets = ["1.1.1.1:443"]\n'
-            'tools = ["workspace_file", "sandbox_exec", "mcp_call", "plugin_api", "credential_call"]\n'
+            'tools = ["workspace_file", "sandbox_exec", "mcp_call", "plugin_api"]\n'
             'mcp = ["notes_rw"]\n'
-            'apis = ["custom_post"]\n'
-            'template = "custom_tpl"\n',
+            'apis = ["custom_post"]\n',
             encoding="utf-8",
         )
+        plugin.runtime.sandbox_settings.enabled = True
         plugin.runtime.sandbox.ready = True
         captured = {}
+        from types import SimpleNamespace
 
-        async def fake_execute(row_arg, work_arg, command, *, secrets=None, targets=(), **kwargs):
-            captured["command"] = command
-            captured["secret_keys"] = sorted((secrets or {}).keys())
-            captured["secret_value"] = secrets["api_token"].read_text(encoding="utf-8")
-            captured["targets"] = tuple(targets)
-            return {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        async def fake_cli(argv, **_kwargs):
+            if "create" in argv:
+                for tok in argv:
+                    if tok.startswith("type=bind,src=") and ",dst=/run/secrets/" in tok:
+                        src = tok.split("src=", 1)[1].split(",dst=", 1)[0]
+                        dst = tok.split(",dst=/run/secrets/", 1)[1].split(",", 1)[0]
+                        captured["secret_keys"] = sorted(
+                            [*captured.get("secret_keys", []), dst]
+                        )
+                        captured["secret_value"] = Path(src).read_text(encoding="utf-8")
+                return SimpleNamespace(code=0, output="cid-demo", stderr="")
+            if "inspect" in argv:
+                return SimpleNamespace(code=0, output='{"ExitCode": 0}', stderr="")
+            return SimpleNamespace(code=0, output="ok", stderr="")
 
-        plugin.runtime.sandbox.volume = lambda _p: nullcontext()
-        plugin.runtime.sandbox.execute = fake_execute
+        orig_exec = plugin.runtime.docker_runner.execute
+
+        async def tracked_exec(req):
+            captured["command"] = req.command
+            captured["targets"] = tuple(req.targets)
+            return await orig_exec(req)
+
+        plugin.runtime.docker_runner.cli_runner = fake_cli
+        plugin.runtime.docker_runner.execute = tracked_exec
 
         profile = plugin.profiles.get("admin_dev")
         plugin.runtime.available(profile)
@@ -244,7 +252,7 @@ async def test_admin_sandbox_secrets_exec_and_writable_mcp_api(tmp_path):
         assert out["exit_code"] == 0
         assert captured["secret_keys"] == ["api_token"]
         assert captured["secret_value"] == "secret-token-xyz"
-        assert captured["targets"] == (("1.1.1.1", 443),)
+        assert captured["targets"] == ("1.1.1.1:443",)
 
         # Readonly profile with admins + writable MCP configured explicitly can call writable MCP
         ro_dir = plugin.profiles.path / "ro_mcp"
@@ -485,7 +493,7 @@ async def test_admin_custom_memory_skill_delete_and_scheduled_workflow_intent(tm
                     "chat_id": "chat",
                     "platform": "qq",
                     "reason": "汇总今日热点",
-                    "profile": "scout",
+                    "profile": "default",
                     "prompt": "查一下今天 AI 新闻并总结",
                     "in_seconds": 60,
                     "every_seconds": 3600,
@@ -515,7 +523,7 @@ async def test_admin_custom_memory_skill_delete_and_scheduled_workflow_intent(tm
         plugin.ctx.call_capability = capability
         await plugin.pulse.tick()
         await plugin.engine.drain()
-        assert seen == ["scout"]
+        assert seen == ["default"]
         now_box[0] += 3
         await plugin.pulse.tick()
         assert sent and "今日总结完成" in str(sent[0][1])

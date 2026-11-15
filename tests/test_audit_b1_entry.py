@@ -649,6 +649,7 @@ async def test_item7_napcat_unwrapped_values_and_partial_file_retry_without_text
             platform="qq",
         )
         tid = started["thread_id"]
+        rev = plugin.threads.enqueue(tid, "补充附件", grp)
         row = plugin.threads.get(tid, grp)
         work = await plugin.runtime._work(row)
         work.write_bytes("out/a.txt", b"file A content")
@@ -660,7 +661,7 @@ async def test_item7_napcat_unwrapped_values_and_partial_file_retry_without_text
             grp,
             {"text": "主报告正文", "attachments": atts},
             [],
-            row["revision"],
+            rev,
         )
         handles = [a["handle"] for a in atts]
 
