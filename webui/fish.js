@@ -197,7 +197,7 @@ function parseFishCustom(seed) {
 }
 const customFishSeed = ({ species, color, eyes, base = "" }) => `c-${species}-${Number(color) || 0}-${eyes}-${base}`;
 const newFishSeed = () => "f" + Math.random().toString(36).slice(2, 9);
-const roleFishSeed = (roleId, seed = "") => `agent:${roleId || "scout"}:${seed || ""}`;
+const roleFishSeed = (roleId, seed = "") => `agent:${roleId || "default"}:${seed || ""}`;
 
 function fishTraits(seed, opts = {}) {
   const c = parseFishCustom(seed);

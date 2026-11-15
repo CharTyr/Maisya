@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-ui-style="millennium" data-dashboard-style="millennium">
+<html lang="zh-CN" data-theme="millennium" data-ui-style="millennium" data-dashboard-style="millennium">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,396 +9,11 @@
 
 {{MGMT_CSS}}
 
-/* ───────────── 现场页专用布局与交互样式 ───────────── */
-
-/* 1. 处理流向图 (FLOW) */
-.flow-box {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 0.92fr) minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 32px;
-  align-items: stretch;
-  padding: 20px;
-  border: 0;
-  border-radius: 20px;
-  background-color: var(--mil-screen);
-}
-:root[data-ui-style="millennium"] .flow-box {
-  border: 2px solid var(--mil-line);
-  border-radius: 0;
-  background-color: var(--mil-screen);
-  background-image: radial-gradient(var(--mil-rule) 1px, transparent 1px);
-  background-size: 12px 12px;
-  box-shadow: inset 2px 2px 0 var(--mil-screen-shade);
-  gap: 38px;
-  padding: 16px;
-}
-:root[data-ui-style="millennium"] .fl-svg path.on {
-  stroke: var(--mil-on-side);
-  stroke-width: 2.8px;
-}
-:root[data-ui-style="millennium"] .fl-svg path.live {
-  stroke: var(--mil-hot);
-  stroke-width: 2.8px;
-}
-:root[data-ui-style="millennium"] .pkt {
-  fill: var(--mil-on);
-  stroke: var(--mil-line);
-}
-:root[data-ui-style="millennium"] .pkt.hot {
-  fill: var(--mil-hot);
-}
-:root[data-ui-style="millennium"] .fl-col-h {
-  font-size: 11.5px;
-  letter-spacing: 0.08em;
-  color: var(--mil-print);
-  padding: 4px 8px;
-  border: 1.5px solid var(--mil-lo);
-  background: var(--mil-panel);
-}
-
-.fl-svg, .fl-sky {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  overflow: visible;
-  z-index: 1;
-}
-.fl-sky {
-  z-index: 3;
-}
-
-.fl-svg path {
-  fill: none;
-  stroke: var(--mil-lo);
-  stroke-width: 1.6px;
-  stroke-dasharray: 4 4;
-  opacity: 0.72;
-}
-.fl-svg path.on {
-  stroke: var(--mil-accent);
-  stroke-width: 2.2px;
-  stroke-dasharray: none;
-  opacity: 0.9;
-}
-.fl-svg path.live {
-  stroke: var(--mil-live);
-  stroke-width: 2.4px;
-  stroke-dasharray: 6 5;
-  opacity: 1;
-  animation: fl-dash 0.8s linear infinite;
-}
-@keyframes fl-dash {
-  to { stroke-dashoffset: -22; }
-}
-
-.pkt {
-  fill: var(--mil-accent);
-  stroke: var(--mil-panel);
-  stroke-width: 1.5px;
-}
-.pkt.hot { fill: var(--mil-live); }
-.pkt.warn { fill: var(--mil-warn); }
-.pkt.held {
-  animation: mil-pulse 1.1s ease-in-out infinite;
-}
-
-.fl-col {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.fl-list {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.fl-col-h {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  font-family: var(--mil-font-display);
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--mil-muted);
-  padding: 2px 4px;
-}
-.fl-stage-arrow {
-  color: var(--mil-lo);
-  font-family: var(--mil-font-mono);
-}
-
-.fl-node {
-  position: relative;
-  width: 100%;
-  text-align: left;
-  padding: 12px 14px;
-  border: 1px solid transparent;
-  border-radius: 14px;
-  background: var(--mil-panel);
-  color: var(--mil-ink);
-  box-shadow: 0 2px 8px rgba(17, 17, 20, 0.04);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 120ms ease;
-}
-:root[data-ui-style="millennium"] .fl-node {
-  border: 2px solid var(--mil-line);
-  border-radius: 0;
-  box-shadow: 0 3px 0 var(--mil-lo);
-}
-.fl-node[data-port-in="1"]::before,
-.fl-node[data-port-out="1"]::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  margin-top: -4px;
-  border-radius: 50%;
-  border: 1.5px solid var(--mil-lo);
-  background: var(--mil-panel);
-  z-index: 4;
-}
-:root[data-ui-style="millennium"] .fl-node[data-port-in="1"]::before,
-:root[data-ui-style="millennium"] .fl-node[data-port-out="1"]::after {
-  width: 7px;
-  height: 7px;
-  margin-top: -3.5px;
-  border-radius: 0;
-  border-color: var(--mil-line);
-  background: var(--mil-screen);
-}
-.fl-node[data-port-in="1"]::before { left: -5px; }
-.fl-node[data-port-out="1"]::after { right: -5px; }
-.fl-node.on[data-port-in="1"]::before,
-.fl-node.on[data-port-out="1"]::after {
-  background: var(--mil-accent);
-  border-color: var(--mil-panel);
-}
-:root[data-ui-style="millennium"] .fl-node.on[data-port-in="1"]::before,
-:root[data-ui-style="millennium"] .fl-node.on[data-port-out="1"]::after {
-  background: var(--mil-on);
-  border-color: var(--mil-on-side);
-}
-.fl-node.run[data-port-in="1"]::before,
-.fl-node.run[data-port-out="1"]::after {
-  background: var(--mil-live);
-  border-color: var(--mil-panel);
-}
-:root[data-ui-style="millennium"] .fl-node.run[data-port-in="1"]::before,
-:root[data-ui-style="millennium"] .fl-node.run[data-port-out="1"]::after {
-  background: var(--mil-hot);
-  border-color: var(--mil-hot-side);
-}
-
-.fl-node--static {
-  cursor: default;
-}
-
-.fl-node.on {
-  background: var(--mil-accent-soft);
-  color: var(--mil-ink);
-  border-color: var(--mil-accent);
-  box-shadow: 0 0 0 1px var(--mil-accent-border);
-}
-:root[data-ui-style="millennium"] .fl-node.on {
-  background: var(--mil-on);
-  color: var(--mil-on-ink);
-  border-color: var(--mil-on-side);
-  box-shadow: 0 3px 0 var(--mil-on-side);
-}
-
-.fl-node.run {
-  border-color: var(--mil-accent-border);
-  box-shadow: inset 3px 0 0 var(--mil-accent), 0 2px 6px rgba(37, 99, 235, 0.08);
-}
-:root[data-ui-style="millennium"] .fl-node.run {
-  border-color: var(--mil-hot-side);
-  box-shadow: inset 4px 0 0 var(--mil-hot), 0 3px 0 var(--mil-lo);
-}
-
-.fl-node--gate {
-  background: var(--mil-panel);
-  box-shadow: inset 3px 0 0 var(--mil-ok), 0 1px 3px rgba(15, 23, 42, 0.04);
-}
-:root[data-ui-style="millennium"] .fl-node--gate {
-  box-shadow: 0 3px 0 var(--mil-lo), inset 4px 0 0 var(--mil-on-side);
-}
-.fl-node--gate[data-port-in="1"]::before,
-.fl-node--gate[data-port-out="1"]::after {
-  background: var(--mil-ok);
-  border-color: var(--mil-panel);
-}
-:root[data-ui-style="millennium"] .fl-node--gate[data-port-in="1"]::before,
-:root[data-ui-style="millennium"] .fl-node--gate[data-port-out="1"]::after {
-  background: var(--mil-on);
-  border-color: var(--mil-on-side);
-}
-
-.fl-subband {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--mil-rule);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.fl-node-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.fl-node-name {
-  font-weight: 700;
-  font-size: 13.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fl-node-sub {
-  font-size: 12px;
-  color: var(--mil-muted);
-  overflow-wrap: anywhere;
-}
-.fl-node.on .fl-node-sub {
-  color: var(--mil-ink-2);
-}
-:root[data-ui-style="millennium"] .fl-node.on .fl-node-sub {
-  color: var(--mil-on-ink);
-  opacity: 0.86;
-}
-
-/* 2. 当前动态条与遥测数字 */
-.strip-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 20px;
-  align-items: stretch;
-}
-.strip-grid > .mil-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-.strip-screen {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 12px;
-  flex: 1;
-}
-
-.strip-main {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.strip-state {
-  font-family: var(--mil-font-display);
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-
-.strip-steps {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12.5px;
-  color: var(--mil-muted);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.strip-steps li {
-  overflow-wrap: anywhere;
-}
-
-.strip-leds {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--mil-rule);
-  font-size: 12.5px;
-  color: var(--mil-ink-2);
-}
-
-.strip-led-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  flex: 1;
-}
-
-.kpi-cell {
-  border: 0;
-  border-radius: 18px;
-  background: var(--mil-screen);
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 6px;
-}
-:root[data-ui-style="millennium"] .kpi-cell {
-  background-color: var(--mil-screen);
-  background-image: var(--mil-lcd-grid);
-  background-size: 3px 3px;
-  border: 2px solid var(--mil-line);
-  border-radius: 0;
-  box-shadow: var(--mil-sunk);
-  padding: 12px 14px;
-}
-
-.kpi-val {
-  font-family: var(--mil-font-display);
-  font-size: 28px;
-  font-weight: 800;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-
-.kpi-lbl {
-  font-size: 13px;
-  color: var(--mil-muted);
-  font-weight: 600;
-}
-
-/* 3. 上下文窗口 (方块 / 方格 + 趋势图) */
+/* ───────────── 现场页上下文方块图与通用窗口样式 ───────────── */
 .ctx-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 16px;
+  gap: 14px;
   align-items: start;
 }
 
@@ -518,7 +133,8 @@
 .ctx-cats {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  margin: 8px 0;
 }
 
 .ctx-swatch {
@@ -595,193 +211,16 @@
 .ci-row-bar > i {
   display: block;
   height: 100%;
-  border-radius: 999px;
   background: var(--mil-accent);
-}
-@media (hover: hover) and (pointer: fine) {
-  .ci-row:hover {
-    background: var(--mil-accent-soft);
-  }
-}
-
-.scope-svg {
-  width: 100%;
-  height: 96px;
-  display: block;
-}
-
-/* 4. 近期活动列表与活动现场检查器 */
-.thread-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 580px;
-  overflow-y: auto;
-  padding: 0;
-}
-:root[data-ui-style="millennium"] .thread-list {
-  gap: 0;
-}
-
-.thread-row {
-  box-sizing: border-box;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  border-radius: 14px;
-  background: var(--mil-panel);
-  color: var(--mil-ink);
-  padding: 12px 14px;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-.thread-row.on {
-  background: var(--mil-accent-soft);
-  box-shadow: inset 3px 0 0 var(--mil-accent);
-  color: var(--mil-ink);
-}
-:root[data-ui-style="millennium"] .thread-row {
-  border-bottom: 2px dashed var(--mil-rule);
-  border-radius: 0;
-  background: transparent;
-  padding: 11px 12px;
-}
-:root[data-ui-style="millennium"] .thread-row:last-child {
-  border-bottom: 0;
-}
-:root[data-ui-style="millennium"] .thread-row.on {
-  background: var(--mil-on);
-  box-shadow: none;
-  color: var(--mil-on-ink);
-}
-@media (hover: hover) and (pointer: fine) {
-  .thread-row:not(.on):hover {
-    background: var(--mil-key-hi);
-  }
-  :root[data-ui-style="millennium"] .thread-row:not(.on):hover {
-    background: var(--mil-accent-soft);
-  }
-}
-
-.thread-title {
-  font-weight: 700;
-  font-size: 13.5px;
-  overflow-wrap: anywhere;
-}
-.thread-excerpt {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--mil-muted);
-  overflow-wrap: anywhere;
-}
-.thread-row.on .thread-excerpt {
-  color: var(--mil-ink-2);
-}
-:root[data-ui-style="millennium"] .thread-row.on .thread-excerpt {
-  color: var(--mil-on-ink);
-  opacity: 0.88;
-}
-.thread-del {
-  border: 1px solid var(--mil-line-soft, var(--mil-rule));
-  background: transparent;
-  color: var(--mil-muted);
-  border-radius: 6px;
-  padding: 1px 7px;
-  font-size: 11px;
-  line-height: 1.4;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-:root[data-ui-style="millennium"] .thread-del {
-  border-radius: 0;
-}
-.thread-row.on .thread-del {
-  color: inherit;
-  opacity: 0.85;
-}
-@media (hover: hover) and (pointer: fine) {
-  .thread-del:hover {
-    color: var(--mil-bad, #b42318);
-    border-color: currentColor;
-  }
-}
-
-.inspector-h2 {
-  font-family: var(--mil-font-display);
-  font-size: 19px;
-  font-weight: 800;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.events-box {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 360px;
-  overflow-y: auto;
-}
-
-.ev-det {
-  border: 0;
-  border-radius: 14px;
-  background: var(--mil-screen);
-  padding: 10px 14px;
-}
-:root[data-ui-style="millennium"] .ev-det {
-  border: 2px solid var(--mil-line);
-  border-radius: 0;
-}
-.ev-det summary {
-  cursor: pointer;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.ev-det pre {
-  margin: 10px 0 4px;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--mil-panel);
-  font-family: var(--mil-font-mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 220px;
-  overflow-y: auto;
-}
-:root[data-ui-style="millennium"] .ev-det pre {
-  border: 1px dashed var(--mil-rule);
-  border-radius: 0;
 }
 
 .launch-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 
 @media (max-width: 960px) {
-  .flow-box {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-    padding: 14px;
-  }
-  .fl-svg, .fl-sky,
-  .fl-node[data-port-in="1"]::before,
-  .fl-node[data-port-out="1"]::after {
-    display: none;
-  }
-  .strip-grid,
   .ctx-layout,
   .launch-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -789,13 +228,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fl-svg path.live,
-  .pkt.held {
-    animation: none;
-  }
-  .fl-node,
-  .cm-tile,
-  .thread-row {
+  .cm-tile {
     transition: none;
   }
 }
@@ -803,15 +236,7 @@
 .ms-view {
   display: flex;
   flex-direction: column;
-  gap: 22px;
-}
-:root[data-ui-style="millennium"] .ms-view {
   gap: 18px;
-}
-@media (max-width: 720px) {
-  .ms-view {
-    gap: 16px;
-  }
 }
 .ms-view[hidden],
 .mil-led-pill[hidden],
@@ -824,7 +249,7 @@
 <body data-page="{{PAGE_ID}}" data-default-page="{{PAGE_ID}}">
 <div class="mil-shell">
 
-  <!-- 顶部导航条 -->
+  <!-- 顶部导航条（4 页 + 安静主题切换 + 新手引导快捷入口） -->
   <header class="mil-topbar">
     <div class="mil-brand">
       <div class="ms-wordmark">
@@ -834,286 +259,243 @@
       <h1 class="mil-page-title" id="ms-page-title">{{TITLE}}</h1>
       <nav class="mil-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm"{{NAV_NOW_CURRENT}} data-nav="now">现场</button>
-        <button type="button" class="mil-key mil-key--sm"{{NAV_OUTPUTS_CURRENT}} data-nav="outputs">产物</button>
-        <button type="button" class="mil-key mil-key--sm"{{NAV_ABILITIES_CURRENT}} data-nav="abilities">能力</button>
-        <button type="button" class="mil-key mil-key--sm"{{NAV_MEMORY_CURRENT}} data-nav="memory">手账</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_PROFILES_CURRENT}} data-nav="profiles">档案</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_LIBRARY_CURRENT}} data-nav="library">资料库</button>
         <button type="button" class="mil-key mil-key--sm"{{NAV_SETTINGS_CURRENT}} data-nav="settings">设置</button>
       </nav>
     </div>
     <div class="mil-top-right">
-      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面风格（千禧机械 / 默认主题）">千禧机械</button>
+      <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面主题（千禧机械 / 现代极简 / 自动）">千禧机械</button>
+      <button type="button" class="mil-key mil-key--sm" id="open-onboarding-btn" title="打开五步初始化引导">引导</button>
       <div class="mil-led-pill" id="top-led-pill"{{NOW_HIDDEN}}>
         <span class="mil-led" id="top-led"></span>
         <span id="top-state-text">待命</span>
       </div>
-      <button type="button" class="mil-key" id="open-launch"{{NOW_HIDDEN}}>唤醒角色</button>
-      <div class="mil-led-pill" id="mgmt-led-pill"{{MGMT_HIDDEN}}>
-        <span class="mil-led" id="mgmt-led"></span>
-        <span>管理台</span>
-      </div>
     </div>
   </header>
 
+  <!-- 管理分页挂载区（档案 / 资料库 / 设置） -->
   <div id="ms-mgmt-view-wrap" class="ms-view"{{MGMT_HIDDEN}}>
     <div class="mil-feedback" id="{{MGMT_FEEDBACK_ID}}" data-feedback-slot="mgmt" aria-live="polite"></div>
     <div id="ms-mgmt-view" class="ms-view">{{MGMT_DEFAULT_BODY}}</div>
   </div>
 
+  <!-- 现场页（默认首页） -->
   <div id="ms-now-view" class="ms-view"{{NOW_HIDDEN}}>
 <!-- ==NOW_BODY_START== -->
+  <div class="mil-feedback" id="feedback" data-feedback-slot="now" aria-live="polite"></div>
 
-  <!-- 1. 处理流向 (FLOW：会话来源 → 脉搏闸门 → 角色 → 活动与产出) -->
-  <section class="mil-panel" id="flow-panel" aria-label="处理流向">
-    <div class="mil-head">
-      <div class="mil-head-l">
-        <span class="mil-silk"><span class="mil-silk-en">FLOW · </span>处理流向</span>
-        <span class="mil-tag" id="flow-filter-hint" hidden></span>
-        <button type="button" class="mil-help" data-help="由 MaiBot Planner 作为主脑调度各角色与原生工具，Pulse 仅负责回返唤醒与主动冒泡节奏；点左侧会话筛选全页，点角色预设唤醒对象，点右侧活动检视或引导" aria-label="查看处理流向说明" aria-expanded="false">?</button>
-      </div>
-      <div class="mil-head-r">
-        <button type="button" class="mil-key mil-key--sm" id="flow-all-chats" aria-pressed="true">全部会话</button>
-        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-    <div class="flow-box" id="flow">
-      <svg class="fl-svg" aria-hidden="true"></svg>
-      <div class="fl-col">
-        <div class="fl-col-h"><span>01 会话来源 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-chat">0</span></div>
-        <div class="fl-list" id="fl-chats"></div>
-      </div>
-      <div class="fl-col">
-        <div class="fl-col-h"><span>02 主脑调度 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-gate">PLANNER</span></div>
-        <div class="fl-list" id="fl-gate"></div>
-      </div>
-      <div class="fl-col">
-        <div class="fl-col-h"><span>03 角色 <span class="fl-stage-arrow">→</span></span><span class="num" id="fl-cnt-prof">0</span></div>
-        <div class="fl-list" id="fl-profiles"></div>
-      </div>
-      <div class="fl-col">
-        <div class="fl-col-h"><span>04 活动与产出</span><span class="num" id="fl-cnt-th">0</span></div>
-        <div class="fl-list" id="fl-threads"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 2. 当前动态 + 实时读数 -->
-  <section class="strip-grid" aria-label="实时状态与读数">
-    <div class="mil-panel mil-panel--flat">
-      <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">STATUS · </span>当前动态</span></div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-      </div>
-      <div class="mil-screen strip-screen">
-        <div class="strip-main">
-          <div>
-            <div class="strip-state" id="now-headline">待命</div>
-            <div class="mil-hint" id="now-subline">尚未选中活动线程</div>
+  <div class="now-v3-grid">
+    <!-- 左栏：预定与盯梢 + 活动时间线 -->
+    <div class="now-col-stack">
+      <section class="mil-panel" aria-label="预定与盯梢">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span data-icon-slot="routines"></span>
+            <div>
+              <div class="mil-silk">预定与盯梢</div>
+              <div class="mil-silk-en">SCHEDULES &amp; WATCHES</div>
+            </div>
           </div>
-          <div class="mil-row" id="now-badges"></div>
-        </div>
-        <ol class="strip-steps" id="now-steps"></ol>
-        <div class="strip-leds" id="now-leds"></div>
-      </div>
-    </div>
-
-    <div class="mil-panel mil-panel--flat">
-      <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">TELEMETRY · </span>实时读数</span></div>
-        <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-      </div>
-      <div class="kpi-grid">
-        <div class="kpi-cell"><span class="kpi-lbl">活动线程</span><span class="kpi-val" id="kpi-active">0</span></div>
-        <div class="kpi-cell"><span class="kpi-lbl">24h 线程</span><span class="kpi-val" id="kpi-today">0</span></div>
-        <div class="kpi-cell"><span class="kpi-lbl">结果交付</span><span class="kpi-val" id="kpi-deliv">0</span></div>
-        <div class="kpi-cell"><span class="kpi-lbl">待唤醒意图</span><span class="kpi-val" id="kpi-intent">0</span></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 3. 上下文窗口 (方块 / 方格 + 趋势折线) -->
-  <section class="mil-panel" id="ctx-panel" aria-label="上下文窗口">
-    <div class="mil-head">
-      <div class="mil-head-l">
-        <span class="mil-silk"><span class="mil-silk-en">CONTEXT · </span>上下文窗口</span>
-        <span class="mil-tag" id="ctx-health">未选线程</span>
-        <button type="button" class="mil-help" id="ctx-help" data-help="支持方块面积与 400 格晶圆视图；点击任意区块或右侧条目可弹出脱敏原文阅读器" aria-label="查看上下文窗口说明" aria-expanded="false">?</button>
-      </div>
-      <div class="mil-head-r">
-        <div class="mil-seg" role="group" aria-label="上下文视图模式">
-          <button type="button" class="mil-key mil-key--sm" data-ctx-view="map" aria-pressed="true">方块</button>
-          <button type="button" class="mil-key mil-key--sm" data-ctx-view="grid" aria-pressed="false">方格</button>
-        </div>
-        <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-
-    <div class="mil-row" id="ctx-threads" style="margin-bottom:12px"></div>
-
-    <div class="mil-screen" style="margin-bottom:14px">
-      <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
-        <strong class="num" id="ctx-readout">0 / 262.1K tokens (0%)</strong>
-        <button type="button" class="mil-help" id="ctx-bar-help" data-help="按角色来源统计 Token 占比：55% 自动折叠旧工具输出，75% 触发结构化交班归档" aria-label="查看容量计量说明" aria-expanded="false">?</button>
-      </div>
-      <div class="mil-meter" id="ctx-meter"><i id="ctx-meter-bar"></i></div>
-      <div class="ctx-cats" id="ctx-cats" style="margin-top:10px"></div>
-    </div>
-
-    <div class="ctx-layout">
-      <div class="ctx-board" id="ctx-board">
-        <div class="ctx-map-stage" id="ctx-map"></div>
-        <div class="cm-grid" id="ctx-grid" hidden></div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
-        <div class="mil-scope">
-          <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
-            <span class="mil-label" style="color:var(--mil-scope-ink)"><span class="mil-silk-en">TREND · </span>轮次上下文增长</span>
-            <span class="num mil-hint" id="ctx-spark-label">—</span>
+          <div class="mil-head-r">
+            <span class="mil-tag" id="now-intent-count">0 项</span>
           </div>
-          <svg class="scope-svg" id="ctx-spark" viewBox="0 0 320 96" preserveAspectRatio="none" aria-label="上下文历史趋势折线"></svg>
         </div>
-        <div class="ctx-items" id="ctx-items"></div>
-      </div>
-    </div>
-  </section>
+        <div class="now-intent-list" id="now-intents">
+          <div class="mil-hint">暂无预定或盯梢项</div>
+        </div>
+      </section>
 
-  <!-- 4. 近期活动 + 活动现场详情与引导 -->
-  <section class="mil-split" aria-label="近期活动与详情">
-    <aside class="mil-panel mil-panel--soft" id="threads-panel">
-      <div class="mil-head">
-        <div class="mil-head-l"><span class="mil-silk"><span class="mil-silk-en">ACTIVITY · </span>近期活动</span></div>
-        <div class="mil-head-r">
-          <div class="mil-seg" id="th-filters" role="group" aria-label="线程状态筛选">
+      <section class="mil-panel" aria-label="活动时间线">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span data-icon-slot="heartbeat"></span>
+            <div>
+              <div class="mil-silk">活动时间线</div>
+              <div class="mil-silk-en">ACTIVITY TIMELINE</div>
+            </div>
+          </div>
+          <div class="mil-head-r">
+            <span class="mil-tag" id="now-thread-count">0 条</span>
+          </div>
+        </div>
+
+        <div class="now-filter-row" style="margin-bottom:10px">
+          <input type="search" class="mil-input" id="now-thread-search" placeholder="搜索线程标题、会话或档案…" aria-label="筛选活动时间线" />
+          <div class="mil-seg" id="now-thread-filters" role="group" aria-label="线程状态筛选">
             <button type="button" class="mil-key mil-key--sm" data-th-filter="all" aria-pressed="true">全部</button>
-            <button type="button" class="mil-key mil-key--sm" data-th-filter="active" aria-pressed="false">运行中</button>
-            <button type="button" class="mil-key mil-key--sm" data-th-filter="delivered" aria-pressed="false">已交付</button>
-            <button type="button" class="mil-key mil-key--sm" data-th-filter="error" aria-pressed="false">异常</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="running" aria-pressed="false">进行中</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="approval" aria-pressed="false">待确认</button>
+            <button type="button" class="mil-key mil-key--sm" data-th-filter="history" aria-pressed="false">历史可续</button>
           </div>
-          <button type="button" class="mil-key mil-key--sm" id="prune-junk-threads" hidden>清理废记录</button>
-          <span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         </div>
-      </div>
-      <div class="thread-list" id="threads">
-        <p class="mil-hint">正在读取线程记录…</p>
-      </div>
-    </aside>
 
-    <div class="mil-panel mil-panel--flat" id="inspector-panel">
+        <div class="now-thread-list" id="now-threads">
+          <div class="mil-hint">暂无活动记录</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 右栏：确认条 + 垂直步骤时间线 + 总览/Treemap/单步详情 -->
+    <section class="mil-panel now-inspector-card" aria-label="线程复盘与操作台">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span class="mil-silk"><span class="mil-silk-en">LIVE · </span>活动现场</span>
-          <span class="mil-tag" id="ins-state-tag">—</span>
-        </div>
-        <div class="mil-head-r" id="ins-meta-tags"></div>
-      </div>
-
-      <div class="mil-screen" style="margin-bottom:16px">
-        <div class="mil-row" style="gap:12px;align-items:center;flex-wrap:nowrap">
-          <span class="mil-fish mil-fish--well" id="ins-role-fish" style="width:44px;height:44px" hidden aria-hidden="true"></span>
-          <div style="min-width:0;flex:1">
-            <h2 class="inspector-h2" id="title">等待选择线程</h2>
-            <div class="mil-hint" id="meta" style="margin-top:4px"></div>
+          <span id="now-sel-fish"></span>
+          <div>
+            <div class="mil-silk" id="now-sel-title">尚未选中线程</div>
+            <div class="mil-silk-en" id="now-sel-meta">在左侧点选活动，查看步骤链与上下文方块图</div>
           </div>
         </div>
-        <pre class="mil-pre" id="result-box" style="margin-top:12px;max-height:220px" hidden></pre>
-        <div class="mil-row" id="deliveries-row" style="margin-top:10px"></div>
-      </div>
-
-      <div class="mil-field" style="margin-bottom:16px">
-        <div class="mil-row" style="justify-content:space-between">
-          <span class="mil-label">步骤时间线</span>
-          <button type="button" class="mil-help" data-help="记录执行过程与工具调用；超长结果可展开后分页阅读" aria-label="查看步骤时间线说明" aria-expanded="false">?</button>
-        </div>
-        <div class="events-box" id="events">
-          <p class="mil-hint">选择一条线程后展示执行事件。</p>
+        <div class="mil-head-r">
+          <span class="mil-tag" id="now-sel-state">待命</span>
+          <button type="button" class="mil-key mil-key--sm" id="now-reopen-btn" hidden>恢复继续</button>
         </div>
       </div>
 
-      <div class="mil-screen" style="display:flex;flex-direction:column;gap:10px">
-        <div class="mil-row" style="justify-content:space-between">
-          <label class="mil-label" for="message">对当前活动搭句话 / 补充方向</label>
-          <button type="button" class="mil-help" data-help="按线程独立暂存未发送草稿；支持 Ctrl/Cmd + Enter 快捷发送" aria-label="查看搭话说明" aria-expanded="false">?</button>
+      <!-- 等待授权确认条 -->
+      <div class="now-approval-bar" id="now-approval-bar" hidden>
+        <div class="now-card-head">
+          <strong id="now-appr-title">需要确认后才能继续执行</strong>
+          <span class="mil-tag mil-tag--warn" id="now-appr-risk">需要授权</span>
         </div>
-        <textarea id="message" class="mil-textarea" rows="3" style="min-height:84px" placeholder="顺口补充想法或调整方向…"></textarea>
-        <div class="mil-row" style="justify-content:space-between">
-          <div class="mil-row" style="gap:6px">
-            <label class="mil-switch">
-              <input type="checkbox" id="steer">
-              <span class="mil-switch-track"></span>
-              <span class="mil-switch-txt">立即转向</span>
-            </label>
-            <button type="button" class="mil-help" data-help="开启后将中断当前后续步骤，优先切换到新方向" aria-label="查看立即转向说明" aria-expanded="false">?</button>
+        <div class="mil-hint" id="now-appr-detail"></div>
+        <pre class="mil-pre" id="now-appr-cmd" hidden></pre>
+        <div class="now-approval-actions">
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" data-appr-decision="once">仅本次允许</button>
+          <button type="button" class="mil-key mil-key--sm" data-appr-decision="session">本轮会话允许</button>
+          <button type="button" class="mil-key mil-key--sm" data-appr-decision="always">长期记住</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--danger" data-appr-decision="deny">拒绝</button>
+        </div>
+      </div>
+
+      <!-- 运行控制：补充说明 + 停止 -->
+      <div class="now-note-bar" id="now-controls-bar" hidden>
+        <input type="text" class="mil-input" id="now-note-input" placeholder="给当前活动补充一条提示或转向说明…" aria-label="补充说明" />
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="now-note-send">补充说明</button>
+        <button type="button" class="mil-key mil-key--sm mil-key--danger" id="now-stop-btn" hidden>停止</button>
+      </div>
+
+      <div class="now-stage">
+        <!-- Muse 式垂直步骤时间线 -->
+        <div>
+          <div class="mil-label" style="margin-bottom:8px">执行步骤链</div>
+          <div class="now-steps-wrap" id="now-step-timeline">
+            <div class="mil-hint">选择线程后展示触发、思考与工具步骤。</div>
           </div>
-          <div class="mil-row">
-            <button type="button" class="mil-key mil-key--hot" id="send-note">引导</button>
-            <button type="button" class="mil-key mil-key--danger" id="stop">停止线程</button>
-            <button type="button" class="mil-key" id="delete-thread" hidden>删除记录</button>
+        </div>
+
+        <!-- 右侧详情视图：总览（含 Token Treemap）或 单步命令与脱敏输出 -->
+        <div class="now-inspector-card">
+          <div id="now-view-overview">
+            <div class="now-summary-box" style="margin-bottom:12px">
+              <div class="now-card-head">
+                <span class="mil-label">一句话结论与交付</span>
+                <div class="mil-row" id="now-attachments"></div>
+              </div>
+              <div id="now-conclusion" class="mil-hint">选中线程后在这里汇总结论与生成产物。</div>
+            </div>
+
+            <!-- 保留并美化的上下文与 Token 消耗方块图 (Treemap) -->
+            <div class="mil-panel mil-panel--soft" id="ctx-panel" style="padding:12px">
+              <div class="mil-head" style="margin-bottom:8px">
+                <div class="mil-head-l">
+                  <span class="mil-silk">上下文与 Token 消耗</span>
+                  <span class="mil-tag" id="ctx-health">待命</span>
+                </div>
+                <div class="mil-head-r">
+                  <div class="mil-seg" role="group" aria-label="上下文视图模式">
+                    <button type="button" class="mil-key mil-key--sm" data-ctx-view="map" aria-pressed="true">方块</button>
+                    <button type="button" class="mil-key mil-key--sm" data-ctx-view="grid" aria-pressed="false">方格</button>
+                  </div>
+                </div>
+              </div>
+              <div class="mil-row" style="justify-content:space-between;margin-bottom:6px">
+                <span class="mil-hint num" id="ctx-readout">0 / 262.1K tokens (0%)</span>
+              </div>
+              <div class="mil-meter" id="ctx-meter" style="margin-bottom:8px"><i id="ctx-meter-bar" style="width:0%"></i></div>
+              <div class="ctx-cats" id="ctx-cats"></div>
+              <div class="ctx-board" style="margin-bottom:10px">
+                <div class="ctx-map-stage" id="ctx-map"></div>
+                <div class="cm-grid" id="ctx-grid" hidden></div>
+              </div>
+              <div class="ctx-items" id="ctx-items"></div>
+            </div>
+          </div>
+
+          <div id="now-view-step" class="now-summary-box" hidden>
+            <div class="now-card-head">
+              <div>
+                <div class="mil-silk" id="now-step-title">步骤详情</div>
+                <div class="mil-hint mono" id="now-step-meta">—</div>
+              </div>
+              <button type="button" class="mil-key mil-key--sm" id="now-back-overview">返回总览</button>
+            </div>
+            <div class="mil-field">
+              <span class="mil-label">命令 / 参数</span>
+              <pre class="mil-pre" id="now-step-args"></pre>
+            </div>
+            <div class="mil-field">
+              <span class="mil-label">脱敏输出</span>
+              <pre class="mil-pre" id="now-step-output"></pre>
+            </div>
           </div>
         </div>
-        <div class="mil-feedback" id="feedback" data-feedback-slot="now" aria-live="polite"></div>
       </div>
-    </div>
-  </section>
+    </section>
+  </div>
 
-  <!-- 5. 临时唤醒角色（默认收起，日常由对话与脉搏自主触发） -->
-  <details class="mil-panel" id="launch-panel" aria-label="临时唤醒角色">
-    <summary class="mil-head" style="cursor:pointer;list-style:none;margin-bottom:0;padding-bottom:0;border-bottom:0">
+  <!-- 折叠临时调度入口 -->
+  <details class="mil-panel" id="launch-wrap">
+    <summary class="mil-head" style="cursor:pointer;margin-bottom:0">
       <div class="mil-head-l">
-        <span class="mil-silk"><span class="mil-silk-en">WAKE · </span>▸ 临时唤醒某个角色</span>
-        <button type="button" class="mil-help" data-help="可选旁路入口：日常由对话与脉搏自主触发，管理员也可在此直接点名唤醒" aria-label="查看临时唤醒说明" aria-expanded="false">?</button>
+        <span class="mil-silk"><span class="mil-silk-en">WAKE · </span>▸ 临时发起一个线程</span>
+        <button type="button" class="mil-help" data-help="日常由 MaiBot 主脑按语境调度；管理员也可在这里手动按档案触发验证" aria-label="查看说明" aria-expanded="false">?</button>
       </div>
       <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
     </summary>
-    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--mil-rule)">
-      <div class="mil-row" id="launch-profile-chips" style="margin-bottom:12px"></div>
-      <div class="launch-grid" style="margin-bottom:12px">
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--mil-rule)">
+      <div class="launch-grid" style="margin-bottom:10px">
         <div class="mil-field">
-          <label class="mil-label" for="launch-profile">执行角色</label>
-          <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="scout" placeholder="scout">
+          <label class="mil-label" for="launch-profile">能力档案</label>
+          <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="default" placeholder="default" />
           <datalist id="launch-profile-list"></datalist>
         </div>
         <div class="mil-field">
-          <div class="mil-row" style="gap:6px">
-            <label class="mil-label" for="launch-chat">关联会话</label>
-            <button type="button" class="mil-help" data-help="填写群/私聊 chat_id，或输入 self 发起自身探索活动" aria-label="查看关联会话说明" aria-expanded="false">?</button>
-          </div>
-          <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="chat_id 或 self">
+          <label class="mil-label" for="launch-chat">关联会话</label>
+          <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="qq:group:100246809 或 self" />
           <datalist id="launch-chat-list"></datalist>
         </div>
         <div class="mil-field">
           <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
-          <input id="launch-workspace" class="mil-input mono" placeholder="digest_daily">
+          <input id="launch-workspace" class="mil-input mono" placeholder="digest_daily" />
         </div>
       </div>
-      <div class="mil-field" style="margin-bottom:12px">
-        <label class="mil-label" for="launch-prompt">想推进或了解的事</label>
-        <textarea id="launch-prompt" class="mil-textarea" rows="2" style="min-height:72px" placeholder="写下想关注或探索的事情…"></textarea>
+      <div class="mil-field" style="margin-bottom:10px">
+        <label class="mil-label" for="launch-prompt">事情描述</label>
+        <textarea id="launch-prompt" class="mil-textarea" rows="2" placeholder="输入需要探索或处理的内容…"></textarea>
       </div>
       <div class="mil-row" style="justify-content:space-between">
-        <div class="mil-row" id="launch-chat-chips"></div>
-        <button type="button" class="mil-key mil-key--hot" id="launch-run">立即唤醒</button>
+        <div class="mil-feedback" id="launch-feedback" aria-live="polite"></div>
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="launch-run">立即发起</button>
       </div>
-      <div class="mil-feedback" id="launch-feedback" style="margin-top:10px" aria-live="polite"></div>
     </div>
   </details>
 <!-- ==NOW_BODY_END== -->
   </div>
 
-  <nav id="ms-mob-dock" class="ms-mob-dock" aria-label="移动端导航"{{MGMT_HIDDEN}}>
+  <!-- 移动端底部 4 栏固定导航（<= 720px 在所有页面展示） -->
+  <nav id="ms-mob-dock" class="ms-mob-dock" aria-label="移动端导航">
     <button type="button" class="ms-mob-dock-btn"{{NAV_NOW_CURRENT}} data-mob-nav="now">
       <span class="ms-mob-dock-ic" data-dock-icon="cpu"></span>
       <span class="ms-mob-dock-lbl">现场</span>
     </button>
-    <button type="button" class="ms-mob-dock-btn"{{NAV_OUTPUTS_CURRENT}} data-mob-nav="outputs">
+    <button type="button" class="ms-mob-dock-btn"{{NAV_PROFILES_CURRENT}} data-mob-nav="profiles">
+      <span class="ms-mob-dock-ic" data-dock-icon="roles"></span>
+      <span class="ms-mob-dock-lbl">档案</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_LIBRARY_CURRENT}} data-mob-nav="library">
       <span class="ms-mob-dock-ic" data-dock-icon="grid"></span>
-      <span class="ms-mob-dock-lbl">产物</span>
-    </button>
-    <button type="button" class="ms-mob-dock-btn"{{NAV_ABILITIES_CURRENT}} data-mob-nav="abilities">
-      <span class="ms-mob-dock-ic" data-dock-icon="plug"></span>
-      <span class="ms-mob-dock-lbl">能力</span>
-    </button>
-    <button type="button" class="ms-mob-dock-btn"{{NAV_MEMORY_CURRENT}} data-mob-nav="memory">
-      <span class="ms-mob-dock-ic" data-dock-icon="book"></span>
-      <span class="ms-mob-dock-lbl">手账</span>
+      <span class="ms-mob-dock-lbl">资料库</span>
     </button>
     <button type="button" class="ms-mob-dock-btn"{{NAV_SETTINGS_CURRENT}} data-mob-nav="settings">
       <span class="ms-mob-dock-ic" data-dock-icon="sliders"></span>
@@ -1123,7 +505,7 @@
 
 </div>
 
-<!-- 悬浮提示、说明气泡 & 上下文条目原文阅读器 -->
+<!-- 悬浮提示、说明气泡、上下文条目原文弹窗 & 五步新手引导弹窗 -->
 <div class="cm-tip" id="cm-tip" hidden></div>
 <div class="mil-help-pop" id="mil-help-pop" role="tooltip" hidden></div>
 
@@ -1140,6 +522,30 @@
       </div>
     </div>
     <pre class="mil-pre" id="ctx-modal-body" style="max-height:56vh"></pre>
+  </div>
+</div>
+
+<div class="onb-scrim" id="onb-scrim" hidden>
+  <div class="onb-card" id="onb-card" role="dialog" aria-modal="true" aria-labelledby="onb-title">
+    <div class="onb-head">
+      <div>
+        <div class="mil-silk" id="onb-title">Maisya 五步启用引导</div>
+        <div class="mil-hint" id="onb-subtitle">按顺序完成核验，随时可跳过并在设置中重新打开</div>
+      </div>
+      <div class="mil-row" style="gap:10px">
+        <div class="onb-dots" id="onb-dots" aria-label="引导进度"></div>
+        <button type="button" class="mil-key mil-key--sm" id="onb-close" aria-label="关闭引导">关闭</button>
+      </div>
+    </div>
+    <div class="mil-feedback" id="onb-feedback" role="status" aria-live="polite"></div>
+    <div class="onb-stage" id="onb-stage"></div>
+    <div class="onb-foot">
+      <button type="button" class="mil-key mil-key--sm" id="onb-skip">暂时跳过</button>
+      <div class="mil-row" style="gap:8px">
+        <button type="button" class="mil-key mil-key--sm" id="onb-prev">上一步</button>
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="onb-next">下一步</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1160,71 +566,20 @@
   window.MaisyaIcons?.ensureDefs?.();
   {{FISH_JS}}
 
-  const PAGES = { now: "现场", outputs: "产物", abilities: "能力", memory: "手账", settings: "设置" };
+  const PAGES = { now: "现场", profiles: "档案", library: "资料库", settings: "设置" };
   const MGMT_FRAGMENTS = {{MGMT_FRAGMENTS_JSON}};
   const defaultPage = document.body.dataset.defaultPage || "now";
-  let activePage = defaultPage;
+  let activePage = Object.prototype.hasOwnProperty.call(PAGES, defaultPage) ? defaultPage : "now";
   let mgmtAbort = null;
-  let userNavigated = false;
   let bootStarted = false;
+  let userNavigated = false;
+  let timer = 0;
 
-  function snapFishSeed(snap, roleId) {
-    const cards = Array.isArray(snap?.profile_cards) ? snap.profile_cards : [];
-    const hit = cards.find((c) => c && c.id === roleId);
-    return String(hit?.fish_seed || "");
-  }
-
-  const CATS = {
-    system: { name: "角色与技能", color: "var(--ctx-system)" },
-    memory: { name: "手账备忘", color: "var(--ctx-memory)" },
-    user: { name: "输入", color: "var(--ctx-user)" },
-    assistant: { name: "推理结论", color: "var(--ctx-assistant)" },
-    tool: { name: "工具调用", color: "var(--ctx-tool)" },
-    free: { name: "剩余空间", color: "var(--ctx-free)" },
-  };
-  const STATE_LABEL = {
-    active: ["运行中", "mil-tag--hot", "mil-led--run"],
-    waiting: ["等待回复", "mil-tag--warn", "mil-led--run"],
-    idle: ["待命", "mil-tag--ok", ""],
-    closed: ["已结束", "", "mil-led--off"],
-  };
-
-  let state = {
-    threadId: "",
-    chatFilter: "",
-    profileFilter: "",
-    userPickedThread: false,
-    thFilter: "all",
-    ctxView: "map",
-    ctxCat: "all",
-    cursor: 0,
-    events: [],
-    lastSnap: null,
-  };
-  const localDrafts = {};
-  const rollNums = new WeakMap();
+  // 双并发排队 + 10s 超时兜底 + 429 重试
   let queryQueue = Promise.resolve();
   let actionQueue = Promise.resolve();
-  let timer = null;
-  window.__maisyaDispose = () => {
-    disposed = true;
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
-    if (mgmtAbort) {
-      mgmtAbort.abort();
-      mgmtAbort = null;
-    }
-    shellAbort.abort();
-  };
-  let lastTriggerTarget = null;
-  let lastSnapshotAt = 0;
-  let pendingOutputTarget = null;
-  let pendingAbilityTarget = null;
-
-  // 读请求按单通道串行，读写合计严格 <= 2 个并发排队
   let activeQueue = 0;
+  let queryInFlight = 0;
   const waiters = [];
   async function acquire() {
     while (activeQueue >= 2) await new Promise((res) => waiters.push(res));
@@ -1239,13 +594,22 @@
     try { return await fn(); }
     finally { release(); }
   }
+  function withTimeout(promise, ms = 10000) {
+    let tid = 0;
+    const t = new Promise((resolve) => {
+      tid = setTimeout(() => resolve({ success: false, timeout: true, error: "请求超时（10s），请检查宿主服务后重试" }), ms);
+    });
+    return Promise.race([Promise.resolve(promise), t]).finally(() => { if (tid) clearTimeout(tid); });
+  }
   const RETRYABLE_RPC_RE = /429|进行中的\s*WebUI\s*请求|Two requests|Concurrency limit/i;
   async function callMaibotRaw(kind, name, arg) {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = kind === "query"
-          ? await window.maibot.query(name, arg)
-          : await window.maibot.action(name, arg);
+        if (!window.maibot || typeof window.maibot[kind] !== "function") {
+          return { success: false, error: "宿主通信通道未就绪" };
+        }
+        const rawP = window.maibot[kind](name, arg);
+        const res = await withTimeout(rawP, 10000);
         if (res && res.success === false && attempt < 2 && RETRYABLE_RPC_RE.test(String(res.error || ""))) {
           await new Promise((r) => setTimeout(r, attempt === 0 ? 350 : 700));
           continue;
@@ -1262,14 +626,11 @@
     }
     return { success: false, error: "请求繁忙，请稍后重试" };
   }
-  let queryInFlight = 0;
   const enqueueQuery = (fn) => {
     queryInFlight += 1;
     const p = queryQueue.then(() => withSlot(fn), () => withSlot(fn));
     queryQueue = p.catch(() => {});
-    return p.finally(() => {
-      queryInFlight = Math.max(0, queryInFlight - 1);
-    });
+    return p.finally(() => { queryInFlight = Math.max(0, queryInFlight - 1); });
   };
   const enqueueAction = (fn) => {
     const p = actionQueue.then(() => withSlot(fn), () => withSlot(fn));
@@ -1285,554 +646,195 @@
         : { action: key, payload: JSON.stringify(body || {}) };
       const res = op === "read" ? await callMaibotRaw("query", "read", arg) : await callMaibotRaw("action", "write", arg);
       if (!disposed && res?.ui_style && startStyleSeq === uiStyleSeq) {
-        savedUiStyle = res.ui_style;
+        savedUiStyle = normalizeThemePref(res.ui_style);
         applyTheme();
       }
       return res;
     };
     return op === "read" ? enqueueQuery(run) : enqueueAction(run);
   }
+
   function hostSay(text, isErr = false) {
     const fb = $('[data-feedback-slot="mgmt"]');
     if (!fb) return;
     fb.textContent = text || "";
     fb.className = `mil-feedback${!text ? "" : isErr ? " mil-feedback--err" : " mil-feedback--ok"}`;
-    const led = $("#mgmt-led");
-    if (led) led.className = `mil-led${isErr ? " mil-led--bad" : ""}`;
   }
-  function setNowFeedback(text, cls = "mil-feedback") {
+  function setNowFeedback(text, isErr = false) {
     const fb = $('[data-feedback-slot="now"]');
     if (!fb) return;
     fb.textContent = text || "";
-    fb.className = cls;
-  }
-  function setDirty(flag) {
-    const tag = $("#dirty-tag");
-    if (tag) tag.hidden = !flag;
-  }
-  function versionHistory(history, current) {
-    const sel = $("#history");
-    if (!sel) return;
-    const list = (history || []).slice().reverse();
-    sel.innerHTML = list.map((h) => `<option value="${esc(h.version)}">v${esc(h.version)} · ${esc(h.source || "manual")}</option>`).join("");
-    if (current !== undefined) sel.value = String(current);
-  }
-  function helpBtn(text, label = "查看说明") {
-    return text ? `<button type="button" class="mil-help" data-help="${esc(text)}" aria-label="${esc(label)}" aria-expanded="false">?</button>` : "";
+    fb.className = `mil-feedback${!text ? "" : isErr ? " mil-feedback--err" : " mil-feedback--ok"}`;
   }
 
+  // 双主题：millennium（默认）| modern（兼容 maiwork）| auto（跟随明暗）
   let savedUiStyle = "millennium";
   let manualUiStyle = "";
   let uiStyleSeq = 0;
   let lastCtx = null;
-  function effectiveUiStyle(hostStyle) {
-    const pref = manualUiStyle || savedUiStyle || "millennium";
-    if (pref === "auto") return hostStyle === "millennium" ? "millennium" : "maiwork";
-    return pref === "maiwork" ? "maiwork" : "millennium";
+  function normalizeThemePref(val) {
+    const raw = String(val || "").trim().toLowerCase();
+    if (raw === "maiwork" || raw === "modern") return "modern";
+    if (raw === "auto") return "auto";
+    return "millennium";
   }
-  function renderMobDockIcons() {
+  function resolveTheme(pref, ctx) {
+    const c = ctx || lastCtx || window.maibot?.context || {};
+    const sysDark = typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const isDark = c.theme === "dark" ? true : c.theme === "light" ? false : sysDark;
+    const hostStyle = normalizeThemePref(c.dashboardStyle || "");
+    let uiStyle = pref;
+    if (pref === "auto") {
+      if (c.dashboardStyle) uiStyle = hostStyle === "auto" ? (isDark ? "modern" : "millennium") : hostStyle;
+      else uiStyle = isDark ? "modern" : "millennium";
+    }
+    return { pref, uiStyle: uiStyle === "modern" ? "modern" : "millennium", isDark };
+  }
+  function renderIconSlots() {
     const ic = window.MaisyaIcons;
     if (!ic) return;
+    $$("[data-icon-slot]").forEach((el) => {
+      const k = el.dataset.iconSlot || "gear";
+      el.innerHTML = ic.mod ? ic.mod(k, 22) : ic.ctrl(k, 18, 1.9);
+    });
     $$("#ms-mob-dock [data-dock-icon]").forEach((el) => {
-      const key = el.dataset.dockIcon || "grid";
-      el.innerHTML = ic.ctrl(key, 18, 1.9);
+      el.innerHTML = ic.ctrl(el.dataset.dockIcon || "grid", 18, 1.9);
     });
   }
+  const THEME_LABEL = { millennium: "千禧机械", modern: "现代极简", auto: "自动跟随" };
   function applyTheme(ctx) {
     if (disposed) return;
     if (ctx) lastCtx = ctx;
-    const c = ctx || lastCtx || window.maibot?.context || {};
-    const theme = c.theme === "dark" ? "dark" : "light";
-    document.documentElement.className = theme === "dark" ? "dark" : "";
-    const styleName = c.dashboardStyle || "millennium";
-    document.documentElement.setAttribute("data-dashboard-style", styleName);
-    const eff = effectiveUiStyle(styleName);
-    document.documentElement.setAttribute("data-ui-style", eff);
+    const pref = normalizeThemePref(manualUiStyle || savedUiStyle || "millennium");
+    const r = resolveTheme(pref, ctx);
+    const root = document.documentElement;
+    root.classList.toggle("dark", r.isDark);
+    root.setAttribute("data-theme", pref);
+    root.setAttribute("data-ui-style", r.uiStyle);
+    root.setAttribute("data-dashboard-style", (lastCtx?.dashboardStyle) || "millennium");
     const btn = $("#ui-style-toggle");
     if (btn) {
-      btn.textContent = eff === "millennium" ? "千禧机械" : "默认主题";
-      btn.setAttribute("aria-pressed", String(eff === "millennium"));
+      btn.textContent = THEME_LABEL[pref] || "千禧机械";
+      btn.setAttribute("aria-pressed", String(r.uiStyle === "millennium"));
     }
-    renderMobDockIcons();
-    window.dispatchEvent(new CustomEvent("maisya:themechange", { detail: { uiStyle: eff, dark: theme === "dark" } }));
+    renderIconSlots();
+    window.dispatchEvent(new CustomEvent("maisya:themechange", { detail: { theme: pref, uiStyle: r.uiStyle, dark: r.isDark } }));
   }
-  applyTheme();
-  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail), { signal: shellSig });
-  $("#ui-style-toggle")?.addEventListener("click", async () => {
-    const cur = document.documentElement.getAttribute("data-ui-style") || "millennium";
-    const next = cur === "millennium" ? "maiwork" : "millennium";
+  async function setUiStylePreference(nextPref) {
+    const pref = normalizeThemePref(nextPref);
     const prevManual = manualUiStyle;
     const prevSaved = savedUiStyle;
     const seq = ++uiStyleSeq;
-    manualUiStyle = next;
+    manualUiStyle = pref;
     applyTheme();
-    if (activePage === "now") drawFlowLines();
     try {
-      const r = await hostRpc("write", "ui_style", { ui_style: next });
+      const res = await hostRpc("write", "ui_style", { ui_style: pref });
       if (disposed || seq !== uiStyleSeq) return;
-      if (!r?.success) {
-        const err = String(r?.error || "主题风格保存失败");
-        if (/unexpected keyword argument/i.test(err)) return;
-        manualUiStyle = prevManual;
-        savedUiStyle = prevSaved;
-        applyTheme();
-        if (activePage === "now") drawFlowLines();
-        if (activePage === "now") setNowFeedback(err, "mil-feedback mil-feedback--err");
-        else hostSay(err, true);
+      if (!res?.success) {
+        const err = String(res?.error || "主题切换保存失败");
+        if (!/未就绪|unexpected keyword/i.test(err)) {
+          manualUiStyle = prevManual;
+          savedUiStyle = prevSaved;
+          applyTheme();
+          if (activePage === "now") setNowFeedback(err, true);
+          else hostSay(err, true);
+        }
         return;
       }
-      savedUiStyle = r.ui_style || next;
+      savedUiStyle = normalizeThemePref(res.ui_style || pref);
       manualUiStyle = "";
       applyTheme();
-      if (activePage === "now") drawFlowLines();
-      window.dispatchEvent(new CustomEvent("maisya:ui-style-saved", { detail: { uiStyle: savedUiStyle, version: r.version } }));
+      window.dispatchEvent(new CustomEvent("maisya:ui-style-saved", { detail: { uiStyle: savedUiStyle } }));
     } catch (err) {
       if (disposed || seq !== uiStyleSeq) return;
-      const msg = String(err?.message || err || "主题风格保存失败");
-      if (/unexpected keyword argument/i.test(msg)) return;
       manualUiStyle = prevManual;
       savedUiStyle = prevSaved;
       applyTheme();
-      if (activePage === "now") drawFlowLines();
-      if (activePage === "now") setNowFeedback(msg, "mil-feedback mil-feedback--err");
-      else hostSay(msg, true);
     }
-  });
+  }
+  applyTheme();
+  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail), { signal: shellSig });
+  window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => applyTheme(), { signal: shellSig });
+  $("#ui-style-toggle")?.addEventListener("click", () => {
+    const cur = normalizeThemePref(manualUiStyle || savedUiStyle || "millennium");
+    const order = ["millennium", "modern", "auto"];
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    setUiStylePreference(next);
+  }, { signal: shellSig });
 
   const calm = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-
-  function fmtTime(ts) {
+  const fmtTime = (ts) => {
     if (!ts) return "—";
+    if (typeof ts === "string" && isNaN(Number(ts))) return ts;
     const d = new Date(Number(ts) * 1000);
-    if (Number.isNaN(d.getTime())) return "—";
+    if (Number.isNaN(d.getTime())) return String(ts);
     return d.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
-  function fmtK(n) {
+  };
+  const fmtK = (n) => {
     const v = Number(n || 0);
     return v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v);
+  };
+  const fmtMs = (ms) => {
+    if (ms === null || ms === undefined || ms === "") return "";
+    const n = Number(ms);
+    return Number.isNaN(n) ? String(ms) : n >= 1000 ? `${(n / 1000).toFixed(2)}s` : `${Math.round(n)}ms`;
+  };
+  const isSafeImageDataUri = (s) => /^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/i.test(String(s || "").trim());
+
+  // 工具辅助与状态管理
+  const STATE_LABEL = {
+    active: ["运行中", "mil-tag--hot", "mil-led--run"],
+    running: ["运行中", "mil-tag--hot", "mil-led--run"],
+    waiting: ["等待确认", "mil-tag--warn", "mil-led--run"],
+    pending_approval: ["待审批", "mil-tag--warn", "mil-led--run"],
+    idle: ["暂停可续", "", "mil-led--off"],
+    done: ["已完成", "mil-tag--ok", ""],
+    error: ["异常", "mil-tag--bad", "mil-led--bad"],
+    archived: ["已归档", "mil-tag--off", "mil-led--off"],
+  };
+  const CATS = {
+    system: { name: "系统与设定", color: "var(--ctx-system)" },
+    memory: { name: "记忆与档案", color: "var(--ctx-memory)" },
+    user: { name: "输入与要求", color: "var(--ctx-user)" },
+    assistant: { name: "推理与回复", color: "var(--ctx-assistant)" },
+    tool: { name: "工具调用结果", color: "var(--ctx-tool)" },
+    free: { name: "剩余空间", color: "var(--ctx-free)" },
+  };
+  const state = {
+    lastSnap: null,
+    threadId: "",
+    selectedDetail: null,
+    selectedStepId: "",
+    viewMode: "overview", // "overview" | "step"
+    thFilter: "all",
+    thQuery: "",
+    ctxView: "map",
+    ctxCat: "all",
+    cursor: 0,
+  };
+  let lastSnapshotAt = 0;
+  let lastTriggerTarget = null;
+  let pendingLibraryTarget = null;
+  let pendingProfileTarget = null;
+
+  function chatDisplayName(snap, cid) {
+    if (!cid) return "未知会话";
+    if (cid === "self") return "自身线程 (self)";
+    const meta = snap?.chat_meta?.[cid] || {};
+    return meta.name || cid;
   }
-
-  // Aisya roll() 数字平滑跳变（respects reduced-motion）
-  function roll(el, target, format = (v) => String(Math.round(v))) {
-    if (!el) return;
-    const to = Number(target || 0);
-    const from = rollNums.get(el) ?? to;
-    rollNums.set(el, to);
-    if (calm() || from === to) {
-      el.textContent = format(to);
-      return;
-    }
-    const t0 = performance.now();
-    const dur = 240;
-    const step = (now) => {
-      const k = Math.min(1, (now - t0) / dur);
-      const eased = 1 - Math.pow(1 - k, 3);
-      el.textContent = format(from + (to - from) * eased);
-      if (k < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
+  function profileFishSeedFromSnap(snap, pid) {
+    const card = (snap?.profile_cards || []).find((c) => c.id === pid);
+    return card?.fish_seed || "";
   }
-
-  /* ───────────── 流向图 SVG 连线与信号脉冲（移植 Aisya flight.js） ───────────── */
-
-  let activeTrips = [];
-  let flightRaf = 0;
-
-  function drawFlowLines() {
-    if (activePage !== "now") return;
-    const box = $("#flow");
-    const svg = box?.querySelector(":scope > .fl-svg");
-    if (!box || !svg) return;
-    if (window.innerWidth <= 960) {
-      svg.innerHTML = "";
-      return;
-    }
-    const br = box.getBoundingClientRect();
-    svg.setAttribute("viewBox", `0 0 ${br.width} ${br.height}`);
-    const cols = [...box.querySelectorAll(".fl-col")];
-    if (cols.length < 4) return;
-    const paths = [];
-    const anchor = (el, side) => {
-      const r = el.getBoundingClientRect();
-      return {
-        x: (side === "R" ? r.right + 4 : r.left - 6) - br.left,
-        y: r.top + r.height / 2 - br.top,
-      };
-    };
-    const curve = (a, b, key, cls) => {
-      const dx = Math.max(26, (b.x - a.x) * 0.5);
-      const marker = cls.includes("live") ? "url(#fl-arr-run)" : cls.includes("on") ? "url(#fl-arr-on)" : "url(#fl-arr-idle)";
-      paths.push(`<path data-k="${esc(key)}" class="${cls}" marker-end="${marker}" d="M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}"/>`);
-    };
-    const chats = [...box.querySelectorAll("#fl-chats .fl-node")];
-    const gate = box.querySelector("#fl-gate .fl-node");
-    const profs = [...box.querySelectorAll("#fl-profiles .fl-node")];
-    const ths = [...box.querySelectorAll("#fl-threads .fl-node")];
-    if (gate) {
-      const gl = anchor(gate, "L");
-      const gr = anchor(gate, "R");
-      chats.forEach((c, i) => {
-        const cls = [c.classList.contains("on") ? "on" : "", c.classList.contains("run") ? "live" : ""].filter(Boolean).join(" ");
-        curve(anchor(c, "R"), gl, `cg-${i}`, cls);
-      });
-      profs.forEach((p, i) => {
-        const cls = [p.classList.contains("on") ? "on" : "", p.classList.contains("run") ? "live" : ""].filter(Boolean).join(" ");
-        curve(gr, anchor(p, "L"), `gp-${i}`, cls);
-      });
-    }
-    if (profs.length && ths.length) {
-      ths.forEach((t, ti) => {
-        const pid = t.dataset.prof;
-        const match = profs.find((p) => p.dataset.flowProfile === pid) || profs[0];
-        if (match) {
-          const cls = [t.classList.contains("on") ? "on" : "", t.classList.contains("run") ? "live" : ""].filter(Boolean).join(" ");
-          curve(anchor(match, "R"), anchor(t, "L"), `pt-${ti}`, cls);
-        }
-      });
-    }
-    const defs = `<defs>
-      <marker id="fl-arr-idle" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-lo)" stroke="none"/></marker>
-      <marker id="fl-arr-on" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-accent)" stroke="none"/></marker>
-      <marker id="fl-arr-run" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,1 L7,4 L0,7 Z" fill="var(--mil-live)" stroke="none"/></marker>
-    </defs>`;
-    svg.innerHTML = defs + paths.join("");
-  }
-
-  function emitFlightPackets() {
-    if (activePage !== "now" || calm() || document.hidden || window.innerWidth <= 960) return;
-    const box = $("#flow");
-    if (!box) return;
-    const wires = [...box.querySelectorAll(".fl-svg path.on")];
-    if (!wires.length) return;
-    let sky = box.querySelector(":scope > .fl-sky");
-    if (!sky) {
-      sky = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      sky.setAttribute("class", "fl-sky");
-      sky.setAttribute("aria-hidden", "true");
-      box.append(sky);
-    }
-    const r = box.getBoundingClientRect();
-    sky.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
-    wires.slice(0, 3).forEach((w) => {
-      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      rect.setAttribute("width", "7");
-      rect.setAttribute("height", "7");
-      rect.setAttribute("rx", "3.5");
-      rect.setAttribute("class", "pkt");
-      sky.append(rect);
-      activeTrips.push({ el: rect, key: w.dataset.k, t0: performance.now(), ms: 720 });
-    });
-    if (!flightRaf) flightRaf = requestAnimationFrame(tickFlight);
-  }
-
-  function tickFlight(now) {
-    flightRaf = 0;
-    const box = $("#flow");
-    activeTrips = activeTrips.filter((tr) => {
-      const p = box?.querySelector(`.fl-svg path[data-k="${CSS.escape(tr.key)}"]`);
-      const k = Math.min(1, (now - tr.t0) / tr.ms);
-      if (!p || !tr.el.isConnected || k >= 1) {
-        tr.el.remove();
-        return false;
-      }
-      const pt = p.getPointAtLength(p.getTotalLength() * k);
-      tr.el.setAttribute("x", (pt.x - 3.5).toFixed(1));
-      tr.el.setAttribute("y", (pt.y - 3.5).toFixed(1));
-      return true;
-    });
-    if (activeTrips.length) flightRaf = requestAnimationFrame(tickFlight);
-  }
-
-  function canonChatKey(snap, cid) {
-    if (!cid) return "";
-    if (cid === "self") return "self";
-    const src = snap?.chat_sources?.[cid];
-    if (src?.stream_spec) return src.stream_spec;
-    return cid;
-  }
-
-  function sameChat(snap, a, b) {
-    if (!a || !b) return false;
-    if (a === b) return true;
-    return canonChatKey(snap, a) === canonChatKey(snap, b);
-  }
-
-  function chatMeta(snap, cid) {
-    const allSrcs = snap?.chat_sources || {};
-    let src = allSrcs[cid] || {};
-    if (!src.name && cid && cid !== "self") {
-      const hit = Object.values(allSrcs).find((s) => s && (s.stream_spec === cid || s.chat_id === cid));
-      if (hit) src = hit;
-    }
-    const spec = src.stream_spec || (cid !== "self" && /^[a-z0-9_-]+:(group|private):/i.test(cid) ? cid : "");
-    const name = src.name || (cid === "self" ? "自身活动" : cid);
-    const plat = src.platform || (cid === "self" ? "self" : "");
-    const typeLabel = src.chat_type === "group" ? "群" : src.chat_type === "private" ? "私" : "";
-    const rawAv = String(src.avatar || "");
-    const safeAv = /^data:image\//i.test(rawAv) && !/["'()\s]/.test(rawAv) ? rawAv : "";
-    const mono = (name || cid || "?").trim().slice(0, 1).toUpperCase();
-    return { name, spec, plat, typeLabel, safeAv, mono };
-  }
-  function avatarHtml(meta, small = false) {
-    return `<span class="mil-avatar${small ? " mil-avatar--sm" : ""}" aria-hidden="true">${esc(meta.mono)}${meta.safeAv ? `<span class="mil-avatar-img" style="background-image:url('${esc(meta.safeAv)}')"></span>` : ""}</span>`;
-  }
-
   function selectedForView(snap) {
-    const rawSel = snap?.selected || null;
-    if (state.profileFilter && rawSel && rawSel.profile !== state.profileFilter) return null;
-    return rawSel;
+    if (state.selectedDetail && (!state.threadId || state.selectedDetail.thread_id === state.threadId)) {
+      return state.selectedDetail;
+    }
+    return snap?.selected || null;
   }
 
-  function renderFlow(snap) {
-    const threads = snap.threads || [];
-    const pulse = snap.pulse || {};
-    const cards = snap.profile_cards?.length
-      ? snap.profile_cards
-      : (snap.profiles || []).map((id) => ({ id, title: id, environment: "readonly", autonomous: true }));
-    const dedupMap = new Map();
-    const pushChat = (rawCid) => {
-      if (!rawCid) return;
-      const k = canonChatKey(snap, rawCid);
-      const pref = rawCid === "self" ? "self" : (canonChatKey(snap, rawCid) || rawCid);
-      if (!dedupMap.has(k) || (rawCid.includes(":") && !dedupMap.get(k).includes(":"))) {
-        dedupMap.set(k, pref);
-      }
-    };
-    (snap.enabled_chats || []).forEach(pushChat);
-    threads.forEach((t) => { if (t.chat_id) pushChat(t.chat_id); });
-    const chats = [...dedupMap.values()].slice(0, 8);
-    $("#fl-cnt-chat").textContent = String(chats.length);
-    $("#flow-all-chats").setAttribute("aria-pressed", String(!state.chatFilter && !state.profileFilter));
-    const filterHint = $("#flow-filter-hint");
-    const filterParts = [];
-    if (state.chatFilter) {
-      const filterMeta = chatMeta(snap, state.chatFilter);
-      const filterLabel = filterMeta?.name || "";
-      const specSuffix = filterMeta?.spec || state.chatFilter;
-      filterParts.push(filterLabel === specSuffix ? specSuffix : `${filterLabel} · ${specSuffix}`);
-    }
-    if (state.profileFilter) {
-      const pCard = cards.find((c) => c.id === state.profileFilter);
-      filterParts.push(
-        pCard?.title && pCard.title !== state.profileFilter
-          ? `${pCard.title} (${state.profileFilter})`
-          : state.profileFilter
-      );
-    }
-    if (filterParts.length) {
-      filterHint.hidden = false;
-      filterHint.textContent = `筛选：${filterParts.join(" · ")}`;
-    } else {
-      filterHint.hidden = true;
-      filterHint.textContent = "";
-    }
-
-    const rawSelThread = threads.find((t) => t.thread_id === state.threadId) || snap.selected || null;
-    const selThread = state.profileFilter && rawSelThread?.profile !== state.profileFilter ? null : rawSelThread;
-    const selChat = state.chatFilter || selThread?.chat_id || "";
-    const selProf = state.profileFilter || selThread?.profile || "";
-
-    $("#fl-chats").innerHTML = chats.length
-      ? chats.map((cid) => {
-          const activeHere = threads.some((t) => sameChat(snap, t.chat_id, cid) && (t.state === "active" || t.state === "waiting"));
-          const on = sameChat(snap, selChat, cid);
-          const m = chatMeta(snap, cid);
-          const cnt = threads.filter((t) => sameChat(snap, t.chat_id, cid)).length;
-          const sub = [m.plat ? m.plat.toUpperCase() : "", m.typeLabel, `${cnt} 条活动`].filter(Boolean).join(" · ");
-          const dispCode = m.spec || cid;
-          return `<button type="button" class="fl-node${on ? " on" : ""}${activeHere ? " run" : ""}" data-port-out="1" data-flow-chat="${esc(cid)}" title="${esc(m.name)} (${esc(dispCode)})">
-            <span class="fl-node-top">
-              <span class="mil-row" style="gap:7px;min-width:0;flex:1;flex-wrap:nowrap">${avatarHtml(m)}<span class="fl-node-name">${esc(m.name)}</span></span>
-              <span class="mil-led ${activeHere ? "mil-led--run" : ""}"></span>
-            </span>
-            <span class="fl-node-sub">${esc(sub)}${m.name !== dispCode ? ` · <span class="mono">${esc(dispCode)}</span>` : ""}</span>
-          </button>`;
-        }).join("")
-      : `<div class="fl-node fl-node--static" data-port-out="1"><span class="fl-node-name">暂无已启用会话</span><span class="fl-node-sub">前往设置添加群或私聊</span></div>`;
-
-    const levelLabelMap = { quiet: "安静", care: "平衡", lively: "活跃" };
-    const levelText = levelLabelMap[pulse.proactive_level] || "平衡";
-    const dailyPct = pulse.daily_limit ? Math.min(100, Math.round(((pulse.daily_used || 0) / pulse.daily_limit) * 100)) : 0;
-    const pendingIntents = snap.stats?.pending_intents ?? (snap.scheduled_intents || []).length;
-    const routeTag = pulse.web_provider && pulse.web_provider !== "auto" ? pulse.web_provider : "自动路由";
-    $("#fl-gate").innerHTML = `<div class="fl-node fl-node--static fl-node--gate" data-port-in="1" data-port-out="1">
-      <span class="fl-node-top"><span class="fl-node-name">MaiBot Planner</span><span class="mil-tag ${pulse.enabled !== false && !pulse.in_sleep ? "mil-tag--ok" : ""}">${pulse.in_sleep ? "休眠" : pulse.enabled !== false ? "调度中" : "停用"}</span></span>
-      <span class="fl-node-sub">主脑调度 · 原生开口与工具编排</span>
-      <span class="fl-node-sub mono">maisya_agent · 联网 ${esc(routeTag)}</span>
-      <div class="fl-subband">
-        <span class="fl-node-sub">Pulse (${esc(levelText)}) 主动 ${pulse.daily_used || 0} / ${pulse.daily_limit ?? 1} · 待唤醒 ${pendingIntents}</span>
-        <div class="mil-meter" style="margin-top:2px"><i style="width:${dailyPct}%"></i></div>
-      </div>
-    </div>`;
-
-    const orderedCards = [...cards].sort((a, b) => Number(b.enabled !== false) - Number(a.enabled !== false));
-    $("#fl-cnt-prof").textContent = String(cards.filter((p) => p.enabled !== false).length);
-    $("#fl-profiles").innerHTML = orderedCards.slice(0, 6).map((p) => {
-      const running = threads.some((t) => t.profile === p.id && (t.state === "active" || t.state === "waiting"));
-      const selectedMatch = state.profileFilter ? state.profileFilter === p.id : selProf === p.id;
-      const isOff = p.enabled === false;
-      const cls = isOff ? "mil-fish--off" : "";
-      const fish = roleFishHtml(p.id, p.fish_seed || "", 26, running ? {} : { still: true }, cls);
-      const chain = Array.isArray(p.model_list) && p.model_list.length ? p.model_list : (p.model_name ? [p.model_name] : []);
-      const modelLabel = chain.length ? (chain.length > 1 ? `${chain[0]} +${chain.length - 1}` : chain[0]) : (p.task || "utils");
-      return `<button type="button" class="fl-node${selectedMatch ? " on" : ""}${running ? " run" : ""}" style="${isOff ? "opacity:0.65" : ""}" data-port-in="1" data-port-out="1" data-flow-profile="${esc(p.id)}" aria-pressed="${String(state.profileFilter === p.id)}">
-        <span class="fl-node-top"><span class="mil-row" style="gap:6px;min-width:0;flex:1;flex-wrap:nowrap">${fish}<span class="fl-node-name">${esc(p.title || p.id)}</span></span><span class="mil-tag ${isOff ? "mil-tag--off" : ""}">${esc(isOff ? "已停用" : (p.environment === "sandbox" ? "沙箱" : "只读"))}</span></span>
-        <span class="fl-node-sub mono">${esc(p.id)} · ${esc(modelLabel)}${isOff ? " · 停用" : p.autonomous ? "" : " · 需授权"}</span>
-      </button>`;
-    }).join("");
-
-    const roleScoped = state.profileFilter ? threads.filter((t) => t.profile === state.profileFilter) : threads;
-    const cleanThreads = roleScoped.filter((t) => !t.junk || (state.userPickedThread && t.thread_id === state.threadId));
-    const shownThreads = cleanThreads.slice(0, 5);
-    $("#fl-cnt-th").textContent = String(cleanThreads.length);
-    $("#fl-threads").innerHTML = shownThreads.length
-      ? shownThreads.map((t) => {
-          const st = STATE_LABEL[t.state] || ["未知", "", ""];
-          const on = t.thread_id === state.threadId;
-          return `<button type="button" class="fl-node${on ? " on" : ""}${t.state === "active" || t.state === "waiting" ? " run" : ""}" data-port-in="1" data-flow-thread="${esc(t.thread_id)}" data-prof="${esc(t.profile)}">
-            <span class="fl-node-top"><span class="fl-node-name">${esc(t.title)}</span><span class="mil-led ${st[2]}"></span></span>
-            <span class="fl-node-sub">${esc(t.profile)} · ${t.delivered ? "已交付" : st[0]}</span>
-          </button>`;
-        }).join("")
-      : state.profileFilter
-        ? `<div class="fl-node fl-node--static on" data-port-in="1" data-prof="${esc(state.profileFilter)}">
-            <span class="fl-node-name">该角色暂无在场活动</span>
-            <span class="fl-node-sub">${roleScoped.length ? `下方有 ${roleScoped.length} 条历史废记录` : "可直接点名唤醒或调整角色设定"}</span>
-            <div class="mil-row" style="gap:6px;margin-top:6px">
-              <button type="button" class="mil-key mil-key--sm mil-key--hot" data-wake-profile="${esc(state.profileFilter)}">用该角色发起</button>
-              <button type="button" class="mil-key mil-key--sm" data-config-profile="${esc(state.profileFilter)}">去配置该角色</button>
-            </div>
-          </div>`
-        : `<div class="fl-node fl-node--static" data-port-in="1"><span class="fl-node-name">暂无在场活动</span><span class="fl-node-sub">下方可随时发起</span></div>`;
-
-    requestAnimationFrame(() => {
-      drawFlowLines();
-      if (threads.some((t) => t.state === "active" || t.state === "waiting")) emitFlightPackets();
-    });
-  }
-
-  /* ───────────── 2. 当前动态条与计数器 ───────────── */
-
-  const EVENT_KIND_LABELS = {
-    opened: "发起活动",
-    started: "开始处理",
-    step: "推理推进",
-    tools: "调用工具",
-    tool_call: "调用工具",
-    tool_result: "工具返回",
-    input: "任务输入",
-    question: "等待确认",
-    redirect: "转向调整",
-    note: "补充引导",
-    steered: "立即转向",
-    completed: "执行完成",
-    delivered: "结果交付",
-    waiting: "等待回复",
-    stopped: "已停止",
-    failed: "执行异常",
-    error: "执行异常",
-    model_fallback: "模型回退",
-  };
-  const ORIGIN_LABELS = {
-    user: "对话触发",
-    console: "现场唤醒",
-    schedule: "定时触发",
-    routine: "周期例行",
-    heartbeat: "自主探索",
-    webhook: "外部推送",
-    intent: "主动意图",
-  };
-
-  function formatChatInline(snap, cid) {
-    if (!cid || cid === "self") return "自身活动";
-    const m = chatMeta(snap, cid);
-    const code = m.spec || cid;
-    return m.name && m.name !== code ? `${m.name} · ${code}` : code;
-  }
-
-  function friendlyEventBrief(snap, e) {
-    const raw = String(e?.text || "").trim();
-    if (raw.startsWith("{") && raw.endsWith("}")) {
-      try {
-        const j = JSON.parse(raw);
-        if (j && typeof j === "object") {
-          const parts = [];
-          if (j.origin) parts.push(ORIGIN_LABELS[j.origin] || String(j.origin));
-          if (j.owner) {
-            parts.push(j.owner === "self" ? "自身记录" : j.owner === "chat" ? "会话线程" : formatChatInline(snap, j.owner));
-          }
-          const summary = j.summary || j.message || j.reason || j.text;
-          if (summary) parts.push(String(summary).replace(/\s+/g, " ").slice(0, 72));
-          if (parts.length) return parts.join(" · ");
-        }
-      } catch {}
-    }
-    return raw.replace(/\s+/g, " ").slice(0, 90);
-  }
-
-  function renderStrip(snap) {
-    const allThreads = snap.threads || [];
-    const threads = state.profileFilter
-      ? allThreads.filter((t) => t.profile === state.profileFilter)
-      : allThreads;
-    const sel = snap.selected && (!state.profileFilter || snap.selected.profile === state.profileFilter)
-      ? snap.selected
-      : null;
-    const activeThreads = threads.filter((t) => t.state === "active" || t.state === "waiting");
-    const hasErr = Boolean(sel?.result?.error) || (snap.stats?.error_count || 0) > 0;
-    const pulse = snap.pulse || {};
-
-    const topLed = $("#top-led");
-    const topTxt = $("#top-state-text");
-    if (activeThreads.length) {
-      topLed.className = "mil-led mil-led--run";
-      topTxt.textContent = `${activeThreads.length} 个线程处理中`;
-    } else if (pulse.enabled === false) {
-      topLed.className = "mil-led mil-led--off";
-      topTxt.textContent = "插件未启用";
-    } else {
-      topLed.className = "mil-led";
-      topTxt.textContent = "系统在线";
-    }
-
-    if (activeThreads.length) {
-      $("#now-headline").textContent = `${activeThreads.length} 个线程正在推进`;
-      $("#now-subline").textContent = `${activeThreads[0].title}（${activeThreads[0].profile} · ${formatChatInline(snap, activeThreads[0].chat_id)}）`;
-    } else if (sel) {
-      const st = STATE_LABEL[sel.state] || ["就绪", "", ""];
-      $("#now-headline").textContent = sel.result?.error ? "线程出错" : `最近：${st[0]}`;
-      $("#now-subline").textContent = `${allThreads.find((t) => t.thread_id === sel.thread_id)?.title || sel.thread_id} · ${sel.profile} · ${formatChatInline(snap, sel.chat_id)}`;
-    } else {
-      $("#now-headline").textContent = "待命";
-      $("#now-subline").textContent = "等待群聊触发或由管理员直接发起工作流";
-    }
-
-    const badges = [];
-    if (sel?.model) badges.push(`<span class="mil-tag">模型 ${esc(sel.model)}</span>`);
-    if (sel?.workspace) badges.push(`<span class="mil-tag mil-tag--warn">工作区 ${esc(sel.workspace)}</span>`);
-    if (sel?.revision) badges.push(`<span class="mil-tag">第 ${sel.revision} 轮</span>`);
-    $("#now-badges").innerHTML = badges.join("");
-
-    const evs = sel ? state.events.slice(-3) : [];
-    $("#now-steps").innerHTML = evs.length
-      ? evs.map((e) => `<li><span class="mil-tag">${esc(EVENT_KIND_LABELS[e.kind] || e.kind)}</span> ${esc(friendlyEventBrief(snap, e))}</li>`).join("")
-      : `<li>暂无最新步骤日志</li>`;
-
-    $("#now-leds").innerHTML = `
-      <span class="strip-led-item"><span class="mil-led ${pulse.enabled === false ? "mil-led--off" : ""}"></span>插件${pulse.enabled === false ? "未启用" : "已就绪"}</span>
-      <span class="strip-led-item"><span class="mil-led ${pulse.in_sleep ? "mil-led--off" : "mil-led"}"></span>${pulse.in_sleep ? "睡眠静默中" : `心跳 ${pulse.heartbeat_interval_minutes || 60}m`}</span>
-      <span class="strip-led-item"><span class="mil-led ${hasErr ? "mil-led--bad" : ""}"></span>${hasErr ? "含异常线程" : "链路正常"}</span>
-    `;
-
-    const stats = snap.stats || {};
-    roll($("#kpi-active"), stats.active_count ?? activeThreads.length);
-    roll($("#kpi-today"), stats.today_threads ?? threads.length);
-    roll($("#kpi-deliv"), stats.today_deliveries ?? 0);
-    roll($("#kpi-intent"), stats.pending_intents ?? (snap.scheduled_intents || []).length);
-  }
-
-  /* ───────────── 3. 上下文窗口：正方化树图 & 400格晶圆（移植 Aisya ctxmap.js） ───────────── */
-
+  /* ───────────── Treemap 与详情弹窗 ───────────── */
   function squarify(items, x, y, w, h) {
     if (!items.length || w <= 0 || h <= 0) return [];
     const total = items.reduce((s, d) => s + d.value, 0);
@@ -1842,8 +844,7 @@
     const worst = (row, side) => {
       if (!row.length || side <= 0) return Infinity;
       const sum = row.reduce((s, d) => s + d.area, 0);
-      const s2 = sum * sum;
-      const side2 = side * side;
+      const s2 = sum * sum, side2 = side * side;
       let maxA = 0, minA = Infinity;
       for (const d of row) { if (d.area > maxA) maxA = d.area; if (d.area < minA) minA = d.area; }
       return Math.max((side2 * maxA) / s2, s2 / (side2 * minA));
@@ -1869,19 +870,11 @@
       }
       return { x: rx, y: ry + ch, w: rw, h: Math.max(0, rh - ch) };
     };
-    let rem = [...scaled];
-    let row = [];
-    let box = { x, y, w, h };
+    let rem = [...scaled], row = [], box = { x, y, w, h };
     while (rem.length) {
-      const next = rem[0];
-      const side = Math.min(box.w, box.h);
-      if (!row.length || worst([...row, next], side) <= worst(row, side)) {
-        row.push(next);
-        rem.shift();
-      } else {
-        box = lay(row, box.x, box.y, box.w, box.h);
-        row = [];
-      }
+      const next = rem[0], side = Math.min(box.w, box.h);
+      if (!row.length || worst([...row, next], side) <= worst(row, side)) { row.push(next); rem.shift(); }
+      else { box = lay(row, box.x, box.y, box.w, box.h); row = []; }
     }
     if (row.length) lay(row, box.x, box.y, box.w, box.h);
     return out;
@@ -1890,15 +883,13 @@
   let currentCtxItems = [];
   function showCtxTip(ev, text) {
     const tip = $("#cm-tip");
+    if (!tip) return;
     tip.textContent = text;
     tip.hidden = false;
     tip.style.left = Math.min(window.innerWidth - 290, ev.clientX + 12) + "px";
     tip.style.top = Math.min(window.innerHeight - 70, ev.clientY + 12) + "px";
   }
-  function hideCtxTip() {
-    $("#cm-tip").hidden = true;
-  }
-
+  function hideCtxTip() { const tip = $("#cm-tip"); if (tip) tip.hidden = true; }
   function openCtxModal(item) {
     if (!item || item.cat === "free") return;
     lastTriggerTarget = document.activeElement;
@@ -1912,61 +903,25 @@
   }
   function closeCtxModal() {
     $("#ctx-scrim").hidden = true;
-    if (lastTriggerTarget && typeof lastTriggerTarget.focus === "function") {
-      lastTriggerTarget.focus();
-    }
-  }
-
-  function renderSparkline(points, limit) {
-    const svg = $("#ctx-spark");
-    const lbl = $("#ctx-spark-label");
-    if (!svg) return;
-    if (!points || !points.length) {
-      svg.innerHTML = `<text x="12" y="52" fill="var(--mil-scope-ink)" font-size="12">暂无历史轮次轨迹</text>`;
-      lbl.textContent = "—";
-      return;
-    }
-    const valOf = (p) => Number(p.tokens ?? p.chars ?? 0);
-    const maxV = Math.max(limit || 262144, ...points.map(valOf), 1);
-    const W = 320, H = 96, pad = 10;
-    const coords = points.map((p, idx) => {
-      const x = points.length === 1 ? W / 2 : pad + (idx / (points.length - 1)) * (W - pad * 2);
-      const y = H - pad - (valOf(p) / maxV) * (H - pad * 2);
-      return [x, y, p];
-    });
-    const lineD = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    const areaD = `${lineD} L${coords[coords.length - 1][0].toFixed(1)},${H - pad} L${coords[0][0].toFixed(1)},${H - pad} Z`;
-    const dots = coords.map(([x, y]) => `<rect x="${(x - 2.5).toFixed(1)}" y="${(y - 2.5).toFixed(1)}" width="5" height="5" fill="#ffd84a" stroke="#181c18" stroke-width="1"/>`).join("");
-    svg.innerHTML = `
-      <line x1="0" y1="${H - pad}" x2="${W}" y2="${H - pad}" stroke="rgba(143,214,160,0.35)" stroke-width="1"/>
-      <path d="${areaD}" fill="rgba(143,214,160,0.16)"/>
-      <path d="${lineD}" fill="none" stroke="#8fd6a0" stroke-width="2.2" stroke-linecap="square" stroke-linejoin="miter"/>
-      ${dots}
-    `;
-    const latest = points[points.length - 1];
-    lbl.textContent = `${points.length} 轮 · 当前 ${fmtK(valOf(latest))}`;
+    if (lastTriggerTarget && typeof lastTriggerTarget.focus === "function") lastTriggerTarget.focus();
   }
 
   function renderContext(snap) {
-    const allThreads = snap.threads || [];
-    const threads = state.profileFilter ? allThreads.filter((t) => t.profile === state.profileFilter) : allThreads;
-    $("#ctx-threads").innerHTML = threads.slice(0, 8).map((t) =>
-      `<button type="button" class="mil-key mil-key--sm" data-ctx-thread="${esc(t.thread_id)}" aria-pressed="${String(t.thread_id === state.threadId)}">${esc(t.profile)} · ${esc(String(t.title || t.thread_id).slice(0, 14))}</button>`
-    ).join("") || `<span class="mil-hint">暂无可选线程</span>`;
-
+    const readout = $("#ctx-readout"), health = $("#ctx-health"), meter = $("#ctx-meter"), bar = $("#ctx-meter-bar");
+    const cats = $("#ctx-cats"), stage = $("#ctx-map"), grid = $("#ctx-grid"), rowsEl = $("#ctx-items");
+    if (!readout || !stage || !grid) return;
     const sel = selectedForView(snap);
     const ctx = sel?.context;
     if (!sel || !ctx) {
-      $("#ctx-readout").textContent = "0 / 262.1K tokens (0%)";
-      $("#ctx-health").textContent = "未选线程";
-      $("#ctx-health").className = "mil-tag";
-      $("#ctx-meter").className = "mil-meter";
-      $("#ctx-meter-bar").style.width = "0%";
-      $("#ctx-cats").innerHTML = "";
-      $("#ctx-map").innerHTML = `<p class="mil-hint" style="padding:16px">选择一条线程后展示上下文构成。</p>`;
-      $("#ctx-grid").innerHTML = "";
-      $("#ctx-items").innerHTML = `<p class="mil-hint" style="padding:10px">暂无上下文条目。</p>`;
-      renderSparkline([], 262144);
+      readout.textContent = "0 / 262.1K tokens (0%)";
+      health.textContent = "未选线程";
+      health.className = "mil-tag";
+      meter.className = "mil-meter";
+      bar.style.width = "0%";
+      cats.innerHTML = "";
+      stage.innerHTML = `<p class="mil-hint" style="padding:16px">选中线程后展示上下文构成与 Token 占用方块图。</p>`;
+      grid.innerHTML = "";
+      rowsEl.innerHTML = "";
       return;
     }
 
@@ -1977,61 +932,40 @@
     const limit = Math.max(rawLimit, used, 1);
     const pct = Math.min(100, Math.round((used / limit) * 100));
     const triggerHint = useTokens && Number(ctx.trigger_tokens || 0) > 0 ? ` · 压缩线 ${fmtK(ctx.trigger_tokens)}` : "";
-    $("#ctx-readout").textContent = `已用 ${fmtK(used)} / ${fmtK(limit)} ${unitLabel} (${pct}%)${triggerHint} · ${ctx.messages || 0} 条消息`;
-    $("#ctx-meter-bar").style.width = `${pct}%`;
-    const nearTrigger = (useTokens && Number(ctx.trigger_tokens || 0) > 0 && used >= Number(ctx.trigger_tokens) * 0.9) || pct >= 70;
-    const hotTrigger = (useTokens && Number(ctx.trigger_tokens || 0) > 0 && used >= Number(ctx.trigger_tokens)) || pct >= 88;
-    $("#ctx-meter").className = `mil-meter${hotTrigger ? " mil-meter--hot" : nearTrigger ? " mil-meter--warn" : ""}`;
-    const health = $("#ctx-health");
-    if (ctx.archived) {
-      health.textContent = "已交班归档";
-      health.className = "mil-tag mil-tag--warn";
-    } else if (ctx.pruned) {
-      health.textContent = "已折叠旧工具输出";
-      health.className = "mil-tag mil-tag--ok";
-    } else if (hotTrigger || nearTrigger) {
-      health.textContent = "接近压缩水位";
-      health.className = "mil-tag mil-tag--hot";
-    } else {
-      health.textContent = "健康";
-      health.className = "mil-tag mil-tag--ok";
-    }
+    readout.textContent = `已用 ${fmtK(used)} / ${fmtK(limit)} ${unitLabel} (${pct}%)${triggerHint}`;
+    bar.style.width = `${pct}%`;
+    const near = (useTokens && Number(ctx.trigger_tokens || 0) > 0 && used >= Number(ctx.trigger_tokens) * 0.9) || pct >= 70;
+    const hot = (useTokens && Number(ctx.trigger_tokens || 0) > 0 && used >= Number(ctx.trigger_tokens)) || pct >= 88;
+    meter.className = `mil-meter${hot ? " mil-meter--hot" : near ? " mil-meter--warn" : ""}`;
+    if (ctx.archived) { health.textContent = "已归档"; health.className = "mil-tag mil-tag--warn"; }
+    else if (ctx.pruned) { health.textContent = "已折叠"; health.className = "mil-tag mil-tag--ok"; }
+    else if (hot || near) { health.textContent = "接近压缩"; health.className = "mil-tag mil-tag--hot"; }
+    else { health.textContent = "健康"; health.className = "mil-tag mil-tag--ok"; }
 
     const roles = (useTokens ? ctx.token_roles : ctx.roles) || ctx.roles || {};
     const catKeys = ["system", "memory", "user", "assistant", "tool"];
     const catTotals = Object.fromEntries(catKeys.map((k) => [k, Number(roles[k] || 0)]));
-    $("#ctx-cats").innerHTML = [
+    cats.innerHTML = [
       `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="all" aria-pressed="${String(state.ctxCat === "all")}">全部 (${fmtK(used)})</button>`,
-      ...catKeys.map((k) => {
-        const meta = CATS[k];
-        return `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="${k}" aria-pressed="${String(state.ctxCat === k)}"><i class="ctx-swatch" style="background:${meta.color}"></i>${meta.name} ${fmtK(catTotals[k])}</button>`;
-      }),
+      ...catKeys.map((k) => `<button type="button" class="mil-key mil-key--sm" data-ctx-cat="${k}" aria-pressed="${String(state.ctxCat === k)}"><i class="ctx-swatch" style="background:${CATS[k].color}"></i>${CATS[k].name} ${fmtK(catTotals[k])}</button>`),
     ].join("");
 
-    // 构造明细列表（如后端未提供 items 时用角色汇总补足）
     const metricOf = (x) => Number((useTokens ? x.tokens : x.chars) ?? x.chars ?? 0);
     let items = Array.isArray(ctx.items) && ctx.items.length
-      ? ctx.items.map((x) => { const m = metricOf(x); return { ...x, metric: m, value: Math.max(1, m) }; })
+      ? ctx.items.map((x) => { const m = metricOf(x); return { ...x, cat: x.cat || x.role || "system", label: x.label || x.title || x.id, metric: m, value: Math.max(1, m) }; })
       : [];
     if (!items.length) {
-      items = catKeys
-        .filter((k) => catTotals[k] > 0)
-        .map((k) => ({ id: `role-${k}`, cat: k, label: CATS[k].name, chars: catTotals[k], tokens: catTotals[k], metric: catTotals[k], value: catTotals[k], preview: `${CATS[k].name}共占 ${catTotals[k]} ${unitLabel}。` }));
+      items = catKeys.filter((k) => catTotals[k] > 0).map((k) => ({ id: `role-${k}`, cat: k, label: CATS[k].name, chars: catTotals[k], tokens: catTotals[k], metric: catTotals[k], value: catTotals[k], preview: `${CATS[k].name}共占 ${catTotals[k]} ${unitLabel}。` }));
     }
     currentCtxItems = items;
-
     const free = Math.max(0, limit - used);
     const mapInputs = [...items];
-    if (free > 0 && state.ctxCat === "all") {
-      mapInputs.push({ id: "free-space", cat: "free", label: "剩余可用空间", chars: free, tokens: free, metric: free, value: free, preview: "" });
-    }
-    const stage = $("#ctx-map");
-    const grid = $("#ctx-grid");
+    if (free > 0 && state.ctxCat === "all") mapInputs.push({ id: "free-space", cat: "free", label: "剩余可用空间", chars: free, tokens: free, metric: free, value: free, preview: "" });
+
     stage.hidden = state.ctxView !== "map";
     grid.hidden = state.ctxView !== "grid";
-
     if (state.ctxView === "map") {
-      const w = stage.clientWidth || 540;
+      const w = stage.clientWidth || 460;
       const h = stage.clientHeight || 220;
       const rects = squarify(mapInputs, 0, 0, w, h);
       stage.innerHTML = rects.map((r, idx) => {
@@ -2042,9 +976,7 @@
       }).join("");
       stage._rectItems = rects.map((r) => r.item);
     } else {
-      // 400 格晶圆分配
-      const cells = [];
-      const alloc = [];
+      const cells = [], alloc = [];
       let totalCells = 0;
       mapInputs.forEach((it, idx) => {
         const count = it.cat === "free" ? 0 : Math.max(1, Math.round((it.value / limit) * 400));
@@ -2062,447 +994,784 @@
         for (let i = 0; i < count; i++) cells.push({ cat: it.cat, label: it.label, chars: mVal, idx });
       });
       while (cells.length < 400) cells.push({ cat: "free", label: "剩余空间", chars: free, idx: -1 });
-      grid.innerHTML = cells.map((c) => {
-        const dim = state.ctxCat !== "all" && c.cat !== state.ctxCat;
-        return `<button type="button" class="cm-cell${dim ? " dim" : ""}" data-cat="${esc(c.cat)}" data-cell-idx="${c.idx}" aria-label="${esc(c.label)}"></button>`;
-      }).join("");
+      grid.innerHTML = cells.map((c) => `<button type="button" class="cm-cell${state.ctxCat !== "all" && c.cat !== state.ctxCat ? " dim" : ""}" data-cat="${esc(c.cat)}" data-cell-idx="${c.idx}" aria-label="${esc(c.label)}"></button>`).join("");
       grid._mapInputs = mapInputs;
     }
 
-    const filteredRows = items
-      .filter((it) => state.ctxCat === "all" || it.cat === state.ctxCat)
-      .sort((a, b) => Number(b.metric ?? b.chars ?? 0) - Number(a.metric ?? a.chars ?? 0));
+    const filteredRows = items.filter((it) => state.ctxCat === "all" || it.cat === state.ctxCat).sort((a, b) => Number(b.metric ?? b.chars ?? 0) - Number(a.metric ?? a.chars ?? 0));
     const maxItemVal = Math.max(1, ...filteredRows.map((x) => Number(x.metric ?? x.chars ?? 0)));
-    $("#ctx-items").innerHTML = filteredRows.length
+    rowsEl.innerHTML = filteredRows.length
       ? filteredRows.map((it) => {
           const origIdx = currentCtxItems.indexOf(it);
           const rowVal = Number(it.metric ?? it.chars ?? 0);
           const pctW = Math.max(3, Math.round((rowVal / maxItemVal) * 100));
-          return `<button type="button" class="ci-row" data-ci-idx="${origIdx}">
-            <span class="ctx-swatch" style="background:${(CATS[it.cat] || CATS.free).color}"></span>
-            <span class="ci-row-name">${esc(it.label)}</span>
-            <span class="num" style="font-size:11.5px">${rowVal}</span>
-            <span class="ci-row-bar"><i style="width:${pctW}%"></i></span>
-          </button>`;
+          return `<button type="button" class="ci-row" data-ci-idx="${origIdx}"><span class="ctx-swatch" style="background:${(CATS[it.cat] || CATS.free).color}"></span><span class="ci-row-name">${esc(it.label)}</span><span class="num" style="font-size:11.5px">${fmtK(rowVal)}</span><span class="ci-row-bar"><i style="width:${pctW}%"></i></span></button>`;
         }).join("")
       : `<p class="mil-hint" style="padding:10px">该分类下暂无上下文段落。</p>`;
-
-    renderSparkline(ctx.history_points || [], limit);
   }
 
-  /* ───────────── 4. 处理记录列表与线程详情工作台 ───────────── */
-
-  function renderThreads(snap) {
-    const all = snap.threads || [];
-    const junkCount = all.filter((t) => t.junk).length;
-    const pruneBtn = $("#prune-junk-threads");
-    if (pruneBtn) {
-      pruneBtn.hidden = junkCount === 0;
-      pruneBtn.textContent = `清理废记录 (${junkCount})`;
-    }
-    const list = all.filter((t) => {
-      if (state.profileFilter && t.profile !== state.profileFilter) return false;
-      if (state.thFilter === "active") return t.state === "active" || t.state === "waiting";
-      if (state.thFilter === "delivered") return Boolean(t.delivered);
-      if (state.thFilter === "error") return Boolean(t.has_error);
-      return true;
+  /* ───────────── 现场页渲染（预定与盯梢 + 时间线 + Muse 步骤复盘） ───────────── */
+  function collectIntents(snap) {
+    const map = new Map();
+    [...(snap?.scheduled_intents || []), ...(snap?.watches || [])].forEach((it) => {
+      if (it && it.intent_id) map.set(it.intent_id, it);
     });
-    const host = $("#threads");
+    return [...map.values()];
+  }
+
+  function renderIntents(snap) {
+    const box = $("#now-intents");
+    const cnt = $("#now-intent-count");
+    if (!box) return;
+    const list = collectIntents(snap);
+    if (cnt) cnt.textContent = `${list.length} 项`;
     if (!list.length) {
-      const hasFilter = Boolean(state.chatFilter || state.profileFilter || state.thFilter !== "all");
-      host._lastHtml = "";
-      host.innerHTML = `<div style="padding:10px">
-        <p class="mil-hint">${all.length || hasFilter ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>
-        ${hasFilter ? `<button type="button" class="mil-key mil-key--sm" id="clear-th-filters" style="margin-top:8px">清除筛选</button>` : ""}
-      </div>`;
+      box.innerHTML = `<div class="mil-hint">暂无预定或盯梢项</div>`;
       return;
     }
-    const threadsHtml = list.map((t) => {
-      const st = STATE_LABEL[t.state] || ["未知", "", ""];
-      const on = t.thread_id === state.threadId;
-      const cm = chatMeta(snap, t.chat_id);
-      const chatDisp = cm.name && cm.name !== (cm.spec || t.chat_id) ? `${cm.name} (${cm.spec || t.chat_id})` : (cm.spec || t.chat_id);
-      return `<div role="button" tabindex="0" class="thread-row${on ? " on" : ""}" data-thread="${esc(t.thread_id)}">
-        <div class="mil-row" style="justify-content:space-between;gap:6px">
-          <div class="mil-row" style="gap:6px;min-width:0">
-            <span class="mil-led ${t.has_error ? "mil-led--bad" : st[2]}"></span>
-            <span class="thread-title">${esc(t.title || t.thread_id)}</span>
+    box.innerHTML = list.map((it) => {
+      const isWatch = it.mode === "watch" || it.kind === "watch" || Boolean(it.condition);
+      const isPaused = it.status === "paused";
+      const dueStr = it.due_at ? fmtTime(it.due_at) : (it.daily_at ? `每日 ${it.daily_at}` : it.every_seconds ? `每 ${it.every_seconds}s` : "周期");
+      const kindCls = isWatch ? "mil-tag--hot" : "mil-tag--ok";
+      return `<div class="now-intent-card" data-intent-id="${esc(it.intent_id)}">
+        <div class="now-card-head">
+          <div class="now-card-title">
+            <span class="mil-tag ${kindCls}">${isWatch ? "盯梢" : "预定"}</span>
+            <span>${esc(it.reason || it.kind_label || it.intent_id)}</span>
           </div>
-          <span class="mil-tag ${st[1]}">${st[0]}</span>
+          <span class="mil-tag ${isPaused ? "mil-tag--off" : "mil-tag--ok"}">${isPaused ? "已暂停" : "等待中"}</span>
         </div>
-        ${t.excerpt ? `<div class="thread-excerpt">${esc(t.excerpt)}</div>` : ""}
-        <div class="mil-row" style="justify-content:space-between;font-size:11px;gap:6px">
-          <span class="mil-row mono" style="gap:5px;min-width:0">${roleFishHtml(t.profile, snapFishSeed(snap, t.profile), 18, (t.state === "active" || t.state === "waiting") ? {} : { still: true })}<span>${esc(t.profile)} · ${esc(chatDisp)}${t.workspace ? ` · 空间:${esc(t.workspace)}` : ""}</span></span>
-          <span class="mil-row" style="gap:6px;flex-wrap:nowrap;flex-shrink:0">
-            <span class="num">${t.delivered ? "已交付 · " : ""}${fmtTime(t.updated)}</span>
-            ${t.can_delete ? `<button type="button" class="thread-del" data-del-thread="${esc(t.thread_id)}" title="删除该条记录">删除</button>` : ""}
-          </span>
+        <div class="now-card-meta">
+          <span>下次 ${esc(dueStr)}</span>
+          ${it.chat_id ? `<span>· ${esc(chatDisplayName(snap, it.chat_id))}</span>` : ""}
+          ${it.profile ? `<span class="mono">· ${esc(it.profile)}</span>` : ""}
+        </div>
+        ${it.condition ? `<div class="now-intent-cond">触发条件：${esc(it.condition)}</div>` : ""}
+        <div class="mil-row" style="gap:6px">
+          <button type="button" class="mil-key mil-key--sm" data-intent-act="${isPaused ? "intent_resume" : "intent_pause"}" data-intent-id="${esc(it.intent_id)}">${isPaused ? "恢复" : "暂停"}</button>
+          <button type="button" class="mil-key mil-key--sm" data-intent-act="intent_run_now" data-intent-id="${esc(it.intent_id)}">立即跑一次</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--danger" data-intent-act="intent_delete" data-intent-id="${esc(it.intent_id)}">取消</button>
         </div>
       </div>`;
     }).join("");
-    if (host._lastHtml !== threadsHtml) {
-      host._lastHtml = threadsHtml;
-      host.innerHTML = threadsHtml;
-    }
   }
 
-  function renderInspector(snap) {
+  function renderThreads(snap) {
+    const box = $("#now-threads");
+    const cnt = $("#now-thread-count");
+    if (!box) return;
+    const raw = snap?.threads || [];
+    const q = state.thQuery.trim().toLowerCase();
+    const list = raw.filter((t) => {
+      if (state.thFilter === "running" && !["active", "running", "waiting"].includes(t.state)) return false;
+      if (state.thFilter === "approval" && !t.pending_approval) return false;
+      if (state.thFilter === "history" && !["idle", "done", "error", "archived"].includes(t.state)) return false;
+      if (q) {
+        const hay = `${t.title || ""} ${t.excerpt || ""} ${t.profile || ""} ${t.chat_id || ""} ${chatDisplayName(snap, t.chat_id)}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    if (cnt) cnt.textContent = `${list.length} 条`;
+    if (!list.length) {
+      box.innerHTML = `<div class="mil-hint">没有匹配当前筛选的活动线程</div>`;
+      return;
+    }
+    box.innerHTML = list.map((t) => {
+      const st = STATE_LABEL[t.pending_approval ? "pending_approval" : t.state] || ["未知", "", ""];
+      const on = t.thread_id === state.threadId;
+      const seed = t.fish_seed || profileFishSeedFromSnap(snap, t.profile);
+      const fish = roleFishHtml(t.profile || "default", seed, 24, { still: !["active", "running"].includes(t.state) });
+      const tok = t.total_tokens ? `${fmtK(t.total_tokens)} tok` : "";
+      const canResume = ["idle", "done", "error", "archived"].includes(t.state);
+      return `<div class="now-thread-card${on ? " is-selected" : ""}" role="button" tabindex="0" data-thread-id="${esc(t.thread_id)}">
+        <div class="now-card-head">
+          <div class="now-card-title">${fish}<span>${esc(t.title || t.thread_id)}</span></div>
+          <span class="mil-tag ${st[1]}">${t.pending_approval ? "等待审批" : st[0]}</span>
+        </div>
+        <div class="now-card-meta">
+          <span>${esc(chatDisplayName(snap, t.chat_id))}</span>
+          <span class="mono">· ${esc(t.profile || "default")}</span>
+          ${tok ? `<span class="num">· ${esc(tok)}</span>` : ""}
+          <span>· ${fmtTime(t.updated || t.created)}</span>
+        </div>
+        ${canResume ? `<div class="mil-row" style="justify-content:flex-end"><button type="button" class="mil-key mil-key--sm" data-thread-reopen="${esc(t.thread_id)}">恢复继续</button></div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  function renderSelectedStage(snap) {
     const sel = selectedForView(snap);
-    const stopBtn = $("#stop");
-    const delBtn = $("#delete-thread");
-    const insFish = $("#ins-role-fish");
+    const topLed = $("#top-led");
+    const topTxt = $("#top-state-text");
+    const threads = snap?.threads || [];
+    const anyRun = threads.some((t) => ["active", "running", "waiting"].includes(t.state) || t.pending_approval);
+    if (topLed) topLed.className = `mil-led${anyRun ? " mil-led--run" : ""}`;
+    if (topTxt) topTxt.textContent = anyRun ? "活动中" : "待命";
+
+    const fishEl = $("#now-sel-fish");
+    const titleEl = $("#now-sel-title");
+    const metaEl = $("#now-sel-meta");
+    const stateTag = $("#now-sel-state");
+    const reopenBtn = $("#now-reopen-btn");
+    const apprBar = $("#now-approval-bar");
+    const ctrlBar = $("#now-controls-bar");
+    const stopBtn = $("#now-stop-btn");
+    const stepsWrap = $("#now-step-timeline");
+
     if (!sel) {
-      if (insFish) { insFish.hidden = true; insFish.innerHTML = ""; insFish.className = "mil-fish mil-fish--well"; }
-      $("#title").textContent = "等待选择线程";
-      $("#meta").textContent = "点击上方流向图或左侧处理记录中的任意线程查看详情。";
-      $("#ins-state-tag").textContent = "—";
-      $("#ins-state-tag").className = "mil-tag";
-      $("#ins-meta-tags").innerHTML = "";
-      $("#result-box").hidden = true;
-      $("#deliveries-row").innerHTML = "";
-      $("#events").innerHTML = `<p class="mil-hint">选择一条线程后展示执行事件。</p>`;
-      stopBtn.disabled = true;
-      if (delBtn) { delBtn.hidden = true; delBtn.disabled = true; }
+      if (fishEl) fishEl.innerHTML = "";
+      if (titleEl) titleEl.textContent = "尚未选中线程";
+      if (metaEl) metaEl.textContent = "在左侧点选活动，查看步骤链与上下文方块图";
+      if (stateTag) { stateTag.textContent = "待命"; stateTag.className = "mil-tag"; }
+      if (reopenBtn) reopenBtn.hidden = true;
+      if (apprBar) apprBar.hidden = true;
+      if (ctrlBar) ctrlBar.hidden = true;
+      if (stepsWrap) stepsWrap.innerHTML = `<div class="mil-hint">暂无步骤事件</div>`;
+      $("#now-conclusion").textContent = "选中线程后在这里汇总结论与生成产物。";
+      $("#now-attachments").innerHTML = "";
       return;
     }
 
-    const rowSummary = (snap.threads || []).find((t) => t.thread_id === sel.thread_id);
-    const st = STATE_LABEL[sel.state] || [sel.state || "未知", "", ""];
-    if (insFish) {
-      const card = (snap.profile_cards || []).find((c) => c && c.id === sel.profile);
-      const isOff = card?.enabled === false;
-      const swimming = sel.state === "active" || sel.state === "waiting";
-      insFish.hidden = false;
-      insFish.className = `mil-fish mil-fish--well${isOff ? " mil-fish--off" : ""}`;
-      insFish.innerHTML = fishSvg(roleFishSeed(sel.profile, snapFishSeed(snap, sel.profile)), {
-        size: 38,
-        still: !swimming || isOff,
-        label: "",
-      });
-    }
-    $("#title").textContent = rowSummary?.title || sel.thread_id;
-    const selCm = chatMeta(snap, sel.chat_id);
-    const selChatDisp = selCm.name && selCm.name !== (selCm.spec || sel.chat_id)
-      ? `${selCm.name} · ${selCm.spec || sel.chat_id}`
-      : (selCm.spec || sel.chat_id);
-    $("#meta").textContent = `${sel.thread_id} · 会话 ${selChatDisp} · 角色 ${sel.profile} · 第 ${sel.processed_revision}/${sel.revision} 轮`;
-    $("#ins-state-tag").textContent = st[0];
-    $("#ins-state-tag").className = `mil-tag ${st[1]}`;
-    $("#ins-meta-tags").innerHTML = [
-      sel.model ? `<span class="mil-tag">${esc(sel.model)}</span>` : "",
-      sel.workspace ? `<span class="mil-tag mil-tag--warn">${esc(sel.workspace)}</span>` : "",
-      `<span class="mil-tag">工具 ${(sel.tools || []).length} 个</span>`,
-    ].filter(Boolean).join("");
-    stopBtn.disabled = sel.state === "closed";
-    if (delBtn) {
-      delBtn.hidden = !sel.can_delete;
-      delBtn.disabled = !sel.can_delete;
+    const stInfo = STATE_LABEL[sel.pending_approval ? "pending_approval" : sel.state] || ["未知", "", ""];
+    if (fishEl) fishEl.innerHTML = roleFishHtml(sel.profile || "default", sel.fish_seed || profileFishSeedFromSnap(snap, sel.profile), 28, { still: !["active", "running"].includes(sel.state) });
+    if (titleEl) titleEl.textContent = sel.title || sel.thread_id;
+    if (metaEl) metaEl.textContent = `${chatDisplayName(snap, sel.chat_id)} · ${sel.profile || "default"}${sel.workspace ? ` · 工作区 ${sel.workspace}` : ""}`;
+    if (stateTag) { stateTag.textContent = sel.pending_approval ? "待审批" : stInfo[0]; stateTag.className = `mil-tag ${stInfo[1]}`; }
+    const isResumable = ["idle", "done", "error", "archived"].includes(sel.state);
+    if (reopenBtn) reopenBtn.hidden = !isResumable;
+
+    const appr = sel.pending_approval || null;
+    if (apprBar) {
+      apprBar.hidden = !appr;
+      if (appr) {
+        $("#now-appr-title").textContent = `等待授权：${appr.summary || appr.tool || appr.action_key || "高危操作"}`;
+        $("#now-appr-risk").textContent = appr.risk_level || appr.category || "需要确认";
+        $("#now-appr-detail").textContent = appr.reason || "请决定仅本次允许、本轮会话允许、长期记住，或拒绝该动作。";
+        const cmdEl = $("#now-appr-cmd");
+        if (appr.command) { cmdEl.hidden = false; cmdEl.textContent = String(appr.command); }
+        else cmdEl.hidden = true;
+      }
     }
 
-    const resBox = $("#result-box");
-    const resText = sel.result?.error ? `错误：${sel.result.error}` : (sel.result?.text || "");
-    if (resText) {
-      resBox.hidden = false;
-      resBox.textContent = resText;
+    const isRunning = ["active", "running", "waiting"].includes(sel.state) || Boolean(appr);
+    if (ctrlBar) ctrlBar.hidden = false;
+    if (stopBtn) stopBtn.hidden = !isRunning;
+
+    // 垂直步骤时间线
+    const steps = Array.isArray(sel.steps) && sel.steps.length
+      ? sel.steps
+      : (snap?.events || []).map((ev, idx) => ({
+          id: ev.seq ?? idx,
+          seq: ev.seq ?? idx + 1,
+          kind: ev.kind || "tool",
+          title: ev.title || ev.kind || `步骤 #${ev.seq ?? idx + 1}`,
+          status: "done",
+          duration_ms: ev.duration_ms,
+          command: ev.command,
+          args: ev.args,
+          redacted_output: ev.text,
+          output_preview: ev.text,
+          at: ev.at,
+        }));
+    const STEP_KIND_CN = { trigger: "触发", thought: "思考", tool: "工具调用", command: "执行命令", wait: "等待", deliver: "交付", error: "异常" };
+    stepsWrap.innerHTML = steps.length
+      ? steps.map((s, idx) => {
+          const sid = String(s.id ?? s.seq ?? idx);
+          const active = state.viewMode === "step" && state.selectedStepId === sid;
+          const stCls = s.status === "error" || s.status === "denied" ? "is-error" : s.status === "running" ? "is-running" : s.status === "waiting" ? "is-waiting" : "is-done";
+          const kLabel = STEP_KIND_CN[s.kind] || s.kind || "步骤";
+          const dur = fmtMs(s.duration_ms);
+          return `<button type="button" class="now-step-btn ${stCls}${active ? " is-active" : ""}" data-step-id="${esc(sid)}">
+            <div class="now-card-head">
+              <strong style="font-size:12.5px">${esc(s.title || s.tool || kLabel)}</strong>
+              ${dur ? `<span class="num mil-hint">${esc(dur)}</span>` : ""}
+            </div>
+            <div class="now-card-meta"><span>${esc(kLabel)}</span>${s.tool ? `<span class="mono">· ${esc(s.tool)}</span>` : ""}<span>· ${esc(s.status || "done")}</span></div>
+          </button>`;
+        }).join("")
+      : `<div class="mil-hint">当前线程暂无步骤明细</div>`;
+
+    // 结论与附件芯片
+    const resText = sel.result?.error ? `错误：${sel.result.error}` : (sel.result?.text || sel.summary || sel.excerpt || "线程准备就绪或执行中，尚未产出最终文字结论。");
+    $("#now-conclusion").textContent = resText;
+    const atts = Array.isArray(sel.artifacts) && sel.artifacts.length ? sel.artifacts : (sel.attachments || []);
+    $("#now-attachments").innerHTML = atts.map((att) =>
+      `<button type="button" class="mil-key mil-key--sm" data-jump-lib="${esc(att.id || att.handle || att.path || "")}">${esc(att.title || att.name || "查看产物")}</button>`
+    ).join("");
+
+    // 切换 总览 vs 单步命令详情
+    const ovPane = $("#now-view-overview");
+    const stPane = $("#now-view-step");
+    const activeStep = steps.find((s, idx) => String(s.id ?? s.seq ?? idx) === state.selectedStepId);
+    if (state.viewMode === "step" && activeStep) {
+      ovPane.hidden = true;
+      stPane.hidden = false;
+      $("#now-step-title").textContent = activeStep.title || activeStep.tool || "步骤详情";
+      $("#now-step-meta").textContent = `${STEP_KIND_CN[activeStep.kind] || activeStep.kind || "步骤"} · 状态 ${activeStep.status || "done"}${activeStep.duration_ms != null ? ` · 耗时 ${fmtMs(activeStep.duration_ms)}` : ""}`;
+      const argsVal = activeStep.command || (typeof activeStep.args === "string" ? activeStep.args : activeStep.args ? JSON.stringify(activeStep.args, null, 2) : "（无命令行或参数记录）");
+      $("#now-step-args").textContent = argsVal;
+      $("#now-step-output").textContent = activeStep.redacted_output || activeStep.output_preview || "（暂无脱敏输出）";
     } else {
-      resBox.hidden = true;
+      state.viewMode = "overview";
+      ovPane.hidden = false;
+      stPane.hidden = true;
     }
-
-    const tags = [];
-    const atts = Array.isArray(sel.attachments) ? sel.attachments : [];
-    atts.forEach((att) => {
-      if (att && att.handle) {
-        tags.push(`<button type="button" class="mil-key mil-key--sm mil-key--hot" data-jump-att="${esc(att.handle)}">预览 ${esc(att.name || att.handle)}</button>`);
-      }
-    });
-    if (resText || atts.length) {
-      tags.push(`<button type="button" class="mil-key mil-key--sm" data-jump-out-thread="${esc(sel.thread_id)}">在产物页查看</button>`);
-    }
-    (snap.deliveries || []).forEach((d) => {
-      tags.push(`<span class="mil-tag mil-tag--ok">交付 [${esc(d.route)}] ${esc(d.status)}</span>`);
-    });
-    (snap.intents || []).forEach((i) => {
-      tags.push(`<span class="mil-tag">回接 R${i.revision}: ${i.consumed ? "已回接" : "待回接"} (${esc(i.wake_status || "queued")})</span>`);
-    });
-    (snap.scheduled_intents || []).slice(0, 3).forEach((si) => {
-      tags.push(`<span class="mil-tag mil-tag--warn">计划 [${esc(si.kind)}] ${esc(si.reason)}</span>`);
-    });
-    $("#deliveries-row").innerHTML = tags.join("");
-  }
-
-  function renderEventsAppend(newEvents) {
-    const box = $("#events");
-    if (!newEvents?.length) {
-      if (!state.events.length) box.innerHTML = `<p class="mil-hint">暂无步骤事件。</p>`;
-      return;
-    }
-    if (box.querySelector(".mil-hint")) box.innerHTML = "";
-    newEvents.forEach((ev) => {
-      const det = document.createElement("details");
-      det.className = "ev-det";
-      det.setAttribute("data-event", String(ev.seq));
-      const sum = document.createElement("summary");
-      const kindTxt = EVENT_KIND_LABELS[ev.kind] || ev.kind;
-      sum.innerHTML = `<span class="mil-tag">#${ev.seq} ${esc(kindTxt)}</span><span class="num">R${ev.revision} · ${fmtTime(ev.at)}</span>`;
-      const pre = document.createElement("pre");
-      pre.textContent = ev.text || "";
-      det.append(sum, pre);
-      if (ev.truncated) {
-        const readBtn = document.createElement("button");
-        readBtn.type = "button";
-        readBtn.className = "mil-key mil-key--sm";
-        readBtn.textContent = "读取完整步骤";
-        let fullText = "";
-        let nextOffset = 0;
-        const loadMore = () => enqueueQuery(async () => {
-          const r = await callMaibotRaw("query", "event", {
-            thread_id: state.threadId,
-            event_seq: ev.seq,
-            offset: nextOffset,
-          });
-          if (!r?.success) {
-            setNowFeedback(r?.error || "读取完整步骤失败", "mil-feedback mil-feedback--err");
-            return;
-          }
-          fullText += r.text || "";
-          pre.textContent = fullText;
-          nextOffset = r.next_offset;
-          if (nextOffset === null || nextOffset === undefined) {
-            readBtn.remove();
-          } else {
-            readBtn.textContent = "继续读取";
-          }
-        });
-        readBtn.onclick = loadMore;
-        det.append(readBtn);
-      }
-      box.append(det);
-    });
   }
 
   function renderLaunchAssist(snap) {
-    const profiles = snap.profiles || [];
-    const chats = snap.enabled_chats || [];
-    $("#launch-profile-list").innerHTML = profiles.map((p) => `<option value="${esc(p)}">`).join("");
-    $("#launch-chat-list").innerHTML = ["self", ...chats].map((c) => `<option value="${esc(c)}">`).join("");
-    $("#launch-profile-chips").innerHTML = profiles.slice(0, 6).map((p) =>
-      `<button type="button" class="mil-key mil-key--sm" data-pick-profile="${esc(p)}"><span class="mil-row" style="gap:5px">${roleFishHtml(p, snapFishSeed(snap, p), 18, { still: true })}<span>${esc(p)}</span></span></button>`
-    ).join("");
-    $("#launch-chat-chips").innerHTML = [...chats.slice(0, 4), "self"].map((c) => {
-      const m = chatMeta(snap, c);
-      const disp = c === "self" ? "自身活动 self" : (m.name && m.name !== c ? `${m.name} (${c})` : c);
-      return `<button type="button" class="mil-key mil-key--sm" data-pick-chat="${esc(c)}" title="${esc(c)}">${esc(disp)}</button>`;
-    }).join("");
-    const lc = $("#launch-chat");
-    if (!lc.value && chats.length) lc.value = chats[0];
+    const profiles = snap?.profiles || [];
+    const chats = snap?.enabled_chats || [];
+    const plist = $("#launch-profile-list");
+    const clist = $("#launch-chat-list");
+    if (plist) plist.innerHTML = profiles.map((p) => `<option value="${esc(p)}">`).join("");
+    if (clist) clist.innerHTML = ["self", ...chats].map((c) => `<option value="${esc(c)}">`).join("");
   }
 
-  function switchThread(nextId) {
-    const prevId = state.threadId;
-    const msgEl = $("#message");
-    if (prevId && msgEl) localDrafts[prevId] = msgEl.value;
-    state.threadId = nextId || "";
-    state.cursor = 0;
-    state.events = [];
-    const evEl = $("#events");
-    if (evEl) evEl.innerHTML = `<p class="mil-hint">正在读取步骤…</p>`;
-    if (msgEl) msgEl.value = localDrafts[state.threadId] || "";
-    setNowFeedback("", "mil-feedback");
+  async function loadThreadDetail(tid) {
+    if (!tid) return;
+    const res = await hostRpc("read", "now_detail", { thread_id: tid });
+    if (disposed || activePage !== "now" || tid !== state.threadId) return;
+    if (res?.success && (res.selected || res.thread)) {
+      state.selectedDetail = { ...(res.thread || {}), ...(res.selected || {}), steps: res.steps || res.selected?.steps, artifacts: res.artifacts || res.selected?.artifacts, context: res.context || res.selected?.context, pending_approval: res.pending_approval ?? res.selected?.pending_approval };
+      renderSelectedStage(state.lastSnap);
+      renderContext(state.lastSnap);
+    }
   }
 
   async function refresh(reset = false) {
     if (disposed || activePage !== "now") return;
-    const reqProfile = state.profileFilter;
-    const reqChat = state.chatFilter;
-    const reqThread = state.threadId || (reqProfile ? "__none__" : "");
+    const reqThread = state.threadId || "";
     const reqCursor = reset ? 0 : state.cursor;
     const startStyleSeq = uiStyleSeq;
-    const snap = await enqueueQuery(() => callMaibotRaw("query", "snapshot", {
-      thread_id: reqThread,
-      chat_id: reqChat,
-      cursor: reqCursor,
-    }));
+    const snap = await enqueueQuery(() => callMaibotRaw("query", "snapshot", { thread_id: reqThread, cursor: reqCursor }));
     if (disposed || activePage !== "now") return;
-    if (reqProfile !== state.profileFilter || reqChat !== state.chatFilter) return;
     if (!snap?.success) {
-      setNowFeedback(snap?.error || "现场快照读取失败", "mil-feedback mil-feedback--err");
+      setNowFeedback(snap?.error || "现场快照读取失败", true);
       return;
     }
-    if (!disposed && snap.ui_style && startStyleSeq === uiStyleSeq) {
-      savedUiStyle = snap.ui_style;
+    if (snap.ui_style && startStyleSeq === uiStyleSeq) {
+      savedUiStyle = normalizeThemePref(snap.ui_style);
       applyTheme();
     }
     lastSnapshotAt = Date.now();
     state.lastSnap = snap;
-    const scopedThreads = state.profileFilter
-      ? (snap.threads || []).filter((t) => t.profile === state.profileFilter)
-      : (snap.threads || []);
-    const scopedSelected = snap.selected
-      && (!state.profileFilter || snap.selected.profile === state.profileFilter)
-      && (!state.chatFilter || snap.selected.chat_id === state.chatFilter)
-      ? snap.selected
-      : null;
-    const snapForView = scopedSelected === snap.selected ? snap : { ...snap, selected: null };
-    const firstId =
-      (!state.profileFilter && scopedSelected?.thread_id) ||
-      scopedThreads.find((t) => t.state === "active" || t.state === "waiting")?.thread_id ||
-      scopedThreads.find((t) => !t.junk)?.thread_id ||
-      scopedThreads[0]?.thread_id ||
-      "";
-    if (!state.threadId && firstId) {
-      switchThread(firstId);
-      if (scopedSelected?.thread_id === firstId) {
-        reset = true;
-      } else {
-        if (!disposed && activePage === "now") return refresh(true);
-        return;
-      }
-    }
-    if (state.threadId && !scopedSelected && firstId && state.threadId !== firstId) {
-      switchThread(firstId);
-      if (!disposed && activePage === "now") return refresh(true);
-      return;
-    }
     if (typeof snap.cursor === "number") state.cursor = snap.cursor;
-    if (snap.events?.length && scopedSelected) {
-      state.events.push(...snap.events);
-      renderEventsAppend(snap.events);
-    } else if (reset || !scopedSelected) {
-      if (!scopedSelected) state.events = [];
-      renderEventsAppend([]);
+
+    const threads = snap.threads || [];
+    if (!state.threadId) {
+      const firstId = snap.selected?.thread_id || threads.find((t) => t.pending_approval || ["active", "running", "waiting"].includes(t.state))?.thread_id || threads[0]?.thread_id || "";
+      if (firstId) state.threadId = firstId;
     }
-    renderFlow(snapForView);
-    renderStrip(snapForView);
-    renderContext(snapForView);
-    renderThreads(snapForView);
-    renderInspector(snapForView);
-    renderLaunchAssist(snapForView);
+    if (snap.selected && (!state.threadId || snap.selected.thread_id === state.threadId)) {
+      state.selectedDetail = snap.selected;
+    }
+
+    renderIntents(snap);
+    renderThreads(snap);
+    renderSelectedStage(snap);
+    renderContext(snap);
+    renderLaunchAssist(snap);
+    maybeAutoOpenOnboarding(snap.onboarding);
   }
 
-  /* ───────────── 事件交互绑定 ───────────── */
+  /* ───────────── 五步启动引导弹窗（严格 run_id + sequence 防竞态 + WAAPI 动效 + Tab 焦点围栏） ───────────── */
+  const ONB_STEPS = ["hello", "admins", "chats", "runtime", "done"];
+  const onb = {
+    open: false,
+    sessionDismissed: false,
+    stepIdx: 0,
+    runId: "",
+    seq: 0,
+    probeSeq: 0,
+    probePending: false,
+    probeResult: null,
+    info: null,
+    advancing: false,
+    stepNavSeq: 0,
+    draftAdmins: null,
+    draftChats: null,
+    draftModel: "",
+    draftPerm: "",
+    draftSandbox: null,
+    anims: [],
+    prevFocus: null,
+  };
 
-  document.addEventListener("click", (ev) => {
+  function settleOnbAnims() {
+    onb.anims.forEach((a) => { try { a.finish(); } catch (_) {} });
+    onb.anims = [];
+    $$("#onb-stage .onb-pane.leaving").forEach((n) => n.remove());
+  }
+
+  function stepIndexFromName(name) {
+    const idx = ONB_STEPS.indexOf(String(name || "hello"));
+    return idx >= 0 ? idx : 0;
+  }
+
+  function applyOnbView(view, opts = {}) {
+    if (!view || typeof view !== "object") return;
+    onb.info = view;
+    if (view.run_id) onb.runId = String(view.run_id);
+    if (typeof view.sequence === "number") onb.seq = Math.max(onb.seq, view.sequence);
+    if (!opts.keepStep && view.current_step) onb.stepIdx = stepIndexFromName(view.current_step);
+    if (view.model_verify && (!onb.probePending || view.model_verify.sequence >= onb.probeSeq)) {
+      onb.probeResult = view.model_verify;
+    }
+    if (onb.open && !opts.skipRender) renderOnbStep(opts.dir || 0);
+  }
+
+  function maybeAutoOpenOnboarding(obView) {
+    if (!obView) return;
+    if (!onb.open && !onb.info) applyOnbView(obView);
+    if (obView.show === true && !onb.open && !onb.sessionDismissed) {
+      openOnboardingModal(obView);
+    }
+  }
+
+  async function openOnboardingModal(initialView) {
+    onb.prevFocus = document.activeElement;
+    onb.open = true;
+    onb.sessionDismissed = false;
+    onb.advancing = false;
+    $("#onb-feedback").textContent = "";
+    $("#onb-scrim").hidden = false;
+    if (initialView) applyOnbView(initialView);
+    else renderOnbStep(0);
+    $("#onb-close")?.focus();
+    const openedNavSeq = onb.stepNavSeq || 0;
+    const res = await hostRpc("read", "onboarding", {});
+    if (!disposed && onb.open && res?.success) {
+      applyOnbView(res.onboarding || res, { keepStep: (onb.stepNavSeq || 0) !== openedNavSeq || onb.advancing });
+    }
+  }
+
+  function closeOnboardingModal(markDismissed = true) {
+    settleOnbAnims();
+    onb.open = false;
+    if (markDismissed) onb.sessionDismissed = true;
+    $("#onb-scrim").hidden = true;
+    if (onb.prevFocus && typeof onb.prevFocus.focus === "function") onb.prevFocus.focus();
+  }
+
+  function renderOnbStep(dir = 0) {
+    const stage = $("#onb-stage");
+    const dots = $("#onb-dots");
+    const prevBtn = $("#onb-prev");
+    const nextBtn = $("#onb-next");
+    const skipBtn = $("#onb-skip");
+    if (!stage) return;
+
+    const idx = Math.max(0, Math.min(ONB_STEPS.length - 1, onb.stepIdx));
+    const step = ONB_STEPS[idx];
+    const info = onb.info || state.lastSnap?.onboarding || {};
+    const items = Array.isArray(info.items) ? info.items : [];
+    const adminsInfo = state.lastSnap?.admins_info || {};
+    const hostAdmins = info.host_admins || adminsInfo.host_admins || [];
+    const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
+    const recentDms = info.recent_dms || state.lastSnap?.recent_dms || [];
+    const knownChats = info.known_chats || state.lastSnap?.known_chats || state.lastSnap?.enabled_chats || [];
+    const enabledChats = onb.draftChats ?? (info.enabled_chats || state.lastSnap?.enabled_chats || []);
+    const models = info.models || state.lastSnap?.available_models || [];
+    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || models[0]?.name || "";
+    const curPerm = onb.draftPerm || info.permission_mode || state.lastSnap?.permission_mode || "ask_risky";
+    const curSandbox = onb.draftSandbox !== null ? onb.draftSandbox : Boolean(info.sandbox_enabled ?? state.lastSnap?.docker?.enabled);
+
+    if (dots) {
+      dots.innerHTML = ONB_STEPS.map((s, i) => `<span class="onb-dot${i === idx ? " is-active" : i < idx ? " is-done" : ""}" title="${esc(s)}"></span>`).join("");
+    }
+    if (prevBtn) prevBtn.disabled = idx === 0;
+    if (nextBtn) nextBtn.textContent = idx === ONB_STEPS.length - 1 ? "完成启用" : "下一步";
+    if (skipBtn) skipBtn.hidden = idx === ONB_STEPS.length - 1;
+
+    settleOnbAnims();
+    const prevPane = stage.querySelector(".onb-pane");
+    const pane = document.createElement("div");
+    pane.className = "onb-pane";
+
+    if (step === "hello") {
+      pane.innerHTML = `
+        <div class="mil-silk">欢迎使用 Maisya · 五步快速就绪</div>
+        <div class="mil-hint">MaiBot 主脑保持对话节奏，Maisya 以四个核心概念扩展行动空间：能力档案、持续线程、唤醒意图与分层记忆。下面请确认核心权限与环境。</div>
+        <div class="onb-summary-grid">
+          ${items.map((it) => `<div class="onb-item"><div><strong style="font-size:12.5px">${esc(it.title || it.key)}</strong><div class="mil-hint">${esc(it.detail || "")}</div></div><span class="mil-tag ${it.state === "ok" ? "mil-tag--ok" : it.state === "warn" ? "mil-tag--warn" : "mil-tag--off"}">${it.state === "ok" ? "就绪" : it.state === "warn" ? "建议补齐" : "待设置"}</span></div>`).join("")}
+        </div>`;
+    } else if (step === "admins") {
+      onb.draftAdmins = [...pluginAdmins];
+      pane.innerHTML = `
+        <div class="mil-silk">第 2 步 · 确认管理员来源</div>
+        <div class="mil-hint">宿主管理员（只读）与插件管理员均可核验高权档案、连接器与配置操作；普通私聊也可点击最近私聊快速加入。</div>
+        <div class="mil-field">
+          <span class="mil-label">宿主授权管理员（只读）</span>
+          <div class="onb-chip-row">${hostAdmins.length ? hostAdmins.map((a) => `<span class="mil-tag mil-tag--ok mono">${esc(a)}</span>`).join("") : `<span class="mil-hint">暂无宿主预设</span>`}</div>
+        </div>
+        <div class="mil-field">
+          <span class="mil-label">插件管理员</span>
+          <div class="onb-chip-row" id="onb-admin-chips">${onb.draftAdmins.map((a) => `<button type="button" class="mil-key mil-key--sm mono" data-onb-del-admin="${esc(a)}">${esc(a)} ×</button>`).join("") || `<span class="mil-hint">暂未添加插件管理员</span>`}</div>
+        </div>
+        ${recentDms.length ? `<div class="mil-field"><span class="mil-label">最近私聊快捷添加</span><div class="onb-chip-row">${recentDms.map((d) => `<button type="button" class="mil-key mil-key--sm" data-onb-add-admin="${esc(d.chat_id || d.user_id || d)}">+ ${esc(d.name || d.chat_id || d)}</button>`).join("")}</div></div>` : ""}
+        <div class="ms-entry-add">
+          <input type="text" class="mil-input mono" id="onb-admin-in" placeholder="输入管理员标识，例如 qq:private:10001" />
+          <button type="button" class="mil-key mil-key--sm" id="onb-admin-add-btn">添加</button>
+        </div>`;
+    } else if (step === "chats") {
+      onb.draftChats = [...enabledChats];
+      const allKnown = [...new Set([...knownChats, ...onb.draftChats])];
+      pane.innerHTML = `
+        <div class="mil-silk">第 3 步 · 选择启用会话</div>
+        <div class="mil-hint">已核验管理员私聊会自动放行；群聊需明确打开白名单开关后才注入工具能力。</div>
+        <div class="ms-entry-list" id="onb-chat-list">
+          ${allKnown.length ? allKnown.map((cid) => `<div class="ms-entry-row"><span class="ms-entry-code">${esc(cid)}</span><label class="mil-switch"><input type="checkbox" data-onb-chat="${esc(cid)}" ${onb.draftChats.includes(cid) ? "checked" : ""} /><span class="mil-switch-track"></span></label></div>`).join("") : `<div class="mil-hint">当前尚未检测到群聊记录，可在下方手动添加。</div>`}
+        </div>
+        <div class="ms-entry-add">
+          <input type="text" class="mil-input mono" id="onb-chat-in" placeholder="手动添加群聊，例如 qq:group:100246809" />
+          <button type="button" class="mil-key mil-key--sm" id="onb-chat-add-btn">添加群聊</button>
+        </div>`;
+    } else if (step === "runtime") {
+      const pr = onb.probeResult;
+      const prTxt = onb.probePending ? "正在探测模型连通性…" : pr?.message ? `${pr.state === "ok" ? "连通正常" : "连通失败"}：${pr.message}${pr.duration_ms ? ` (${pr.duration_ms}ms)` : ""}` : "建议在完成前点击右侧按钮实际探针测试一次";
+      const prCls = onb.probePending ? "mil-tag mil-tag--warn" : pr?.state === "ok" ? "mil-tag mil-tag--ok" : pr?.state === "error" ? "mil-tag mil-tag--bad" : "mil-tag";
+      pane.innerHTML = `
+        <div class="mil-silk">第 4 步 · 默认模型、授权与安全沙箱</div>
+        <div class="mil-grid-2">
+          <div class="mil-field">
+            <label class="mil-label" for="onb-model">默认任务模型</label>
+            <select class="mil-select" id="onb-model">
+              ${models.length ? models.map((m) => `<option value="${esc(m.name)}" ${m.name === curModel ? "selected" : ""}>${esc(m.name)}${m.provider ? ` (${esc(m.provider)})` : ""}</option>`).join("") : `<option value="${esc(curModel || "utils")}">${esc(curModel || "utils")}</option>`}
+            </select>
+          </div>
+          <div class="mil-field">
+            <label class="mil-label" for="onb-perm">默认授权策略</label>
+            <select class="mil-select" id="onb-perm">
+              <option value="ask_risky" ${curPerm === "ask_risky" ? "selected" : ""}>仅高危操作确认 (ask_risky)</option>
+              <option value="autonomous" ${curPerm === "autonomous" ? "selected" : ""}>受托自主执行 (autonomous)</option>
+              <option value="always_ask" ${curPerm === "always_ask" ? "selected" : ""}>每次操作都确认 (always_ask)</option>
+            </select>
+          </div>
+        </div>
+        <label class="mil-switch">
+          <input type="checkbox" id="onb-sandbox" ${curSandbox ? "checked" : ""} />
+          <span class="mil-switch-track"></span>
+          <span class="mil-switch-txt">默认优先启用轻量 Docker 沙箱（如宿主机已就绪）</span>
+        </label>
+        <div class="now-summary-box">
+          <div class="now-card-head">
+            <span class="mil-tag ${prCls}" id="onb-probe-tag">${esc(prTxt)}</span>
+            <button type="button" class="mil-key mil-key--sm mil-key--hot" id="onb-probe-btn">测试模型连通</button>
+          </div>
+          <div class="mil-hint">测试请求按 (run_id, sequence) 严格校验，切换步骤或重复点击会自动丢弃过期返回。</div>
+        </div>`;
+    } else {
+      const promptText = "在群里帮我用默认档案总结最近讨论的要点";
+      pane.innerHTML = `
+        <div class="mil-silk">第 5 步 · 7 项就绪清单与启航检查</div>
+        <div class="onb-summary-grid">
+          ${items.map((it) => `<div class="onb-item"><div><strong style="font-size:12.5px">${esc(it.title || it.key)}</strong><div class="mil-hint">${esc(it.detail || "")}</div></div><button type="button" class="mil-key mil-key--sm" data-onb-jump-step="${esc(it.step || "hello")}">${it.state === "ok" ? "查看" : "去完善"}</button></div>`).join("")}
+        </div>
+        <div class="now-summary-box">
+          <div class="now-card-head">
+            <span class="mil-label">推荐开场测试语</span>
+            <button type="button" class="mil-key mil-key--sm" data-onb-copy="${esc(promptText)}">复制</button>
+          </div>
+          <code class="mono" style="font-size:12px">${esc(promptText)}</code>
+        </div>`;
+    }
+
+    stage.appendChild(pane);
+    if (prevPane) {
+      if (dir === 0 || calm() || typeof pane.animate !== "function") {
+        prevPane.remove();
+      } else {
+        prevPane.classList.add("leaving");
+        const offset = dir > 0 ? 22 : -22;
+        const aOut = prevPane.animate([{ opacity: 1, transform: "translateX(0)" }, { opacity: 0, transform: `translateX(${-offset}px)` }], { duration: 170, easing: "cubic-bezier(0.22,1,0.36,1)", fill: "forwards" });
+        const aIn = pane.animate([{ opacity: 0, transform: `translateX(${offset}px)` }, { opacity: 1, transform: "translateX(0)" }], { duration: 170, easing: "cubic-bezier(0.22,1,0.36,1)", fill: "forwards" });
+        onb.anims.push(aOut, aIn);
+        aOut.finished.then(() => prevPane.remove()).catch(() => prevPane.remove());
+      }
+    }
+  }
+
+  async function onbStepMutation(actionName, payloadBuilder, opts = {}) {
+    const reqRunId = onb.runId || onb.info?.run_id || "";
+    const reqSeq = ++onb.seq;
+    const body = { ...(payloadBuilder ? payloadBuilder() : {}), run_id: reqRunId, sequence: reqSeq };
+    const res = await hostRpc("write", actionName, body);
+    if (disposed || !onb.open) return res;
+    if (res?.stale || (res?.run_id && reqRunId && res.run_id !== reqRunId && actionName !== "onboarding_reopen")) {
+      return res;
+    }
+    if (reqSeq !== onb.seq && actionName === "onboarding_verify_model") return res;
+    if (!res?.success) {
+      $("#onb-feedback").textContent = String(res?.error || "引导操作失败");
+      $("#onb-feedback").className = "mil-feedback mil-feedback--err";
+      return res;
+    }
+    $("#onb-feedback").textContent = "";
+    $("#onb-feedback").className = "mil-feedback";
+    applyOnbView(res.onboarding || res, {
+      keepStep: Boolean(opts.keepStep || actionName === "onboarding_verify_model"),
+      skipRender: Boolean(opts.skipRender),
+      dir: opts.dir || 0,
+    });
+    return res;
+  }
+
+  async function triggerOnbModelProbe() {
+    const reqRunId = onb.runId || onb.info?.run_id || "";
+    const curProbeSeq = ++onb.probeSeq;
+    const seq = ++onb.seq;
+    const modelName = $("#onb-model")?.value || onb.draftModel || "";
+    onb.draftModel = modelName;
+    onb.probePending = true;
+    const tag = $("#onb-probe-tag");
+    if (tag) { tag.textContent = "正在探测模型连通性…"; tag.className = "mil-tag mil-tag--warn"; }
+    const res = await hostRpc("write", "onboarding_verify_model", { run_id: reqRunId, sequence: seq, probe_sequence: curProbeSeq, model_name: modelName });
+    if (disposed || !onb.open) return;
+    const resRunId = res?.run_id || res?.onboarding?.run_id || "";
+    const resProbeSeq = res?.probe_sequence ?? res?.model_verify?.sequence ?? res?.sequence;
+    if (res?.stale || (reqRunId && resRunId && resRunId !== reqRunId) || (curProbeSeq !== onb.probeSeq) || (typeof resProbeSeq === "number" && resProbeSeq < curProbeSeq && resProbeSeq !== seq)) {
+      return; // 严格丢弃过期探测响应
+    }
+    onb.probePending = false;
+    onb.probeResult = res?.model_verify || res?.onboarding?.model_verify || { state: res?.success ? "ok" : "error", message: res?.message || res?.error || "探测完成" };
+    renderOnbStep(0);
+  }
+
+  function collectCurrentOnbStepData() {
+    const step = ONB_STEPS[onb.stepIdx];
+    if (step === "admins") return { admins: onb.draftAdmins || [] };
+    if (step === "chats") return { enabled_chats: onb.draftChats || [] };
+    if (step === "runtime") {
+      onb.draftModel = $("#onb-model")?.value || onb.draftModel;
+      onb.draftPerm = $("#onb-perm")?.value || onb.draftPerm;
+      onb.draftSandbox = $("#onb-sandbox") ? Boolean($("#onb-sandbox").checked) : onb.draftSandbox;
+      return { default_model: onb.draftModel, permission_mode: onb.draftPerm, sandbox_enabled: Boolean(onb.draftSandbox) };
+    }
+    return {};
+  }
+
+  // 全局事件绑定（现场 + 引导 + 导航 + Tab 焦点围栏）
+  document.addEventListener("click", async (ev) => {
     const navBtn = ev.target.closest("[data-nav], [data-mob-nav]");
     if (navBtn) {
       const p = navBtn.dataset.nav || navBtn.dataset.mobNav;
       if (Object.prototype.hasOwnProperty.call(PAGES, p)) switchWorkspaceTab(p);
+      return;
     }
-  }, { signal: shellSig });
 
-  async function deleteThreadById(tid) {
-    if (!tid) return;
-    const r = await hostRpc("write", "delete_thread", { thread_id: tid });
-    if (activePage !== "now") return;
-    if (!r?.success) {
-      setNowFeedback(r?.error || "删除失败", "mil-feedback mil-feedback--err");
-      return;
-    }
-    if (state.threadId === tid) {
-      state.userPickedThread = false;
-      switchThread("");
-    }
-    await refresh(true);
-    setNowFeedback("记录已删除。", "mil-feedback mil-feedback--ok");
-  }
-
-  $("#ms-now-view").addEventListener("keydown", (ev) => {
-    if (ev.key !== "Enter" && ev.key !== " ") return;
-    const row = ev.target.closest?.(".thread-row[data-thread]");
-    if (row && ev.target === row) {
-      ev.preventDefault();
-      row.click();
-    }
-  });
-
-  $("#ms-now-view").addEventListener("click", (ev) => {
-    const delTh = ev.target.closest("[data-del-thread]");
-    if (delTh) {
-      ev.stopPropagation();
-      deleteThreadById(delTh.dataset.delThread);
-      return;
-    }
-    const wakeProf = ev.target.closest("[data-wake-profile]");
-    if (wakeProf) {
-      $("#launch-profile").value = wakeProf.dataset.wakeProfile;
-      const lp = $("#launch-panel");
-      if (lp) lp.open = true;
-      $("#launch-prompt")?.focus();
-      return;
-    }
-    const cfgProf = ev.target.closest("[data-config-profile]");
-    if (cfgProf) {
-      pendingAbilityTarget = { profile: cfgProf.dataset.configProfile };
-      switchWorkspaceTab("abilities");
-      return;
-    }
-    const flowChat = ev.target.closest("[data-flow-chat]");
-    if (flowChat) {
-      const cid = flowChat.dataset.flowChat;
-      state.chatFilter = state.chatFilter === cid ? "" : cid;
-      state.userPickedThread = false;
-      switchThread("");
-      refresh(true);
-      return;
-    }
-    if (ev.target.closest("#flow-all-chats") || ev.target.closest("#clear-th-filters")) {
-      state.chatFilter = "";
-      state.profileFilter = "";
-      state.userPickedThread = false;
-      state.thFilter = "all";
-      document.querySelectorAll("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.thFilter === "all")));
-      switchThread("");
-      refresh(true);
-      return;
-    }
-    const flowProf = ev.target.closest("[data-flow-profile]");
-    if (flowProf) {
-      const pid = flowProf.dataset.flowProfile;
-      $("#launch-profile").value = pid;
-      state.profileFilter = state.profileFilter === pid ? "" : pid;
-      state.userPickedThread = false;
-      if (!state.profileFilter) {
-        switchThread("");
-        refresh(true);
-        return;
-      }
-      const roleThreads = (state.lastSnap?.threads || []).filter((t) => t.profile === pid);
-      const match =
-        roleThreads.find((t) => t.state === "active" || t.state === "waiting") ||
-        roleThreads.find((t) => !t.junk) ||
-        roleThreads[0];
-      if (match) {
-        switchThread(match.thread_id);
-        refresh(true);
-      } else {
-        switchThread("");
-        renderEventsAppend([]);
-        if (state.lastSnap) {
-          const emptySnap = { ...state.lastSnap, selected: null };
-          renderFlow(emptySnap);
-          renderStrip(emptySnap);
-          renderContext(emptySnap);
-          renderThreads(emptySnap);
-          renderInspector(emptySnap);
+    if (ev.target.closest("#open-onboarding-btn")) {
+      onb.stepIdx = 0;
+      const curView = state.lastSnap?.onboarding;
+      if (curView && curView.show === false) {
+        const res = await hostRpc("write", "onboarding_reopen", {});
+        if (res?.success && res.onboarding) {
+          if (state.lastSnap) state.lastSnap.onboarding = res.onboarding;
+          openOnboardingModal(res.onboarding);
+          return;
         }
       }
+      openOnboardingModal(curView);
       return;
     }
-    const flowTh = ev.target.closest("[data-flow-thread],[data-thread],[data-ctx-thread]");
-    if (flowTh) {
-      const tid = flowTh.dataset.flowThread || flowTh.dataset.thread || flowTh.dataset.ctxThread;
-      state.userPickedThread = true;
-      if (tid && tid !== state.threadId) {
-        switchThread(tid);
-        refresh(true);
-      } else if (state.lastSnap) {
-        renderFlow(state.lastSnap);
+
+    if (ev.target.closest("#onb-close")) {
+      closeOnboardingModal(true);
+      return;
+    }
+    if (ev.target.closest("#onb-skip")) {
+      await onbStepMutation("onboarding_skip", () => ({ step: ONB_STEPS[onb.stepIdx] }), { keepStep: true, skipRender: true });
+      closeOnboardingModal(true);
+      return;
+    }
+    if (ev.target.closest("#onb-prev")) {
+      if (onb.stepIdx > 0 && !onb.advancing) {
+        onb.stepNavSeq += 1;
+        onb.stepIdx -= 1;
+        renderOnbStep(-1);
       }
       return;
     }
+    if (ev.target.closest("#onb-next")) {
+      if (onb.advancing) return;
+      onb.advancing = true;
+      const nextBtnEl = $("#onb-next");
+      if (nextBtnEl) nextBtnEl.disabled = true;
+      try {
+        if (onb.stepIdx >= ONB_STEPS.length - 1) {
+          const res = await onbStepMutation("onboarding_complete", () => ({}), { keepStep: true, skipRender: true });
+          if (res?.success) { closeOnboardingModal(true); refresh(true); }
+        } else {
+          const curStepIdx = onb.stepIdx;
+          const data = collectCurrentOnbStepData();
+          const nextStep = ONB_STEPS[curStepIdx + 1];
+          onb.stepNavSeq += 1;
+          const res = await onbStepMutation(
+            "onboarding_advance",
+            () => ({ step: ONB_STEPS[curStepIdx], target_step: nextStep, data }),
+            { keepStep: true, skipRender: true }
+          );
+          if (res?.success) {
+            const srvStep = res?.onboarding?.current_step;
+            const srvIdx = srvStep ? stepIndexFromName(srvStep) : curStepIdx + 1;
+            onb.stepIdx = Math.min(ONB_STEPS.length - 1, srvStep ? srvIdx : curStepIdx + 1);
+            renderOnbStep(1);
+          }
+        }
+      } finally {
+        onb.advancing = false;
+        if (nextBtnEl) nextBtnEl.disabled = false;
+      }
+      return;
+    }
+    const addAdmQuick = ev.target.closest("[data-onb-add-admin]");
+    if (addAdmQuick) {
+      const id = addAdmQuick.dataset.onbAddAdmin;
+      if (id && !(onb.draftAdmins || []).includes(id)) {
+        onb.draftAdmins = [...(onb.draftAdmins || []), id];
+        renderOnbStep(0);
+      }
+      return;
+    }
+    const delAdmQuick = ev.target.closest("[data-onb-del-admin]");
+    if (delAdmQuick) {
+      const id = delAdmQuick.dataset.onbDelAdmin;
+      onb.draftAdmins = (onb.draftAdmins || []).filter((x) => x !== id);
+      renderOnbStep(0);
+      return;
+    }
+    if (ev.target.closest("#onb-admin-add-btn")) {
+      const val = ($("#onb-admin-in")?.value || "").trim();
+      if (val && !(onb.draftAdmins || []).includes(val)) {
+        onb.draftAdmins = [...(onb.draftAdmins || []), val];
+        renderOnbStep(0);
+      }
+      return;
+    }
+    if (ev.target.closest("#onb-chat-add-btn")) {
+      const val = ($("#onb-chat-in")?.value || "").trim();
+      if (val) {
+        onb.draftChats = [...new Set([...(onb.draftChats || []), val])];
+        renderOnbStep(0);
+      }
+      return;
+    }
+    if (ev.target.closest("#onb-probe-btn")) {
+      triggerOnbModelProbe();
+      return;
+    }
+    const onbJump = ev.target.closest("[data-onb-jump-step]");
+    if (onbJump) {
+      onb.stepNavSeq += 1;
+      onb.stepIdx = stepIndexFromName(onbJump.dataset.onbJumpStep);
+      renderOnbStep(-1);
+      return;
+    }
+    const onbCopy = ev.target.closest("[data-onb-copy]");
+    if (onbCopy) {
+      try { await navigator.clipboard?.writeText?.(onbCopy.dataset.onbCopy || ""); $("#onb-feedback").textContent = "已复制测试语句"; } catch (_) {}
+      return;
+    }
+
+    if (activePage !== "now") return;
+
+    const intentActBtn = ev.target.closest("[data-intent-act]");
+    if (intentActBtn) {
+      const action = intentActBtn.dataset.intentAct;
+      const intent_id = intentActBtn.dataset.intentId;
+      const r = await hostRpc("write", action, { intent_id });
+      if (!r?.success) setNowFeedback(r?.error || "操作失败", true);
+      else { setNowFeedback("状态已更新"); refresh(true); }
+      return;
+    }
+
+    const reopenBtn = ev.target.closest("[data-thread-reopen]") || (ev.target.closest("#now-reopen-btn") ? { dataset: { threadReopen: state.threadId } } : null);
+    if (reopenBtn && reopenBtn.dataset.threadReopen) {
+      ev.stopPropagation();
+      const tid = reopenBtn.dataset.threadReopen;
+      const r = await hostRpc("write", "thread_reopen", { thread_id: tid });
+      if (!r?.success) setNowFeedback(r?.error || "恢复失败", true);
+      else { setNowFeedback("线程已恢复可继续状态"); state.threadId = tid; refresh(true); }
+      return;
+    }
+
+    const thCard = ev.target.closest("[data-thread-id]");
+    if (thCard) {
+      state.threadId = thCard.dataset.threadId;
+      state.selectedStepId = "";
+      state.viewMode = "overview";
+      state.selectedDetail = null;
+      refresh(true);
+      loadThreadDetail(state.threadId);
+      return;
+    }
+
+    const thFilterBtn = ev.target.closest("[data-th-filter]");
+    if (thFilterBtn) {
+      state.thFilter = thFilterBtn.dataset.thFilter;
+      $$("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === thFilterBtn)));
+      if (state.lastSnap) renderThreads(state.lastSnap);
+      return;
+    }
+
+    const apprBtn = ev.target.closest("[data-appr-decision]");
+    if (apprBtn) {
+      const sel = selectedForView(state.lastSnap);
+      const appr = sel?.pending_approval || {};
+      const r = await hostRpc("write", "thread_approve", {
+        thread_id: sel?.thread_id || state.threadId,
+        request_id: appr.request_id || "",
+        action_key: appr.action_key || "",
+        decision: apprBtn.dataset.apprDecision,
+      });
+      if (!r?.success) setNowFeedback(r?.error || "审批提交失败", true);
+      else { setNowFeedback("已提交审批决定"); refresh(true); loadThreadDetail(state.threadId); }
+      return;
+    }
+
+    if (ev.target.closest("#now-note-send")) {
+      const inp = $("#now-note-input");
+      const msg = (inp?.value || "").trim();
+      if (!msg) return;
+      const r = await enqueueAction(() => callMaibotRaw("action", "note", { thread_id: state.threadId, message: msg, steer: true }));
+      if (!r?.success) setNowFeedback(r?.error || "补充发送失败", true);
+      else { inp.value = ""; setNowFeedback("补充说明已送入线程"); refresh(true); }
+      return;
+    }
+
+    if (ev.target.closest("#now-stop-btn")) {
+      const r = await hostRpc("write", "thread_stop", { thread_id: state.threadId });
+      if (!r?.success) setNowFeedback(r?.error || "停止失败", true);
+      else { setNowFeedback("已请求停止并保留上下文（可恢复继续）"); refresh(true); }
+      return;
+    }
+
+    const stepBtn = ev.target.closest("[data-step-id]");
+    if (stepBtn) {
+      state.selectedStepId = stepBtn.dataset.stepId;
+      state.viewMode = "step";
+      if (state.lastSnap) renderSelectedStage(state.lastSnap);
+      return;
+    }
+
+    if (ev.target.closest("#now-back-overview")) {
+      state.viewMode = "overview";
+      if (state.lastSnap) { renderSelectedStage(state.lastSnap); renderContext(state.lastSnap); }
+      return;
+    }
+
+    const jumpLib = ev.target.closest("[data-jump-lib]");
+    if (jumpLib) {
+      pendingLibraryTarget = { id: jumpLib.dataset.jumpLib };
+      switchWorkspaceTab("library");
+      return;
+    }
+
     const ctxViewBtn = ev.target.closest("[data-ctx-view]");
     if (ctxViewBtn) {
       state.ctxView = ctxViewBtn.dataset.ctxView;
-      document.querySelectorAll("[data-ctx-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === ctxViewBtn)));
+      $$("[data-ctx-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === ctxViewBtn)));
       if (state.lastSnap) renderContext(state.lastSnap);
       return;
     }
@@ -2512,322 +1781,118 @@
       if (state.lastSnap) renderContext(state.lastSnap);
       return;
     }
-    const thFilterBtn = ev.target.closest("[data-th-filter]");
-    if (thFilterBtn) {
-      state.thFilter = thFilterBtn.dataset.thFilter;
-      document.querySelectorAll("[data-th-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b === thFilterBtn)));
-      if (state.lastSnap) renderThreads(state.lastSnap);
-      return;
-    }
     const tile = ev.target.closest(".cm-tile");
-    if (tile) {
-      const item = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
-      openCtxModal(item);
-      return;
-    }
+    if (tile) { openCtxModal($("#ctx-map")?._rectItems?.[Number(tile.dataset.itemIdx)]); return; }
     const cell = ev.target.closest(".cm-cell");
-    if (cell) {
-      const idx = Number(cell.dataset.cellIdx);
-      const item = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
-      openCtxModal(item);
-      return;
-    }
+    if (cell) { const idx = Number(cell.dataset.cellIdx); openCtxModal(idx >= 0 ? $("#ctx-grid")?._mapInputs?.[idx] : null); return; }
     const ci = ev.target.closest("[data-ci-idx]");
-    if (ci) {
-      openCtxModal(currentCtxItems[Number(ci.dataset.ciIdx)]);
+    if (ci) { openCtxModal(currentCtxItems[Number(ci.dataset.ciIdx)]); return; }
+
+    if (ev.target.closest("#ctx-modal-close") || ev.target === $("#ctx-scrim")) {
+      closeCtxModal();
       return;
     }
-    const pickProf = ev.target.closest("[data-pick-profile]");
-    if (pickProf) {
-      $("#launch-profile").value = pickProf.dataset.pickProfile;
-      return;
-    }
-    const pickChat = ev.target.closest("[data-pick-chat]");
-    if (pickChat) {
-      $("#launch-chat").value = pickChat.dataset.pickChat;
-      return;
-    }
-    const jumpAtt = ev.target.closest("[data-jump-att]");
-    if (jumpAtt) {
-      pendingOutputTarget = { handle: jumpAtt.dataset.jumpAtt, threadId: state.threadId || "" };
-      switchWorkspaceTab("outputs");
-      return;
-    }
-    const jumpOut = ev.target.closest("[data-jump-out-thread]");
-    if (jumpOut) {
-      pendingOutputTarget = { threadId: jumpOut.dataset.jumpOutThread || state.threadId || "" };
-      switchWorkspaceTab("outputs");
-      return;
-    }
-  });
 
-  function bootNowTab() {
-    const ctxBoard = $("#ctx-board");
-    if (!ctxBoard) return;
-    document.querySelectorAll("[data-th-filter]").forEach((b) => {
-      b.setAttribute("aria-pressed", String(b.dataset.thFilter === state.thFilter));
-    });
-    document.querySelectorAll("[data-ctx-view]").forEach((b) => {
-      b.setAttribute("aria-pressed", String(b.dataset.ctxView === state.ctxView));
-    });
-
-    ctxBoard.addEventListener("mousemove", (ev) => {
-      const tile = ev.target.closest(".cm-tile");
-      const cell = ev.target.closest(".cm-cell");
-      if (tile) {
-        const it = $("#ctx-map")._rectItems?.[Number(tile.dataset.itemIdx)];
-        if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
-      } else if (cell) {
-        const idx = Number(cell.dataset.cellIdx);
-        const it = idx >= 0 ? $("#ctx-grid")._mapInputs?.[idx] : null;
-        if (it) showCtxTip(ev, `${it.label} · ${it.chars} 字符`);
-      } else {
-        hideCtxTip();
-      }
-    });
-    ctxBoard.addEventListener("mouseleave", hideCtxTip);
-
-    const msgEl = $("#message");
-    if (msgEl) {
-      msgEl.value = state.threadId ? (localDrafts[state.threadId] || "") : "";
-      msgEl.addEventListener("input", () => {
-        if (state.threadId) localDrafts[state.threadId] = msgEl.value;
-      });
-      msgEl.addEventListener("keydown", (ev) => {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
-          ev.preventDefault();
-          $("#send-note")?.click();
-        }
-      });
-    }
-    const launchPrompt = $("#launch-prompt");
-    if (launchPrompt) {
-      launchPrompt.addEventListener("keydown", (ev) => {
-        if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
-          ev.preventDefault();
-          $("#launch-run")?.click();
-        }
-      });
-    }
-
-    const sendBtn = $("#send-note");
-    if (sendBtn) sendBtn.onclick = () => enqueueAction(async () => {
-      const fb = $('[data-feedback-slot="now"]');
-      if (!fb) return;
-      if (!state.threadId) {
-        fb.textContent = "请先选择一条线程。";
-        fb.className = "mil-feedback mil-feedback--err";
-        return;
-      }
-      const curMsg = $("#message");
-      const text = (curMsg?.value || "").trim();
-      if (!text) {
-        fb.textContent = "请填写要递给线程的内容。";
-        fb.className = "mil-feedback mil-feedback--err";
-        return;
-      }
-      const r = await callMaibotRaw("action", "note", {
-        thread_id: state.threadId,
-        message: text,
-        steer: Boolean($("#steer")?.checked),
-      });
-      if (activePage !== "now") return;
-      const nowFb = $('[data-feedback-slot="now"]');
-      if (!r?.success) {
-        if (nowFb) {
-          nowFb.textContent = r?.error || "引导失败";
-          nowFb.className = "mil-feedback mil-feedback--err";
-        }
-        return;
-      }
-      localDrafts[state.threadId] = "";
-      if ($("#message")) $("#message").value = "";
-      if (nowFb) {
-        nowFb.textContent = "引导已送达原活动。";
-        nowFb.className = "mil-feedback mil-feedback--ok";
-      }
-      refresh(false);
-    });
-
-    const stopBtn = $("#stop");
-    if (stopBtn) stopBtn.onclick = () => enqueueAction(async () => {
-      if (!state.threadId) return;
-      const r = await callMaibotRaw("action", "stop", { thread_id: state.threadId });
-      if (activePage !== "now") return;
-      const fb = $('[data-feedback-slot="now"]');
-      if (!r?.success) {
-        if (fb) {
-          fb.textContent = r?.error || "停止失败";
-          fb.className = "mil-feedback mil-feedback--err";
-        }
-        return;
-      }
-      if (fb) {
-        fb.textContent = "线程已停止。";
-        fb.className = "mil-feedback mil-feedback--ok";
-      }
-      refresh(false);
-    });
-
-    const delBtn = $("#delete-thread");
-    if (delBtn) delBtn.onclick = () => {
-      if (state.threadId) deleteThreadById(state.threadId);
-    };
-
-    const pruneBtn = $("#prune-junk-threads");
-    if (pruneBtn) pruneBtn.onclick = async () => {
-      const r = await hostRpc("write", "prune_threads", { chat_id: state.chatFilter || "" });
-      if (activePage !== "now") return;
-      if (!r?.success) {
-        setNowFeedback(r?.error || "清理失败", "mil-feedback mil-feedback--err");
-        return;
-      }
-      if (Array.isArray(r.deleted) && r.deleted.includes(state.threadId)) {
-        state.userPickedThread = false;
-        switchThread("");
-      }
-      await refresh(true);
-      setNowFeedback(`已清理 ${r.count || 0} 条废记录。`, "mil-feedback mil-feedback--ok");
-    };
-
-    const launchBtn = $("#launch-run");
-    if (launchBtn) launchBtn.onclick = () => enqueueAction(async () => {
+    if (ev.target.closest("#launch-run")) {
       const fb = $("#launch-feedback");
-      if (!fb) return;
-      const profile = ($("#launch-profile")?.value || "").trim() || "scout";
-      const chatId = ($("#launch-chat")?.value || "").trim();
-      const workspace = ($("#launch-workspace")?.value || "").trim();
-      const message = ($("#launch-prompt")?.value || "").trim();
-      if (!chatId || !message) {
-        fb.textContent = "请填写目标会话与任务提示词。";
-        fb.className = "mil-feedback mil-feedback--err";
-        return;
-      }
-      const r = await callMaibotRaw("action", "note", {
-        thread_id: "",
-        message,
-        profile,
-        chat_id: chatId,
-        workspace,
+      const msg = ($("#launch-prompt")?.value || "").trim();
+      if (!msg) { if (fb) { fb.textContent = "请输入事情描述"; fb.className = "mil-feedback mil-feedback--err"; } return; }
+      const res = await enqueueAction(() => callMaibotRaw("action", "note", {
+        profile: ($("#launch-profile")?.value || "default").trim() || "default",
+        chat_id: ($("#launch-chat")?.value || "").trim() || undefined,
+        workspace: ($("#launch-workspace")?.value || "").trim() || undefined,
+        message: msg,
         steer: false,
-      });
-      if (activePage !== "now") return;
-      const nowLaunchFb = $("#launch-feedback");
-      if (!r?.success) {
-        if (nowLaunchFb) {
-          nowLaunchFb.textContent = r?.error || "工作流发起失败";
-          nowLaunchFb.className = "mil-feedback mil-feedback--err";
-        }
-        return;
-      }
-      if ($("#launch-prompt")) $("#launch-prompt").value = "";
-      if (nowLaunchFb) {
-        nowLaunchFb.textContent = "工作流线程已发起。";
-        nowLaunchFb.className = "mil-feedback mil-feedback--ok";
-      }
-      if (r.thread_id) switchThread(r.thread_id);
-      refresh(true);
-    });
-  }
+      }));
+      if (!res?.success) { if (fb) { fb.textContent = res?.error || "发起失败"; fb.className = "mil-feedback mil-feedback--err"; } }
+      else { if (fb) { fb.textContent = "已提交发起"; fb.className = "mil-feedback mil-feedback--ok"; } $("#launch-prompt").value = ""; if (res.thread_id) state.threadId = res.thread_id; refresh(true); }
+    }
+  }, { signal: shellSig });
 
-  $("#ctx-modal-close").onclick = closeCtxModal;
-  $("#ctx-scrim").addEventListener("click", (ev) => {
-    if (ev.target === $("#ctx-scrim")) closeCtxModal();
-  });
+  document.addEventListener("change", (ev) => {
+    const chk = ev.target.closest("[data-onb-chat]");
+    if (chk) {
+      const cid = chk.dataset.onbChat;
+      const cur = new Set(onb.draftChats || []);
+      if (chk.checked) cur.add(cid); else cur.delete(cid);
+      onb.draftChats = [...cur];
+      return;
+    }
+    if (ev.target.id === "onb-model") onb.draftModel = ev.target.value;
+    if (ev.target.id === "onb-perm") onb.draftPerm = ev.target.value;
+    if (ev.target.id === "onb-sandbox") onb.draftSandbox = Boolean(ev.target.checked);
+  }, { signal: shellSig });
+
+  document.addEventListener("input", (ev) => {
+    if (ev.target.id === "now-thread-search") {
+      state.thQuery = ev.target.value || "";
+      if (state.lastSnap) renderThreads(state.lastSnap);
+    }
+  }, { signal: shellSig });
+
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && activePage === "now" && !$("#ctx-scrim").hidden) closeCtxModal();
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
-      const canClick = (el) => Boolean(el && el.isConnected && !el.disabled && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
-      if (activePage === "settings") {
-        ev.preventDefault();
-        const btn = ["#save-settings", "#save-settings-streams", "#save-settings-adv"].map((s) => $(s)).find(canClick);
-        btn?.click();
-      } else if (activePage === "abilities" || activePage === "memory") {
-        ev.preventDefault();
-        const btn = $("#save");
-        if (canClick(btn)) btn.click();
+    if (ev.key === "Escape") {
+      if (!$("#ctx-scrim")?.hidden) { closeCtxModal(); return; }
+      if (onb.open) { closeOnboardingModal(true); return; }
+    }
+    // 引导弹窗 Tab 焦点围栏
+    if (ev.key === "Tab" && onb.open && !$("#onb-scrim")?.hidden) {
+      const card = $("#onb-card");
+      if (!card) return;
+      const focusables = [...card.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter((el) => !el.hidden && !el.closest("[hidden]") && !el.closest(".leaving") && el.offsetParent !== null);
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      if (ev.shiftKey && (document.activeElement === first || !card.contains(document.activeElement))) {
+        ev.preventDefault(); last.focus();
+      } else if (!ev.shiftKey && document.activeElement === last) {
+        ev.preventDefault(); first.focus();
       }
     }
   }, { signal: shellSig });
 
-  $("#open-launch").onclick = () => {
-    if (activePage !== "now") return;
-    const panel = $("#launch-panel");
-    if (!panel) return;
-    panel.open = true;
-    panel.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "center" });
-    $("#launch-prompt")?.focus();
-  };
-
-  window.addEventListener("resize", () => {
-    if (activePage !== "now") return;
-    drawFlowLines();
-    if (state.lastSnap && state.ctxView === "map") renderContext(state.lastSnap);
+  document.addEventListener("mouseover", (ev) => {
+    const t = ev.target.closest(".cm-tile, .cm-cell");
+    if (!t || activePage !== "now") return;
+    const item = t.classList.contains("cm-tile")
+      ? $("#ctx-map")?._rectItems?.[Number(t.dataset.itemIdx)]
+      : $("#ctx-grid")?._mapInputs?.[Number(t.dataset.cellIdx)];
+    if (item) showCtxTip(ev, `${item.label} · ${fmtK(item.tokens ?? item.chars ?? 0)}`);
+  }, { signal: shellSig });
+  document.addEventListener("mouseout", (ev) => {
+    if (ev.target.closest(".cm-tile, .cm-cell")) hideCtxTip();
   }, { signal: shellSig });
 
   function initHelpPopovers() {
     const pop = $("#mil-help-pop");
     if (!pop) return () => {};
-    let activeBtn = null;
-    let pinnedBtn = null;
+    let activeBtn = null, pinnedBtn = null;
     const closePop = () => {
       if (activeBtn) activeBtn.setAttribute("aria-expanded", "false");
-      activeBtn = null;
-      pinnedBtn = null;
-      pop.hidden = true;
+      activeBtn = null; pinnedBtn = null; pop.hidden = true;
     };
     const openPop = (btn) => {
       const text = btn?.dataset?.help || "";
       if (!text) return;
       if (activeBtn && activeBtn !== btn) activeBtn.setAttribute("aria-expanded", "false");
-      activeBtn = btn;
-      activeBtn.setAttribute("aria-expanded", "true");
-      pop.textContent = text;
-      pop.hidden = false;
+      activeBtn = btn; activeBtn.setAttribute("aria-expanded", "true");
+      pop.textContent = text; pop.hidden = false;
       const r = btn.getBoundingClientRect();
-      const pw = pop.offsetWidth || 260;
-      const ph = pop.offsetHeight || 60;
-      const left = Math.max(12, Math.min(window.innerWidth - pw - 12, r.left + r.width / 2 - pw / 2));
-      const top = r.bottom + ph + 16 < window.innerHeight ? r.bottom + 8 : Math.max(12, r.top - ph - 8);
-      pop.style.left = `${Math.round(left)}px`;
-      pop.style.top = `${Math.round(top)}px`;
+      const pw = pop.offsetWidth || 260, ph = pop.offsetHeight || 60;
+      pop.style.left = `${Math.round(Math.max(12, Math.min(window.innerWidth - pw - 12, r.left + r.width / 2 - pw / 2)))}px`;
+      pop.style.top = `${Math.round(r.bottom + ph + 16 < window.innerHeight ? r.bottom + 8 : Math.max(12, r.top - ph - 8))}px`;
     };
     document.addEventListener("click", (ev) => {
       const btn = ev.target.closest(".mil-help");
       if (btn) {
         if (btn.closest("summary")) ev.preventDefault();
         ev.stopPropagation();
-        if (pinnedBtn === btn && !pop.hidden) closePop();
-        else { pinnedBtn = btn; openPop(btn); }
+        if (pinnedBtn === btn && !pop.hidden) closePop(); else { pinnedBtn = btn; openPop(btn); }
         return;
       }
       if (!pop.hidden && !ev.target.closest("#mil-help-pop")) closePop();
     }, { signal: shellSig });
-    document.addEventListener("mouseenter", (ev) => {
-      const btn = ev.target.closest?.(".mil-help");
-      if (btn && !pinnedBtn && window.matchMedia?.("(hover: hover)").matches) openPop(btn);
-    }, { capture: true, signal: shellSig });
-    document.addEventListener("mouseleave", (ev) => {
-      const btn = ev.target.closest?.(".mil-help");
-      if (btn && activeBtn === btn && pinnedBtn !== btn && window.matchMedia?.("(hover: hover)").matches) closePop();
-    }, { capture: true, signal: shellSig });
-    document.addEventListener("focusin", (ev) => {
-      const btn = ev.target.closest?.(".mil-help");
-      if (btn && !pinnedBtn) openPop(btn);
-    }, { signal: shellSig });
-    document.addEventListener("focusout", (ev) => {
-      const btn = ev.target.closest?.(".mil-help");
-      if (btn && activeBtn === btn && pinnedBtn !== btn) closePop();
-    }, { signal: shellSig });
-    document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && !pop.hidden) closePop();
-    }, { signal: shellSig });
-    window.addEventListener("scroll", () => {
-      if (pop.hidden) return;
-      if (pinnedBtn?.isConnected) openPop(pinnedBtn);
-      else closePop();
-    }, { passive: true, signal: shellSig });
-    window.addEventListener("resize", closePop, { signal: shellSig });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !pop.hidden) closePop(); }, { signal: shellSig });
     return closePop;
   }
 
@@ -2836,16 +1901,10 @@
   const closeHelpPop = initHelpPopovers();
 
   function syncShellToPage(targetPage, { remountMgmt = true, remountNow = true } = {}) {
-    const prevPage = activePage;
     const isNow = targetPage === "now";
     const nowView = $("#ms-now-view");
     const mgmtWrap = $("#ms-mgmt-view-wrap");
     const mgmtView = $("#ms-mgmt-view");
-
-    if (prevPage === "now" && !isNow && state.threadId) {
-      const msgEl = $("#message");
-      if (msgEl) localDrafts[state.threadId] = msgEl.value;
-    }
 
     activePage = targetPage;
     document.body.dataset.page = targetPage;
@@ -2860,18 +1919,7 @@
     if (nowView) nowView.hidden = !isNow;
     if (mgmtWrap) mgmtWrap.hidden = isNow;
     const topLedPill = $("#top-led-pill");
-    const openLaunch = $("#open-launch");
-    const mgmtLedPill = $("#mgmt-led-pill");
-    const mobDock = $("#ms-mob-dock");
     if (topLedPill) topLedPill.hidden = !isNow;
-    if (openLaunch) openLaunch.hidden = !isNow;
-    if (mgmtLedPill) mgmtLedPill.hidden = isNow;
-    if (mobDock) {
-      mobDock.hidden = isNow;
-      if (!isNow) renderMobDockIcons();
-    }
-    const mled = $("#mgmt-led");
-    if (mled) mled.className = "mil-led";
 
     closeHelpPop?.();
     hideCtxTip();
@@ -2879,55 +1927,28 @@
 
     if (isNow) {
       if (mgmtView) mgmtView.innerHTML = "";
-      if (remountNow && nowView) nowView.innerHTML = MGMT_FRAGMENTS.now || "";
+      if (remountNow && nowView && !nowView.innerHTML.trim()) nowView.innerHTML = MGMT_FRAGMENTS.now || "";
     } else {
-      if (nowView) nowView.innerHTML = "";
       if (remountMgmt && mgmtView) mgmtView.innerHTML = MGMT_FRAGMENTS[targetPage] || "";
     }
-
-    const nowFb = $('[data-feedback-slot="now"]');
-    const mgmtFb = $('[data-feedback-slot="mgmt"]');
-    if (isNow) {
-      if (mgmtFb) mgmtFb.id = "mgmt-feedback";
-      if (nowFb) nowFb.id = "feedback";
-    } else {
-      if (nowFb) nowFb.id = "now-feedback";
-      if (mgmtFb) {
-        mgmtFb.id = "feedback";
-        mgmtFb.textContent = "";
-        mgmtFb.className = "mil-feedback";
-      }
-    }
+    renderIconSlots();
   }
 
   function switchWorkspaceTab(targetPage, opts = {}) {
     if (!Object.prototype.hasOwnProperty.call(PAGES, targetPage)) return;
-    const forceBoot = Boolean(opts.forceBoot);
-    if (targetPage === activePage && !forceBoot) return;
+    if (targetPage === activePage && !opts.forceBoot) return;
     if (!opts.system) userNavigated = true;
-    if (mgmtAbort) {
-      mgmtAbort.abort();
-      mgmtAbort = null;
-    }
+    if (mgmtAbort) { mgmtAbort.abort(); mgmtAbort = null; }
     syncShellToPage(targetPage, { remountMgmt: opts.remountMgmt !== false, remountNow: opts.remountNow !== false });
     if (targetPage === "now") {
-      bootNowTab();
       applyTheme();
-      state.cursor = 0;
-      state.events = [];
       if (state.lastSnap) {
-        renderEventsAppend([]);
-        renderFlow(state.lastSnap);
-        renderStrip(state.lastSnap);
-        renderContext(state.lastSnap);
+        renderIntents(state.lastSnap);
         renderThreads(state.lastSnap);
-        renderInspector(state.lastSnap);
-        renderLaunchAssist(state.lastSnap);
+        renderSelectedStage(state.lastSnap);
+        renderContext(state.lastSnap);
       }
-      if (bootStarted) {
-        refresh(true);
-      }
-      requestAnimationFrame(() => { if (activePage === "now") drawFlowLines(); });
+      if (bootStarted) refresh(true);
     } else {
       mgmtAbort = new AbortController();
       bootManagementTab(targetPage, mgmtAbort.signal);
@@ -2935,29 +1956,34 @@
     }
   }
 
+  window.__maisyaDispose = () => {
+    disposed = true;
+    if (timer) clearInterval(timer);
+    if (mgmtAbort) mgmtAbort.abort();
+    shellAbort.abort();
+  };
+
   const initHostTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
   if (initHostTab && Object.prototype.hasOwnProperty.call(PAGES, initHostTab) && initHostTab !== activePage) {
     switchWorkspaceTab(initHostTab, { system: true, forceBoot: true });
-  } else if (activePage !== "now") {
-    switchWorkspaceTab(activePage, { system: true, forceBoot: true, remountMgmt: false });
   } else {
-    switchWorkspaceTab("now", { system: true, forceBoot: true, remountNow: false });
+    switchWorkspaceTab(activePage, { system: true, forceBoot: true, remountMgmt: false, remountNow: false });
   }
 
   Promise.resolve(window.maibot?.ready).then(() => {
     if (disposed) return;
     bootStarted = true;
-    const readyHostTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
-    if (!userNavigated && readyHostTab && Object.prototype.hasOwnProperty.call(PAGES, readyHostTab) && readyHostTab !== activePage) {
-      switchWorkspaceTab(readyHostTab, { system: true, forceBoot: true });
+    const readyTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
+    if (!userNavigated && readyTab && Object.prototype.hasOwnProperty.call(PAGES, readyTab) && readyTab !== activePage) {
+      switchWorkspaceTab(readyTab, { system: true, forceBoot: true });
     } else if (activePage === "now") {
       applyTheme();
       refresh(true);
     }
     timer = setInterval(() => {
       if (disposed || activePage !== "now") return;
-      if (!document.hidden && queryInFlight === 0 && Date.now() - lastSnapshotAt >= 1800) refresh(false);
-    }, 2400);
+      if (!document.hidden && queryInFlight === 0 && Date.now() - lastSnapshotAt >= 2000) refresh(false);
+    }, 2600);
   });
 })();
 </script>

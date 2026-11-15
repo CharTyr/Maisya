@@ -1,8 +1,9 @@
 /* Maisya WebUI · 双主题设计系统
-   1. 千禧机械 [data-ui-style="millennium"]（0px 直角 / 塑料机壳凹凸导角与纹理 / 百叶散热窗与丝印 / 下沉液晶屏与深色示波器 / 立体机械键帽 / 高可读系统无衬线正文）
-   2. 默认主题 [data-ui-style="maiwork"]（Warm Editorial Studio：暖白编辑画布 #F6F4EF / 深炭绿室暗色 #0F1011 / 陶土与松石绿强调 / 清晰可读留白，为 :root 基础层） */
+   1. 千禧机械 [data-ui-style="millennium"]（默认：0px 直角 / 塑料机壳凹凸导角与纹理 / 百叶散热窗与丝印 / 下沉液晶屏 / 立体机械键帽）
+   2. 现代极简 [data-ui-style="modern"] / [data-ui-style="maiwork"]（暖白编辑画布 #F6F4EF / 深炭室暗色 #0F1011 / 陶土与松石绿强调，为 :root 基础层） */
 
 :root,
+:root[data-ui-style="modern"],
 :root[data-ui-style="maiwork"] {
   --mil-shell: #F6F4EF;
   --mil-panel: #FFFFFF;
@@ -87,6 +88,7 @@
 }
 
 :root.dark,
+:root.dark[data-ui-style="modern"],
 :root.dark[data-ui-style="maiwork"] {
   --mil-shell: #0F1011;
   --mil-panel: #17191B;
@@ -2157,16 +2159,17 @@ pre, code, .mono, .num {
 }
 
 @media (max-width: 720px) {
-  body:not([data-page="now"]) .mil-shell {
+  .mil-shell {
     max-width: 100%;
     overflow-x: clip;
     padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px));
   }
 
-  body:not([data-page="now"]) .mil-topbar .mil-nav {
+  .mil-topbar .mil-nav {
     display: none;
   }
 
+  .ms-mob-dock,
   .ms-mob-dock:not([hidden]) {
     position: fixed;
     left: 0;
@@ -2174,7 +2177,7 @@ pre, code, .mono, .num {
     bottom: 0;
     z-index: 48;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: center;
     gap: 2px;
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
@@ -2184,6 +2187,7 @@ pre, code, .mono, .num {
     border-top: 1px solid var(--mil-line);
   }
 
+  :root[data-ui-style="millennium"] .ms-mob-dock,
   :root[data-ui-style="millennium"] .ms-mob-dock:not([hidden]) {
     background: var(--mil-panel);
     backdrop-filter: none;
@@ -2231,6 +2235,414 @@ pre, code, .mono, .num {
   }
 }
 
+/* ───────────── v0.3 四页交互与五步引导弹窗 ───────────── */
+.ms-theme-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.now-v3-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.92fr) minmax(0, 1.42fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.now-col-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.now-intent-list,
+.now-thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.now-intent-card,
+.now-thread-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  min-width: 0;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.now-thread-card {
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.now-thread-card.is-selected {
+  background: var(--mil-panel);
+  border-color: var(--mil-accent);
+}
+
+:root[data-ui-style="millennium"] .now-intent-card,
+:root[data-ui-style="millennium"] .now-thread-card {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--mil-screen-shade);
+}
+
+:root[data-ui-style="millennium"] .now-thread-card.is-selected {
+  background: var(--mil-key-hi);
+  border-color: var(--mil-hot);
+  box-shadow: var(--mil-raise);
+}
+
+.now-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.now-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--mil-muted);
+}
+
+.now-intent-cond {
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--mil-well);
+  font-size: 11.5px;
+  color: var(--mil-ink-2);
+  overflow-wrap: anywhere;
+}
+
+:root[data-ui-style="millennium"] .now-intent-cond {
+  border-radius: 0;
+  border: 1px dashed var(--mil-rule);
+}
+
+.now-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.now-approval-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--mil-warn);
+  border-radius: 14px;
+  background: var(--mil-warn-soft);
+  color: var(--mil-ink);
+}
+
+:root[data-ui-style="millennium"] .now-approval-bar {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--mil-hi), inset -1px -1px 0 var(--mil-lo);
+}
+
+.now-approval-bar[hidden] {
+  display: none;
+}
+
+.now-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.now-stage {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.85fr) minmax(0, 1.35fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.now-steps-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+}
+
+.now-steps-wrap::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  background: var(--mil-line);
+}
+
+.now-step-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.now-step-btn::before {
+  content: "";
+  position: absolute;
+  left: -13px;
+  top: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid var(--mil-panel);
+  background: var(--mil-muted);
+}
+
+.now-step-btn.is-done::before { background: var(--mil-ok); }
+.now-step-btn.is-running::before { background: var(--mil-accent); }
+.now-step-btn.is-error::before { background: var(--mil-danger); }
+.now-step-btn.is-waiting::before { background: var(--mil-warn); }
+
+.now-step-btn.is-active {
+  background: var(--mil-panel);
+  border-color: var(--mil-accent);
+}
+
+:root[data-ui-style="millennium"] .now-step-btn {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+:root[data-ui-style="millennium"] .now-step-btn::before {
+  border-radius: 0;
+}
+
+:root[data-ui-style="millennium"] .now-step-btn.is-active {
+  background: var(--mil-key-hi);
+  border-color: var(--mil-hot);
+}
+
+.now-inspector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.now-summary-box {
+  padding: 12px 14px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+:root[data-ui-style="millennium"] .now-summary-box {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--mil-screen-shade);
+}
+
+.now-note-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.now-note-bar .mil-input {
+  flex: 1 1 200px;
+}
+
+/* 五步引导弹窗 */
+.onb-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 16, 17, 0.52);
+  backdrop-filter: blur(4px);
+}
+
+.onb-scrim[hidden] {
+  display: none;
+}
+
+.onb-card {
+  width: 100%;
+  max-width: 660px;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--mil-panel);
+  border: 1px solid var(--mil-line);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  color: var(--mil-ink);
+}
+
+:root[data-ui-style="millennium"] .onb-card {
+  border-width: 2px;
+  border-radius: 0;
+  background-image: var(--mil-grain-panel);
+  background-size: 6px 6px;
+  box-shadow: 8px 8px 0 var(--mil-drop), inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo);
+}
+
+.onb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.onb-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.onb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mil-lo);
+  transition: width 0.16s ease, background-color 0.16s ease;
+}
+
+.onb-dot.is-active {
+  width: 24px;
+  background: var(--mil-accent);
+}
+
+.onb-dot.is-done {
+  background: var(--mil-ok);
+}
+
+:root[data-ui-style="millennium"] .onb-dot {
+  border-radius: 0;
+}
+
+.onb-stage {
+  position: relative;
+  min-height: 240px;
+  overflow: hidden;
+}
+
+.onb-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onb-pane.leaving {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.onb-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.onb-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+}
+
+:root[data-ui-style="millennium"] .onb-item {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.onb-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.onb-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--mil-line);
+  padding-top: 12px;
+}
+
+:root[data-ui-style="millennium"] .onb-foot {
+  border-top: 2px dashed var(--mil-rule);
+}
+
+@media (max-width: 960px) {
+  .now-v3-grid,
+  .now-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .onb-scrim {
+    padding: 8px;
+    align-items: flex-end;
+  }
+  .onb-card {
+    max-height: 92vh;
+    padding: 14px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mil-led--run,
   .mil-fish.is-new svg {
@@ -2243,7 +2655,11 @@ pre, code, .mono, .num {
   .fish-swatch,
   .m-rail-item,
   .mob-role-avatar,
-  .ms-mob-dock-btn {
+  .ms-mob-dock-btn,
+  .now-intent-card,
+  .now-thread-card,
+  .now-step-btn,
+  .onb-dot {
     transition: none;
   }
 }
