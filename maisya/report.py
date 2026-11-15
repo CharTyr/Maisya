@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import base64
 import html
+import io
+import re
 from typing import Any
+
+try:
+    from PIL import Image, ImageOps
+except Exception:
+    Image = None
+    ImageOps = None
 
 from .pathsafe import split_rel
 from .viz_spec import check_spec_numbers, load_viz_css, render, validate
@@ -12,6 +20,8 @@ from .workspaces import regular_open
 
 MAX_IMAGE_BYTES = 3 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_CARD_HTML_BYTES = 524_288
+_CARD_SAFE_TARGET_BYTES = 508_000
 
 _ALLOWED_IMAGE_ROOTS = frozenset({"in", "project", "out"})
 _FORBIDDEN_OUTPUT_ROOTS = frozenset({"in", "project", "cache"})
@@ -126,11 +136,79 @@ def _image_mime(data: bytes) -> str:
     raise ValueError("仅支持有效的 PNG/JPEG/WebP/GIF 图片魔数")
 
 
-def _make_image_resolver(work: Any):
+def _flatten_card_rgb(im: Any) -> Any:
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[3])
+        return bg
+    if im.mode != "RGB":
+        return im.convert("RGB")
+    return im
+
+
+def _compress_card_image(raw: bytes, *, mime: str, target_bytes: int) -> str:
+    raw_uri = f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+    if len(raw) <= 8192 and len(raw_uri.encode("utf-8")) <= target_bytes:
+        return raw_uri
+    if Image is None:
+        return raw_uri
+    try:
+        with Image.open(io.BytesIO(raw)) as opened:
+            w0, h0 = opened.size
+            if w0 * h0 > 40_000_000:
+                raise ValueError("内嵌图片像素尺寸过大")
+            im = (
+                ImageOps.exif_transpose(opened)
+                if ImageOps is not None
+                else opened.copy()
+            )
+            rgb = _flatten_card_rgb(im)
+    except ValueError:
+        raise
+    except Exception:
+        return raw_uri
+
+    orig_w, orig_h = rgb.size
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    best_uri = ""
+    best_len = 1 << 60
+    max_sides = (1080, 880, 720, 560, 420, 320, 240, 180, 128)
+    qualities = (84, 72, 60, 48, 36, 26)
+    for max_side in max_sides:
+        longest = max(orig_w, orig_h)
+        if longest > max_side:
+            scale = max_side / longest
+            tw = max(1, round(orig_w * scale))
+            th = max(1, round(orig_h * scale))
+            candidate_img = rgb.resize((tw, th), resample)
+        else:
+            candidate_img = rgb
+        for qual in qualities:
+            buf = io.BytesIO()
+            candidate_img.save(buf, format="JPEG", quality=qual, optimize=True)
+            uri = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+            uri_len = len(uri.encode("utf-8"))
+            if uri_len < best_len:
+                best_uri = uri
+                best_len = uri_len
+            if uri_len <= target_bytes:
+                return uri
+    return best_uri or raw_uri
+
+
+def _make_image_resolver(
+    work: Any,
+    *,
+    card_mode: bool = False,
+    per_image_target: int = 180_000,
+    raw_cache: dict[str, tuple[bytes, str]] | None = None,
+):
     work_root = getattr(work, "path", None) or getattr(work, "root", None)
     if work_root is None:
         raise ValueError("工作区对象缺少 path")
     total_bytes = 0
+    cache = raw_cache if raw_cache is not None else {}
 
     def resolve(rel_path: str) -> str:
         nonlocal total_bytes
@@ -138,23 +216,31 @@ def _make_image_resolver(work: Any):
         if len(parts) < 2 or parts[0] not in _ALLOWED_IMAGE_ROOTS:
             raise ValueError(f"image 路径必须位于 in/、project/ 或 out/ 内: {rel_path!r}")
         normalized = "/".join(parts)
-        try:
-            with regular_open(work_root, normalized) as fp:
-                raw = fp.read(MAX_IMAGE_BYTES + 1)
-        except ValueError:
-            raise
-        except OSError as exc:
-            raise ValueError(f"无法读取工作区图片 {normalized}: {exc}") from exc
+        if normalized in cache:
+            raw, mime = cache[normalized]
+        else:
+            try:
+                with regular_open(work_root, normalized) as fp:
+                    raw = fp.read(MAX_IMAGE_BYTES + 1)
+            except ValueError:
+                raise
+            except OSError as exc:
+                raise ValueError(f"无法读取工作区图片 {normalized}: {exc}") from exc
 
-        if not raw:
-            raise ValueError(f"图片文件为空: {normalized}")
-        if len(raw) > MAX_IMAGE_BYTES:
-            raise ValueError(f"单张图片不能超过 3 MiB: {normalized}")
+            if not raw:
+                raise ValueError(f"图片文件为空: {normalized}")
+            if len(raw) > MAX_IMAGE_BYTES:
+                raise ValueError(f"单张图片不能超过 3 MiB: {normalized}")
+
+            mime = _image_mime(raw)
+            cache[normalized] = (raw, mime)
+
         total_bytes += len(raw)
         if total_bytes > MAX_TOTAL_IMAGE_BYTES:
             raise ValueError("报告内嵌图片累计大小不能超过 8 MiB")
 
-        mime = _image_mime(raw)
+        if card_mode:
+            return _compress_card_image(raw, mime=mime, target_bytes=per_image_target)
         encoded = base64.b64encode(raw).decode("ascii")
         return f"data:{mime};base64,{encoded}"
 
@@ -202,38 +288,69 @@ def render_report_artifact(work: Any, arguments: dict[str, Any]) -> dict[str, An
 
     out_path = _normalize_report_path(arguments.get("path"))
     is_card = layout == "card"
-    resolver = _make_image_resolver(work)
-    body_html = render(spec, static=is_card, image_resolver=resolver)
-
     page_title = spec.get("title") or "调研报告"
     csp = _CSP_CARD if is_card else _CSP_PAGE
     viewport = "width=780, initial-scale=1" if is_card else "width=device-width, initial-scale=1"
     container_cls = "report-card" if is_card else "report-page"
-    script_html = ""
-    if not is_card and 'class="vs-tabs"' in body_html:
-        script_html = f"\n<script>{_TABS_JS}</script>"
+    viz_css = load_viz_css()
 
-    doc = (
-        "<!doctype html>\n"
-        f'<html lang="zh-CN" data-theme="{html.escape(theme, quote=True)}">\n'
-        "<head>\n"
-        '<meta charset="utf-8">\n'
-        f'<meta name="viewport" content="{viewport}">\n'
-        f'<meta http-equiv="Content-Security-Policy" content="{csp}">\n'
-        f"<title>{html.escape(page_title)}</title>\n"
-        "<style>\n"
-        f"{_PAGE_THEME_CSS}\n"
-        f"{load_viz_css()}\n"
-        "</style>\n"
-        "</head>\n"
-        "<body>\n"
-        f'<main class="{container_cls}">\n'
-        f"{body_html}\n"
-        "</main>"
-        f"{script_html}\n"
-        "</body>\n"
-        "</html>\n"
+    def _assemble_doc(body: str) -> str:
+        script_html = ""
+        if not is_card and 'class="vs-tabs"' in body:
+            script_html = f"\n<script>{_TABS_JS}</script>"
+        return (
+            "<!doctype html>\n"
+            f'<html lang="zh-CN" data-theme="{html.escape(theme, quote=True)}">\n'
+            "<head>\n"
+            '<meta charset="utf-8">\n'
+            f'<meta name="viewport" content="{viewport}">\n'
+            f'<meta http-equiv="Content-Security-Policy" content="{csp}">\n'
+            f"<title>{html.escape(page_title)}</title>\n"
+            "<style>\n"
+            f"{_PAGE_THEME_CSS}\n"
+            f"{viz_css}\n"
+            "</style>\n"
+            "</head>\n"
+            "<body>\n"
+            f'<main class="{container_cls}">\n'
+            f"{body}\n"
+            "</main>"
+            f"{script_html}\n"
+            "</body>\n"
+            "</html>\n"
+        )
+
+    raw_cache: dict[str, tuple[bytes, str]] = {}
+    resolver = _make_image_resolver(
+        work,
+        card_mode=is_card,
+        per_image_target=180_000,
+        raw_cache=raw_cache,
     )
+    body_html = render(spec, static=is_card, image_resolver=resolver)
+    doc = _assemble_doc(body_html)
+
+    if is_card and len(doc.encode("utf-8")) >= MAX_CARD_HTML_BYTES and raw_cache:
+        uri_matches = re.findall(r"data:image/[^\"'\s>]+", body_html)
+        img_count = max(1, len(uri_matches))
+        img_total = sum(len(u.encode("utf-8")) for u in uri_matches)
+        non_img_bytes = len(doc.encode("utf-8")) - img_total
+        avail_budget = max(8_192, _CARD_SAFE_TARGET_BYTES - non_img_bytes)
+        base_per_img = max(2_048, avail_budget // img_count)
+        for factor in (1.0, 0.7, 0.45, 0.25, 0.12):
+            tight_resolver = _make_image_resolver(
+                work,
+                card_mode=True,
+                per_image_target=max(1_536, int(base_per_img * factor)),
+                raw_cache=raw_cache,
+            )
+            body_html = render(spec, static=True, image_resolver=tight_resolver)
+            doc = _assemble_doc(body_html)
+            if len(doc.encode("utf-8")) < MAX_CARD_HTML_BYTES:
+                break
+
+    if is_card and len(doc.encode("utf-8")) >= MAX_CARD_HTML_BYTES:
+        raise ValueError("卡片 HTML 体积超过 512 KiB 渲染上限，请精简图片数量或正文")
 
     written = work.write(out_path, doc)
     work.commit()

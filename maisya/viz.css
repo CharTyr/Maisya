@@ -254,12 +254,43 @@
   overflow: hidden;
 }
 
+.vs-bar-t.is-signed {
+  position: relative;
+  display: block;
+  border-radius: 6px;
+}
+
+.vs-bar-zero {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--vs-border-strong, rgba(15, 23, 42, 0.3));
+  z-index: 2;
+  pointer-events: none;
+}
+
+.vs-bar-t.is-signed .vs-bar-b {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
 .vs-bar-b {
   width: 100%;
   min-height: 3px;
   background: var(--vs-blue);
   border-radius: 6px 6px 2px 2px;
   transition: height 0.25s ease;
+}
+
+.vs-bar-b.is-pos {
+  border-radius: 6px 6px 0 0;
+}
+
+.vs-bar-b.is-neg {
+  background: var(--vs-red);
+  border-radius: 0 0 6px 6px;
 }
 
 .vs-bar-b.tone-green { background: var(--vs-green); }

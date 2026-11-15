@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import http.client
 import html
 import inspect
 import ipaddress
@@ -137,6 +138,8 @@ DIGEST_POOL_FILE = "project/digest_pool.json"
 def _is_public_ip(raw_ip: str) -> bool:
     try:
         ip = ipaddress.ip_address(raw_ip.split("%", 1)[0])
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
     except ValueError:
         return False
     return bool(
@@ -150,36 +153,71 @@ def _is_public_ip(raw_ip: str) -> bool:
     )
 
 
-def _validate_public_url(url: str) -> urllib.parse.ParseResult:
+def _host_literal_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    bare = host.split("%", 1)[0]
+    try:
+        ip = ipaddress.ip_address(bare)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            return ip.ipv4_mapped
+        return ip
+    except ValueError:
+        pass
+    try:
+        packed = socket.inet_aton(bare)
+    except OSError:
+        return None
+    return ipaddress.IPv4Address(packed)
+
+
+def _validate_public_url_with_ips(
+    url: str,
+) -> tuple[urllib.parse.ParseResult, tuple[str, ...]]:
     if not isinstance(url, str) or not url.strip():
         raise ValueError("RSS 地址不能为空")
-    parsed = urllib.parse.urlparse(url.strip())
+    raw = url.strip()
+    if any(ch.isspace() or ord(ch) < 32 for ch in raw):
+        raise ValueError("链接包含非法空白或控制字符")
+    parsed = urllib.parse.urlparse(raw)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("仅支持 http/https 公开链接")
     if parsed.username or parsed.password:
         raise ValueError("拒绝包含用户名或密码的链接")
-    host = (parsed.hostname or "").strip().lower()
-    if not host or host == "localhost" or host.endswith(".local"):
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if (
+        not host
+        or host == "localhost"
+        or host.endswith((".localhost", ".local", ".internal"))
+    ):
         raise ValueError("拒绝本地或未指定主机地址")
-    try:
-        literal = ipaddress.ip_address(host.split("%", 1)[0])
-    except ValueError:
-        literal = None
+    literal = _host_literal_ip(host)
     if literal is not None:
         if not _is_public_ip(str(literal)):
             raise ValueError("拒绝非公网 IP 地址")
-        return parsed
+        return parsed, (str(literal),)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+        infos = socket.getaddrinfo(host, port)
     except socket.gaierror as err:
         raise ValueError(f"无法解析公开域名: {err}") from err
     if not infos:
         raise ValueError("域名未解析到有效公网地址")
+    pinned: list[str] = []
+    seen_ips: set[str] = set()
     for info in infos:
-        addr = info[4][0]
+        addr = str(info[4][0]).split("%", 1)[0]
         if not _is_public_ip(addr):
             raise ValueError("域名解析到内网或保留 IP，已拦截")
-    return parsed
+        if addr not in seen_ips:
+            seen_ips.add(addr)
+            pinned.append(addr)
+    return parsed, tuple(pinned)
+
+
+def _validate_public_url(url: str) -> urllib.parse.ParseResult:
+    return _validate_public_url_with_ips(url)[0]
+
+
+_ORIG_VALIDATE_PUBLIC_URL = _validate_public_url
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -187,11 +225,118 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _connect_pinned_ips(
+    pinned_ips: tuple[str, ...],
+    port: int,
+    timeout: Any,
+    source_address: Any = None,
+) -> socket.socket:
+    last_err: OSError | None = None
+    sock_timeout = None if timeout is socket._GLOBAL_DEFAULT_TIMEOUT else timeout
+    for raw_ip in pinned_ips:
+        ip_str = raw_ip.split("%", 1)[0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        family = socket.AF_INET6 if ip_obj.version == 6 else socket.AF_INET
+        sock: socket.socket | None = None
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            if sock_timeout is not None:
+                sock.settimeout(sock_timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            if ip_obj.version == 6:
+                sock.connect((str(ip_obj), port, 0, 0))
+            else:
+                sock.connect((str(ip_obj), port))
+            return sock
+        except OSError as err:
+            last_err = err
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+    if last_err is not None:
+        raise last_err
+    raise OSError("无法连接到已核验的公网 IP 地址")
+
+
+def _make_pinned_http_cls(pinned_ips: tuple[str, ...]):
+    class _PinnedHTTPConnection(http.client.HTTPConnection):
+        def connect(self) -> None:
+            self.sock = _connect_pinned_ips(
+                pinned_ips, self.port, self.timeout, self.source_address
+            )
+            if self._tunnel_host:
+                self._tunnel()
+
+    return _PinnedHTTPConnection
+
+
+def _make_pinned_https_cls(pinned_ips: tuple[str, ...]):
+    class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            raw_sock = _connect_pinned_ips(
+                pinned_ips, self.port, self.timeout, self.source_address
+            )
+            self.sock = raw_sock
+            try:
+                if self._tunnel_host:
+                    self._tunnel()
+                server_hostname = self._tunnel_host if self._tunnel_host else self.host
+                self.sock = self._context.wrap_socket(
+                    raw_sock, server_hostname=server_hostname
+                )
+            except BaseException:
+                try:
+                    raw_sock.close()
+                except OSError:
+                    pass
+                raise
+
+    return _PinnedHTTPSConnection
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ips: tuple[str, ...], debuglevel: int = 0) -> None:
+        super().__init__(debuglevel=debuglevel)
+        self._conn_cls = _make_pinned_http_cls(pinned_ips)
+
+    def http_open(self, req: urllib.request.Request):
+        return self.do_open(self._conn_cls, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(
+        self, pinned_ips: tuple[str, ...], debuglevel: int = 0, context: Any = None
+    ) -> None:
+        super().__init__(debuglevel=debuglevel, context=context)
+        self._conn_cls = _make_pinned_https_cls(pinned_ips)
+
+    def https_open(self, req: urllib.request.Request):
+        return self.do_open(self._conn_cls, req, context=self._context)
+
+
 def _sync_fetch_public_bytes(url: str, timeout: float, max_bytes: int) -> dict[str, Any]:
     current = url
-    opener = urllib.request.build_opener(_NoRedirectHandler())
     for _hop in range(5):
-        _validate_public_url(current)
+        if _validate_public_url is not _ORIG_VALIDATE_PUBLIC_URL:
+            _validate_public_url(current)
+            pinned_ips: tuple[str, ...] = ()
+        else:
+            _parsed, pinned_ips = _validate_public_url_with_ips(current)
+        handlers: list[Any] = [
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+        ]
+        if pinned_ips:
+            handlers.extend(
+                [_PinnedHTTPHandler(pinned_ips), _PinnedHTTPSHandler(pinned_ips)]
+            )
+        opener = urllib.request.build_opener(*handlers)
         req = urllib.request.Request(
             current,
             headers={
@@ -257,7 +402,6 @@ def _sync_fetch_public_bytes(url: str, timeout: float, max_bytes: int) -> dict[s
 async def fetch_public_bytes(
     url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152
 ) -> dict[str, Any]:
-    _validate_public_url(url)
     return await asyncio.to_thread(_sync_fetch_public_bytes, url, timeout, max_bytes)
 
 
@@ -418,22 +562,46 @@ def _extract_meta_image(html_bytes: bytes | str, page_url: str) -> str:
 def _is_safe_http_url(url: str) -> bool:
     if not isinstance(url, str) or not url.strip():
         return False
+    raw = url.strip()
+    if any(ch.isspace() or ord(ch) < 32 for ch in raw):
+        return False
     try:
-        parsed = urllib.parse.urlparse(url.strip())
+        parsed = urllib.parse.urlparse(raw)
     except Exception:
         return False
     if parsed.scheme not in {"http", "https"}:
         return False
     if parsed.username or parsed.password:
         return False
-    host = (parsed.hostname or "").strip().lower()
-    if not host or host == "localhost" or host.endswith(".local"):
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if (
+        not host
+        or host == "localhost"
+        or host.endswith((".localhost", ".local", ".internal"))
+    ):
         return False
-    try:
-        literal = ipaddress.ip_address(host.split("%", 1)[0])
-    except ValueError:
+    literal = _host_literal_ip(host)
+    if literal is None:
         return True
     return _is_public_ip(str(literal))
+
+
+def _is_blocked_domain(
+    host: str,
+    blocked_domains: set[str] | frozenset[str] | list[str] | tuple[str, ...],
+) -> bool:
+    clean_host = (host or "").strip().lower().rstrip(".")
+    if not clean_host:
+        return False
+    bare_host = clean_host[4:] if clean_host.startswith("www.") else clean_host
+    for raw_d in blocked_domains or ():
+        bd = str(raw_d).strip().lower().rstrip(".")
+        if not bd:
+            continue
+        bd_bare = bd[4:] if bd.startswith("www.") else bd
+        if bare_host == bd_bare or bare_host.endswith("." + bd_bare):
+            return True
+    return False
 
 
 def parse_feed_xml(
@@ -1262,7 +1430,7 @@ def _render_fallback_viz_block(blk: dict[str, Any]) -> tuple[str, int]:
 
 
 def _strip_script_tags(fragment: str) -> str:
-    return re.sub(r"<script\b[^>]*>.*?</script>", "", fragment, flags=re.I | re.S)
+    return digest_card.sanitize_html_fragment(fragment)
 
 
 def _render_viz_fragment(viz_raw: Any, *, uid: str = "vs") -> tuple[str, int]:
@@ -1342,10 +1510,8 @@ def prefilter_search_item(
     bare_host = host[4:] if host.startswith("www.") else host
 
     blocked_set = {str(d).strip().lower() for d in (blocked_domains or ()) if str(d).strip()}
-    for bd in blocked_set:
-        bd_bare = bd[4:] if bd.startswith("www.") else bd
-        if bare_host == bd_bare or bare_host.endswith("." + bd_bare):
-            return "来源域名已屏蔽"
+    if _is_blocked_domain(host, blocked_set):
+        return "来源域名已屏蔽"
 
     # Encyclopedia entries
     if (
@@ -1563,7 +1729,7 @@ class DigestWorkspace:
         origin: str = "manual",
     ) -> dict[str, Any]:
         now = self.clock()
-        sources = self._load_sources()
+        sources = await asyncio.to_thread(self._load_sources)
         self._prune_rejected(sources, now)
         host = _host_of(url)
         if not host:
@@ -1585,11 +1751,13 @@ class DigestWorkspace:
                 "ok": False,
                 "reason": f"抓取订阅源失败: {resp.get('error') or resp.get('status')}",
             }
-        parsed = parse_feed_xml(body, now=now, lookback_days=30.0)
+        parsed = await asyncio.to_thread(
+            parse_feed_xml, body, now=now, lookback_days=30.0
+        )
         resolved_title = title.strip() or parsed.get("title") or host
         async with self._sources_lock:
             now = self.clock()
-            sources = self._load_sources()
+            sources = await asyncio.to_thread(self._load_sources)
             self._prune_rejected(sources, now)
             rej = self._is_rejected(sources, url, host, now)
             if rej is not None:
@@ -1616,8 +1784,12 @@ class DigestWorkspace:
                 "last_polled_at": 0.0,
             }
             sources["feeds"].append(feed)
-            self._save_sources(sources)
-            self.work.commit()
+
+            def _save_new_feed() -> None:
+                self._save_sources(sources)
+                self.work.commit()
+
+            await asyncio.to_thread(_save_new_feed)
         return {"ok": True, "feed": feed}
 
     async def discover(self, url: str, *, origin: str = "discover") -> dict[str, Any]:
@@ -1630,7 +1802,7 @@ class DigestWorkspace:
         if _is_big_platform(url):
             return {"ok": False, "reason": "大平台域名不做全站自动订阅"}
 
-        sources = self._load_sources()
+        sources = await asyncio.to_thread(self._load_sources)
         self._prune_rejected(sources, now)
         host = _host_of(url)
         rej = self._is_rejected(sources, url, host, now)
@@ -1650,7 +1822,9 @@ class DigestWorkspace:
         sniff = body[:256].lstrip()
         if "xml" in ctype or sniff.startswith((b"<?xml", b"<rss", b"<feed")):
             try:
-                parse_feed_xml(body, now=now, lookback_days=30.0)
+                await asyncio.to_thread(
+                    parse_feed_xml, body, now=now, lookback_days=30.0
+                )
                 return await self.add_feed(final_url, auto=True, origin=origin)
             except ValueError:
                 pass
@@ -1794,7 +1968,7 @@ class DigestWorkspace:
 
     async def poll(self, *, lookback_days: float = 14.0) -> dict[str, Any]:
         now = self.clock()
-        sources = self._load_sources()
+        sources = await asyncio.to_thread(self._load_sources)
         changed = self._prune_rejected(sources, now)
         graduated: list[dict[str, Any]] = []
         unsubscribed: list[dict[str, Any]] = []
@@ -1885,7 +2059,7 @@ class DigestWorkspace:
                         continue
 
         # Phase 2: Trusted source auto-discovery from last 30d non-RSS high-signal history
-        history = self._load_history()
+        history = await asyncio.to_thread(self._load_history)
         win_start = now - TRUSTED_WINDOW_DAYS * DAYS_TO_SECS
         by_host: dict[str, list[dict[str, Any]]] = {}
         for item in history.get("items", []):
@@ -1918,13 +2092,13 @@ class DigestWorkspace:
                 and positive >= 1
             ):
                 if changed:
-                    self._save_sources(sources)
-                    self.work.commit()
+                    await asyncio.to_thread(self._save_sources, sources)
+                    await asyncio.to_thread(self.work.commit)
                     changed = False
                 res = await self.discover(f"https://{host}/", origin="trusted")
                 if res.get("ok") and not res.get("existing"):
                     subscribed.append(res["feed"])
-                    sources = self._load_sources()
+                    sources = await asyncio.to_thread(self._load_sources)
 
         # Phase 3: Fetch remaining active & trial feeds concurrently (Semaphore(6))
         feeds_list = list(sources.get("feeds", []))
@@ -1955,8 +2129,12 @@ class DigestWorkspace:
                     changed = True
                     continue
                 try:
-                    parsed = parse_feed_xml(
-                        body, now=now, lookback_days=lookback_days, max_items=20
+                    parsed = await asyncio.to_thread(
+                        parse_feed_xml,
+                        body,
+                        now=now,
+                        lookback_days=lookback_days,
+                        max_items=20,
                     )
                 except ValueError:
                     feed["fail_count"] = int(feed.get("fail_count", 0) or 0) + 1
@@ -1996,8 +2174,11 @@ class DigestWorkspace:
                 changed = True
 
         if changed:
-            self._save_sources(sources)
-            self.work.commit()
+            def _save_polled() -> None:
+                self._save_sources(sources)
+                self.work.commit()
+
+            await asyncio.to_thread(_save_polled)
 
         return {
             "candidates": candidates,
@@ -2080,7 +2261,7 @@ class DigestWorkspace:
             ]
 
         now = self.clock()
-        sources = self._load_sources()
+        sources = await asyncio.to_thread(self._load_sources)
         self._prune_rejected(sources, now)
         existing_urls = {
             _normalize_url_key(f.get("url", ""))
@@ -2128,7 +2309,9 @@ class DigestWorkspace:
                             f"抓取订阅源失败: {resp.get('error') or resp.get('status')}",
                             None,
                         )
-                    parsed = parse_feed_xml(body, now=now, lookback_days=30.0)
+                    parsed = await asyncio.to_thread(
+                        parse_feed_xml, body, now=now, lookback_days=30.0
+                    )
                 except Exception as exc:
                     return entry, False, f"抓取异常: {exc}", None
             final_url = str(resp.get("url") or url)
@@ -2175,10 +2358,15 @@ class DigestWorkspace:
             changed = True
 
         if changed:
-            self._save_sources(sources)
-            self.work.commit()
+            def _save_seeded() -> None:
+                self._save_sources(sources)
+                self.work.commit()
 
-        total_feeds = len(self._load_sources().get("feeds", []))
+            await asyncio.to_thread(_save_seeded)
+
+        total_feeds = len(
+            (await asyncio.to_thread(self._load_sources)).get("feeds", [])
+        )
         return {
             "added": added,
             "skipped": skipped,
@@ -2205,7 +2393,7 @@ class DigestWorkspace:
             clean_topics = [str(t).strip() for t in (topics or ()) if str(t).strip()]
 
         seeded_urls: list[str] = []
-        sources_before = self._load_sources()
+        sources_before = await asyncio.to_thread(self._load_sources)
         if not sources_before.get("feeds") and (clean_topics or clean_queries):
             topic_hint = " ".join([*clean_topics, *clean_queries])
             try:
@@ -2222,7 +2410,7 @@ class DigestWorkspace:
         rss_raw = list(poll_res.get("candidates") or [])
 
         now = self.clock()
-        history = self._load_history()
+        history = await asyncio.to_thread(self._load_history)
         blocked_domains = {
             str(d).lower()
             for d in history.get("blocked_domains", [])
@@ -2395,7 +2583,7 @@ class DigestWorkspace:
                 raw_content = str(page.get("content") or page.get("text") or "").strip()
                 if raw_content:
                     cleaned = re.sub(r"[ \t]+", " ", raw_content)
-                    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()[:2200]
+                    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()[:30000]
                     cand["source_text"] = cleaned
                 pub = str(
                     page.get("published_at")
@@ -2437,18 +2625,18 @@ class DigestWorkspace:
             if raw_body:
                 full_text_by_url[_normalize_url_key(c_url)] = re.sub(
                     r"\s+", " ", raw_body
-                ).strip()[:850]
+                ).strip()[:30000]
 
         final_candidates: list[dict[str, Any]] = []
         for cand in working_pool:
             if not cand.get("source_text"):
                 fallback_body = str(cand.get("body") or cand.get("summary") or cand.get("snippet") or "").strip()
                 if fallback_body:
-                    cand["source_text"] = re.sub(r"\s+", " ", fallback_body).strip()[:2200]
+                    cand["source_text"] = re.sub(r"\s+", " ", fallback_body).strip()[:30000]
             src_txt = str(cand.get("source_text") or "")
             c_url = str(cand.get("url") or "").strip()
             if c_url and src_txt:
-                full_text_by_url[_normalize_url_key(c_url)] = src_txt[:2200]
+                full_text_by_url[_normalize_url_key(c_url)] = src_txt[:30000]
             if not cand.get("published"):
                 fallback_pub = str(cand.get("published_at") or "").strip()
                 if not fallback_pub and src_txt:
@@ -2494,19 +2682,22 @@ class DigestWorkspace:
                 "feed_title": str(cand.get("feed_title") or prev.get("feed_title") or ""),
                 "source_text": full_text_by_url.get(u_key) or str(prev.get("source_text") or ""),
             }
-        self._save_pool(
-            {
-                "updated_at": now,
-                "total_discovered": max(len(combined), len(final_candidates)),
-                "by_url": pool_by_url,
-            }
-        )
-        self.work.commit()
+        def _persist_pool() -> None:
+            self._save_pool(
+                {
+                    "updated_at": now,
+                    "total_discovered": max(len(combined), len(final_candidates)),
+                    "by_url": pool_by_url,
+                }
+            )
+            self.work.commit()
+
+        await asyncio.to_thread(_persist_pool)
 
         # Opportunistically subscribe to at most 1 non-big-platform RSS feed found during fetch
         discovered_feeds: list[str] = []
         if discovered_feed_candidates:
-            current_sources = self._load_sources()
+            current_sources = await asyncio.to_thread(self._load_sources)
             known_feed_keys = {
                 _normalize_url_key(f.get("url", ""))
                 for f in current_sources.get("feeds", [])
@@ -2599,7 +2790,13 @@ class DigestWorkspace:
             title = str(item.get("title") or "").strip()
             url = str(item.get("url") or "").strip()
             host = _host_of(url)
-            if not title or not url or not host or host in blocked_domains:
+            if (
+                not title
+                or not url
+                or not _is_safe_http_url(url)
+                or not host
+                or _is_blocked_domain(host, blocked_domains)
+            ):
                 item["reject_reason"] = "缺少标题或有效公开链接，或来源域名已屏蔽"
                 rejected.append(item)
                 continue
@@ -2646,6 +2843,13 @@ class DigestWorkspace:
                     rejected.append(item)
                     continue
 
+            summary_text = str(item.get("brief") or item.get("summary") or "").strip()
+            if not summary_text:
+                item["reject_reason"] = "缺少中文摘要（请提供 brief 或 summary 事实摘要）"
+                rejected.append(item)
+                continue
+            item["summary"] = summary_text
+
             pool_source_text = (
                 str(pool_meta.get("source_text") or "")
                 if isinstance(pool_meta, dict)
@@ -2654,33 +2858,31 @@ class DigestWorkspace:
             source_text = item.get("source_text")
             quote = str(item.get("quote") or "").strip()
             reject_quote_msg = "引用片段未能在原文中找到对照依据（quote 必须从 source_text 原语言逐字复制，严禁翻译或改写）"
-            if source_text is not None:
-                norm_src = _norm_quote_match(str(source_text))
-                norm_quote = _norm_quote_match(quote)
-                if not norm_quote or norm_quote not in norm_src:
-                    item["reject_reason"] = reject_quote_msg
-                    rejected.append(item)
-                    continue
-            elif quote and pool_source_text:
-                norm_src = _norm_quote_match(pool_source_text)
-                norm_quote = _norm_quote_match(quote)
-                if not norm_quote or norm_quote not in norm_src:
-                    item["reject_reason"] = reject_quote_msg
-                    rejected.append(item)
-                    continue
-
-            summary_text = str(item.get("brief") or item.get("summary") or "").strip()
-            if not summary_text:
-                item["reject_reason"] = "缺少中文摘要（请提供 brief 或 summary 事实摘要）"
+            norm_quote = _norm_quote_match(quote)
+            if not norm_quote:
+                item["reject_reason"] = reject_quote_msg
                 rejected.append(item)
                 continue
-            item["summary"] = summary_text
+            verifiable_src = (
+                pool_source_text
+                if pool_source_text.strip()
+                else (str(source_text) if source_text is not None else "")
+            )
+            if not verifiable_src.strip():
+                item["reject_reason"] = reject_quote_msg
+                rejected.append(item)
+                continue
+            norm_src = _norm_quote_match(verifiable_src)
+            if norm_quote not in norm_src:
+                item["reject_reason"] = reject_quote_msg
+                rejected.append(item)
+                continue
 
             if "viz" in item and item["viz"] is not None:
                 effective_src = (
-                    source_text
-                    if source_text is not None
-                    else (pool_source_text or None)
+                    pool_source_text
+                    if pool_source_text.strip()
+                    else (source_text if source_text is not None else None)
                 )
                 valid_viz, viz_drop = _validate_and_check_viz(item.get("viz"), effective_src)
                 if valid_viz is not None:
@@ -2802,15 +3004,10 @@ class DigestWorkspace:
                 cand["reject_reason"] = "同一件事已在更高分候选入选"
                 rejected.append(cand)
                 continue
-            if cand["kind"] == "guide":
-                if guides_used >= 1:
-                    cand["reject_reason"] = "单轮教程/指南数量已达上限（最多 1 篇）"
-                    rejected.append(cand)
-                    continue
-                guides_used += 1
-            if len(selected) >= regular_budget and explore_used < min(explore_cap, len(explore_pool)):
-                # Only reject/defer if we still need to evaluate explore slots vs regular tail
-                pass
+            if cand["kind"] == "guide" and guides_used >= 1:
+                cand["reject_reason"] = "单轮教程/指南数量已达上限（最多 1 篇）"
+                rejected.append(cand)
+                continue
             if len(selected) >= max_items:
                 cand["reject_reason"] = "超出本轮输出条数上限"
                 rejected.append(cand)
@@ -2818,6 +3015,8 @@ class DigestWorkspace:
             if len(selected) >= regular_budget and len(explore_pool) > explore_used:
                 continue
             selected.append(cand)
+            if cand["kind"] == "guide":
+                guides_used += 1
 
         for cand in explore_pool:
             if len(selected) >= max_items or explore_used >= explore_cap:
@@ -2831,26 +3030,38 @@ class DigestWorkspace:
             selected.append(cand)
             explore_used += 1
 
-        # Top up any unused capacity with remaining regular items if explore didn't use all reserved slots
+        # Top up any unused capacity with remaining regular items if explore didn't use all reserved slots,
+        # and move every remaining deferred candidate into rejected so nothing silently disappears.
+        handled_ids = {id(it) for it in selected} | {id(it) for it in rejected}
         selected_urls = {it["url_key"] for it in selected}
-        rejected_urls = {it.get("url_key") for it in rejected}
         for cand in regular_pool:
+            if id(cand) in handled_ids:
+                continue
+            if cand["url_key"] in selected_urls:
+                cand["reject_reason"] = "与已入选主榜链接重复"
+                rejected.append(cand)
+                handled_ids.add(id(cand))
+                continue
             if len(selected) >= max_items:
-                break
-            if cand["url_key"] in selected_urls or cand["url_key"] in rejected_urls:
+                cand["reject_reason"] = "超出本轮输出条数上限"
+                rejected.append(cand)
+                handled_ids.add(id(cand))
                 continue
             if any(_same_story(cand, chosen) for chosen in selected):
                 cand["reject_reason"] = "同一件事已在更高分候选入选"
                 rejected.append(cand)
+                handled_ids.add(id(cand))
                 continue
-            if cand["kind"] == "guide":
-                if guides_used >= 1:
-                    cand["reject_reason"] = "单轮教程/指南数量已达上限（最多 1 篇）"
-                    rejected.append(cand)
-                    continue
-                guides_used += 1
+            if cand["kind"] == "guide" and guides_used >= 1:
+                cand["reject_reason"] = "单轮教程/指南数量已达上限（最多 1 篇）"
+                rejected.append(cand)
+                handled_ids.add(id(cand))
+                continue
             selected.append(cand)
+            handled_ids.add(id(cand))
             selected_urls.add(cand["url_key"])
+            if cand["kind"] == "guide":
+                guides_used += 1
 
         clean_selected = []
         for idx, cand in enumerate(selected, 1):
@@ -2928,8 +3139,13 @@ class DigestWorkspace:
         async def _one(item: Any) -> None:
             if not isinstance(item, dict):
                 return
-            if str(item.get("cover_data") or "").startswith("data:image/"):
+            raw_cover_data = str(item.get("cover_data") or "").strip()
+            if digest_card.is_safe_raster_data_uri(raw_cover_data):
                 return
+            if raw_cover_data:
+                item.pop("cover_data", None)
+                item.pop("cover_small", None)
+                item.pop("cover_tint", None)
             img_url = str(item.get("image_url") or item.get("cover_url") or "").strip()
             article_url = str(item.get("url") or "").strip()
 
@@ -2949,7 +3165,9 @@ class DigestWorkspace:
                             body
                             and status_code < 400
                             and "text/html" not in ctype
-                            and _apply_cover_bytes(item, body, final_img_url)
+                            and await asyncio.to_thread(
+                                _apply_cover_bytes, item, body, final_img_url
+                            )
                         ):
                             return
                     except Exception:
@@ -2970,7 +3188,9 @@ class DigestWorkspace:
                             or page_ctype.startswith("image/")
                         ):
                             return
-                        og_url = _extract_meta_image(page_body, final_page_url)
+                        og_url = await asyncio.to_thread(
+                            _extract_meta_image, page_body, final_page_url
+                        )
                         if (
                             not og_url
                             or og_url == img_url
@@ -2984,7 +3204,9 @@ class DigestWorkspace:
                         img_ctype = str(img_resp.get("content_type") or "").lower()
                         final_og_url = str(img_resp.get("url") or og_url)
                         if img_body and img_status < 400 and "text/html" not in img_ctype:
-                            _apply_cover_bytes(item, img_body, final_og_url)
+                            await asyncio.to_thread(
+                                _apply_cover_bytes, item, img_body, final_og_url
+                            )
                     except Exception:
                         return
 
@@ -3011,7 +3233,13 @@ class DigestWorkspace:
             if not isinstance(raw_it, dict):
                 continue
             it = dict(raw_it)
-            if not str(it.get("cover_data") or "").startswith("data:image/") and isinstance(
+            raw_cover = str(it.get("cover_data") or "").strip()
+            has_safe_cover = digest_card.is_safe_raster_data_uri(raw_cover)
+            if not has_safe_cover and raw_cover:
+                it.pop("cover_data", None)
+                it.pop("cover_small", None)
+                it.pop("cover_tint", None)
+            if not has_safe_cover and isinstance(
                 it.get("viz"), dict
             ):
                 frag, est_h = _render_viz_fragment(it["viz"], uid=f"vs-{idx}")
@@ -3024,6 +3252,8 @@ class DigestWorkspace:
                     any_viz = True
                     total_viz_h += est_h
                     total_viz_chars += len(frag)
+            elif it.get("viz_frag"):
+                it["viz_frag"] = digest_card.sanitize_html_fragment(str(it["viz_frag"]))
             picked.append(it)
 
         viz_css = _load_viz_css_text() if any_viz else ""
@@ -3040,7 +3270,7 @@ class DigestWorkspace:
             viz_css=viz_css,
             now_ts=self.clock(),
         )
-        doc = _strip_script_tags(doc)
+        doc = re.sub(r"<script\b[^>]*>.*?</script>", "", doc, flags=re.I | re.S)
         res = self.work.write(output_path, doc)
         self.work.commit()
         return {"path": output_path, "bytes": res["bytes"], "count": len(picked)}
@@ -3056,7 +3286,7 @@ async def run_digest_tool(
     dw = DigestWorkspace(work)
     action = arguments["action"]
     if action == "status":
-        return dw.status()
+        return await asyncio.to_thread(dw.status)
     if action == "seed":
         return await dw.seed_starter_feeds(
             arguments.get("topics") or arguments.get("query") or arguments.get("note") or "",
@@ -3092,18 +3322,21 @@ async def run_digest_tool(
             origin=str(arguments.get("origin") or "manual"),
         )
     if action == "unsubscribe":
-        return dw.unsubscribe(
+        return await asyncio.to_thread(
+            dw.unsubscribe,
             arguments.get("feed_id", ""),
             reason=str(arguments.get("note") or "手动退订"),
         )
     if action == "feedback":
-        return dw.feedback(
+        return await asyncio.to_thread(
+            dw.feedback,
             item_id=arguments.get("item_id", ""),
             signal=arguments.get("signal", "up"),
             note=str(arguments.get("note") or ""),
         )
     if action == "score_select":
-        return dw.score_select(
+        return await asyncio.to_thread(
+            dw.score_select,
             list(arguments.get("candidates") or []),
             max_items=int(arguments.get("max_items", 5) or 5),
         )
@@ -3111,7 +3344,7 @@ async def run_digest_tool(
         raw_max = arguments.get("max_items")
         max_items = max(1, min(int(raw_max if raw_max is not None else 5), 8))
         candidates = arguments.get("candidates")
-        history = dw._load_history()
+        history = await asyncio.to_thread(dw._load_history)
         if candidates is None:
             candidates = history.get("last_selected") or []
         picked = [
@@ -3123,7 +3356,8 @@ async def run_digest_tool(
             or history.get("last_total_candidates")
             or len(picked)
         )
-        return dw.render_card_html(
+        return await asyncio.to_thread(
+            dw.render_card_html,
             picked,
             slot_label=str(arguments.get("slot_label") or ""),
             group_title=str(arguments.get("group_title") or ""),

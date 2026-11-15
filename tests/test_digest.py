@@ -1152,6 +1152,7 @@ async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers
                     {
                         "title": "Cloudflare 边缘 KV 延迟优化落地",
                         "url": "https://blog.cloudflare.com/kv-latency-2026/",
+                        "quote": "Reduced p99 read latency by 35% globally.",
                         "brief": "全局边缘节点读取优化后 p99 延迟下降 35%。",
                         "why": "对依赖边缘缓存的独立应用收益直观。",
                         "topic": "系统工程",
@@ -1165,6 +1166,7 @@ async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers
                     {
                         "title": "v2.0 工具发布并改用正文 og:image 封面",
                         "url": "https://indietool.example/posts/v2-release",
+                        "quote": "Benchmark summary",
                         "brief": "自动剔除 logo 缩略图后回退抓取文章 og:image。",
                         "why": "验证多级封面退化链。",
                         "topic": "开源工具",
@@ -1178,6 +1180,7 @@ async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers
                     {
                         "title": "纯色 Logo 被拒收后降级无封面条目",
                         "url": "https://rust-notes.example/posts/mir",
+                        "quote": "Details",
                         "brief": "单色 Logo 图会被封面过滤器拦掉，改用内联 SVG 徽章。",
                         "why": "保证版式不被假封面污染。",
                         "topic": "系统",
