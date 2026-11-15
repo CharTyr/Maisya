@@ -4,8 +4,9 @@ from pathlib import Path
 from maibot_sdk.config import PluginConfigBase
 from pydantic import Field, field_validator
 
+from .pathsafe import path_is_link_like, safe_chmod
 from .sandbox import SandboxSettings
-from .vault import private_directory
+from .vault import VaultError
 
 PROACTIVE_LEVELS = frozenset({"quiet", "care", "lively"})
 USER_ID_RE = re.compile(r"^([a-z][a-z0-9_-]{0,31}):([^\s:]{1,200})$")
@@ -50,7 +51,15 @@ class Settings(PluginConfigBase):
     chat_proactive_levels: dict[str, str] = Field(default_factory=dict)
     acquaintance_users: list[str] = Field(default_factory=list)
     longing_quiet_hours: int = Field(default=0, ge=0, le=720)
+    tz_offset_minutes: int = Field(default=480, ge=-720, le=840)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+
+    @field_validator("tz_offset_minutes", mode="before")
+    @classmethod
+    def _reject_bool_tz_offset(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("tz_offset_minutes 必须是整数分钟偏移，不能为布尔值")
+        return value
 
     @field_validator("longing_quiet_hours")
     @classmethod
@@ -94,6 +103,24 @@ class Settings(PluginConfigBase):
         return cleaned
 
 
+def _ensure_bounded_private_dir(root: Path, relative: str | None = None) -> Path:
+    """仅在 data/maisya 及其子目录边界内检查符号链接并收紧权限，不向上检查宿主祖先目录。"""
+    candidates = [root]
+    if relative:
+        current = root
+        for part in Path(relative).parts:
+            current = current / part
+            candidates.append(current)
+    for candidate in candidates:
+        if path_is_link_like(candidate):
+            raise VaultError("保险箱路径不能经过符号链接")
+        candidate.mkdir(mode=0o700, exist_ok=True)
+        if path_is_link_like(candidate):
+            raise VaultError("保险箱路径不能经过符号链接")
+        safe_chmod(candidate, 0o700)
+    return candidates[-1]
+
+
 def initialize_data(sdk_data_dir: Path) -> Path:
     sdk_data_dir = Path(sdk_data_dir).absolute()
     if (
@@ -101,7 +128,9 @@ def initialize_data(sdk_data_dir: Path) -> Path:
         or sdk_data_dir.parent.parent.name != "data"
     ):
         raise ValueError("宿主 SDK data_dir 应为 <宿主根>/data/plugins/<plugin_id>")
-    root = private_directory(sdk_data_dir.parent.parent / "maisya")
+    data_root = sdk_data_dir.parent.parent
+    data_root.mkdir(parents=True, exist_ok=True)
+    root = _ensure_bounded_private_dir(data_root / "maisya")
     for relative in (
         "vault",
         "abilities/profiles",
@@ -110,5 +139,5 @@ def initialize_data(sdk_data_dir: Path) -> Path:
         "memory/chats",
         "workspaces",
     ):
-        private_directory(root / relative)
+        _ensure_bounded_private_dir(root, relative)
     return root

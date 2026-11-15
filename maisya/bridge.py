@@ -101,7 +101,7 @@ class Bridge:
             ).fetchone()
         return dict(row) if row else None
 
-    def claim_delivery(self, row, route):
+    def claim_delivery(self, row, route, retry_statuses=()):
         thread_id = row["thread_id"]
         revision = row.get("completed_revision", row["revision"])
         destination = (
@@ -113,7 +113,12 @@ class Bridge:
                 "SELECT * FROM result_deliveries WHERE thread_id=? AND revision=? AND destination=?",
                 (thread_id, revision, destination),
             ).fetchone()
-            if old:
+            can_retry = bool(
+                old
+                and old["route"] == route
+                and old["status"] in (retry_statuses or ())
+            )
+            if old and not can_retry:
                 return {"already_handled": True, **dict(old)}
             current = db.execute(
                 "SELECT state,revision,completed_revision FROM agent_threads WHERE thread_id=?",
@@ -127,20 +132,55 @@ class Bridge:
             ):
                 raise ValueError("线程结果已停止或被新的方向替代")
             status = "preparing" if route == "share" else "offered"
-            db.execute(
-                "INSERT INTO result_deliveries VALUES (?, ?, ?, ?, ?, '', ?)",
-                (thread_id, revision, destination, route, status, self.clock()),
-            )
+            if can_retry:
+                db.execute(
+                    "UPDATE result_deliveries SET status=?, at=? WHERE thread_id=? AND revision=? AND destination=?",
+                    (status, self.clock(), thread_id, revision, destination),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO result_deliveries VALUES (?, ?, ?, ?, ?, '', ?)",
+                    (thread_id, revision, destination, route, status, self.clock()),
+                )
             db.execute(
                 "UPDATE return_intents SET consumed=1 WHERE thread_id=? AND revision=?",
                 (thread_id, revision),
             )
-        return {
+        result = {
             "thread_id": thread_id,
             "revision": revision,
             "route": route,
             "status": status,
         }
+        if can_retry:
+            result["retried_from"] = old["status"]
+            result["message_id"] = old["message_id"]
+        return result
+
+    def record_delivery_part(
+        self, thread_id, revision, destination, route, status, message_id=""
+    ):
+        with self.store.connect() as db, db:
+            db.execute(
+                "INSERT OR REPLACE INTO result_deliveries VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    revision,
+                    destination,
+                    route,
+                    status,
+                    str(message_id or ""),
+                    self.clock(),
+                ),
+            )
+
+    def get_delivery_part(self, thread_id, revision, destination):
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT * FROM result_deliveries WHERE thread_id=? AND revision=? AND destination=?",
+                (thread_id, revision, destination),
+            ).fetchone()
+        return dict(row) if row else None
 
     def finish_delivery(
         self, thread_id, revision, status, message_id, destination=None
@@ -312,6 +352,23 @@ class Bridge:
 
         await asyncio.to_thread(settle)
 
+    async def abort_planned(self, chat_id, source_msg_id=""):
+        key = (chat_id, source_msg_id)
+        planned = self._plans.get(key)
+        if not planned:
+            for candidate_key in list(self._plans):
+                if candidate_key[0] == chat_id and self._plans[candidate_key]:
+                    key = candidate_key
+                    planned = self._plans[key]
+                    break
+        if not planned:
+            return False
+        group = planned.pop(0)
+        if not planned:
+            self._plans.pop(key, None)
+        await self.submitted({"group_id": group})
+        return True
+
     def _rows(self, db, chat_id=None, ids=None, *, group_id=None, thread_id=None):
         now = self.clock()
         parameters = [now - 1800]
@@ -366,8 +423,9 @@ class Bridge:
                     )
             if (
                 ids is None
+                and group_id is None
                 and not _grant_admin_direct(item.get("raw_grant"))
-                and (item.get("available_at") or 0) < now - 600
+                and (item.get("available_at") or 0) < now - 1800
             ):
                 continue
             item["result"] = json.loads(item["payload"])
@@ -486,7 +544,7 @@ class Bridge:
                     claim = await asyncio.to_thread(self.claim_delivery, row, "reply")
                 except ValueError:
                     continue
-                if claim["route"] != "reply":
+                if claim.get("already_handled") or claim["route"] != "reply":
                     continue
             unique[(row["thread_id"], row["revision"])] = row
         rows = list(unique.values())
@@ -612,17 +670,23 @@ class Bridge:
         now = self.clock()
         batches = {}
         allow_plugin = plugin_enabled() if callable(plugin_enabled) else True
+        if not allow_plugin:
+            return batches
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             groups = db.execute(
-                "SELECT g.* FROM return_groups g WHERE g.wake_attempted IS NULL AND "
-                "(g.ready_after<=? OR g.deadline<=?) AND EXISTS ("
+                "SELECT g.* FROM return_groups g WHERE ("
+                "g.wake_attempted IS NULL "
+                "OR g.wake_status IN ('skipped', 'deferred') "
+                "OR (g.wake_status IN ('rejected', 'session_missing', 'failed') AND g.wake_attempted <= ?) "
+                "OR (g.wake_status = 'attempting' AND g.wake_attempted <= ?)"
+                ") AND (g.ready_after<=? OR g.deadline<=?) AND EXISTS ("
                 "SELECT 1 FROM return_intents i JOIN agent_threads t ON t.thread_id=i.thread_id "
                 "WHERE i.group_id=g.group_id AND i.origin='user' AND i.inline=0 AND i.consumed=0 "
                 "AND i.available_at BETWEEN ? AND ? AND t.revision=i.revision "
                 "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting')) "
                 "ORDER BY g.deadline LIMIT 64",
-                (now, now, now - 1800, now),
+                (now - 15.0, now - 60.0, now, now, now - 1800, now),
             ).fetchall()
             for group in groups:
                 if group["remaining"] and now < group["deadline"]:
@@ -659,7 +723,13 @@ class Bridge:
     def wake_status(self, rows, status):
         with self.store.connect() as db, db:
             for group_id in {row["group_id"] for row in rows}:
-                db.execute(
-                    "UPDATE return_groups SET wake_status=? WHERE group_id=?",
-                    (status, group_id),
-                )
+                if status in {"skipped", "deferred"}:
+                    db.execute(
+                        "UPDATE return_groups SET wake_attempted=NULL, wake_status=? WHERE group_id=?",
+                        (status, group_id),
+                    )
+                else:
+                    db.execute(
+                        "UPDATE return_groups SET wake_status=? WHERE group_id=?",
+                        (status, group_id),
+                    )

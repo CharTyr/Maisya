@@ -48,6 +48,7 @@
     "config.get_plugin",
     "chat.open_session",
     "chat.get_all_streams",
+    "chat.get_avatar",
     "llm.generate_with_tools",
     "llm.generate_for_image",
     "llm.get_available_models",

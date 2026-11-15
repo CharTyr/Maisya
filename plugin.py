@@ -246,6 +246,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self.incoming = None
         self._pending_sources = {}
         self._turn_sources = {}
+        self._continuing_turn_chats: set[str] = set()
+        self._reply_sources: dict[str, tuple[float, list[str]]] = {}
         self._turn_ops_receipts: dict[str, dict] = {}
         self._bootstrap_messages = {}
         self._bootstrap_platforms = {}
@@ -446,6 +448,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self.incoming = None
         self._pending_sources.clear()
         self._turn_sources.clear()
+        self._continuing_turn_chats.clear()
+        self._reply_sources.clear()
         self._turn_ops_receipts.clear()
         self._bootstrap_messages.clear()
         self._bootstrap_platforms.clear()
@@ -1438,8 +1442,11 @@ class MaisyaPlugin(MaiBotPlugin):
             if len(parts) == 4 and parts[1] == "set":
                 secrets.update(secret_variants(parts[3]))
             try:
-                if private and self.authorize_admin_source(
-                    identity.message_id, identity.session_id, identity.platform
+                if private and await asyncio.to_thread(
+                    self.authorize_admin_source,
+                    identity.message_id,
+                    identity.session_id,
+                    identity.platform,
                 ):
                     if len(parts) == 4 and parts[1] == "set":
                         await asyncio.to_thread(self.vault.set, parts[2], parts[3])
@@ -1469,7 +1476,8 @@ class MaisyaPlugin(MaiBotPlugin):
         message = kwargs.get("message") or {}
         identity = Message.from_event(message)
         try:
-            chat_enabled = self.enabled_for(
+            chat_enabled = await asyncio.to_thread(
+                self.enabled_for,
                 identity.session_id,
                 identity.platform,
                 group_id=identity.group_id,
@@ -1478,7 +1486,7 @@ class MaisyaPlugin(MaiBotPlugin):
             admin_bootstrap = bool(
                 not chat_enabled
                 and self.settings.plugin.enabled
-                and self.is_verified_admin_identity(identity)
+                and await asyncio.to_thread(self.is_verified_admin_identity, identity)
             )
             if self.messages and chat_enabled:
                 await asyncio.to_thread(self.messages.record, identity)
@@ -1499,9 +1507,16 @@ class MaisyaPlugin(MaiBotPlugin):
                 and self.settings.plugin.enabled
                 and identity.is_plugin_relayed
                 and (
-                    (self.bridge and self.bridge.has_admin_direct_for(identity.session_id))
-                    or self._is_verified_admin_private_chat(
-                        identity.session_id, identity.platform
+                    (
+                        self.bridge
+                        and await asyncio.to_thread(
+                            self.bridge.has_admin_direct_for, identity.session_id
+                        )
+                    )
+                    or await asyncio.to_thread(
+                        self._is_verified_admin_private_chat,
+                        identity.session_id,
+                        identity.platform,
                     )
                     or (
                         not identity.group_id
@@ -1511,7 +1526,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             ):
                 self._record_relayed_bootstrap_source(identity)
-            if chat_enabled or admin_bootstrap:
+            if (chat_enabled or admin_bootstrap) and not identity.is_plugin_relayed:
                 pending = self._pending_sources.setdefault(identity.session_id, [])
                 pending.append(identity.message_id)
                 del pending[:-32]
@@ -1521,6 +1536,29 @@ class MaisyaPlugin(MaiBotPlugin):
         if VAULT_COMMAND.match(text.strip()) or PRIVATE_KEY.search(text):
             return await self._vault_input(message, identity, text)
         return {"action": "continue"}
+
+    async def _target_in_chat_aliases(
+        self, raw_target: str, chat_id: str, platform: str = ""
+    ) -> bool:
+        cleaned = str(raw_target or "").strip()
+        if not cleaned or cleaned == "current":
+            return True
+        aliases = await asyncio.to_thread(self.chat_aliases_for, chat_id, platform)
+        lower_aliases = {str(item).strip().lower() for item in aliases if item}
+        if cleaned in aliases or cleaned.lower() in lower_aliases:
+            return True
+        parsed = parse_stream_spec(cleaned)
+        if parsed:
+            normalized = format_stream_spec(*parsed)
+            if normalized in aliases or normalized.lower() in lower_aliases:
+                return True
+        try:
+            resolved_id, _ = await self.resolve_chat_id(
+                cleaned, current_chat_id=chat_id, current_platform=platform
+            )
+        except (ValueError, RuntimeError):
+            return False
+        return resolved_id in aliases or resolved_id.lower() in lower_aliases
 
     async def schedule_cross_chat_delivery(
         self,
@@ -1673,6 +1711,9 @@ class MaisyaPlugin(MaiBotPlugin):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
         route = None
+        planned_source = str(source_msg_id or "")
+        raw_deliver_to = str(deliver_to or "auto").strip()
+        raw_target_chat = str(target_chat or "").strip()
         caller_specified_wait = wait_seconds is not None
         if wait_seconds is None:
             wait_seconds = 20
@@ -1681,7 +1722,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 raise PermissionError("Maisya 尚未就绪或已停用")
             if type(wait_seconds) not in (int, float) or not 0 <= wait_seconds <= 30:
                 raise ValueError("等待窗口必须在 0 到 30 秒之间")
-            deliver_to = str(deliver_to or "auto").strip()
+            deliver_to = raw_deliver_to
             if deliver_to not in {"auto", "target", "current", "none"}:
                 raise ValueError("deliver_to 必须是 auto/target/current/none")
             is_admin_caller = bool(
@@ -1690,7 +1731,6 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.authorize_admin_source, source_msg_id, chat_id, platform
                 )
             )
-            raw_target_chat = str(target_chat or "").strip()
             effective_chat_id, effective_platform = chat_id, platform
             pre_row = None
             if raw_target_chat:
@@ -1730,9 +1770,13 @@ class MaisyaPlugin(MaiBotPlugin):
                 and not cross_chat
                 and not is_admin_caller
                 and (
-                    not self.enabled_for(effective_chat_id, effective_platform)
-                    or self._is_verified_admin_private_chat(
-                        effective_chat_id, effective_platform
+                    not await asyncio.to_thread(
+                        self.enabled_for, effective_chat_id, effective_platform
+                    )
+                    or await asyncio.to_thread(
+                        self._is_verified_admin_private_chat,
+                        effective_chat_id,
+                        effective_platform,
                     )
                 )
                 and thread_id
@@ -1747,7 +1791,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 and cross_chat
                 and deliver_to == "auto"
                 and (
-                    not self.enabled_for(chat_id, platform)
+                    not await asyncio.to_thread(self.enabled_for, chat_id, platform)
                     or (
                         thread_id
                         and self.bridge
@@ -1769,14 +1813,16 @@ class MaisyaPlugin(MaiBotPlugin):
                     action in {"start", "send"}
                     and delivery_mode in {"current", "none"}
                 )
-                if not allow_cross and not self.enabled_for(
-                    effective_chat_id, effective_platform
+                if not allow_cross and not await asyncio.to_thread(
+                    self.enabled_for, effective_chat_id, effective_platform
                 ):
                     raise PermissionError(
                         "目标会话尚未加入 enabled_chats；可先用 maisya_shape 开启白名单，或传 deliver_to='current' 先回传当前私聊预览"
                     )
             elif not (
-                self.enabled_for(effective_chat_id, effective_platform)
+                await asyncio.to_thread(
+                    self.enabled_for, effective_chat_id, effective_platform
+                )
                 or effective_admin
             ):
                 raise PermissionError("当前会话没有启用 Maisya")
@@ -1794,7 +1840,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 raise ValueError("steer 仅用于 send 的显式转向")
             identity = None
             if source_msg_id:
-                lookup_max_age = self._admin_source_max_age(chat_id, platform)
+                lookup_max_age = await asyncio.to_thread(
+                    self._admin_source_max_age, chat_id, platform
+                )
                 identity = await asyncio.to_thread(
                     self._lookup_message,
                     source_msg_id,
@@ -1802,6 +1850,8 @@ class MaisyaPlugin(MaiBotPlugin):
                     platform,
                     max_age=lookup_max_age,
                 )
+                if identity is not None and not identity.is_plugin_relayed:
+                    planned_source = identity.message_id
                 if identity is not None and identity.is_plugin_relayed:
                     raise PermissionError("本次调用的来源消息无法核验")
                 if identity is None:
@@ -1878,11 +1928,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 dest_arena = await asyncio.to_thread(
                     self._chat_arena, dest_chat_id, dest_platform
                 )
-                if dest_arena != "group" or not (
-                    not cross_chat
-                    or caller_arena == "group"
-                    or delivery_mode != "current"
-                ):
+                if dest_arena != "group":
                     return
                 if (
                     prev_row.get("owner") == "chat"
@@ -1908,14 +1954,18 @@ class MaisyaPlugin(MaiBotPlugin):
             admin_direct_grant = bool(
                 is_admin_caller
                 and delivery_mode == "current"
-                and (cross_chat or not self.enabled_for(chat_id, platform))
+                and (
+                    cross_chat
+                    or not await asyncio.to_thread(self.enabled_for, chat_id, platform)
+                )
             )
             if action == "start":
                 ability = await asyncio.to_thread(self.profiles.get, profile)
                 self.runtime.available(ability)
                 if owner == "self" and not ability.autonomous:
                     raise PermissionError("自身活动只使用公开、无私有凭据的能力")
-                if not self._profile_allowed(
+                if not await asyncio.to_thread(
+                    self._profile_allowed,
                     ability,
                     identity,
                     effective_chat_id,
@@ -2050,17 +2100,22 @@ class MaisyaPlugin(MaiBotPlugin):
                     if effective_admin and row["owner"] == "chat"
                     else effective_platform
                 )
-                if not all(
-                    self._profile_allowed(
-                        candidate,
-                        identity,
-                        check_chat,
-                        check_plat,
-                        admin_verified=effective_admin,
-                    )
-                    for candidate in (
-                        Profile(**row["profile_snapshot"]),
-                        self.profiles.get(row["profile"]),
+                current_ability = await asyncio.to_thread(
+                    self.profiles.get, row["profile"]
+                )
+                if not await asyncio.to_thread(
+                    lambda: all(
+                        self._profile_allowed(
+                            candidate,
+                            identity,
+                            check_chat,
+                            check_plat,
+                            admin_verified=effective_admin,
+                        )
+                        for candidate in (
+                            Profile(**row["profile_snapshot"]),
+                            current_ability,
+                        )
                     )
                 ):
                     raise PermissionError("当前真实发言人或会话不在原线程能力范围内")
@@ -2127,7 +2182,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             raise PermissionError(
                                 "群聊个人委托线程仅限发起人或管理员继续补充或回答提问"
                             )
-                    self.runtime.available(self.profiles.get(row["profile"]))
+                    self.runtime.available(current_ability)
                     if from_threads:
                         for previous in from_threads:
                             prev_row = await asyncio.to_thread(
@@ -2253,6 +2308,23 @@ class MaisyaPlugin(MaiBotPlugin):
         finally:
             if route and self.bridge:
                 await self.bridge.submitted(route)
+            elif (
+                route is None
+                and self.bridge
+                and chat_id
+                and action in {"start", "send"}
+                and owner != "self"
+                and raw_deliver_to != "none"
+                and (
+                    raw_deliver_to == "current"
+                    or not raw_target_chat
+                    or raw_target_chat == "current"
+                    or await self._target_in_chat_aliases(
+                        raw_target_chat, chat_id, platform
+                    )
+                )
+            ):
+                await self.bridge.abort_planned(chat_id, planned_source)
 
     @Tool(
         "maisya_recall",
@@ -2302,13 +2374,16 @@ class MaisyaPlugin(MaiBotPlugin):
         try:
             if not self.threads or not self.settings.plugin.enabled:
                 raise PermissionError("Maisya 尚未就绪或已停用")
+            recall_max_age = await asyncio.to_thread(
+                self._admin_source_max_age, chat_id, platform
+            )
             identity = (
                 await asyncio.to_thread(
                     self._lookup_message,
                     source_msg_id,
                     chat_id,
                     platform,
-                    max_age=self._admin_source_max_age(chat_id, platform),
+                    max_age=recall_max_age,
                 )
                 if source_msg_id
                 else None
@@ -2336,13 +2411,20 @@ class MaisyaPlugin(MaiBotPlugin):
                 if search_chat_id != chat_id and not is_admin_caller:
                     raise PermissionError("跨会话检索需要真实管理员消息授权")
                 all_chats = False
-                alias_ids = self.chat_aliases_for(search_chat_id, search_platform)
+                alias_ids = await asyncio.to_thread(
+                    self.chat_aliases_for, search_chat_id, search_platform
+                )
             else:
-                if not self.enabled_for(chat_id, platform) and not is_admin_caller:
+                if (
+                    not await asyncio.to_thread(self.enabled_for, chat_id, platform)
+                    and not is_admin_caller
+                ):
                     raise PermissionError("当前会话没有启用 Maisya")
                 all_chats = False
                 search_chat_id, search_platform = chat_id, platform
-                alias_ids = self.chat_aliases_for(chat_id, platform)
+                alias_ids = await asyncio.to_thread(
+                    self.chat_aliases_for, chat_id, platform
+                )
             if kind not in {"threads", "experiences", "memory", "journal", "all"}:
                 raise ValueError("未知记忆类型")
             rows = []
@@ -2398,8 +2480,10 @@ class MaisyaPlugin(MaiBotPlugin):
                 ):
                     enriched = dict(item)
                     if enriched.get("chat_id") and enriched.get("chat_id") != "self":
-                        spec = self.canonical_stream_spec(
-                            enriched["chat_id"], row.get("platform") or search_platform
+                        spec = await asyncio.to_thread(
+                            self.canonical_stream_spec,
+                            enriched["chat_id"],
+                            row.get("platform") or search_platform,
                         )
                         if spec:
                             enriched["stream_spec"] = spec
@@ -2412,7 +2496,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 and identity is not None
                 and not identity.is_plugin_relayed
                 and bool(identity.user_id)
-                and self.enabled_for(chat_id, platform)
+                and await asyncio.to_thread(self.enabled_for, chat_id, platform)
             ):
                 seen_thread_ids = {r["thread_id"] for _, r in readable}
                 caller_plat = str(identity.platform or platform).lower()
@@ -2451,12 +2535,16 @@ class MaisyaPlugin(MaiBotPlugin):
                     if (
                         await asyncio.to_thread(self._chat_arena, cand_chat, cand_plat)
                         != "group"
-                        or not self.enabled_for(cand_chat, cand_plat)
+                        or not await asyncio.to_thread(
+                            self.enabled_for, cand_chat, cand_plat
+                        )
                     ):
                         continue
                     try:
                         snap_prof = Profile(**cand_row["profile_snapshot"])
-                        cur_prof = self.profiles.get(cand_row["profile"])
+                        cur_prof = await asyncio.to_thread(
+                            self.profiles.get, cand_row["profile"]
+                        )
                     except (OSError, ValueError, FileNotFoundError):
                         continue
                     if not all(
@@ -2877,7 +2965,12 @@ class MaisyaPlugin(MaiBotPlugin):
                     )
                     if effective_chat_id != chat_id and not is_admin_caller:
                         raise PermissionError("跨会话查看计划需要真实管理员消息授权")
-                elif not self.enabled_for(effective_chat_id, effective_platform) and not is_admin_caller:
+                elif (
+                    not await asyncio.to_thread(
+                        self.enabled_for, effective_chat_id, effective_platform
+                    )
+                    and not is_admin_caller
+                ):
                     raise PermissionError("当前会话没有启用 Maisya")
                 rows = await asyncio.to_thread(self.intents.list, "chat:" + effective_chat_id)
                 rows = self.vault.redact(rows)
@@ -2902,7 +2995,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 elif is_admin_caller:
                     cancel_target = existing["target"]
                 else:
-                    if not self.enabled_for(chat_id, platform):
+                    if not await asyncio.to_thread(self.enabled_for, chat_id, platform):
                         raise PermissionError("当前会话没有启用 Maisya")
                     cancel_target = "chat:" + chat_id
                 result = await asyncio.to_thread(
@@ -2924,31 +3017,37 @@ class MaisyaPlugin(MaiBotPlugin):
             if cross_chat and not is_admin_caller:
                 raise PermissionError("跨会话安排计划需要真实管理员消息授权")
             intent_kind = kind if kind in {"proactive", "silent"} else "return"
+            effective_enabled = await asyncio.to_thread(
+                self.enabled_for, effective_chat_id, effective_platform
+            )
             if cross_chat:
-                if not self.enabled_for(effective_chat_id, effective_platform):
+                if not effective_enabled:
                     raise PermissionError(
                         "目标会话尚未加入 enabled_chats，请先通过 maisya_shape 开启白名单后再安排计划"
                     )
             elif not (
-                self.enabled_for(effective_chat_id, effective_platform)
+                effective_enabled
                 or (is_admin_caller and intent_kind == "return")
             ):
                 raise PermissionError("当前会话没有启用 Maisya")
             admin_direct = bool(
                 is_admin_caller
                 and not cross_chat
-                and not self.enabled_for(effective_chat_id, effective_platform)
+                and not effective_enabled
             )
             target = "chat:" + effective_chat_id
 
             identity = None
             if source_msg_id:
+                later_max_age = await asyncio.to_thread(
+                    self._admin_source_max_age, chat_id, platform
+                )
                 identity = await asyncio.to_thread(
                     self._lookup_message,
                     source_msg_id,
                     chat_id,
                     platform,
-                    max_age=self._admin_source_max_age(chat_id, platform),
+                    max_age=later_max_age,
                 )
                 if identity is None or identity.is_plugin_relayed:
                     raise PermissionError("本次调用的来源消息无法核验")
@@ -2961,7 +3060,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 self.runtime.available(ability)
                 if not ability.autonomous and not is_admin_caller:
                     raise PermissionError("定期运行受限角色需要真实管理员消息授权")
-                if not self._profile_allowed(
+                if not await asyncio.to_thread(
+                    self._profile_allowed,
                     ability,
                     identity,
                     effective_chat_id,
@@ -3161,35 +3261,66 @@ class MaisyaPlugin(MaiBotPlugin):
                     ],
                 },
             }
+        self._reply_sources.pop(chat_id, None)
         has_pending_sources = bool(self._pending_sources.get(chat_id))
+        raw_items = kwargs.get("items") or []
+        item_text = "\n".join(
+            str(part.get("text") or "")
+            for it in raw_items
+            if isinstance(it, dict)
+            for part in (
+                it.get("parts") or ([it] if isinstance(it.get("text"), str) else [])
+            )
+            if isinstance(part, dict)
+        )
+        is_pulse_wakeup = any(
+            marker in item_text
+            for marker in ("<plugin_proactive_task", "<maisya_intent", "<maisya_return")
+        )
+        lookup_max_age = await asyncio.to_thread(
+            self._admin_source_max_age, chat_id, platform
+        )
+        has_pending_bridge = bool(
+            self.bridge
+            and await asyncio.to_thread(self.bridge.has_pending_for, chat_id)
+        )
         self._prune_ops_receipts()
         if has_pending_sources:
             self._turn_sources[chat_id] = self._pending_sources.pop(chat_id)
-            self._turn_ops_receipts.pop(chat_id, None)
+            self._continuing_turn_chats.discard(chat_id)
+        elif is_pulse_wakeup or (
+            has_pending_bridge and chat_id not in self._continuing_turn_chats
+        ):
+            self._turn_sources.pop(chat_id, None)
+            self._continuing_turn_chats.discard(chat_id)
         else:
             existing_sources = list(self._turn_sources.get(chat_id) or ())
             if existing_sources:
-                fresh_sources = await asyncio.to_thread(
-                    lambda: [
-                        item
-                        for item in existing_sources
-                        if self._lookup_message(item, chat_id, platform, max_age=300)
-                        is not None
-                    ]
-                )
+                def _filter_fresh_sources():
+                    fresh = []
+                    for item in existing_sources:
+                        looked = self._lookup_message(
+                            item, chat_id, platform, max_age=lookup_max_age
+                        )
+                        if looked is not None and not looked.is_plugin_relayed:
+                            fresh.append(item)
+                    return fresh
+
+                fresh_sources = await asyncio.to_thread(_filter_fresh_sources)
                 if fresh_sources:
                     self._turn_sources[chat_id] = fresh_sources
                 else:
                     self._turn_sources.pop(chat_id, None)
-            if self._turn_ops_receipts.get(chat_id, {}).get("consumed"):
-                self._turn_ops_receipts.pop(chat_id, None)
+                    self._continuing_turn_chats.discard(chat_id)
+        if self._turn_ops_receipts.get(chat_id, {}).get("consumed"):
+            self._turn_ops_receipts.pop(chat_id, None)
         sources = self._turn_sources.get(chat_id, [])
         is_admin = await asyncio.to_thread(
             lambda: any(
                 self.authorize_admin_source(item, chat_id, platform) for item in sources
             )
         )
-        enabled = self.enabled_for(chat_id, platform)
+        enabled = await asyncio.to_thread(self.enabled_for, chat_id, platform)
         if not enabled and not is_admin:
             has_admin_direct = bool(
                 self.bridge
@@ -3272,7 +3403,9 @@ class MaisyaPlugin(MaiBotPlugin):
                     continue
                 try:
                     identities = [None] + [
-                        self._lookup_message(source, chat_id, platform, max_age=300)
+                        self._lookup_message(
+                            source, chat_id, platform, max_age=lookup_max_age
+                        )
                         for source in sources
                     ]
                     if enabled and not any(
@@ -3361,7 +3494,9 @@ class MaisyaPlugin(MaiBotPlugin):
 
         if not enabled and is_admin:
             latest_source = sources[-1] if sources else ""
-            current_spec = self.canonical_stream_spec(chat_id, platform)
+            current_spec = await asyncio.to_thread(
+                self.canonical_stream_spec, chat_id, platform
+            )
             returned = await self.bridge.offer(chat_id)
             boot_parts = [
                 "<maisya_admin_bootstrap>",
@@ -3536,6 +3671,10 @@ class MaisyaPlugin(MaiBotPlugin):
             (item.get("tool_call") or {}).get("func_name") == "maisya_agent"
             and isinstance((item.get("tool_call") or {}).get("args"), dict)
             and (item.get("tool_call") or {}).get("args", {}).get("action") == "share"
+            and not (
+                isinstance(item.get("tool_result"), dict)
+                and item["tool_result"].get("success") is False
+            )
             for item in output
         )
         has_wait_stop = any(
@@ -3599,11 +3738,18 @@ class MaisyaPlugin(MaiBotPlugin):
         for item in output:
             call = item.get("tool_call") or {}
             if call.get("func_name") == "maisya_agent":
+                tool_result = item.get("tool_result")
+                if (
+                    isinstance(tool_result, dict)
+                    and tool_result.get("success") is False
+                ):
+                    continue
                 arguments = call.get("args") or {}
-                if isinstance(arguments, dict) and arguments.get("action") in {
-                    "start",
-                    "send",
-                }:
+                if (
+                    isinstance(arguments, dict)
+                    and arguments.get("action") in {"start", "send"}
+                    and str(arguments.get("owner") or "chat").strip() != "self"
+                ):
                     raw_tc = str(arguments.get("target_chat") or "").strip()
                     deliver_to = str(arguments.get("deliver_to") or "auto").strip()
                     if deliver_to == "none":
@@ -3611,18 +3757,23 @@ class MaisyaPlugin(MaiBotPlugin):
                     if (
                         raw_tc
                         and raw_tc != "current"
-                        and raw_tc not in self.chat_aliases_for(chat_id)
                         and deliver_to != "current"
+                        and not await self._target_in_chat_aliases(
+                            raw_tc, chat_id, platform
+                        )
                     ):
                         continue
                     source = str(arguments.get("source_msg_id") or "")
+                    max_age = await asyncio.to_thread(
+                        self._admin_source_max_age, chat_id, platform
+                    )
                     identity = (
                         await asyncio.to_thread(
                             self._lookup_message,
                             source,
                             chat_id,
                             platform,
-                            max_age=self._admin_source_max_age(chat_id, platform),
+                            max_age=max_age,
                         )
                         if source
                         else None
@@ -3637,14 +3788,10 @@ class MaisyaPlugin(MaiBotPlugin):
                         calls.append(
                             (identity.message_id if identity else source, wait)
                         )
-            if call.get("func_name") in {"stop", "wait"}:
-                self._turn_sources.pop(chat_id, None)
-                if not has_reply:
-                    self._turn_ops_receipts.pop(chat_id, None)
-                if self.bridge and not has_reply:
-                    await self.bridge.end_turn(chat_id)
         if calls and self.bridge and self.settings.plugin.enabled:
-            can_plan = self.enabled_for(chat_id, platform) or await asyncio.to_thread(
+            can_plan = await asyncio.to_thread(
+                self.enabled_for, chat_id, platform
+            ) or await asyncio.to_thread(
                 lambda: any(
                     self.authorize_admin_source(src, chat_id, platform)
                     for src, _ in calls
@@ -3652,6 +3799,21 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             if can_plan:
                 await self.bridge.plan(chat_id, calls)
+        if has_wait_stop:
+            self._continuing_turn_chats.discard(chat_id)
+            self._turn_sources.pop(chat_id, None)
+            if not has_reply:
+                self._turn_ops_receipts.pop(chat_id, None)
+            if self.bridge and not has_reply:
+                await self.bridge.end_turn(chat_id)
+        elif has_reply or has_share or not output:
+            turn_srcs = self._turn_sources.pop(chat_id, None)
+            self._continuing_turn_chats.discard(chat_id)
+            if has_reply and turn_srcs:
+                self._reply_sources[chat_id] = (time.monotonic(), list(turn_srcs))
+        else:
+            if self._turn_sources.get(chat_id):
+                self._continuing_turn_chats.add(chat_id)
         if (
             self.intents
             and had_turn_sources
@@ -3677,7 +3839,7 @@ class MaisyaPlugin(MaiBotPlugin):
         ):
             return {"action": "continue"}
         platform = await asyncio.to_thread(self._platform_for, chat_id)
-        enabled = self.enabled_for(chat_id, platform)
+        enabled = await asyncio.to_thread(self.enabled_for, chat_id, platform)
         arguments = kwargs.get("reply_tool_args") or {}
         if not isinstance(arguments, dict):
             arguments = {}
@@ -3996,7 +4158,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     async with sem:
                         url = ""
                         now_done = time.monotonic()
-                        expires = now_done + 180.0
+                        expires = now_done + 15.0
                         try:
                             res = await call_capability(
                                 ctx,
@@ -4026,9 +4188,30 @@ class MaisyaPlugin(MaiBotPlugin):
                                     expires = now_done + 300.0
                                 else:
                                     expires = now_done + 180.0
-                        except Exception:
+                            else:
+                                err_detail = (
+                                    res.get("error") or res
+                                    if isinstance(res, dict)
+                                    else res
+                                )
+                                if getattr(ctx, "logger", None):
+                                    ctx.logger.warning(
+                                        "chat.get_avatar failed for %s:%s: %s",
+                                        meta["platform"],
+                                        meta["target_id"],
+                                        err_detail,
+                                    )
+                                expires = now_done + 15.0
+                        except Exception as exc:
+                            if getattr(ctx, "logger", None):
+                                ctx.logger.warning(
+                                    "chat.get_avatar error for %s:%s: %s",
+                                    meta["platform"],
+                                    meta["target_id"],
+                                    exc,
+                                )
                             url = ""
-                            expires = time.monotonic() + 180.0
+                            expires = time.monotonic() + 15.0
                         self._avatar_cache[cache_key] = {"expires": expires, "url": url}
                         return url
                 finally:
@@ -4067,62 +4250,68 @@ class MaisyaPlugin(MaiBotPlugin):
                 if chat_id and str(chat_id).strip() and str(chat_id).strip() != "self"
                 else chat_id
             )
-            result = await asyncio.to_thread(
-                snapshot,
-                self.threads,
-                thread_id=thread_id,
-                chat_id=filter_chat,
-                cursor=cursor,
-                context_limit=self.settings.thread_context_chars,
-                context_tokens=self.settings.thread_context_tokens,
-                model_catalog=self.get_model_catalog(),
-                redact=self.vault.redact,
-                memory=self.memory,
-            )
-            profile_ids = (
-                sorted(
-                    item.name
-                    for item in self.profiles.path.iterdir()
-                    if item.is_dir() and not item.name.startswith(".") and not item.is_symlink()
+            def _load_console_bundle():
+                model_catalog = self.get_model_catalog()
+                res = snapshot(
+                    self.threads,
+                    thread_id=thread_id,
+                    chat_id=filter_chat,
+                    cursor=cursor,
+                    context_limit=self.settings.thread_context_chars,
+                    context_tokens=self.settings.thread_context_tokens,
+                    model_catalog=model_catalog,
+                    redact=self.vault.redact,
+                    memory=self.memory,
                 )
-                if self.profiles and self.profiles.path.exists()
-                else []
-            )
-            profile_cards = []
-            for pid in profile_ids[:100]:
-                try:
-                    card = self.profiles.get(pid)
-                    profile_cards.append(
-                        {
-                            "id": card.id,
-                            "title": card.title or card.id,
-                            "environment": card.environment,
-                            "access": card.access,
-                            "enabled": card.enabled,
-                            "autonomous": card.autonomous,
-                            "task": card.task,
-                            "model_name": card.model_name or card.model,
-                            "fallback_models": list(card.fallback_models),
-                            "model_list": list(card.model_list),
-                            "fish_seed": card.fish_seed,
-                        }
+                profile_ids = (
+                    sorted(
+                        item.name
+                        for item in self.profiles.path.iterdir()
+                        if item.is_dir()
+                        and not item.name.startswith(".")
+                        and not item.is_symlink()
                     )
-                except (ValueError, OSError):
-                    profile_cards.append(
-                        {
-                            "id": pid,
-                            "title": pid,
-                            "environment": "readonly",
-                            "access": "everyone",
-                            "enabled": True,
-                            "autonomous": True,
-                            "task": "utils",
-                            "model_name": "",
-                            "fallback_models": [],
-                            "model_list": [],
-                            "fish_seed": "",
-                        }
-                    )
+                    if self.profiles and self.profiles.path.exists()
+                    else []
+                )
+                cards = []
+                for pid in profile_ids[:100]:
+                    try:
+                        card = self.profiles.get(pid)
+                        cards.append(
+                            {
+                                "id": card.id,
+                                "title": card.title or card.id,
+                                "environment": card.environment,
+                                "access": card.access,
+                                "enabled": card.enabled,
+                                "autonomous": card.autonomous,
+                                "task": card.task,
+                                "model_name": card.model_name or card.model,
+                                "fallback_models": list(card.fallback_models),
+                                "model_list": list(card.model_list),
+                                "fish_seed": card.fish_seed,
+                            }
+                        )
+                    except (ValueError, OSError):
+                        cards.append(
+                            {
+                                "id": pid,
+                                "title": pid,
+                                "environment": "readonly",
+                                "access": "everyone",
+                                "enabled": True,
+                                "autonomous": True,
+                                "task": "utils",
+                                "model_name": "",
+                                "fallback_models": [],
+                                "model_list": [],
+                                "fish_seed": "",
+                            }
+                        )
+                return res, cards
+
+            result, profile_cards = await asyncio.to_thread(_load_console_bundle)
 
             def _daily_proactive_used():
                 if not self.intents:
@@ -4336,7 +4525,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 if not (
                     self.settings.plugin.enabled
                     if target_chat == "self"
-                    else self.enabled_for(target_chat, target_platform)
+                    else await asyncio.to_thread(
+                        self.enabled_for, target_chat, target_platform
+                    )
                 ):
                     raise PermissionError("目标会话尚未启用 Maisya")
                 ability = await asyncio.to_thread(self.profiles.get, str(profile))
@@ -4357,7 +4548,9 @@ class MaisyaPlugin(MaiBotPlugin):
             if not (
                 self.settings.plugin.enabled
                 if row["owner"] == "self"
-                else self.enabled_for(row["chat_id"], row["platform"])
+                else await asyncio.to_thread(
+                    self.enabled_for, row["chat_id"], row["platform"]
+                )
             ):
                 raise PermissionError("原会话尚未启用 Maisya")
             live_ability = await asyncio.to_thread(self.profiles.get, row["profile"])
@@ -4422,6 +4615,11 @@ class MaisyaPlugin(MaiBotPlugin):
         message = kwargs.get("message")
         sanitized = self.vault.redact(message)
         modified = {}
+        for key in ("segments", "processed_plain_text"):
+            if key in kwargs:
+                cleaned = self.vault.redact(kwargs[key])
+                if cleaned != kwargs[key]:
+                    modified[key] = cleaned
         session_id = str(
             kwargs.get("session_id")
             or kwargs.get("stream_id")
@@ -4437,8 +4635,15 @@ class MaisyaPlugin(MaiBotPlugin):
         ).lower()
         if not platform and session_id and self.messages:
             platform = await asyncio.to_thread(self.messages.platform_for, session_id)
-        if session_id and self.enabled_for(session_id, platform):
+        reply_entry = self._reply_sources.pop(session_id, None) if session_id else None
+        reply_srcs = (
+            list(reply_entry[1])
+            if reply_entry and (time.monotonic() - reply_entry[0]) <= 300.0
+            else []
+        )
+        if session_id and await asyncio.to_thread(self.enabled_for, session_id, platform):
             sources = [
+                *reply_srcs,
                 *self._turn_sources.get(session_id, []),
                 *self._pending_sources.get(session_id, []),
             ]
@@ -4449,7 +4654,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 sanitized = strip_mention_all(sanitized)
                 for key in ("segments", "processed_plain_text"):
                     if key in kwargs:
-                        cleaned = strip_mention_all(self.vault.redact(kwargs[key]))
+                        current_val = modified.get(key, kwargs[key])
+                        cleaned = strip_mention_all(current_val)
                         if cleaned != kwargs[key]:
                             modified[key] = cleaned
         if sanitized != message:

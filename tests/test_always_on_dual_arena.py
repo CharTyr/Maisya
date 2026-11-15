@@ -619,8 +619,8 @@ async def test_one_way_privacy_wall_blocks_private_to_group_leaks(tmp_path):
     assert not leak_send["success"]
     assert "私聊线程结果默认不可直接注入群聊线程" in leak_send["error"]
 
-    # 3. Admin in private previewing group target with deliver_to="current" MAY pass from_threads=[priv_thread]
-    preview_ok = await plugin.agent_tool(
+    # 3. Private->Group from_threads isolation applies even when admin in private previews group with deliver_to="current"
+    preview_blocked = await plugin.agent_tool(
         action="start",
         message="在私聊里用私人上下文试跑群任务",
         target_chat=grp,
@@ -630,7 +630,8 @@ async def test_one_way_privacy_wall_blocks_private_to_group_leaks(tmp_path):
         chat_id=priv,
         platform="qq",
     )
-    assert preview_ok["success"]
+    assert not preview_blocked["success"]
+    assert "私聊线程结果默认不可直接注入群聊线程" in preview_blocked["error"]
     await plugin.on_unload()
 
 
