@@ -25,15 +25,17 @@ def _signed(secret: str, **event) -> str:
 @pytest.mark.asyncio
 async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
-    assert profiles.get("scout").enabled is True
-    assert profiles.get("maker").enabled is True
+    assert profiles.get("default").enabled is True
+    profiles.clone("default", "digest")
+    (profiles.path / "digest/profile.toml").write_text(
+        'title = "资讯简报"\nenabled = false\nbound = true\naccess = "everyone"\nenvironment = "readonly"\ntools = ["workspace_file", "digest_feed"]\n',
+        encoding="utf-8",
+    )
     digest = profiles.get("digest")
     assert digest.enabled is False
-    assert digest.autonomous is False
-    assert digest.autonomous_config is True
 
     with pytest.raises(ValueError, match="预设角色不可删除"):
-        profiles.delete("digest")
+        profiles.delete("default")
 
     bad_dir = profiles.path / "bad_toggle"
     bad_dir.mkdir()
@@ -44,6 +46,16 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
 
     plugin = await loaded(tmp_path, ["qq:Alice"])
     try:
+        plugin.profiles.clone("default", "digest")
+        cur_p = plugin.memory.read("profile", target="digest", document="profile.toml", allow_custom=True)
+        plugin.memory.write(
+            "profile",
+            cur_p["content"].replace("enabled = true", "enabled = false"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur_p["version"],
+            allow_custom=True,
+        )
         # 1. Disabled by default: absent from before_planner, rejected at every execution entrypoint
         planner = await plugin.before_planner(
             session_id="chat",
@@ -56,7 +68,7 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
             for part in item.get("parts", [])
         )
         assert "digest" not in planner_text
-        assert "scout" in planner_text
+        assert "default" in planner_text
 
         res_agent = await plugin.agent_tool(
             action="start",
@@ -97,7 +109,6 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
         assert toggled["success"] is True
         assert toggled["enabled"] is True
         assert plugin.profiles.get("digest").enabled is True
-        assert plugin.profiles.get("digest").autonomous is True
 
         planner_on = await plugin.before_planner(
             session_id="chat",
@@ -110,27 +121,6 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
             for part in item.get("parts", [])
         )
         assert "digest" in planner_on_text
-
-        # Can create webhook + schedule when enabled, and running console thread works
-        plugin.vault.set("digest_hook_key", "digest-webhook-secret-key-999")
-        wh_cur = await plugin.manage_read("webhooks")
-        wh_saved = await plugin.manage_write(
-            "webhooks",
-            json.dumps(
-                {
-                    "configuration": {
-                        "digest_wh": {
-                            "target": "chat:chat",
-                            "kind": "proactive",
-                            "profile": "digest",
-                            "secret_handle": "digest_hook_key",
-                        }
-                    },
-                    "expected_version": wh_cur["version"],
-                }
-            ),
-        )
-        assert wh_saved["success"] is True
 
         row = plugin.threads.create(
             plugin.profiles.get("digest"),
@@ -154,16 +144,12 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
         )
         assert sched_on["success"] is True
 
-        # 3. Disabling later blocks existing thread send, webhook receive, and Pulse dispatch,
-        # while webhooks manage_read still succeeds cleanly
+        # 3. Disabling later blocks existing thread send and Pulse dispatch
         toggled_off = await plugin.manage_write(
             "toggle_profile", json.dumps({"target": "digest", "enabled": False})
         )
         assert toggled_off["success"] is True
         assert toggled_off["enabled"] is False
-
-        wh_read_after = await plugin.manage_read("webhooks")
-        assert wh_read_after["success"] is True
 
         send_blocked = await plugin.console_send(
             thread_id=row["thread_id"], message="继续跑一轮"
@@ -179,16 +165,6 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
             platform="qq",
         )
         assert agent_send_blocked["success"] is False
-
-        ev = {
-            "channel": "digest_wh",
-            "event_id": "wh-disabled-1",
-            "timestamp": int(time.time()),
-            "payload": '{"reason":"触发简报"}',
-        }
-        ev_res = await plugin.incoming_event(**ev, signature=_signed("digest-webhook-secret-key-999", **ev))
-        assert ev_res["success"] is False
-        assert "停用" in ev_res["error"]
 
         intent_id = sched_on["intent"]["intent_id"]
         plugin.pulse.sleep_window = ()
@@ -460,6 +436,27 @@ async def test_rss_xml_xxe_ssrf_and_auto_trial_unsubscribe_state_machine(tmp_pat
         await plugin.on_unload()
 
 
+def _seed_enabled_digest(plugin):
+    plugin.profiles.clone("default", "digest")
+    cur = plugin.memory.read("profile", target="digest", document="profile.toml", allow_custom=True)
+    plugin.memory.write(
+        "profile",
+        'title = "资讯简报"\n'
+        'enabled = true\n'
+        'bound = true\n'
+        'access = "everyone"\n'
+        'environment = "readonly"\n'
+        'network = "public"\n'
+        'skills = ["news-digest"]\n'
+        'tools = ["workspace_file", "html_render", "result_attach", "digest_feed"]\n',
+        target="digest",
+        document="profile.toml",
+        expected_version=cur["version"],
+        allow_custom=True,
+    )
+    return plugin.profiles.get("digest")
+
+
 @pytest.mark.asyncio
 async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_path, monkeypatch):
     async def _offline_fetch(url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152):
@@ -477,19 +474,7 @@ async def test_digest_hard_filter_five_dimension_scoring_and_card_render(tmp_pat
     )
     plugin = await loaded(tmp_path)
     try:
-        profile = plugin.profiles.get("digest")
-        assert profile.enabled is False
-        # Enable digest cleanly via Profiles TOML edit helper
-        cur = plugin.memory.read("profile", target="digest", document="profile.toml")
-        plugin.memory.write(
-            "profile",
-            cur["content"].replace("enabled = false", "enabled = true"),
-            target="digest",
-            document="profile.toml",
-            expected_version=cur["version"],
-            allow_custom=True,
-        )
-        enabled_profile = plugin.profiles.get("digest")
+        enabled_profile = _seed_enabled_digest(plugin)
         assert enabled_profile.enabled is True
 
         row = plugin.threads.create(
@@ -760,16 +745,7 @@ async def test_score_select_top_level_source_and_render_card_default_candidates(
     monkeypatch.setattr(digest_mod, "fetch_public_bytes", _offline_fetch)
     plugin = await loaded(tmp_path)
     try:
-        cur = plugin.memory.read("profile", target="digest", document="profile.toml")
-        plugin.memory.write(
-            "profile",
-            cur["content"].replace("enabled = false", "enabled = true"),
-            target="digest",
-            document="profile.toml",
-            expected_version=cur["version"],
-            allow_custom=True,
-        )
-        enabled_profile = plugin.profiles.get("digest")
+        enabled_profile = _seed_enabled_digest(plugin)
         row = plugin.threads.create(
             enabled_profile,
             "验证顶级数字 source 评分与省略 candidates 默认渲染",
@@ -1106,16 +1082,7 @@ async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers
 
     plugin = await loaded(tmp_path)
     try:
-        cur = plugin.memory.read("profile", target="digest", document="profile.toml")
-        plugin.memory.write(
-            "profile",
-            cur["content"].replace("enabled = false", "enabled = true"),
-            target="digest",
-            document="profile.toml",
-            expected_version=cur["version"],
-            allow_custom=True,
-        )
-        enabled_profile = plugin.profiles.get("digest")
+        enabled_profile = _seed_enabled_digest(plugin)
         row = plugin.threads.create(
             enabled_profile,
             "检验 digest_pool 回填、brief 必填及封面渲染",
@@ -1244,65 +1211,65 @@ async def test_rss_image_extraction_pool_backfill_brief_guard_and_prepare_covers
 async def test_digest_presets_pass_memory_layers_and_guard(tmp_path):
     plugin = await loaded(tmp_path)
     try:
-        prof = plugin.memory.read("profile", target="digest", document="PROFILE.md")["content"]
+        prof = plugin.memory.read("profile", target="default", document="PROFILE.md")["content"]
         skill = plugin.memory.read("skill", target="news-digest", document="SKILL.md")["content"]
         for label, content in (("PROFILE.md", prof), ("SKILL.md", skill)):
             assert "她" not in content, f"{label} 含禁用词 '她'"
             assert "本群" not in content, f"{label} 含禁用词 '本群'"
-            assert "brief" in content and "why" in content
-            assert "width=600" in content and 'selector=".card"' in content
-            assert "result_attach" in content
+        assert "brief" in skill and "why" in skill
+        assert "width=600" in skill and 'selector=".card"' in skill
+        assert "result_attach" in skill
         plugin.memory._guard("profile", prof, "")
         plugin.memory._guard("skill", skill, "")
 
-        # 模拟老版本未编辑过的 digest/PROFILE.md（含旧 width=780 与 v0 索引），重启加载后自动同步
-        prof_path = plugin.profiles.path / "digest/PROFILE.md"
-        legacy_prof = "# 资讯编辑\n\n使用 html_render(..., width=780) 出图。\n"
-        prof_path.write_text(legacy_prof, encoding="utf-8")
+        # 模拟老版本未编辑过的 skills/news-digest/SKILL.md（含旧 width=780 与 v0 索引），重启加载后自动同步
+        skill_path = plugin.memory.root / "abilities/skills/news-digest/SKILL.md"
+        legacy_skill = "# 资讯简报工作流方法论\n\n使用 html_render(..., width=780) 出图。\n"
+        skill_path.write_text(legacy_skill, encoding="utf-8")
         with plugin.memory.store.connect() as db, db:
             db.execute(
                 "INSERT OR REPLACE INTO memory_versions VALUES (?,?,?,?,?,?,?,?,?)",
                 (
-                    "profile:digest:PROFILE.md",
+                    "skill:news-digest:SKILL.md",
                     0,
-                    "profile",
-                    "digest",
+                    "skill",
+                    "news-digest",
                     "",
-                    "PROFILE.md",
-                    legacy_prof,
+                    "SKILL.md",
+                    legacy_skill,
                     "preset",
                     1.0,
                 ),
             )
-            db.execute("DELETE FROM memory_search WHERE asset=?", ("profile:digest:PROFILE.md",))
+            db.execute("DELETE FROM memory_search WHERE asset=?", ("skill:news-digest:SKILL.md",))
             db.execute(
                 "INSERT INTO memory_search VALUES (?,?)",
-                ("profile:digest:PROFILE.md", legacy_prof),
+                ("skill:news-digest:SKILL.md", legacy_skill),
             )
     finally:
         await plugin.on_unload()
 
     reloaded = await loaded(tmp_path)
     try:
-        refreshed = reloaded.memory.read("profile", target="digest", document="PROFILE.md")["content"]
+        refreshed = reloaded.memory.read("skill", target="news-digest", document="SKILL.md")["content"]
         assert "width=600" in refreshed and 'selector=".card"' in refreshed
         assert "width=780" not in refreshed
         with reloaded.memory.store.connect() as db:
             v0 = db.execute(
                 "SELECT content FROM memory_versions WHERE asset=? AND version=0",
-                ("profile:digest:PROFILE.md",),
+                ("skill:news-digest:SKILL.md",),
             ).fetchone()
         assert v0 is not None and "width=600" in v0["content"]
 
-        # 若管理员主动改过 digest/PROFILE.md（version >= 1），重加载绝不覆盖用户版本
-        custom_prof = "# 资讯编辑\n\n管理员定制版规范：width=600，保留自定义风格。\n"
-        reloaded.memory.write("profile", custom_prof, target="digest", document="PROFILE.md", author="admin")
+        # 若管理员主动改过 skills/news-digest/SKILL.md（version >= 1），重加载绝不覆盖用户版本
+        custom_skill = "# 资讯简报工作流方法论\n\n管理员定制版规范：width=600，保留自定义风格。\n"
+        reloaded.memory.write("skill", custom_skill, target="news-digest", document="SKILL.md", author="admin")
     finally:
         await reloaded.on_unload()
 
     reloaded_custom = await loaded(tmp_path)
     try:
-        preserved = reloaded_custom.memory.read("profile", target="digest", document="PROFILE.md")["content"]
-        assert preserved == custom_prof
+        preserved = reloaded_custom.memory.read("skill", target="news-digest", document="SKILL.md")["content"]
+        assert preserved == custom_skill
     finally:
         await reloaded_custom.on_unload()

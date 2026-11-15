@@ -16,16 +16,33 @@ PNG_1X1 = base64.b64decode(
 )
 
 
+def _seed_maker_profile(profiles, *, name="maker"):
+    if name not in {p.id for p in profiles.list()}:
+        profiles.clone("default", name)
+    (profiles.path / name / "profile.toml").write_text(
+        'title = "创作工坊"\n'
+        'enabled = true\n'
+        'bound = true\n'
+        'access = "everyone"\n'
+        'environment = "sandbox"\n'
+        'execution_mode = "sandbox"\n'
+        'permission_mode = "autonomous"\n'
+        'network = "public"\n'
+        'skills = ["research-report"]\n'
+        'tools = ["person_read", "recall_read", "workspace_file", "html_render", "render_report", "result_attach", "sandbox_exec"]\n',
+        encoding="utf-8",
+    )
+    return profiles.get(name)
+
+
 def test_presets_complete_builtin_tools_and_silent_out_of_box_heartbeat(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    scout_raw = (root / "presets/profiles/scout/profile.toml").read_text("utf-8")
-    assert not re.search(r"(?m)^\s*skills\s*=", scout_raw), (
-        "scout/profile.toml must not predefine skills = []"
+    default_raw = (root / "presets/profiles/default/profile.toml").read_text("utf-8")
+    assert not re.search(r"(?m)^\s*skills\s*=", default_raw), (
+        "default/profile.toml must not predefine skills = []"
     )
-    maker_raw = (root / "presets/profiles/maker/profile.toml").read_text("utf-8")
-    assert 'skills = ["research-report"]' in maker_raw
-    digest_raw = (root / "presets/profiles/digest/profile.toml").read_text("utf-8")
-    assert 'skills = ["news-digest"]' in digest_raw
+    assert (root / "presets/skills/research-report/SKILL.md").is_file()
+    assert (root / "presets/skills/news-digest/SKILL.md").is_file()
 
     from maisya.abilities import Profiles
     from maisya.memory import MemoryLayers
@@ -33,16 +50,15 @@ def test_presets_complete_builtin_tools_and_silent_out_of_box_heartbeat(tmp_path
     from maisya.vault import Vault
 
     profiles = Profiles(tmp_path / "profiles")
-    for role in ("scout", "maker", "digest"):
-        prof = profiles.get(role)
-        assert "person_read" in prof.tools
-        assert "recall_read" in prof.tools
-    maker = profiles.get("maker")
-    assert "html_render" in maker.tools
-    assert "workspace_file" in maker.tools
-    assert "result_attach" in maker.tools
-    assert "render_report" in maker.tools
-    assert not maker.requires_container
+    assert [p.id for p in profiles.list()] == ["default"]
+    default_prof = profiles.get("default")
+    assert "person_read" in default_prof.tools
+    assert "recall_read" in default_prof.tools
+    assert "html_render" in default_prof.tools
+    assert "workspace_file" in default_prof.tools
+    assert "result_attach" in default_prof.tools
+    assert "render_report" in default_prof.tools
+    assert not default_prof.requires_container
 
     memory = MemoryLayers(
         tmp_path, ThreadStore(tmp_path / "state.db"), profiles, Vault(tmp_path / "vault")
@@ -119,7 +135,7 @@ async def test_containerless_maker_light_workspace_runs_and_auto_restores_sandbo
     plugin.ctx.call_capability = capability
     try:
         assert plugin.runtime.sandbox.ready is False
-        maker = plugin.profiles.get("maker")
+        maker = _seed_maker_profile(plugin.profiles)
         assert plugin.runtime.effective_mode(maker) == "light_workspace"
 
         res = await plugin.agent_tool(
@@ -140,6 +156,7 @@ async def test_containerless_maker_light_workspace_runs_and_auto_restores_sandbo
         assert "轻量工作区模式" in first_sys
 
         # Flip container ready -> sandbox_exec immediately restored without profile edits
+        plugin.runtime.sandbox_settings.enabled = True
         plugin.runtime.sandbox.ready = True
         assert plugin.runtime.effective_mode(maker) == "sandbox"
         seen_tool_sets.clear()
@@ -171,11 +188,12 @@ async def test_containerless_maker_light_workspace_runs_and_auto_restores_sandbo
 async def test_before_planner_compact_idle_and_enriched_profiles_and_threads(tmp_path):
     plugin = await loaded(tmp_path, ["qq:Alice"])
     try:
+        _seed_maker_profile(plugin.profiles)
         plugin.messages.record(Message.from_event(event("hi", user="Alice", platform="qq")))
         plugin.vault.set("leak_check", "top-secret-token-998877")
         await plugin.manage_write(
             action="bind_skill",
-            payload=json.dumps({"skill": "source-checking", "profile": "scout", "bound": True}),
+            payload=json.dumps({"skill": "source-checking", "profile": "default", "bound": True}),
         )
 
         # 1. Idle session: compact prompt, enriched <maisya_profiles>, no <maisya_threads> noise
@@ -193,12 +211,12 @@ async def test_before_planner_compact_idle_and_enriched_profiles_and_threads(tmp
         assert profiles_match is not None
         profiles_payload = json.loads(html.unescape(profiles_match.group(1)))
         by_id = {p["id"]: p for p in profiles_payload}
-        assert "scout" in by_id and "maker" in by_id
+        assert "default" in by_id and "maker" in by_id
         assert by_id["maker"]["mode"] == "light_workspace"
         assert "html_render" in by_id["maker"]["capabilities"]
         assert any(
             s["id"] == "source-checking" and s["summary"]
-            for s in by_id["scout"]["skills"]
+            for s in by_id["default"]["skills"]
         )
 
         # 2. Active thread with workspace & step event: <maisya_threads> exposes title, workspace, redacted latest_step
@@ -277,10 +295,11 @@ async def test_parallel_wait_zero_and_from_threads_handoff_results_and_out_files
 
     plugin.ctx.call_capability = slow_capability
     try:
+        maker = _seed_maker_profile(plugin.profiles)
         # Launch two parallel threads with wait_seconds=0
         r_a = await plugin.agent_tool(
             action="start",
-            profile="scout",
+            profile="default",
             message="查证分支A",
             wait_seconds=0,
             chat_id="chat",
@@ -288,7 +307,7 @@ async def test_parallel_wait_zero_and_from_threads_handoff_results_and_out_files
         )
         r_b = await plugin.agent_tool(
             action="start",
-            profile="scout",
+            profile="default",
             message="查证分支B",
             wait_seconds=0,
             chat_id="chat",
@@ -303,7 +322,6 @@ async def test_parallel_wait_zero_and_from_threads_handoff_results_and_out_files
                 await asyncio.sleep(0.02)
 
         # Also prepare an upstream maker workspace with both unattached out/data.json and attached out/chart.png
-        maker = plugin.profiles.get("maker")
         up_maker = plugin.threads.create(
             maker, "生成上游数据", chat_id="chat", platform="qq", user_id="Alice", workspace="up_ws"
         )
@@ -380,7 +398,7 @@ async def test_parallel_wait_zero_and_from_threads_handoff_results_and_out_files
 
         # Cross-chat isolation check
         other_row = plugin.threads.create(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             "其他群任务",
             chat_id="other_chat",
             platform="qq",
@@ -404,7 +422,7 @@ async def test_share_forwards_sanitized_planner_intent_to_replyer(tmp_path):
     plugin = await loaded(tmp_path)
     plugin.vault.set("tok", "secret-share-tok-777")
     row = plugin.threads.create(
-        plugin.profiles.get("scout"),
+        plugin.profiles.get("default"),
         "查证更新日志",
         chat_id="chat",
         platform="qq",
@@ -462,7 +480,7 @@ async def test_visible_maisya_later_workflow_wake_wording_and_link_staging(tmp_p
         assert components["maisya_later"]["metadata"]["visibility"] == "visible"
 
         # Create a restricted admin-only role to verify non-admin cannot schedule it via maisya_later
-        plugin.profiles.clone("scout", "ops_audit")
+        plugin.profiles.clone("default", "ops_audit")
         t_cur = plugin.memory.read("profile", target="ops_audit", document="profile.toml")
         plugin.memory.write(
             "profile",
@@ -489,7 +507,7 @@ async def test_visible_maisya_later_workflow_wake_wording_and_link_staging(tmp_p
         )
         assert not denied["success"] and "管理员" in denied["error"]
 
-        # Schedule natural-language recurring workflow on scout -> promoted to source="workflow"
+        # Schedule natural-language recurring workflow on default -> promoted to source="workflow"
         alice_ev = event("帮我们每天早上巡检一次开源发布", user="Alice")
         alice_ev["message_id"] = "msg_alice_1"
         plugin.messages.record(Message.from_event(alice_ev))
@@ -498,7 +516,7 @@ async def test_visible_maisya_later_workflow_wake_wording_and_link_staging(tmp_p
             reason="每日开源巡检",
             in_seconds=60,
             every_seconds=3600,
-            profile="scout",
+            profile="default",
             prompt="汇总今日开源新版本",
             chat_id="chat",
             platform="qq",
@@ -572,10 +590,18 @@ async def test_strict_sandbox_role_never_downgrades_and_direct_sandbox_exec_reje
     plugin = await loaded(tmp_path, ["qq:Alice"])
     try:
         assert plugin.runtime.sandbox.ready is False
+        alice_ev = event("直测命令", user="Alice")
+        alice_ev["message_id"] = "m-admin-step1"
+        plugin.messages.record(Message.from_event(alice_ev))
         # 1. Direct sandbox_exec call on light_workspace maker is explicitly rejected
-        maker = plugin.profiles.get("maker")
+        maker = _seed_maker_profile(plugin.profiles)
         maker_row = plugin.threads.create(
-            maker, "直接测命令", chat_id="chat", platform="qq", user_id="qq:Alice"
+            maker,
+            "直接测命令",
+            chat_id="chat",
+            platform="qq",
+            user_id="Alice",
+            grant={"admin": True, "source_msg_id": "m-admin-step1"},
         )
         with pytest.raises(RuntimeError, match="轻量工作区|沙箱"):
             await plugin.runtime.call(
@@ -615,7 +641,7 @@ async def test_active_thread_live_rebind_guard_later_edge_cases_and_dedup(tmp_pa
     plugin = await loaded(tmp_path, ["qq:Alice"])
     try:
         # 1. Active thread snapshot must respect live.bound=False and readonly->strict_sandbox upgrades!
-        plugin.profiles.clone("scout", "live_guard")
+        plugin.profiles.clone("default", "live_guard")
         snap_prof = plugin.profiles.get("live_guard")
         t_cur = plugin.memory.read("profile", target="live_guard", document="profile.toml")
         plugin.memory.write(
@@ -667,7 +693,7 @@ async def test_active_thread_live_rebind_guard_later_edge_cases_and_dedup(tmp_pa
         )
         assert unavail["success"] is False and "沙箱" in unavail["error"]
 
-        plugin.profiles.clone("scout", "other_chat_only")
+        plugin.profiles.clone("default", "other_chat_only")
         oc_cur = plugin.memory.read(
             "profile", target="other_chat_only", document="profile.toml"
         )
@@ -725,7 +751,7 @@ async def test_active_thread_live_rebind_guard_later_edge_cases_and_dedup(tmp_pa
         )
 
         # 4. from_threads deduplicates declared attachment vs out/* and _import_bytes overwrites 0-byte file
-        maker = plugin.profiles.get("maker")
+        maker = _seed_maker_profile(plugin.profiles)
         up_row = plugin.threads.create(
             maker, "上游出图", chat_id="chat", platform="qq", user_id="qq:Alice"
         )

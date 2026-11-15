@@ -36,7 +36,7 @@ async def test_maibot_can_explore_continue_and_stop_without_user_message(tmp_pat
     stopped = await plugin.agent_tool(
         action="stop", thread_id=result["thread_id"], chat_id="chat", platform="qq"
     )
-    assert stopped["success"] and stopped["state"] == "closed"
+    assert stopped["success"] and stopped["state"] == "idle"
     await plugin.on_unload()
 
 
@@ -44,7 +44,7 @@ async def test_maibot_can_explore_continue_and_stop_without_user_message(tmp_pat
 async def test_autonomy_does_not_grant_admin_access_or_trust_forged_source(tmp_path):
     plugin = await loaded(tmp_path, ["qq:Alice"])
     plugin.ctx.call_capability = answering
-    path = plugin.profiles.path / "scout/profile.toml"
+    path = plugin.profiles.path / "default/profile.toml"
     path.write_text('access="admins"\nenvironment="readonly"', encoding="utf-8")
     denied = await plugin.agent_tool(
         action="start",
@@ -347,7 +347,7 @@ async def test_stop_does_not_execute_tools_if_model_ignores_cancellation(tmp_pat
     first = await start(engine, wait_seconds=0)
     await entered.wait()
     result = await engine.stop(first["thread_id"], chat_id="chat-a")
-    assert result["state"] == "closed"
+    assert result["state"] == "idle"
     assert runtime.executed == []
     await engine.close()
 
@@ -473,7 +473,7 @@ async def test_real_user_context_does_not_implicitly_authorize_autonomous_admin_
     plugin.ctx.call_capability = answering
     payload = event()
     await plugin.after_receive(message=payload)
-    (plugin.profiles.path / "scout/profile.toml").write_text(
+    (plugin.profiles.path / "default/profile.toml").write_text(
         'access="admins"\nenvironment="readonly"',
         encoding="utf-8",
     )

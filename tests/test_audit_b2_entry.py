@@ -197,6 +197,7 @@ async def test_b2_item2_later_tool_ops_receipt_replace_aliases_and_daily_limit(t
 
         # 2b) replace=True must cancel prior scheduled_admin workflows across chat_aliases_for
         await plugin.resolve_chat_id("100246809", current_chat_id=priv_sid, current_platform="qq")
+        plugin.profiles.clone("default", "digest")
         digest_doc = plugin.memory.read("profile", target="digest", document="profile.toml")
         plugin.memory.write(
             "profile",
@@ -574,7 +575,9 @@ async def test_b2_item4_entry_routes_console_locks_and_quota(tmp_path):
         )
         assert bad_share["success"] is False
 
-        # 4c) console_send normalizes workspace via normalize_profile_workspace
+        # 4c) console_send preserves explicit custom workspace name
+        if not (plugin.profiles.path / "digest").is_dir():
+            plugin.profiles.clone("default", "digest")
         digest_doc = plugin.memory.read("profile", target="digest", document="profile.toml")
         plugin.memory.write(
             "profile",
@@ -599,7 +602,7 @@ async def test_b2_item4_entry_routes_console_locks_and_quota(tmp_path):
                 "SELECT name FROM agent_workspaces WHERE workspace_id=?",
                 (con_row["workspace_id"],),
             ).fetchone()
-        assert ws_row is not None and ws_row["name"] == "digest"
+        assert ws_row is not None and ws_row["name"] == "digest-feeds"
 
         # 4d) _bootstrap_lock concurrent safety + _relayed_bootstrap_sources clearing
         plugin._record_relayed_bootstrap_source(

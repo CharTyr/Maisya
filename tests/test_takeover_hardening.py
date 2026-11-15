@@ -17,16 +17,17 @@ from maisya.trust import Message, MessageStore, strip_mention_all
 
 def test_profile_task_slot_validation_and_preset_defaults(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
-    assert profiles.get("scout").task == "utils"
-    assert profiles.get("maker").task == "planner"
+    assert profiles.get("default").task == "utils"
+    assert profiles.get("scout").id == "default"
+    assert profiles.get("maker").id == "default"
 
-    cfg = profiles.path / "scout/profile.toml"
+    cfg = profiles.path / "default/profile.toml"
     cfg.write_text('environment = "readonly"\ntask = "custom_reasoning"\n', encoding="utf-8")
-    assert profiles.get("scout").task == "custom_reasoning"
+    assert profiles.get("default").task == "custom_reasoning"
 
     cfg.write_text('environment = "readonly"\ntask = "bad task!"\n', encoding="utf-8")
     with pytest.raises(ValueError):
-        profiles.get("scout")
+        profiles.get("default")
 
 
 @pytest.mark.asyncio
@@ -92,7 +93,7 @@ async def test_learning_uses_explicit_timeout_budget(tmp_path):
         )
         assert calls and calls[0][0] == "llm.generate_with_tools"
         assert calls[0][1]["timeout_ms"] == 40000
-        assert "先缩窄查询关键词再重试" in plugin.memory.read("notes", target="scout")["content"]
+        assert "先缩窄查询关键词再重试" in plugin.memory.read("notes", target="default")["content"]
     finally:
         await plugin.on_unload()
 

@@ -253,13 +253,19 @@ async def test_corrupt_payload_deleted_profile_and_empty_silent_stop_looping(tmp
 
         # 3) Profile-less recurring _silent with closed thread or empty thread_id stops cleanly (no empty reschedule loop)
         closed_thread = plugin.threads.create(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             "已关闭线程",
             chat_id="chat",
             platform="qq",
             user_id="",
         )
         plugin.threads.stop(closed_thread["thread_id"], "chat")
+        assert plugin.threads.get(closed_thread["thread_id"], "chat")["state"] == "idle"
+        with plugin.threads.connect() as db, db:
+            db.execute(
+                "UPDATE agent_threads SET state='closed' WHERE thread_id=?",
+                (closed_thread["thread_id"],),
+            )
         silent_closed = plugin.intents.schedule(
             kind="silent",
             source="thread",
@@ -539,13 +545,13 @@ async def test_heartbeat_ability_gate_before_cooldown_and_silent_continuation_sc
         # Seed a clean HEARTBEAT plan
         plugin.memory.write("heartbeat", "## 自主探索方向\n探索开源工具", allow_custom=True)
 
-        # Disable scout -> _heartbeat MUST NOT claim cooldown in social_state or advance _heartbeat_next_at
+        # Disable default -> _heartbeat MUST NOT claim cooldown in social_state or advance _heartbeat_next_at
         orig_get = plugin.profiles.get
         mode = ["disabled"]
 
         def fake_get(pid):
             prof = orig_get(pid)
-            if pid != "scout":
+            if pid != "default":
                 return prof
             if mode[0] == "disabled":
                 return type(prof)(**{**prof.__dict__, "enabled": False})
@@ -584,11 +590,11 @@ async def test_heartbeat_ability_gate_before_cooldown_and_silent_continuation_sc
                 is None
             )
 
-        # Immediately restoring scout to enabled+autonomous runs heartbeat without waiting interval
+        # Immediately restoring default to enabled+autonomous runs heartbeat without waiting interval
         mode[0] = "ok"
         await asyncio.wait_for(plugin.pulse._heartbeat(), timeout=3.0)
         await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
-        assert started == ["scout"]
+        assert started == ["default"]
 
         # _silent continuation MUST block listed/allow_chats/sandbox_targets/bound=False snapshots AND live restricted profiles
         plugin.profiles.get = orig_get
@@ -602,9 +608,9 @@ async def test_heartbeat_ability_gate_before_cooldown_and_silent_continuation_sc
                 ]
             )
         t_listed = plugin.threads.create(
-            type(orig_get("scout"))(
+            type(orig_get("default"))(
                 **{
-                    **orig_get("scout").__dict__,
+                    **orig_get("default").__dict__,
                     "access": "listed",
                     "allow_chats": ("qq:group:100246809",),
                 }
@@ -856,7 +862,7 @@ async def test_learning_fenced_json_scope_isolation_and_transient_retry(
 
     # 2) {"ok": False} -> {"ok": True} recovery detection + transient TimeoutError -> interrupted -> retry with fenced JSON -> applied
     normal_row = store.create(
-        profiles.get("scout"),
+        profiles.get("default"),
         "normal",
         chat_id="chat-learn",
         platform="qq",
@@ -902,7 +908,7 @@ async def test_learning_fenced_json_scope_isolation_and_transient_retry(
     llm_mode[0] = "fenced"
     await asyncio.wait_for(learning.schedule(row_input), timeout=3.0)
     await asyncio.wait_for(learning.drain(), timeout=3.0)
-    assert "先校验订阅参数再调用" in memory.read("notes", target="scout")["content"]
+    assert "先校验订阅参数再调用" in memory.read("notes", target="default")["content"]
     with store.connect() as db:
         status2 = db.execute(
             "SELECT status FROM learning_receipts WHERE thread_id=? AND revision=1",
@@ -912,7 +918,7 @@ async def test_learning_fenced_json_scope_isolation_and_transient_retry(
 
     # 3) Version conflict on memory.write -> interrupted (retryable); genuinely malformed JSON -> rejected
     row2 = store.create(
-        profiles.get("scout"), "conflict", chat_id="chat-learn", platform="qq", user_id=""
+        profiles.get("default"), "conflict", chat_id="chat-learn", platform="qq", user_id=""
     )
     _record_tool_events(
         store,
@@ -950,7 +956,7 @@ async def test_learning_fenced_json_scope_isolation_and_transient_retry(
     # Bad JSON permanently marks rejected
     memory.write = orig_write
     row3 = store.create(
-        profiles.get("scout"), "badjson", chat_id="chat-learn", platform="qq", user_id=""
+        profiles.get("default"), "badjson", chat_id="chat-learn", platform="qq", user_id=""
     )
     _record_tool_events(
         store,

@@ -11,19 +11,17 @@ async def test_management_assets_versions_and_credentials_are_private(tmp_path):
     try:
         catalog = await plugin.manage_read("abilities")
         assert catalog["success"] and {p["id"] for p in catalog["profiles"]} == {
-            "scout",
-            "maker",
-            "digest",
+            "default",
         }
         current = await plugin.manage_read(
-            "asset", json.dumps({"kind": "notes", "target": "scout"})
+            "asset", json.dumps({"kind": "notes", "target": "default"})
         )
         saved = await plugin.manage_write(
             "asset",
             json.dumps(
                 {
                     "kind": "notes",
-                    "target": "scout",
+                    "target": "default",
                     "content": "先核对来源。",
                     "expected_version": current["version"],
                 }
@@ -35,7 +33,7 @@ async def test_management_assets_versions_and_credentials_are_private(tmp_path):
             json.dumps(
                 {
                     "kind": "notes",
-                    "target": "scout",
+                    "target": "default",
                     "content": "stale",
                     "expected_version": current["version"],
                 }
@@ -130,7 +128,7 @@ async def test_chunked_package_roundtrip_and_service_registration_do_not_expose_
 
     plugin = await loaded(tmp_path)
     try:
-        package = await plugin.manage_read("package", json.dumps({"target": "scout"}))
+        package = await plugin.manage_read("package", json.dumps({"target": "default"}))
         assert package["success"], package
         imported = await plugin.manage_write(
             "import",
@@ -160,7 +158,6 @@ async def test_chunked_package_roundtrip_and_service_registration_do_not_expose_
                     "readonly": False,
                 }
             },
-            "templates": {},
         }
         saved = await plugin.manage_write(
             "services",
@@ -188,7 +185,7 @@ async def test_scope_configuration_can_be_edited_without_exposing_group_data_as_
         current = await plugin.manage_read(
             "asset",
             json.dumps(
-                {"kind": "profile", "target": "scout", "document": "profile.toml"}
+                {"kind": "profile", "target": "default", "document": "profile.toml"}
             ),
         )
         content = (
@@ -200,7 +197,7 @@ async def test_scope_configuration_can_be_edited_without_exposing_group_data_as_
             json.dumps(
                 {
                     "kind": "profile",
-                    "target": "scout",
+                    "target": "default",
                     "document": "profile.toml",
                     "content": content,
                     "chat_id": "chat",
@@ -209,7 +206,7 @@ async def test_scope_configuration_can_be_edited_without_exposing_group_data_as_
             ),
         )
         assert saved["success"], saved
-        assert plugin.profiles.get("scout").allow_users == ("qq:123456789",)
+        assert plugin.profiles.get("default").allow_users == ("qq:123456789",)
     finally:
         await plugin.on_unload()
 
@@ -235,7 +232,7 @@ async def test_skill_catalog_lifecycle_preset_reset_and_role_binding(tmp_path):
             assert items[sid]["version"] >= 0
         assert items["source-checking"]["used_by"] == []
         assert items["ongoing-workspace"]["used_by"] == []
-        assert "digest" in items["news-digest"]["used_by"]
+        assert items["news-digest"]["used_by"] == []
 
         # Create a new starter skill
         created = await plugin.manage_write(
@@ -274,36 +271,36 @@ async def test_skill_catalog_lifecycle_preset_reset_and_role_binding(tmp_path):
         # One-click role binding and unbinding
         bound = await plugin.manage_write(
             "bind_skill",
-            json.dumps({"skill": "rss-audit", "profile": "scout", "bound": True}),
+            json.dumps({"skill": "rss-audit", "profile": "default", "bound": True}),
         )
         assert bound["success"], bound
-        assert "rss-audit" in plugin.profiles.get("scout").skills
+        assert "rss-audit" in plugin.profiles.get("default").skills
         after_bind = {
             item["id"]: item
             for item in (await plugin.manage_read("abilities", "{}"))["skill_items"]
         }
-        assert "scout" in after_bind["rss-audit"]["used_by"]
+        assert "default" in after_bind["rss-audit"]["used_by"]
 
         unbound = await plugin.manage_write(
             "bind_skill",
-            json.dumps({"skill": "rss-audit", "profile": "scout", "bound": False}),
+            json.dumps({"skill": "rss-audit", "profile": "default", "bound": False}),
         )
         assert unbound["success"], unbound
-        assert "rss-audit" not in plugin.profiles.get("scout").skills
+        assert "rss-audit" not in plugin.profiles.get("default").skills
 
         # Deleting a bound custom skill auto-unbinds roles and clears stale versions
         await plugin.manage_write(
             "bind_skill",
-            json.dumps({"skill": "rss-audit-v2", "profile": "scout", "bound": True}),
+            json.dumps({"skill": "rss-audit-v2", "profile": "default", "bound": True}),
         )
-        assert "rss-audit-v2" in plugin.profiles.get("scout").skills
+        assert "rss-audit-v2" in plugin.profiles.get("default").skills
         deleted = await plugin.manage_write(
             "delete_skill", json.dumps({"target": "rss-audit-v2"})
         )
         assert deleted["success"], deleted
-        assert "rss-audit-v2" not in plugin.profiles.get("scout").skills
+        assert "rss-audit-v2" not in plugin.profiles.get("default").skills
         assert "rss-audit-v2" not in plugin.memory.skills()
-        assert isinstance(plugin.memory.methods(plugin.profiles.get("scout")), str)
+        assert isinstance(plugin.memory.methods(plugin.profiles.get("default")), str)
         recreated = await plugin.manage_write(
             "create_skill", json.dumps({"target": "rss-audit-v2"})
         )
@@ -419,11 +416,11 @@ async def test_skill_archive_zip_tar_multi_bundle_companions_and_security(tmp_pa
         # Runtime materializes companions read-only under in/skills/<id>/ inside workspace
         await plugin.manage_write(
             "bind_skill",
-            json.dumps({"skill": "web-audit", "profile": "maker", "bound": True}),
+            json.dumps({"skill": "web-audit", "profile": "default", "bound": True}),
         )
-        maker = plugin.profiles.get("maker")
-        assert "in/skills/web-audit/" in plugin.memory.methods(maker)
-        trow = plugin.threads.create(maker, "执行网页核验", chat_id="chat", platform="qq", user_id="qq:u1")
+        default_prof = plugin.profiles.get("default")
+        assert "in/skills/web-audit/" in plugin.memory.methods(default_prof)
+        trow = plugin.threads.create(default_prof, "执行网页核验", chat_id="chat", platform="qq", user_id="qq:u1")
         work = await plugin.runtime._work(trow)
         assert (work.path / "in/skills/web-audit/references/rules.md").is_file()
         assert (work.path / "in/skills/web-audit/scripts/check.py").is_file()
@@ -621,13 +618,13 @@ async def test_management_set_profile_models(tmp_path):
     plugin = await loaded(tmp_path)
     try:
         toml_cur = await plugin.manage_read(
-            "asset", json.dumps({"kind": "profile", "target": "scout", "document": "profile.toml"})
+            "asset", json.dumps({"kind": "profile", "target": "default", "document": "profile.toml"})
         )
         res = await plugin.manage_write(
             "set_profile_models",
             json.dumps(
                 {
-                    "profile_id": "scout",
+                    "profile_id": "default",
                     "models": ["gpt-5", "claude-4", "gpt-5"],
                     "fallback_slot": "planner",
                     "expected_version": toml_cur["version"],
@@ -635,14 +632,14 @@ async def test_management_set_profile_models(tmp_path):
             ),
         )
         assert res["success"], res
-        assert res["profile_id"] == "scout"
+        assert res["profile_id"] == "default"
         assert res["models"] == ["gpt-5", "claude-4"]
         assert res["model_name"] == "gpt-5"
         assert res["fallback_models"] == ["claude-4"]
         assert res["fallback_slot"] == "planner"
         assert res["version"] > toml_cur["version"]
 
-        prof = plugin.profiles.get("scout")
+        prof = plugin.profiles.get("default")
         assert prof.model_name == "gpt-5"
         assert prof.fallback_models == ("claude-4",)
         assert prof.model_list == ("gpt-5", "claude-4")
@@ -652,7 +649,7 @@ async def test_management_set_profile_models(tmp_path):
             "set_profile_models",
             json.dumps(
                 {
-                    "profile_id": "scout",
+                    "profile_id": "default",
                     "models": ["stale-model"],
                     "expected_version": toml_cur["version"],
                 }
@@ -662,39 +659,39 @@ async def test_management_set_profile_models(tmp_path):
 
         reordered = await plugin.manage_write(
             "set_profile_models",
-            json.dumps({"profile_id": "scout", "models": ["claude-4", "gpt-5"]}),
+            json.dumps({"profile_id": "default", "models": ["claude-4", "gpt-5"]}),
         )
         assert reordered["success"], reordered
         assert reordered["models"] == ["claude-4", "gpt-5"]
-        assert plugin.profiles.get("scout").model_name == "claude-4"
-        assert plugin.profiles.get("scout").fallback_models == ("gpt-5",)
+        assert plugin.profiles.get("default").model_name == "claude-4"
+        assert plugin.profiles.get("default").fallback_models == ("gpt-5",)
 
         bad_slot = await plugin.manage_write(
             "set_profile_models",
-            json.dumps({"profile_id": "scout", "models": ["claude-4"], "fallback_slot": "bad slot!"}),
+            json.dumps({"profile_id": "default", "models": ["claude-4"], "fallback_slot": "bad slot!"}),
         )
         assert not bad_slot["success"]
 
         bad_models = await plugin.manage_write(
             "set_profile_models",
-            json.dumps({"profile_id": "scout", "models": [""]}),
+            json.dumps({"profile_id": "default", "models": [""]}),
         )
         assert not bad_models["success"]
 
         cleared = await plugin.manage_write(
             "set_profile_models",
-            json.dumps({"profile_id": "scout", "models": []}),
+            json.dumps({"profile_id": "default", "models": []}),
         )
         assert cleared["success"], cleared
         assert cleared["models"] == []
-        assert plugin.profiles.get("scout").model_list == ()
-        assert plugin.profiles.get("scout").task == "planner"
+        assert plugin.profiles.get("default").model_list == ()
+        assert plugin.profiles.get("default").task == "planner"
     finally:
         await plugin.on_unload()
 
 
 @pytest.mark.asyncio
-async def test_management_upsert_and_delete_service_item_and_webhook(tmp_path):
+async def test_management_upsert_and_delete_mcp_service_item(tmp_path):
     plugin = await loaded(tmp_path)
     try:
         stored_secret = await plugin.manage_write(
@@ -741,22 +738,7 @@ async def test_management_upsert_and_delete_service_item_and_webhook(tmp_path):
         )
         assert not stale_add["success"]
 
-        ssrf_tpl = await plugin.manage_write(
-            "upsert_service_item",
-            json.dumps(
-                {
-                    "kind": "template",
-                    "item": {
-                        "id": "bad_tpl",
-                        "argv": ["/bin/echo", "hi"],
-                        "targets": ["127.0.0.1:8080"],
-                    },
-                }
-            ),
-        )
-        assert not ssrf_tpl["success"]
-
-        tpl_add = await plugin.manage_write(
+        rejected_tpl = await plugin.manage_write(
             "upsert_service_item",
             json.dumps(
                 {
@@ -764,16 +746,12 @@ async def test_management_upsert_and_delete_service_item_and_webhook(tmp_path):
                     "item": {
                         "id": "fetch_doc",
                         "argv": ["/bin/echo", "{doc}"],
-                        "schema": {"type": "object", "properties": {"doc": {"type": "string"}}},
-                        "secrets": ["svc_key"],
                         "targets": ["93.184.216.34:443"],
-                        "access": "admins",
                     },
                 }
             ),
         )
-        assert tpl_add["success"], tpl_add
-        assert "fetch_doc" in plugin.runtime.services.load()["templates"]
+        assert not rejected_tpl["success"]
 
         stale_del = await plugin.manage_write(
             "delete_service_item",
@@ -786,70 +764,17 @@ async def test_management_upsert_and_delete_service_item_and_webhook(tmp_path):
         del_mcp = await plugin.manage_write(
             "delete_service_item",
             json.dumps(
-                {"kind": "mcp", "name": "weather", "expected_version": tpl_add["version"]}
+                {"kind": "mcp", "name": "weather", "expected_version": mcp_add["version"]}
             ),
         )
         assert del_mcp["success"], del_mcp
         assert "weather" not in plugin.runtime.services.load()["servers"]
 
-        del_tpl = await plugin.manage_write(
-            "delete_service_item",
-            json.dumps({"kind": "template", "id": "fetch_doc"}),
-        )
-        assert del_tpl["success"], del_tpl
-        assert "fetch_doc" not in plugin.runtime.services.load()["templates"]
-
         missing_del = await plugin.manage_write(
             "delete_service_item",
-            json.dumps({"kind": "template", "name": "nonexistent"}),
+            json.dumps({"kind": "mcp", "name": "nonexistent"}),
         )
         assert not missing_del["success"]
-
-        # Webhooks item deletion (by id, by index, and version conflict)
-        wh0 = await plugin.manage_read("webhooks")
-        wh_cfg = {
-            "alpha": {
-                "target": "qq:group:100246809",
-                "kind": "silent",
-                "secret_handle": "svc_key",
-                "profile": "scout",
-                "enabled": True,
-            },
-            "beta": {
-                "target": "qq:group:100246810",
-                "kind": "silent",
-                "secret_handle": "svc_key",
-                "profile": "scout",
-                "enabled": True,
-            },
-        }
-        wh_saved = await plugin.manage_write(
-            "webhooks",
-            json.dumps({"configuration": wh_cfg, "expected_version": wh0["version"]}),
-        )
-        assert wh_saved["success"], wh_saved
-
-        stale_wh_del = await plugin.manage_write(
-            "delete_webhook_item",
-            json.dumps({"id": "alpha", "expected_version": wh0["version"]}),
-        )
-        assert not stale_wh_del["success"]
-
-        del_alpha = await plugin.manage_write(
-            "delete_webhook_item",
-            json.dumps({"id": "alpha", "expected_version": wh_saved["version"]}),
-        )
-        assert del_alpha["success"], del_alpha
-        assert del_alpha["name"] == "alpha"
-        assert list(plugin.incoming.load().keys()) == ["beta"]
-
-        del_beta = await plugin.manage_write(
-            "delete_webhook_item",
-            json.dumps({"index": 0}),
-        )
-        assert del_beta["success"], del_beta
-        assert del_beta["name"] == "beta"
-        assert plugin.incoming.load() == {}
     finally:
         await plugin.on_unload()
 
@@ -858,53 +783,54 @@ async def test_management_upsert_and_delete_service_item_and_webhook(tmp_path):
 async def test_management_undo_learning_note(tmp_path):
     plugin = await loaded(tmp_path)
     try:
-        v1 = plugin.memory.write("notes", "方法一：先核对来源。", target="scout", author="admin")
+        v1 = plugin.memory.write("notes", "方法一：先核对来源。", target="default", author="admin")
         v2 = plugin.memory.write(
             "notes",
             "方法一：先核对来源。\n\n遇到限流先等待后重试。",
-            target="scout",
+            target="default",
             expected_version=v1["version"],
             author="thread:t-learn-1",
         )
 
         stale = await plugin.manage_write(
             "undo_learning_note",
-            json.dumps({"profile_id": "scout", "expected_version": v1["version"]}),
+            json.dumps({"profile_id": "default", "expected_version": v1["version"]}),
         )
         assert not stale["success"]
 
         undone = await plugin.manage_write(
             "undo_learning_note",
-            json.dumps({"profile_id": "scout", "expected_version": v2["version"]}),
+            json.dumps({"profile_id": "default", "expected_version": v2["version"]}),
         )
         assert undone["success"], undone
-        assert undone["profile_id"] == "scout"
+        assert undone["profile_id"] == "default"
         assert undone["content"] == "方法一：先核对来源。"
         assert undone["restored_from"] == v1["version"]
-        assert plugin.memory.read("notes", target="scout")["content"] == "方法一：先核对来源。"
+        assert plugin.memory.read("notes", target="default")["content"] == "方法一：先核对来源。"
 
         v4 = plugin.memory.write(
             "notes",
             "方法一：先核对来源。\n\n二次自动学习补充。",
-            target="scout",
+            target="default",
             expected_version=undone["version"],
             author="thread:t-learn-2",
         )
         undone_by_thread = await plugin.manage_write(
             "undo_learning_note",
-            json.dumps({"profile_id": "scout", "history_id": "t-learn-2"}),
+            json.dumps({"profile_id": "default", "history_id": "t-learn-2"}),
         )
         assert undone_by_thread["success"], undone_by_thread
         assert undone_by_thread["content"] == "方法一：先核对来源。"
 
         undone_by_ver = await plugin.manage_write(
             "undo_learning_note",
-            json.dumps({"profile_id": "scout", "history_id": f"v{v4['version']}"}),
+            json.dumps({"profile_id": "default", "history_id": f"v{v4['version']}"}),
         )
         assert undone_by_ver["success"], undone_by_ver
         assert "二次自动学习补充" in undone_by_ver["content"]
 
         # Undoing the very first auto-learned note clears back to empty
+        plugin.profiles.clone("default", "maker")
         maker_v1 = plugin.memory.write(
             "notes",
             "初次自动记录的经验。",

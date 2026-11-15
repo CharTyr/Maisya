@@ -62,18 +62,18 @@ async def test_workspace_lifecycle_and_windows_guards_without_dir_fd(
         comp_file.write_text("指南正文\r\n", encoding="utf-8")
 
         toml_ver = plugin.memory.read(
-            "profile", target="scout", document="profile.toml"
+            "profile", target="default", document="profile.toml"
         )["version"]
         plugin.memory.write(
             "profile",
-            'title = "探索者"\nenvironment = "readonly"\nskills = ["companion-demo"]\n',
-            target="scout",
+            'title = "全能默认助手"\nenvironment = "readonly"\nskills = ["companion-demo"]\n',
+            target="default",
             document="profile.toml",
             expected_version=toml_ver,
         )
 
         row = plugin.threads.create(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             "跨平台工作区周期",
             chat_id="chat",
             platform="qq",
@@ -354,7 +354,6 @@ async def test_windows_minimal_subprocess_env_and_program_path_checks(
                         "readonly": True,
                     }
                 },
-                "templates": {},
             }
         )
         for bad_cmd in (
@@ -373,7 +372,6 @@ async def test_windows_minimal_subprocess_env_and_program_path_checks(
                                 "readonly": True,
                             }
                         },
-                        "templates": {},
                     }
                 )
 
@@ -603,11 +601,11 @@ async def test_qq_official_case_sensitive_openid_and_webui_allow_users(tmp_path)
                     "<head>", CSP_META, 1
                 )
                 await page.set_content(doc)
-                await page.locator('[data-profile="scout"]').click()
+                await page.locator('[data-profile="default"]').click()
                 await expect(page.locator("#editor-panel")).to_be_visible()
                 await page.locator('[data-doc-tab="config"]').click()
                 await expect(page.locator("#cfg-visual")).to_be_visible()
-                await expect(page.locator("#cfg-title")).to_have_value("探索者")
+                await expect(page.locator("#cfg-title")).to_have_value("全能默认助手")
                 await page.locator("#cfg-access").select_option("listed")
                 await expect(page.locator("#cfg-allow-scope-wrap")).to_be_visible()
                 await page.locator("#cfg-user-plat").select_option("qq")
@@ -618,10 +616,10 @@ async def test_qq_official_case_sensitive_openid_and_webui_allow_users(tmp_path)
                 )
                 await page.locator("#save").click()
                 await expect(page.locator("#feedback")).to_contain_text("已保存")
-                saved_scout = plugin.profiles.get("scout")
-                assert f"qq:private:{openid}" in saved_scout.allow_users
-                assert saved_scout.permits("chat", "qq", user_id=openid) is True
-                assert saved_scout.permits("chat", "qq", user_id=openid.lower()) is False
+                saved_default = plugin.profiles.get("default")
+                assert f"qq:private:{openid}" in saved_default.allow_users
+                assert saved_default.permits("chat", "qq", user_id=openid) is True
+                assert saved_default.permits("chat", "qq", user_id=openid.lower()) is False
                 assert not errors
             finally:
                 await browser.close()
@@ -677,9 +675,9 @@ async def test_checked_redaction_html_render_hint_and_scout_cooldown(
             return {"success": True}
 
         plugin.ctx.call_capability = fake_cap
-        maker = plugin.profiles.get("maker")
+        default_prof = plugin.profiles.get("default")
         row = plugin.threads.create(
-            maker, "渲染提示测试", chat_id="chat", platform="qq", user_id="Alice"
+            default_prof, "渲染提示测试", chat_id="chat", platform="qq", user_id="Alice"
         )
         with pytest.raises(RuntimeError) as render_err:
             await plugin.runtime.call(
@@ -824,7 +822,7 @@ async def _prepare_file_share_thread(tmp_path, *, chat_id="qq:group:987654321", 
     plugin.ctx.call_capability = prepare_cap
     started = await plugin.agent_tool(
         action="start",
-        profile="maker",
+        profile="default",
         message="生成报告文件",
         chat_id=chat_id,
         platform="qq",

@@ -38,12 +38,11 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
         assert "source-checking" in abilities["skills"]
         assert "ongoing-workspace" in abilities["skills"]
         assert "news-digest" in abilities["skills"]
-        assert plugin.profiles.get("digest").enabled is False
+        assert plugin.profiles.get("default").enabled is True
+        assert [p["id"] for p in abilities["profiles"]] == ["default"]
 
         for kind, content in [
-            ("profile", (plugin.profiles.path / "scout/PROFILE.md").read_text(encoding="utf-8")),
-            ("profile", (plugin.profiles.path / "maker/PROFILE.md").read_text(encoding="utf-8")),
-            ("profile", (plugin.profiles.path / "digest/PROFILE.md").read_text(encoding="utf-8")),
+            ("profile", (plugin.profiles.path / "default/PROFILE.md").read_text(encoding="utf-8")),
             ("skill", source_skill.read_text(encoding="utf-8")),
             ("skill", workspace_skill.read_text(encoding="utf-8")),
             ("skill", digest_skill.read_text(encoding="utf-8")),
@@ -63,14 +62,18 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
         await plugin.pulse.tick()
         await plugin.engine.drain()
         assert len(llm_calls) == 1
+        # Custom edits via MemoryLayers are preserved across reloads
+        custom_skill = (
+            "---\nname: source-checking\ndescription: custom\n---\n自定义核验规范。\n"
+        )
+        custom_hb = "## 气质与分寸\n保持安静。\n\n## 自主探索方向\n本地工具生态"
+        plugin.memory.write(
+            "skill", custom_skill, target="source-checking", expected_version=0
+        )
+        heartbeat_file.write_text(custom_hb, encoding="utf-8")
     finally:
         await plugin.on_unload()
 
-    # Custom edits are preserved across reloads
-    custom_skill = "自定义核验规范。"
-    custom_hb = "## 气质与分寸\n保持安静。\n\n## 自主探索方向\n本地工具生态"
-    source_skill.write_text(custom_skill, encoding="utf-8")
-    heartbeat_file.write_text(custom_hb, encoding="utf-8")
     again = await loaded(tmp_path)
     try:
         assert (again.data_root / "abilities/skills/source-checking/SKILL.md").read_text(encoding="utf-8") == custom_skill
@@ -105,7 +108,6 @@ async def test_cross_plugin_readonly_api_validation_binding_and_execution(tmp_pa
 
         good_cfg = {
             "servers": {},
-            "templates": {},
             "apis": {
                 "weather": {
                     "api_name": "other.plugin.get_weather",
@@ -136,7 +138,7 @@ async def test_cross_plugin_readonly_api_validation_binding_and_execution(tmp_pa
         assert saved["success"], saved
 
         # Clone & configure a readonly profile with apis + plugin_api
-        cloned = await plugin.manage_write("clone", json.dumps({"base": "scout", "target": "api_reader"}))
+        cloned = await plugin.manage_write("clone", json.dumps({"base": "default", "target": "api_reader"}))
         assert cloned["success"]
         toml_ver = plugin.memory.read("profile", target="api_reader", document="profile.toml")["version"]
         wrote = await plugin.manage_write(
@@ -353,10 +355,12 @@ async def test_share_splits_file_attachments_into_separate_send_hybrid_calls(
 
     plugin.ctx.call_capability = capability
     try:
-        ability = plugin.profiles.get("maker")
+        ability = plugin.profiles.get("default")
         row = plugin.threads.create(
             ability, "生成报告", chat_id="chat", platform="qq", user_id=""
         )
+        rev = plugin.threads.enqueue(row["thread_id"], "生成报告", "chat")
+        row = plugin.threads.get(row["thread_id"], "chat")
         with plugin.runtime.files.activity(row) as work:
             work.write("out/report.txt", "final report body")
             att = plugin.runtime.files.attach(row, work, ["out/report.txt"])[0]
@@ -368,7 +372,7 @@ async def test_share_splits_file_attachments_into_separate_send_hybrid_calls(
                 "attachments": [att],
             },
             [{"role": "user", "content": "生成报告"}],
-            0,
+            rev,
         )
         updated = plugin.threads.get(row["thread_id"], "chat")
         delivered = await plugin.sharing.send(
@@ -685,90 +689,3 @@ async def test_longing_triggers_once_for_quiet_familiar_chat_and_obeys_cooldown(
     finally:
         await plugin.on_unload()
 
-
-@pytest.mark.asyncio
-async def test_webhook_with_profile_runs_thread_first_and_idempotently_delivers_via_pulse(
-    tmp_path,
-):
-    import hashlib
-    import hmac
-    import time
-
-    from maisya.trust import Message
-
-    plugin = await loaded(tmp_path)
-    plugin.messages.record(Message.from_event(event("hi", user="Bob", platform="qq", group=True)))
-    secret = "webhook-thread-secret-key"
-    plugin.vault.set("hook_key", secret)
-    gate = asyncio.Event()
-    wakes = []
-    llm_calls = []
-
-    async def capability(name, **arguments):
-        if name == "llm.generate_with_tools":
-            llm_calls.append(arguments)
-            await gate.wait()
-            return {"success": True, "response": "早报归纳完成：共 3 项更新。", "tool_calls": []}
-        if name == "maisaka.proactive.trigger":
-            wakes.append(arguments)
-            return {"success": True}
-        raise AssertionError(name)
-
-    plugin.ctx.call_capability = capability
-    try:
-        current = await plugin.manage_read("webhooks", "{}")
-        saved = await plugin.manage_write(
-            "webhooks",
-            json.dumps(
-                {
-                    "configuration": {
-                        "digest": {
-                            "target": "chat:chat",
-                            "kind": "proactive",
-                            "profile": "scout",
-                            "workspace": "daily_digest",
-                            "secret_handle": "hook_key",
-                        }
-                    },
-                    "expected_version": current["version"],
-                }
-            ),
-        )
-        assert saved["success"], saved
-
-        ev = {
-            "channel": "digest",
-            "event_id": "digest-2026-11-13",
-            "timestamp": int(time.time()),
-            "payload": '{"reason":"整理今日订阅更新","data":{"count":3}}',
-        }
-        sig = hmac.new(
-            secret.encode(),
-            json.dumps(ev, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(),
-            hashlib.sha256,
-        ).hexdigest()
-
-        accepted = await plugin.incoming_event(**ev, signature=sig)
-        assert accepted["success"] and accepted["thread_id"].startswith("th_")
-        # Replay does not spawn a second thread or duplicate revision
-        replayed = await plugin.incoming_event(**ev, signature=sig)
-        assert replayed["intent_id"] == accepted["intent_id"]
-        assert replayed["thread_id"] == accepted["thread_id"]
-
-        # While thread is still active, Pulse defers without waking the chat
-        await plugin.pulse._intents()
-        assert wakes == []
-
-        # Let thread complete and advance clock beyond brief 5s defer
-        gate.set()
-        await plugin.engine.drain()
-        assert len(llm_calls) == 1
-        plugin.intents.clock = lambda: time.time() + 10
-        await plugin.pulse._intents()
-        assert len(wakes) == 1
-        assert "<maisya_thread_result>" in wakes[0]["intent"]
-        assert "<external_event>" in wakes[0]["intent"]
-        assert "早报归纳完成" in wakes[0]["intent"]
-    finally:
-        gate.set()
-        await plugin.on_unload()

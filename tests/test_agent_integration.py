@@ -127,10 +127,8 @@ async def test_planner_keeps_native_and_third_party_and_does_not_start_for_chat(
 async def test_admin_profile_hidden_and_execution_rechecks_source(tmp_path):
     plugin = await loaded(tmp_path, ["qq:Alice"])
     plugin.ctx.call_capability = llm_rpc
-    config = plugin.profiles.path / "scout/profile.toml"
+    config = plugin.profiles.path / "default/profile.toml"
     config.write_text('access="admins"\nenvironment="readonly"', encoding="utf-8")
-    maker_config = plugin.profiles.path / "maker/profile.toml"
-    maker_config.write_text('access="admins"\nenvironment="sandbox"', encoding="utf-8")
     msg_id = await source(plugin, user="Mallory")
     tools = [
         {"name": "reply"},
@@ -180,6 +178,6 @@ async def test_disabling_chat_stops_active_threads(tmp_path):
         {"plugin": {"enabled": True, "config_version": "0.1.0"}, "enabled_chats": []},
         2,
     )
-    assert plugin.threads.get(result["thread_id"], "chat")["state"] == "closed"
+    assert plugin.threads.get(result["thread_id"], "chat")["state"] == "idle"
     gate.set()
     await plugin.on_unload()

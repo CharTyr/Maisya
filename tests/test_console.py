@@ -85,7 +85,7 @@ async def test_operator_note_uses_same_thread_and_stop_is_immediate(tmp_path):
     row = plugin.threads.get(first["thread_id"], "chat")
     assert "New direction from operator" in str(row["history"])
     stopped = await plugin.console_stop(thread_id=first["thread_id"])
-    assert stopped["success"] and stopped["state"] == "closed"
+    assert stopped["success"] and stopped["state"] == "idle"
     await plugin.on_unload()
 
 

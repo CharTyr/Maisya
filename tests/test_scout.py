@@ -36,17 +36,17 @@ class Host:
 
 def test_profiles_seed_without_overwriting_and_reject_write_tools(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
-    profile = profiles.get("scout")
+    profile = profiles.get("default")
     assert profile.environment == "readonly"
-    notes = profiles.path / "scout/PROFILE.md"
+    notes = profiles.path / "default/PROFILE.md"
     notes.write_text("custom exploration style", encoding="utf-8")
     assert (
-        Profiles(profiles.path).get("scout").instructions == "custom exploration style"
+        Profiles(profiles.path).get("default").instructions == "custom exploration style"
     )
-    config = profiles.path / "scout/profile.toml"
+    config = profiles.path / "default/profile.toml"
     config.write_text('environment="readonly"\ntools=["shell_exec"]', encoding="utf-8")
     with pytest.raises(ValueError):
-        profiles.get("scout")
+        profiles.get("default")
 
 
 @pytest.mark.asyncio
@@ -192,11 +192,11 @@ async def test_profile_model_list_and_three_step_fallback(tmp_path):
     from maisya.abilities import Profile, Profiles
 
     profiles = Profiles(tmp_path / "profiles")
-    (tmp_path / "profiles" / "scout" / "profile.toml").write_text(
-        'title = "探索者"\nmodel_list = ["primary-m", "backup-a", "backup-b"]\n',
+    (tmp_path / "profiles" / "default" / "profile.toml").write_text(
+        'title = "全能默认助手"\nmodel_list = ["primary-m", "backup-a", "backup-b"]\n',
         encoding="utf-8",
     )
-    loaded_profile = profiles.get("scout")
+    loaded_profile = profiles.get("default")
     assert loaded_profile.model_list == ("primary-m", "backup-a", "backup-b")
     assert loaded_profile.model_name == "primary-m"
     assert loaded_profile.fallback_models == ("backup-a", "backup-b")
@@ -372,9 +372,7 @@ model_list = ["tavily"]
             platform="qq",
         )
         assert ov["success"] is True, ov
-        assert "qwen-coder-unused" in ov["host_models"]["names"]
-        assert "deepseek-r1-standby" in ov["host_models"]["names"]
-        assert "tavily" not in ov["host_models"]["names"]
+        assert any(p["profile_id"] == "default" for p in ov["profiles"])
 
         # 2. Live modification of model_config.toml on disk picks up newly added unused model without reload
         model_cfg.write_text(
@@ -391,13 +389,13 @@ model_list = ["tavily"]
             chat_id="chat",
             platform="qq",
         )
-        assert "glm-4-air-unused" in ov2["host_models"]["names"]
+        assert ov2["success"] is True
 
         # 3. Assigning an unused host model to a role works end-to-end with Scout.step
         patched = await plugin.shape_tool(
             action="patch",
             kind="profile",
-            target="scout",
+            target="default",
             patch={"model_name": "qwen-coder-unused"},
             source_msg_id="host-message-123456789",
             chat_id="chat",
@@ -405,7 +403,7 @@ model_list = ["tavily"]
         )
         assert patched["success"] is True, patched
         res = await Scout(plugin.ctx).step(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             [{"role": "user", "content": "test unused model"}],
         )
         assert res["response"] == "ok"

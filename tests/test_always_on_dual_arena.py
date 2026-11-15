@@ -530,7 +530,7 @@ async def test_group_thread_ownership_protection(tmp_path):
         chat_id=grp,
         platform="qq",
     )
-    assert admin_stop["success"] and admin_stop["state"] == "closed"
+    assert admin_stop["success"] and admin_stop["state"] == "idle"
 
     # Unattributed autonomous thread can still be stopped without source_msg_id
     auto_stop = await plugin.agent_tool(
@@ -539,7 +539,7 @@ async def test_group_thread_ownership_protection(tmp_path):
         chat_id=grp,
         platform="qq",
     )
-    assert auto_stop["success"] and auto_stop["state"] == "closed"
+    assert auto_stop["success"] and auto_stop["state"] == "idle"
     await plugin.on_unload()
 
 

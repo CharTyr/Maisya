@@ -183,7 +183,7 @@ async def test_heartbeat_when_engine_full_does_not_stack_orphans_and_kicks_queue
     plugin.ctx.call_capability = capability
     try:
         # Check ability.autonomous before _claim_heartbeat so non-autonomous does not poison cooldown
-        cur_toml = plugin.memory.read("profile", target="scout", document="profile.toml")
+        cur_toml = plugin.memory.read("profile", target="default", document="profile.toml")
         original_toml = cur_toml["content"]
         admins_toml = (
             original_toml.replace('access = "everyone"', 'access = "admins"')
@@ -193,7 +193,7 @@ async def test_heartbeat_when_engine_full_does_not_stack_orphans_and_kicks_queue
         plugin.memory.write(
             "profile",
             admins_toml,
-            target="scout",
+            target="default",
             document="profile.toml",
             expected_version=cur_toml["version"],
             allow_custom=True,
@@ -206,18 +206,18 @@ async def test_heartbeat_when_engine_full_does_not_stack_orphans_and_kicks_queue
         assert claimed_row is None
 
         # Restore autonomous profile
-        cur_toml2 = plugin.memory.read("profile", target="scout", document="profile.toml")
+        cur_toml2 = plugin.memory.read("profile", target="default", document="profile.toml")
         plugin.memory.write(
             "profile",
             original_toml,
-            target="scout",
+            target="default",
             document="profile.toml",
             expected_version=cur_toml2["version"],
             allow_custom=True,
         )
         plugin.pulse.invalidate_caches()
 
-        scout = plugin.profiles.get("scout")
+        scout = plugin.profiles.get("default")
         await plugin.engine.start(
             scout,
             "busy blocker",
