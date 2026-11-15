@@ -124,12 +124,10 @@ async def _session_snapshot(plugin) -> tuple[dict, object, dict[str, dict]]:
         spec = str(s.get("stream_spec") or "").strip() or (format_stream_spec(plat, "group" if gid else "private", gid or uid) if plat and (gid or uid) else "")
         merged[sid] = {
             "session_id": sid, "platform": plat, "chat_type": ctype, "group_id": gid, "user_id": uid,
-            "stream_spec": spec, "name": str(s.get("name") or "").strip(),
+            "stream_spec": spec, "name": str(s.get("name") or "").strip(), "avatar": str(s.get("avatar") or ""),
             "account_id": str(s.get("account_id") or r.get("account_id") or "").strip(),
             "human_count": int(s.get("human_count") or r.get("human_count") or 0),
-            "last_human_at": float(s.get("last_human_at") or r.get("last_human_at") or 0.0),
-            "updated": float(s.get("updated") or r.get("updated") or 0.0),
-            "avatar": str(s.get("avatar") or ""),
+            "last_human_at": float(s.get("last_human_at") or r.get("last_human_at") or 0.0), "updated": float(s.get("updated") or r.get("updated") or 0.0),
         }
     return streams, messages, merged
 
@@ -160,14 +158,18 @@ async def resolve_chat_target(plugin, raw_target: str | None, *, current_chat_id
         return current_chat_id, cur_plat or "qq"
     streams, messages, merged = await _session_snapshot(plugin)
     pref_acct = str((messages.route_for(current_chat_id) or {}).get("account_id") or "") if messages and current_chat_id else ""
+    def _upgrade(sid: str, acct: object, plat: object) -> tuple[str, str]:
+        up = plugin.resolve_known_session_id(sid) if not str(acct or "").strip() and callable(getattr(plugin, "resolve_known_session_id", None)) else sid
+        info = merged.get(up) or merged.get(sid) or {}
+        return (up or sid), str(info.get("platform") or plat or cur_plat or "qq").lower()
     if raw in merged:
-        return raw, str(merged[raw].get("platform") or cur_plat or "qq").lower()
+        return _upgrade(raw, merged[raw].get("account_id"), merged[raw].get("platform"))
     parsed = parse_stream_spec(raw)
     norm_spec = format_stream_spec(*parsed) if parsed else ""
     if messages is not None:
         route = messages.route_for(raw)
         if route:
-            return raw, str(route.get("platform") or cur_plat or "qq").lower()
+            return _upgrade(raw, route.get("account_id"), route.get("platform"))
         found = messages.find_sessions(raw)
         if found:
             return _pick_match([dict(merged.get(f["session_id"]) or f) for f in found], raw, cur_plat, preferred_account_id=pref_acct)
@@ -186,7 +188,11 @@ async def resolve_chat_target(plugin, raw_target: str | None, *, current_chat_id
             try:
                 res = await ctx.call_capability("chat.open_session", platform=plat, chat_type=kind, group_id=tid if kind == "group" else "", user_id=tid if kind == "private" else "")
                 if isinstance(res, dict) and res.get("session_id"):
-                    return str(res["session_id"]), plat
+                    sid = str(res["session_id"]).strip()
+                    if sid:
+                        if messages is not None and hasattr(messages, "upsert_route"):
+                            await completed_thread(messages.upsert_route, sid, platform=plat, chat_type=kind, group_id=tid if kind == "group" else "", user_id=tid if kind == "private" else "", account_id=str(res.get("account_id") or ""))
+                        return sid, plat
             except (RuntimeError, OSError, ValueError, TypeError):
                 pass
         return norm_spec, plat
@@ -234,11 +240,7 @@ async def collect_known_chats(plugin) -> list[dict]:
         plat, ctype, tid = parsed if parsed else ("", "", tok)
         aliases = {tok, norm}
         known_aliases.update(aliases)
-        records.append({
-            "session_id": norm, "stream_spec": norm if parsed else "", "display_name": tid or norm, "name": "",
-            "platform": plat, "chat_type": ctype, "group_id": tid if ctype == "group" else "",
-            "user_id": tid if ctype == "private" else "", "avatar": "", "aliases": aliases, "updated": 0.0, "human_count": 0, "last_human_at": 0.0,
-        })
+        records.append({"session_id": norm, "stream_spec": norm if parsed else "", "display_name": tid or norm, "name": "", "platform": plat, "chat_type": ctype, "group_id": tid if ctype == "group" else "", "user_id": tid if ctype == "private" else "", "avatar": "", "aliases": aliases, "updated": 0.0, "human_count": 0, "last_human_at": 0.0})
     grouped: dict[tuple[str, str], list[dict]] = {}
     for rec in records:
         grouped.setdefault(("spec", rec["stream_spec"]) if rec["stream_spec"] else ("sid", rec["session_id"]), []).append(rec)
@@ -249,11 +251,7 @@ async def collect_known_chats(plugin) -> list[dict]:
         avatar = best.get("avatar") or next((g.get("avatar", "") for g in grp if g.get("avatar")), "")
         name = next((g["name"] for g in sorted(grp, key=session_rank_key, reverse=True) if g.get("name") and g["name"] not in aliases), best["display_name"])
         level = next((level_map[c] for c in [best["stream_spec"], best["session_id"], *sorted(aliases)] if c and c in level_map), "")
-        out.append({
-            "chat_id": best["session_id"], "stream_spec": best["stream_spec"], "stream_id": best["stream_spec"] or best["session_id"],
-            "name": name, "platform": best["platform"], "chat_type": best["chat_type"], "group_id": best["group_id"],
-            "user_id": best["user_id"], "avatar": avatar, "enabled": bool(aliases & enabled_set), "proactive_level": level,
-        })
+        out.append({"chat_id": best["session_id"], "stream_spec": best["stream_spec"], "stream_id": best["stream_spec"] or best["session_id"], "name": name, "platform": best["platform"], "chat_type": best["chat_type"], "group_id": best["group_id"], "user_id": best["user_id"], "avatar": avatar, "enabled": bool(aliases & enabled_set), "proactive_level": level})
     return out
 
 

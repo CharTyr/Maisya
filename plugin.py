@@ -2899,7 +2899,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         **(
                             {"admin_direct": True}
                             if admin_direct_grant
-                            else {}
+                            else {"admin_direct": False}
                         ),
                     },
                     references=ref_msg_ids,
