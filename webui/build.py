@@ -1,4 +1,4 @@
-"""将 Maisya 双主题单页 5 标签工作台样式（默认主题 + MaiBot 千禧机械主题）与管理片段打包为宿主所需的自包含 HTML。"""
+"""将 Maisya v0.3 双主题 4 页工作台（现场 / 档案 / 资料库 / 设置）打包为宿主单入口自包含 `webui/now.html`。"""
 
 import json
 import sys
@@ -6,9 +6,8 @@ from pathlib import Path
 
 _PAGES: tuple[tuple[str, str], ...] = (
     ("now", "现场"),
-    ("outputs", "产物"),
-    ("abilities", "能力"),
-    ("memory", "手账"),
+    ("profiles", "档案"),
+    ("library", "资料库"),
     ("settings", "设置"),
 )
 
@@ -41,8 +40,8 @@ def _render_unified(
     fragments_json: str,
     mgmt_boot_js: str,
     fragments: dict[str, str],
-    page: str,
-    title: str,
+    page: str = "now",
+    title: str = "现场",
 ) -> str:
     is_now = page == "now"
     out = template
@@ -61,9 +60,8 @@ def _render_unified(
         "{{NOW_BODY}}": fragments["now"] if is_now else "",
         "{{MGMT_DEFAULT_BODY}}": "" if is_now else fragments[page],
         "{{NAV_NOW_CURRENT}}": ' aria-current="page"' if page == "now" else "",
-        "{{NAV_OUTPUTS_CURRENT}}": ' aria-current="page"' if page == "outputs" else "",
-        "{{NAV_ABILITIES_CURRENT}}": ' aria-current="page"' if page == "abilities" else "",
-        "{{NAV_MEMORY_CURRENT}}": ' aria-current="page"' if page == "memory" else "",
+        "{{NAV_PROFILES_CURRENT}}": ' aria-current="page"' if page == "profiles" else "",
+        "{{NAV_LIBRARY_CURRENT}}": ' aria-current="page"' if page == "library" else "",
         "{{NAV_SETTINGS_CURRENT}}": ' aria-current="page"' if page == "settings" else "",
     }
     for key, val in replacements.items():
@@ -97,35 +95,30 @@ def main():
             fragments[page] = (root / "fragments" / f"{page}.html").read_text(encoding="utf-8").rstrip("\n")
     fragments_json = json.dumps(fragments, ensure_ascii=False).replace("</", "<\\/")
 
-    targets: list[tuple[Path, str]] = [
-        (
-            root / f"{page}.html",
-            _render_unified(
-                shell_tpl,
-                css=css,
-                mgmt_css=mgmt_css,
-                icons_js=icons_js,
-                fish_js=fish_js,
-                fragments_json=fragments_json,
-                mgmt_boot_js=mgmt_boot_js,
-                fragments=fragments,
-                page=page,
-                title=title,
-            ),
-        )
-        for page, title in _PAGES
-    ]
+    target = root / "now.html"
+    rendered = _render_unified(
+        shell_tpl,
+        css=css,
+        mgmt_css=mgmt_css,
+        icons_js=icons_js,
+        fish_js=fish_js,
+        fragments_json=fragments_json,
+        mgmt_boot_js=mgmt_boot_js,
+        fragments=fragments,
+        page="now",
+        title="现场",
+    )
+
     check = "--check" in sys.argv
-    for target, rendered in targets:
-        if "{{ICONS_JS}}" in rendered:
-            raise SystemExit(f"{target.name} 未能正确内联 icons.js")
-        if len(rendered.encode("utf-8")) >= 2 * 1024 * 1024:
-            raise SystemExit(f"{target.name} 超出 2 MiB 体积上限")
-        if check:
-            if not target.exists() or target.read_text(encoding="utf-8") != rendered:
-                raise SystemExit(f"{target.name} 需要重新构建")
-        else:
-            target.write_text(rendered, encoding="utf-8")
+    if "{{ICONS_JS}}" in rendered:
+        raise SystemExit(f"{target.name} 未能正确内联 icons.js")
+    if len(rendered.encode("utf-8")) >= 2 * 1024 * 1024:
+        raise SystemExit(f"{target.name} 超出 2 MiB 体积上限")
+    if check:
+        if not target.exists() or target.read_text(encoding="utf-8") != rendered:
+            raise SystemExit(f"{target.name} 需要重新构建")
+    else:
+        target.write_text(rendered, encoding="utf-8")
 
 
 if __name__ == "__main__":

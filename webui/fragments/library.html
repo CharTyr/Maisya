@@ -1,0 +1,105 @@
+<div class="m-out-shell lib-shell" id="lib-shell" data-tab="library">
+  <aside class="mil-panel m-out-aside lib-aside" aria-label="资料过滤与系统文件">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span data-icon-slot="artifacts"></span>
+        <div>
+          <div class="mil-silk">资料库</div>
+          <div class="mil-silk-en">LIBRARY</div>
+        </div>
+      </div>
+      <div class="mil-head-r">
+        <button type="button" class="mil-key mil-key--sm" id="lib-refresh">刷新</button>
+      </div>
+    </div>
+
+    <div class="lib-aside-block">
+      <input type="search" class="mil-input" id="lib-search" placeholder="搜索产物标题、档案或来源会话…" aria-label="搜索生成产物" />
+      <div class="mil-seg lib-filters" id="lib-filters" role="group" aria-label="产物类型过滤">
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="all" aria-pressed="true">全部</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="image" aria-pressed="false">图文</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="markdown" aria-pressed="false">报告</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="html" aria-pressed="false">网页</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="text" aria-pressed="false">文本</button>
+        <button type="button" class="mil-key mil-key--sm" data-lib-filter="conclusion" aria-pressed="false">结论</button>
+      </div>
+    </div>
+
+    <!-- 侧栏底部入口：系统文件 -->
+    <div class="lib-fs-entry" id="lib-fs-entry">
+      <div class="lib-fs-entry-head">
+        <div class="mil-label">系统文件</div>
+        <button type="button" class="mil-key mil-key--sm" id="lib-fs-back" hidden>回根目录</button>
+      </div>
+      <div class="mil-hint" id="lib-fs-crumbs">根目录（MEMORY / JOURNAL / HEARTBEAT / 工作区）</div>
+      <div class="lib-fs-tree" id="lib-fs-tree" role="tree" aria-label="系统文件目录树"></div>
+    </div>
+  </aside>
+
+  <main class="mil-panel m-out-main lib-main" aria-label="生成产物画廊与文件浏览">
+    <!-- 主画廊区 -->
+    <section id="lib-gallery-pane">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="artifacts"></span>
+          <div>
+            <div class="mil-silk">生成产物画廊</div>
+            <div class="mil-silk-en">ARTIFACTS GALLERY</div>
+          </div>
+        </div>
+        <div class="mil-head-r">
+          <span class="mil-tag" id="lib-count-tag">0 项</span>
+        </div>
+      </div>
+
+      <div class="mil-feedback" id="lib-feedback" role="status" aria-live="polite"></div>
+      <div class="lib-gallery" id="lib-gallery"></div>
+    </section>
+
+    <!-- 系统文件阅读/编辑面板（点击侧栏系统文件后切换显示） -->
+    <section id="lib-fs-pane" hidden>
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="workspace"></span>
+          <div>
+            <div class="mil-silk" id="lib-fs-title">系统文件</div>
+            <div class="mil-silk-en mono" id="lib-fs-path">—</div>
+          </div>
+        </div>
+        <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm" id="lib-fs-close-pane">返回画廊</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--danger" id="lib-fs-delete" hidden>删除文件</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="lib-fs-save">保存文件</button>
+        </div>
+      </div>
+
+      <div class="mil-feedback" id="lib-fs-feedback" role="status" aria-live="polite"></div>
+      <textarea class="mil-textarea mil-textarea--code lib-fs-editor" id="lib-fs-editor" rows="18" aria-label="系统文件内容"></textarea>
+    </section>
+  </main>
+
+  <!-- 产物预览抽屉 -->
+  <aside class="mil-panel lib-drawer" id="lib-drawer" hidden aria-label="产物详情预览">
+    <div class="mil-head">
+      <div class="mil-head-l">
+        <span data-icon-slot="artifacts"></span>
+        <div>
+          <div class="mil-silk" id="lib-drawer-title">产物详情</div>
+          <div class="mil-silk-en" id="lib-drawer-meta">—</div>
+        </div>
+      </div>
+      <div class="mil-head-r">
+        <button type="button" class="mil-key mil-key--sm" id="lib-drawer-close" aria-label="关闭预览">关闭</button>
+      </div>
+    </div>
+
+    <div class="lib-drawer-actions">
+      <button type="button" class="mil-key mil-key--sm" id="lib-jump-chat">来源会话</button>
+      <button type="button" class="mil-key mil-key--sm" id="lib-copy">复制内容</button>
+      <a class="mil-key mil-key--sm" id="lib-download" download="artifact.txt" hidden>下载</a>
+      <button type="button" class="mil-key mil-key--sm mil-key--danger" id="lib-art-delete" hidden>删除产物</button>
+    </div>
+
+    <div class="lib-stage" id="lib-stage"></div>
+  </aside>
+</div>
