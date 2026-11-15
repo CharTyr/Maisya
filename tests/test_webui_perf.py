@@ -327,7 +327,8 @@ async def test_manage_read_batch_aggregates_and_redacts_secrets(tmp_path):
             ),
         )
         assert res["success"] is True
-        assert res["ui_style"] == "maiwork"
+        assert res["ui_style"] == "modern"
+        assert res["sections"]["settings"]["ui_style"] == "modern"
         assert set(res["sections"].keys()) == {"settings", "services", "health", "intents", "memory"}
         assert "known_chats" in res["sections"]["settings"]
         assert "running" in res["sections"]["health"]

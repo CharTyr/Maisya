@@ -1,5 +1,4 @@
 import json
-import re
 import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,14 +9,27 @@ from test_foundation import loaded
 
 WEBUI_DIR = Path(__file__).resolve().parents[1] / "webui"
 
+HOST_CSP_META = (
+    "<head><meta http-equiv=\"Content-Security-Policy\" content=\""
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+    "connect-src 'none'; img-src data: blob:;\">"
+)
+
+
+def _wrap_csp(html: str) -> str:
+    return html.replace("<head>", HOST_CSP_META, 1)
+
 
 @asynccontextmanager
-async def _open_mgmt_page(plugin, page_name: str, *, viewport=None):
+async def _open_spa(plugin, tab: str = "now", *, viewport=None):
     errors = []
-
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
-        context = await browser.new_context(viewport=viewport) if viewport else await browser.new_context()
+        context = (
+            await browser.new_context(viewport=viewport)
+            if viewport
+            else await browser.new_context(viewport={"width": 1280, "height": 900})
+        )
         page = await context.new_page()
         page.on("pageerror", lambda err: errors.append(f"pageerror:{err}"))
         page.on(
@@ -27,27 +39,50 @@ async def _open_mgmt_page(plugin, page_name: str, *, viewport=None):
             else None,
         )
 
-        async def request(mode, arguments):
-            args = arguments or {}
-            if mode == "read":
-                return await plugin.manage_read(
-                    args.get("section", ""),
-                    args.get("payload", "{}"),
-                )
-            if mode == "write":
-                return await plugin.manage_write(
-                    args.get("action", ""),
-                    args.get("payload", "{}"),
-                )
-            raise AssertionError(f"unexpected rpc mode: {mode}")
+        async def request(kind, name, arguments):
+            args = dict(arguments or {})
+            if kind == "query":
+                if name == "read":
+                    return await plugin.manage_read(**args)
+                if name == "event":
+                    return await plugin.console_event(**args)
+                return await plugin.console_query(**args)
+            if name == "write":
+                return await plugin.manage_write(**args)
+            if name == "note":
+                return await plugin.console_send(**args)
+            return await plugin.console_stop(**args)
 
-        await page.expose_function("backend", request)
-        await page.add_init_script(
-            "window.maibot={ready:Promise.resolve(),context:{theme:'light'},query:(_,args)=>window.backend('read',args),action:(_,args)=>window.backend('write',args),navigate:()=>Promise.resolve()}"
+        await page.expose_function("hostRpc", request)
+        raw_doc = (WEBUI_DIR / "now.html").read_text(encoding="utf-8")
+        assert "localStorage" not in raw_doc
+        assert "sessionStorage" not in raw_doc
+        assert "transition: all" not in raw_doc
+        await page.evaluate(
+            f"""() => {{
+              window.__msPendingQueries = 0;
+              window.maibot = {{
+                ready: Promise.resolve(),
+                context: {{ theme: 'light', host: {{ plugins: {{}} }} }},
+                page: {{ state: {{ tab: {json.dumps(tab)} }} }},
+                query: async (name, args) => {{
+                  window.__msPendingQueries += 1;
+                  try {{
+                    return await window.hostRpc('query', name, args);
+                  }} finally {{
+                    window.__msPendingQueries -= 1;
+                  }}
+                }},
+                action: (name, args) => window.hostRpc('action', name, args),
+                navigate: () => Promise.resolve(),
+              }};
+            }}"""
         )
-        await page.goto((WEBUI_DIR / f"{page_name}.html").as_uri())
+        await page.set_content(_wrap_csp(raw_doc), wait_until="domcontentloaded")
         try:
             yield page, errors
+            assert await page.locator("img").count() == 0
+            assert await page.locator("iframe").count() == 0
         finally:
             await context.close()
             await browser.close()
@@ -56,10 +91,18 @@ async def _open_mgmt_page(plugin, page_name: str, *, viewport=None):
 @pytest.mark.asyncio
 async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
     plugin = await loaded(tmp_path)
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
-        plugin.memory.write("notes", "基线笔记：保留现有规则。", target="scout", author="user")
+        for tid_name, label in (("custom_writer", "写作助手"), ("custom_maker", "制作助手")):
+            cloned = await plugin.manage_write(
+                "profile_clone",
+                json.dumps({"source_id": "default", "target_id": tid_name, "name": label}),
+            )
+            assert cloned["success"], cloned
+
+        plugin.memory.write("notes", "基线笔记：保留现有规则。", target="custom_writer", author="user")
         t1 = plugin.threads.create(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("custom_writer"),
             "向量检索阈值排查",
             chat_id="qq:group:100246809",
             platform="qq",
@@ -76,13 +119,13 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
         v2 = plugin.memory.write(
             "notes",
             "基线笔记：保留现有规则。\n- 向量检索阈值建议调为 0.78",
-            target="scout",
+            target="custom_writer",
             author=f"thread:{t1['thread_id']}",
         )
 
-        plugin.memory.write("notes", "创作者初稿规范", target="maker", author="user")
+        plugin.memory.write("notes", "创作者初稿规范", target="custom_maker", author="user")
         t2 = plugin.threads.create(
-            plugin.profiles.get("maker"),
+            plugin.profiles.get("custom_maker"),
             "图表输出规范沉淀",
             chat_id="qq:group:100246809",
             platform="qq",
@@ -99,12 +142,12 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
         plugin.memory.write(
             "notes",
             "创作者初稿规范\n- 图表默认使用矢量 SVG",
-            target="maker",
+            target="custom_maker",
             author=f"thread:{t2['thread_id']}",
         )
 
         t3 = plugin.threads.create(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             "无新增结论的检索",
             chat_id="qq:group:100246809",
             platform="qq",
@@ -129,7 +172,7 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
         assert intents_res["success"], intents_res
         by_tid = {item["thread_id"]: item for item in intents_res["learning"]}
         rec1 = by_tid[t1["thread_id"]]
-        assert rec1["profile"] == "scout"
+        assert rec1["profile"] == "custom_writer"
         assert rec1["chat_id"] == "qq:group:100246809"
         assert "向量检索" in rec1["topic"]
         assert rec1["summary"]
@@ -139,54 +182,44 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
         assert rec1["can_undo"] is True
 
         rec3 = by_tid[t3["thread_id"]]
-        assert rec3["profile"] == "scout"
+        assert rec3["profile"] == "default"
         assert rec3["can_undo"] is False
 
-        async with _open_mgmt_page(plugin, "memory") as (page, errors):
-            await page.locator('[data-kind-tab="heartbeat"]').click()
-            undo_btn = page.locator('#learning [data-undo-learning="scout"]')
-            await expect(undo_btn).to_be_visible()
-            card_text = await page.locator("#learning").inner_text()
-            assert "scout" in card_text
-            assert "向量检索" in card_text
+        # 撤回学习笔记写回并更新回执状态
+        undo1 = await plugin.manage_write(
+            "undo_learning_note",
+            json.dumps({"profile": "custom_writer", "history_id": rec1["history_id"]}),
+        )
+        assert undo1["success"], undo1
+        assert (
+            plugin.memory.read("notes", target="custom_writer")["content"]
+            == "基线笔记：保留现有规则。"
+        )
+        undo2 = await plugin.manage_write(
+            "undo_learning_note", json.dumps({"profile": "custom_maker"})
+        )
+        assert undo2["success"], undo2
+        assert (
+            plugin.memory.read("notes", target="custom_maker")["content"]
+            == "创作者初稿规范"
+        )
+        with plugin.threads.connect() as db:
+            rows = db.execute(
+                "SELECT thread_id, status FROM learning_receipts WHERE thread_id IN (?, ?)",
+                (t1["thread_id"], t2["thread_id"]),
+            ).fetchall()
+        assert {r["status"] for r in rows} == {"reverted"}
 
-            await undo_btn.click()
-            await expect(page.locator("#feedback")).to_contain_text("撤回")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
-            assert (
-                plugin.memory.read("notes", target="scout")["content"]
-                == "基线笔记：保留现有规则。"
-            )
-            with plugin.threads.connect() as db:
-                row = db.execute(
-                    "SELECT status FROM learning_receipts WHERE thread_id=?",
-                    (t1["thread_id"],),
-                ).fetchone()
-            assert row["status"] == "reverted"
-            await expect(undo_btn).to_have_count(0)
-            assert "已撤回" in await page.locator("#learning").inner_text()
-            assert errors == []
-
-        async with _open_mgmt_page(plugin, "settings") as (page, errors):
-            await page.locator('[data-settings-mode="advanced"]').click()
-            undo_btn = page.locator('#learning [data-undo-learning="maker"]')
-            await expect(undo_btn).to_be_visible()
-            await undo_btn.click()
-            await expect(page.locator("#feedback")).to_contain_text("撤回")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
-            assert (
-                plugin.memory.read("notes", target="maker")["content"]
-                == "创作者初稿规范"
-            )
-            with plugin.threads.connect() as db:
-                row = db.execute(
-                    "SELECT status FROM learning_receipts WHERE thread_id=?",
-                    (t2["thread_id"],),
-                ).fetchone()
-            assert row["status"] == "reverted"
-            await expect(undo_btn).to_have_count(0)
+        async with _open_spa(plugin, "profiles") as (page, errors):
+            await expect(page.locator("#ms-page-title")).to_have_text("档案")
+            await expect(
+                page.locator('#pr-roster [data-pick-profile-id="custom_writer"]')
+            ).to_be_visible()
+            await expect(
+                page.locator('#pr-roster [data-pick-profile-id="custom_maker"]')
+            ).to_be_visible()
+            await page.locator('[data-nav="library"]').click()
+            await expect(page.locator("#ms-page-title")).to_have_text("资料库")
             assert errors == []
     finally:
         await plugin.on_unload()
@@ -195,13 +228,20 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
 @pytest.mark.asyncio
 async def test_audit_b1_scheduled_admin_cancel_on_memory_and_settings(tmp_path):
     plugin = await loaded(tmp_path)
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
+        cloned = await plugin.manage_write(
+            "profile_clone",
+            json.dumps({"source_id": "default", "target_id": "custom_maker", "name": "制作助手"}),
+        )
+        assert cloned["success"], cloned
+
         r1 = await plugin.manage_write(
             "schedule_intent",
             json.dumps(
                 {
                     "chat_id": "qq:group:100246809",
-                    "profile": "scout",
+                    "profile": "default",
                     "in_seconds": 3600,
                     "every_seconds": 86400,
                     "prompt": "每日例行巡检群消息",
@@ -214,7 +254,7 @@ async def test_audit_b1_scheduled_admin_cancel_on_memory_and_settings(tmp_path):
             json.dumps(
                 {
                     "chat_id": "qq:group:100246809",
-                    "profile": "maker",
+                    "profile": "custom_maker",
                     "in_seconds": 7200,
                     "every_seconds": 604800,
                     "prompt": "每周项目周报汇总",
@@ -230,130 +270,112 @@ async def test_audit_b1_scheduled_admin_cancel_on_memory_and_settings(tmp_path):
             it["intent_id"] for it in all_intents if "每周项目周报汇总" in it["reason"]
         )
 
-        async with _open_mgmt_page(plugin, "memory") as (page, errors):
-            await page.locator('[data-kind-tab="heartbeat"]').click()
-            cancel_btn = page.locator(f'#intent-list [data-cancel-intent="{i1}"]')
+        # 桌面端 1280x900 现场页取消第一项管理员定时计划
+        async with _open_spa(
+            plugin, "now", viewport={"width": 1280, "height": 900}
+        ) as (page, errors):
+            cancel_btn = page.locator(
+                f'#now-intents [data-intent-act="intent_delete"][data-intent-id="{i1}"]'
+            )
             await expect(cancel_btn).to_be_visible()
-            assert "受保护" in await page.locator("#intent-list").inner_text()
+            await expect(page.locator("#now-intents")).to_contain_text("每日例行巡检群消息")
             await cancel_btn.click()
-            await expect(page.locator("#feedback")).to_contain_text("取消")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
+            await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
+            fb_cls = await page.locator('[data-feedback-slot="now"]').get_attribute("class") or ""
+            assert "mil-feedback--err" not in fb_cls
             assert plugin.intents.get(i1)["status"] == "cancelled"
             assert errors == []
 
-        async with _open_mgmt_page(plugin, "settings") as (page, errors):
-            await page.locator('[data-settings-mode="advanced"]').click()
-            cancel_btn = page.locator(f'#intent-list [data-cancel-intent="{i2}"]')
-            await expect(cancel_btn).to_be_visible()
-            assert "受保护" in await page.locator("#intent-list").inner_text()
-            await cancel_btn.click()
-            await expect(page.locator("#feedback")).to_contain_text("取消")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
+        # 移动端 390x844 现场页取消第二项管理员定时计划
+        async with _open_spa(
+            plugin, "now", viewport={"width": 390, "height": 844}
+        ) as (page, errors):
+            await expect(page.locator("#ms-mob-dock")).to_be_visible()
+            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+            cancel_btn2 = page.locator(
+                f'#now-intents [data-intent-act="intent_delete"][data-intent-id="{i2}"]'
+            )
+            await expect(cancel_btn2).to_be_visible()
+            await cancel_btn2.click()
+            await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
             assert plugin.intents.get(i2)["status"] == "cancelled"
+            assert await page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth"
+            )
             assert errors == []
     finally:
         await plugin.on_unload()
 
 
 @pytest.mark.asyncio
-async def test_audit_b1_webhook_quick_builder_desktop_and_mobile(tmp_path):
-    plugin = await loaded(tmp_path)
+async def test_audit_b1_settings_and_vault_controls_desktop_and_mobile(tmp_path):
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
         plugin.vault.set("gh_hook_key", "super-secret-webhook-token-123")
 
-        async with _open_mgmt_page(
+        async with _open_spa(
             plugin, "settings", viewport={"width": 1280, "height": 900}
         ) as (page, errors):
-            await page.locator('[data-settings-mode="advanced"]').click()
-            await page.locator('[data-set-rail="webhooks"]').click()
+            await expect(page.locator("#ms-page-title")).to_have_text("设置")
+            await expect(page.locator("#set-vault-list")).to_contain_text("gh_hook_key")
+            assert "super-secret-webhook-token-123" not in await page.content()
 
-            tag_name = await page.locator("#wh-b-profile").evaluate(
-                "el => el.tagName"
+            # 1) 非法免打扰时段应报错且不落盘
+            await page.locator("#set-sleep-start").fill("99:99")
+            await page.locator("#set-save-runtime").click()
+            await expect(page.locator("#set-feedback")).to_have_class(
+                __import__("re").compile(r"mil-feedback--err")
             )
-            assert tag_name == "SELECT"
-            await expect(
-                page.locator('#wh-b-profile option[value="maker"]')
-            ).to_be_attached()
-            prof_vals = await page.locator("#wh-b-profile option").evaluate_all(
-                "opts => opts.map(o => o.value)"
-            )
-            assert "scout" in prof_vals and "maker" in prof_vals
+            assert plugin.settings.sleep_window != "99:99-08:00"
 
-            kind_vals = await page.locator("#wh-b-kind option").evaluate_all(
-                "opts => opts.map(o => o.value)"
-            )
-            assert kind_vals == ["proactive", "silent"]
-
-            assert (
-                await page.locator("#wh-b-secret").get_attribute("required")
-                is not None
-            )
-            secret_ph = (
-                await page.locator("#wh-b-secret").get_attribute("placeholder") or ""
-            )
-            assert "可选" not in secret_ph
-
-            await page.locator("#wh-b-name").fill("repo_push")
-            await page.locator("#wh-b-target").fill("qq:group:100246809")
-            await page.locator("#wh-b-secret").fill("")
-            await page.locator("#wh-b-add").click()
-            await expect(page.locator("#feedback")).to_have_class(
-                re.compile(r"mil-feedback--err")
-            )
-            assert "repo_push" not in (
-                await page.locator("#webhook-config").input_value()
+            # 2) 空凭据句柄保存 Vault 应报错
+            await page.locator("#set-vault-handle").fill("")
+            await page.locator("#set-vault-secret").fill("TOKEN=secret-abc")
+            await page.locator("#set-vault-save").click()
+            await expect(page.locator("#set-feedback")).to_have_class(
+                __import__("re").compile(r"mil-feedback--err")
             )
 
-            await page.locator("#wh-b-secret").fill("bad handle!")
-            await page.locator("#wh-b-add").click()
-            await expect(page.locator("#feedback")).to_have_class(
-                re.compile(r"mil-feedback--err")
-            )
-            assert "repo_push" not in (
-                await page.locator("#webhook-config").input_value()
-            )
+            # 3) 合法保存运行时设置与新 Vault 凭据
+            await page.locator("#set-daily-limit").fill("4")
+            await page.locator("#set-sleep-start").fill("00:30")
+            await page.locator("#set-sleep-end").fill("07:30")
+            await page.locator("#set-save-runtime").click()
+            await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
+            assert plugin.settings.daily_proactive_limit == 4
+            assert plugin.settings.sleep_window == "00:30-07:30"
 
-            await page.locator("#wh-b-profile").select_option("maker")
-            await page.locator("#wh-b-kind").select_option("silent")
-            await page.locator("#wh-b-secret").fill("gh_hook_key")
-            await page.locator("#wh-b-add").click()
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
-
-            await page.locator("#save-webhooks").click()
-            await expect(page.locator("#feedback")).to_contain_text("保存")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
-            saved_hooks = plugin.incoming.load()
-            assert saved_hooks["repo_push"]["kind"] == "silent"
-            assert saved_hooks["repo_push"]["profile"] == "maker"
-            assert saved_hooks["repo_push"]["secret_handle"] == "gh_hook_key"
-            assert saved_hooks["repo_push"]["target"] == "chat:qq:group:100246809"
+            await page.locator("#set-vault-handle").fill("ci_deploy_token")
+            await page.locator("#set-vault-label").fill("CI 只读凭据")
+            await page.locator("#set-vault-domain").fill("api.example.org")
+            await page.locator("#set-vault-secret").fill("TOKEN=secret-xyz-999")
+            await page.locator("#set-vault-save").click()
+            await expect(page.locator("#set-feedback")).to_contain_text("ci_deploy_token")
+            await expect(page.locator("#set-vault-secret")).to_have_value("")
+            assert "ci_deploy_token" in plugin.vault.handles()
+            assert "secret-xyz-999" not in await page.content()
             assert errors == []
 
-        async with _open_mgmt_page(
+        async with _open_spa(
             plugin, "settings", viewport={"width": 390, "height": 844}
         ) as (page, errors):
-            await page.locator('[data-mob-route="webhooks"]').click()
-            await page.locator("#mob-sub-act-add").click()
-            await expect(page.locator("#settings-mob-scrim")).to_be_visible()
-            await expect(
-                page.locator('#wh-b-profile option[value="maker"]')
-            ).to_be_attached()
-
-            await page.locator("#wh-b-name").fill("ci_hook")
-            await page.locator("#wh-b-target").fill("qq:group:100246809")
-            await page.locator("#wh-b-profile").select_option("scout")
-            await page.locator("#wh-b-kind").select_option("proactive")
-            await page.locator("#wh-b-secret").fill("gh_hook_key")
-            await page.locator("#wh-b-add").click()
-
-            await expect(page.locator("#settings-mob-scrim")).to_be_hidden()
-            cfg_json = json.loads(await page.locator("#webhook-config").input_value())
-            assert cfg_json["ci_hook"]["kind"] == "proactive"
-            assert cfg_json["ci_hook"]["secret_handle"] == "gh_hook_key"
+            await expect(page.locator("#ms-mob-dock")).to_be_visible()
+            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+            for block in (
+                "#set-block-chats",
+                "#set-block-auth",
+                "#set-block-vault",
+                "#set-block-runtime",
+            ):
+                await expect(page.locator(block)).to_be_visible()
+            await page.locator("#set-chat-input").fill("qq:group:100246809")
+            await page.locator("#set-chat-add").click()
+            await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
+            assert "qq:group:100246809" in plugin.settings.enabled_chats
+            assert await page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth"
+            )
             assert errors == []
     finally:
         await plugin.on_unload()
@@ -361,88 +383,120 @@ async def test_audit_b1_webhook_quick_builder_desktop_and_mobile(tmp_path):
 
 @pytest.mark.asyncio
 async def test_audit_b1_cfg_task_default_both_save_paths(tmp_path):
+    cfg_dir = tmp_path / "host/config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "model_config.toml").write_text(
+        """
+[[models]]
+name = "demo-planner"
+model_identifier = "demo/planner"
+
+[[models]]
+name = "demo-replyer"
+model_identifier = "demo/replyer"
+""",
+        encoding="utf-8",
+    )
     plugin = await loaded(tmp_path)
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
+        cloned = await plugin.manage_write(
+            "profile_clone",
+            json.dumps({"source_id": "default", "target_id": "custom_maker", "name": "制作助手"}),
+        )
+        assert cloned["success"], cloned
+
         # 1) 后端 set_profile_models 应放行 fallback_slot="" 并从 profile.toml 移除 task 键
         res = await plugin.manage_write(
             "set_profile_models",
             json.dumps(
-                {"profile_id": "maker", "models": [], "fallback_slot": ""}
+                {"profile_id": "custom_maker", "models": [], "fallback_slot": ""}
             ),
         )
         assert res["success"], res
         maker_toml = tomllib.loads(
-            (plugin.profiles.path / "maker" / "profile.toml").read_text(
+            (plugin.profiles.path / "custom_maker" / "profile.toml").read_text(
                 encoding="utf-8"
             )
         )
         assert "task" not in maker_toml
 
-        # 重新给 maker 写入 task = "planner" 供界面路径 A 测试
         res2 = await plugin.manage_write(
             "set_profile_models",
             json.dumps(
-                {"profile_id": "maker", "models": [], "fallback_slot": "planner"}
+                {"profile_id": "custom_maker", "models": [], "fallback_slot": "planner"}
             ),
         )
         assert res2["success"], res2
-
-        async with _open_mgmt_page(plugin, "abilities") as (page, errors):
-            await page.locator("#nav-roles").click()
-
-            # 路径 A：通过 #cfg-model-apply 保存 "跟随系统默认" (value="")
-            await page.locator('#profiles [data-profile="maker"]').click()
-            await page.locator('[data-doc-tab="config"]').click()
-            await expect(page.locator("#cfg-task")).to_have_value("planner")
-            await page.locator("#cfg-task").select_option("")
-            await page.locator("#cfg-model-apply").click()
-            await expect(page.locator("#feedback")).to_contain_text("应用")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
-            await expect(page.locator("#cfg-task")).to_have_value("")
-            maker_after = tomllib.loads(
-                (plugin.profiles.path / "maker" / "profile.toml").read_text(
-                    encoding="utf-8"
-                )
+        maker_with_task = tomllib.loads(
+            (plugin.profiles.path / "custom_maker" / "profile.toml").read_text(
+                encoding="utf-8"
             )
-            assert "task" not in maker_after
+        )
+        assert maker_with_task.get("task") == "planner"
 
-            # 路径 B：通过 #save 保存 "跟随系统默认" (value="")，不得强写 task = ""
-            await page.locator('#profiles [data-profile="scout"]').click()
-            await page.locator('[data-doc-tab="config"]').click()
-            await expect(page.locator("#cfg-title")).to_have_value("探索者")
-            await expect(page.locator("#cfg-task")).to_have_value("")
+        res3 = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps(
+                {"profile_id": "custom_maker", "models": [], "fallback_slot": ""}
+            ),
+        )
+        assert res3["success"], res3
+        assert "task" not in tomllib.loads(
+            (plugin.profiles.path / "custom_maker" / "profile.toml").read_text(
+                encoding="utf-8"
+            )
+        )
 
-            await page.locator("#cfg-task").select_option("replyer")
-            await expect(page.locator("#dirty-tag")).to_be_visible()
-            await page.locator("#save").click()
-            await expect(page.locator("#dirty-tag")).to_be_hidden()
-            await expect(page.locator("#feedback")).to_contain_text("保存")
-            assert (
-                tomllib.loads(
-                    (plugin.profiles.path / "scout" / "profile.toml").read_text(
-                        encoding="utf-8"
-                    )
-                ).get("task")
-                == "replyer"
+        # 2) v0.3 档案页 #pr-model 切换与跟随默认模型保存
+        async def _wait_reads_settled(page) -> None:
+            await page.wait_for_function(
+                "() => (window.__msPendingQueries || 0) === 0",
+                timeout=5000,
+            )
+            await page.evaluate("() => new Promise(r => setTimeout(r, 0))")
+            await page.wait_for_function(
+                "() => (window.__msPendingQueries || 0) === 0",
+                timeout=5000,
             )
 
-            await page.locator("#cfg-task").select_option("")
-            await expect(page.locator("#dirty-tag")).to_be_visible()
-            raw_toml = await page.locator("#content").input_value()
-            assert 'task = ""' not in raw_toml
-            await page.locator("#save").click()
-            await expect(page.locator("#dirty-tag")).to_be_hidden()
-            await expect(page.locator("#feedback")).to_contain_text("保存")
-            fb_class = await page.locator("#feedback").get_attribute("class") or ""
-            assert "mil-feedback--err" not in fb_class
-            await expect(page.locator("#cfg-task")).to_have_value("")
-            scout_after = tomllib.loads(
-                (plugin.profiles.path / "scout" / "profile.toml").read_text(
-                    encoding="utf-8"
-                )
-            )
-            assert "task" not in scout_after
+        async with _open_spa(plugin, "profiles") as (page, errors):
+            await expect(page.locator("#pr-model")).to_contain_text("demo-planner")
+            await _wait_reads_settled(page)
+            await page.locator('#pr-roster [data-pick-profile-id="custom_maker"]').click()
+            await _wait_reads_settled(page)
+            await page.locator("#pr-adv-toggle").click()
+            await expect(page.locator("#pr-adv-body")).to_be_visible()
+            await page.locator("#pr-model").select_option("demo-planner")
+            await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
+            await page.locator("#pr-btn-save").click()
+            await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
+            await _wait_reads_settled(page)
+            assert plugin.profiles.get("custom_maker").model_name == "demo-planner"
+
+            await page.locator("#pr-model").select_option("")
+            await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
+            await page.locator("#pr-btn-save").click()
+            await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
+            await _wait_reads_settled(page)
+            assert plugin.profiles.get("custom_maker").model_name == ""
+
+            # 默认档案同样可通过高级切换模型并保存
+            await page.locator('#pr-roster [data-pick-profile-id="default"]').click()
+            await _wait_reads_settled(page)
+            await expect(page.locator("#pr-btn-delete")).to_be_disabled()
+            await page.locator("#pr-model").select_option("demo-replyer")
+            await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
+            await page.locator("#pr-btn-save").click()
+            await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
+            await _wait_reads_settled(page)
+            assert plugin.profiles.get("default").model_name == "demo-replyer"
+            await page.locator("#pr-model").select_option("")
+            await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
+            await page.locator("#pr-btn-save").click()
+            await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
+            await _wait_reads_settled(page)
+            assert plugin.profiles.get("default").model_name == ""
             assert errors == []
     finally:
         await plugin.on_unload()

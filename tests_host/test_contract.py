@@ -120,10 +120,10 @@ class HostContract(unittest.TestCase):
                     catalog = await plugin.manage_read("abilities")
                     self.assertEqual(
                         {p["id"] for p in catalog["profiles"]},
-                        {"scout", "maker", "digest"},
+                        {"default"},
                     )
                     cloned = await plugin.manage_write(
-                        "clone", '{"base":"scout","target":"traveler"}'
+                        "clone", '{"base":"default","target":"traveler"}'
                     )
                     self.assertTrue(cloned["success"], cloned)
                     self.assertIn(
@@ -136,7 +136,7 @@ class HostContract(unittest.TestCase):
                         for component in plugin.get_components()
                     }
                     self.assertFalse(metadata["maisya_manage_write"]["public"])
-                    self.assertTrue(metadata["maisya_incoming_event"]["public"])
+                    self.assertNotIn("maisya_incoming_event", metadata)
                 finally:
                     await plugin.on_unload()
 
@@ -183,9 +183,9 @@ class HostContract(unittest.TestCase):
                         "platform": "qq",
                     }
                     denied = await plugin.shape_tool(
-                        action="write",
-                        kind="notes",
-                        target="scout",
+                        action="file",
+                        op="write",
+                        document="MEMORY.md",
                         content="changed",
                         expected_version=0,
                         chat_id="contract-chat",
@@ -194,9 +194,9 @@ class HostContract(unittest.TestCase):
                     )
                     self.assertFalse(denied["success"])
                     saved = await plugin.shape_tool(
-                        action="write",
-                        kind="notes",
-                        target="scout",
+                        action="file",
+                        op="write",
+                        document="MEMORY.md",
                         content="查证前先核实来源。",
                         expected_version=0,
                         **options,
@@ -210,9 +210,9 @@ class HostContract(unittest.TestCase):
                     )
                     self.assertIn("查证前先核实来源", str(prompts[-1]))
                     restored = await plugin.shape_tool(
-                        action="rollback",
-                        kind="notes",
-                        target="scout",
+                        action="file",
+                        op="rollback",
+                        document="MEMORY.md",
                         version=0,
                         expected_version=saved["version"],
                         **options,
@@ -286,14 +286,13 @@ class HostContract(unittest.TestCase):
         self.assertEqual(page.placement, "sidebar")
         self.assertIn("Maisya", page.document)
         self.assertEqual(set(page.queries), {"event", "snapshot", "read"})
-        self.assertEqual(set(page.actions), {"note", "stop", "write", "incoming_event"})
+        self.assertEqual(set(page.actions), {"note", "stop", "write"})
         self.assertEqual(page.queries["event"].api, "maisya_event")
         self.assertEqual(page.queries["snapshot"].api, "maisya_now")
         self.assertEqual(page.queries["read"].api, "maisya_manage_read")
         self.assertEqual(page.actions["note"].api, "maisya_note")
         self.assertEqual(page.actions["stop"].api, "maisya_stop")
         self.assertEqual(page.actions["write"].api, "maisya_manage_write")
-        self.assertEqual(page.actions["incoming_event"].api, "maisya_incoming_event")
         page.queries["snapshot"].validate_args({"thread_id": "", "cursor": 0})
         page.actions["write"].validate_args({"action": "asset", "payload": "{}"})
         page.actions["note"].validate_args(
@@ -330,7 +329,6 @@ class HostContract(unittest.TestCase):
                 "maisya_stop",
                 "maisya_manage_read",
                 "maisya_manage_write",
-                "maisya_incoming_event",
             },
         )
         self.assertEqual(
@@ -354,7 +352,10 @@ class HostContract(unittest.TestCase):
             p["name"]: p for p in components["maisya_shape"]["metadata"].get("parameters", [])
         }
         if "action" in shape_params and "enum" in shape_params["action"]:
-            self.assertIn("setup", shape_params["action"]["enum"])
+            self.assertEqual(
+                set(shape_params["action"]["enum"]),
+                {"overview", "settings", "profile", "file"},
+            )
         for name in (
             "maisya_now",
             "maisya_event",
@@ -580,7 +581,7 @@ class HostContract(unittest.TestCase):
                 await plugin.engine.drain()
                 self.assertEqual(
                     (await plugin.console_stop(thread_id=result["thread_id"]))["state"],
-                    "closed",
+                    "idle",
                 )
                 await plugin.on_unload()
 
@@ -1106,7 +1107,7 @@ class HostContract(unittest.TestCase):
                     plugin.threads.get(result["thread_id"], "contract-chat")["user_id"],
                     "",
                 )
-                (plugin.profiles.path / "scout/profile.toml").write_text(
+                (plugin.profiles.path / "default/profile.toml").write_text(
                     'environment="readonly"\naccess="admins"'
                 )
                 denied = await plugin.agent_tool(
