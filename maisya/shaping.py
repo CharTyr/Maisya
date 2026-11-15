@@ -21,19 +21,13 @@ _SETTINGS_HISTORY_FILE = "settings_history.json"
 _MAX_SETTINGS_HISTORY = 50
 _CURRENT_CHAT_ALIASES = {"", "current", "here", "this", "当前", "本群", "当前会话"}
 _LOCKOUT_MESSAGE = "拒绝在聊天内关闭总开关（plugin.enabled=false 会锁死管理入口，请前往 WebUI 操作）"
-_SLEEP_WINDOW_RE = re.compile(
-    r"^(\d{1,2})(?:\s*[:：]\s*(\d{2}))?\s*(?:-|–|—|~|～|至|到)\s*(\d{1,2})(?:\s*[:：]\s*(\d{2}))?$"
-)
-_DIGEST_WORKSPACE_ALIASES = frozenset(
-    {"", "digest", "digest-feeds", "digest_feeds", "digest-news", "digest-daily", "digest_feed"}
-)
+_SLEEP_WINDOW_RE = re.compile(r"^(\d{1,2})(?:\s*[:：]\s*(\d{2}))?\s*(?:-|–|—|~|～|至|到)\s*(\d{1,2})(?:\s*[:：]\s*(\d{2}))?$")
+_DIGEST_WORKSPACE_ALIASES = frozenset({"", "digest", "digest-feeds", "digest_feeds", "digest-news", "digest-daily", "digest_feed"})
 _PROFILE_TOML_KEYS = {
-    "title", "description", "enabled", "base", "session_mode", "access",
-    "allow_chats", "allow_users", "share_credentials", "model", "model_name",
-    "fallback_models", "toolsets", "tools", "skills", "connectors", "mcp",
-    "apis", "secrets", "sandbox_targets", "network", "environment", "task",
-    "max_tokens", "context_tokens", "temperature", "max_steps", "web_provider",
-    "bound", "fish_seed",
+    "title", "description", "enabled", "base", "session_mode", "access", "allow_chats", "allow_users",
+    "share_credentials", "model", "model_name", "fallback_models", "task", "toolsets", "tools", "skills",
+    "connectors", "mcp", "apis", "secrets", "sandbox_targets", "network", "environment", "max_tokens",
+    "context_tokens", "temperature", "max_steps", "web_provider", "bound", "fish_seed",
 }
 DEFAULT_DIGEST_SCHEDULE_PROMPT = (
     "结合当前会话 MEMORY.md 中记录的关注主题、已订阅资讯源与读者反馈，"
@@ -387,6 +381,12 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
         if simple in patch and simple in Settings.model_fields:
             cand[simple] = str(patch[simple] or "").strip()
             changes.append(simple)
+    if "chat_proactive_levels" in patch and "chat_proactive_levels" in Settings.model_fields:
+        raw_lv = patch["chat_proactive_levels"]
+        if raw_lv is not None and not isinstance(raw_lv, dict):
+            raise ValueError("chat_proactive_levels 必须是映射对象")
+        cand["chat_proactive_levels"] = {await resolve_stream_spec(plugin, k, current_chat_id=current_chat_id, current_platform=current_platform): (v.strip() if isinstance(v, str) else v) for k, v in (raw_lv or {}).items() if str(k or "").strip()}
+        changes.append("chat_proactive_levels")
     if "sleep_window" in patch:
         cand["sleep_window"] = normalize_sleep_window(patch["sleep_window"])
         changes.append("sleep_window")
