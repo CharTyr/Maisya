@@ -459,6 +459,40 @@ class Bridge:
         facts, _rows = await self._consume(chat_id)
         return facts
 
+    def pending_admin_direct_attachments(self, chat_id: str) -> list[dict]:
+        """Return un-delivered offered admin_direct attachment rows for a session."""
+        ids = set(self._offered.get(chat_id) or ())
+        if not chat_id or not ids:
+            return []
+        with self.store.connect() as db:
+            rows = self._rows(db, chat_id, ids)
+            pending = []
+            for row in rows:
+                if row.get("return_chat_id") != chat_id or not _grant_admin_direct(
+                    row.get("raw_grant")
+                ):
+                    continue
+                attachments = (row.get("result") or {}).get("attachments") or []
+                if not any(
+                    isinstance(item, dict)
+                    and str(item.get("handle") or "").startswith("att_")
+                    for item in attachments
+                ):
+                    continue
+                delivered = db.execute(
+                    "SELECT 1 FROM result_deliveries WHERE thread_id=? AND revision=? AND destination=?",
+                    (row["thread_id"], row["revision"], chat_id),
+                ).fetchone()
+                if delivered is not None:
+                    continue
+                inp = db.execute(
+                    "SELECT at FROM thread_events WHERE thread_id=? AND kind='input' AND revision=? ORDER BY seq DESC LIMIT 1",
+                    (row["thread_id"], row["revision"]),
+                ).fetchone()
+                row["input_at"] = float(inp["at"] or 0.0) if inp else 0.0
+                pending.append(row)
+        return pending
+
     async def end_turn(self, chat_id):
         self._blocked.discard(chat_id)
         self._manual.pop(chat_id, None)

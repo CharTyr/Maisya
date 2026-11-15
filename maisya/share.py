@@ -508,7 +508,7 @@ class Share:
             "sent": status == "sent",
             "message_id": message_id,
             "end_turn": True,
-            "instruction": "本次交付已处理，请结束本轮，不再重复调用 reply 或 share。",
+            "instruction": "本次交付已处理并发送到会话，请立即调用无时间参数的 wait 静默结束本轮，不再重复调用 reply 或 share。",
         }
         if status != "sent" and last_send_error:
             result["error"] = last_send_error

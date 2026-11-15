@@ -174,13 +174,23 @@ class Pulse:
                     self.bridge.redact(self.bridge.material(rows)), ensure_ascii=False
                 )
             )
-            intent = (
-                "之前由本会话真实用户消息触发的 Agent 线程已有结果。结合当前对话判断是否开口；"
-                "纯文字通过原生 reply 表达，事实将单次交给 Replyer，也可以静默 stop。"
-                "结果仍可通过 maisya_recall 查阅。\n<maisya_return>"
-                + facts
-                + "</maisya_return>"
-            )
+            if any(_grant_admin_direct(row.get("raw_grant")) for row in rows):
+                intent = (
+                    "之前由本会话真实用户消息触发的 Agent 线程已有结果。"
+                    "这是管理员最新发起的后台试跑预览（晚于此前历史闲聊或旧取消语，请勿因旧消息静默跳过）："
+                    "含图片/文件附件或准确链接的结果请直接调用 maisya_agent(action='share', thread_id=...)（无需传 source_msg_id）发送后结束本轮；"
+                    "纯文字结论可直接用 reply 回复。\n<maisya_return>"
+                    + facts
+                    + "</maisya_return>"
+                )
+            else:
+                intent = (
+                    "之前由本会话真实用户消息触发的 Agent 线程已有结果。结合当前对话判断是否开口；"
+                    "含图片/文件附件或准确链接请调用 maisya_agent(action='share', thread_id=...) 交付，纯文字通过原生 reply 表达，事实将单次交给 Replyer，也可以静默 stop。"
+                    "结果仍可通过 maisya_recall 查阅。\n<maisya_return>"
+                    + facts
+                    + "</maisya_return>"
+                )
             self.bridge.new_input(chat_id)
             if not all(self.enabled(chat_id, row["platform"]) for row in rows):
                 await self.bridge.offer(chat_id)

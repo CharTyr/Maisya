@@ -339,11 +339,14 @@ class HostContract(unittest.TestCase):
         self.assertEqual(
             components["maisya_redact"]["metadata"]["error_policy"], "abort"
         )
+        def component_chat_scope(item):
+            return item.get("chat_scope", item["metadata"].get("chat_scope"))
+
         for name in ("maisya_agent", "maisya_recall", "maisya_later"):
-            self.assertEqual(components[name]["metadata"]["chat_scope"], "all")
+            self.assertEqual(component_chat_scope(components[name]), "all")
             self.assertEqual(components[name]["metadata"]["visibility"], "visible")
         self.assertNotIn("visibility", components["maisya_shape"]["metadata"])
-        self.assertEqual(components["maisya_shape"]["metadata"]["chat_scope"], "all")
+        self.assertEqual(component_chat_scope(components["maisya_shape"]), "all")
         from maisya import viz_spec
 
         self.assertIn(".vs", viz_spec.load_viz_css())

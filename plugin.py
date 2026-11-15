@@ -864,6 +864,18 @@ class MaisyaPlugin(MaiBotPlugin):
             return float(self.messages.clock())
         return time.time()
 
+    def _latest_human_ts(self, chat_id: str) -> float:
+        latest = 0.0
+        if self.messages:
+            activity = self.messages.activity_for(chat_id) or {}
+            latest = max(latest, float(activity.get("last_human_at") or 0.0))
+        for (sid, _plat, _mid), (ts, ident) in list(
+            getattr(self, "_bootstrap_messages", {}).items()
+        ):
+            if sid == chat_id and not getattr(ident, "is_plugin_relayed", False):
+                latest = max(latest, float(ts or 0.0))
+        return latest
+
     def _record_bootstrap_message(self, identity: Message) -> None:
         if not identity.message_id or not identity.session_id or not identity.platform:
             return
@@ -2941,7 +2953,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         "parts": [
                             {
                                 "type": "text",
-                                "text": "当前管理员私聊存在待交付的后台试跑预览结果；含图片/文件附件或精确链接的结果请直接调用 maisya_agent(action='share', thread_id=...)（无需传 source_msg_id）发送后结束本轮，纯文字结论可直接调用 reply 回复（reply_style='长回复'）。\n<maisya_returns>"
+                                "text": "当前管理员私聊存在最新完成的后台试跑预览结果（晚于此前历史旧消息，请勿因旧消息静默跳过）；含图片/文件附件或精确链接的结果请直接调用 maisya_agent(action='share', thread_id=...)（无需传 source_msg_id）发送后调无参数 wait 结束本轮，纯文字结论可直接调用 reply 回复（reply_style='长回复'）。\n<maisya_returns>"
                                 + html.escape(json.dumps(returned, ensure_ascii=False))
                                 + "</maisya_returns>",
                             }
@@ -3253,6 +3265,62 @@ class MaisyaPlugin(MaiBotPlugin):
         has_reply = any(
             (item.get("tool_call") or {}).get("func_name") == "reply" for item in output
         )
+        has_share = any(
+            (item.get("tool_call") or {}).get("func_name") == "maisya_agent"
+            and isinstance((item.get("tool_call") or {}).get("args"), dict)
+            and (item.get("tool_call") or {}).get("args", {}).get("action") == "share"
+            for item in output
+        )
+        has_wait_stop = any(
+            (item.get("tool_call") or {}).get("func_name") in {"stop", "wait"}
+            for item in output
+        )
+        had_turn_sources = bool(self._turn_sources.get(chat_id))
+        if (
+            has_wait_stop
+            and not has_reply
+            and not has_share
+            and not had_turn_sources
+            and self.bridge
+            and self.sharing
+            and self.threads
+        ):
+            pending_direct = await asyncio.to_thread(
+                self.bridge.pending_admin_direct_attachments, chat_id
+            )
+            if pending_direct:
+                latest_human = await asyncio.to_thread(self._latest_human_ts, chat_id)
+                for prow in pending_direct:
+                    input_at = float(prow.get("input_at") or 0.0)
+                    if input_at <= 0 or latest_human > input_at:
+                        continue
+                    try:
+                        full_row = await asyncio.to_thread(
+                            self.threads.get,
+                            prow["thread_id"],
+                            chat_id,
+                            allow_self=True,
+                            allow_any_chat=True,
+                        )
+                        if full_row is not None:
+                            await self.sharing.send(
+                                full_row,
+                                target_chat_id=(
+                                    chat_id if chat_id != full_row["chat_id"] else None
+                                ),
+                                target_platform=(
+                                    platform or full_row.get("platform") or "qq"
+                                ),
+                                is_admin=True,
+                                allow_admin_destination=True,
+                            )
+                    except Exception as exc:
+                        if getattr(getattr(self, "ctx", None), "logger", None):
+                            self.ctx.logger.warning(
+                                "auto-share admin_direct attachment failed for %s: %s",
+                                prow.get("thread_id"),
+                                exc,
+                            )
         for item in output:
             call = item.get("tool_call") or {}
             if call.get("func_name") == "maisya_agent":

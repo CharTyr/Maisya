@@ -1007,3 +1007,179 @@ def test_on_load_requeues_orphaned_claimed_intents_after_runner_reload(tmp_path)
             await plg2.on_unload()
 
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_admin_direct_attachment_preview_auto_shares_when_planner_calls_wait_on_stale_history(tmp_path):
+    """管理员早于试跑前的旧取消语不得让 Planner 在未分享预览图卡时静默吞掉交付；若确有晚于试跑的新人类输入则不自动发送。"""
+    import base64 as _b64
+
+    plg = await _boot_plugin(tmp_path / "auto_share_wait", enabled_chats=["qq:group:10001"])
+    try:
+        await plg.pulse.close()
+        plg.pulse.closing = False
+        cur = plg.memory.read("profile", target="digest", document="profile.toml")
+        plg.memory.write(
+            "profile",
+            cur["content"].replace("enabled = false", "enabled = true"),
+            target="digest",
+            document="profile.toml",
+            expected_version=cur["version"],
+            allow_custom=True,
+        )
+
+        clock = [time.time() - 200.0]
+        plg.bridge.clock = lambda: clock[0]
+        plg.intents.clock = lambda: clock[0]
+        plg.messages.clock = lambda: clock[0]
+
+        wake_calls = []
+        sent_calls = []
+
+        async def _cap(name, **kwargs):
+            if name == "chat.get_all_streams":
+                return {"success": True, "streams": list(plg.ctx.streams)}
+            if name == "maisaka.proactive.trigger":
+                wake_calls.append(kwargs)
+                return {"success": True, "queued": True}
+            if name == "maisaka.reply.generate":
+                return {"success": True, "text": "刚跑好的独立游戏简报发你。"}
+            if name == "send.hybrid":
+                sent_calls.append(kwargs)
+                return {
+                    "success": True,
+                    "sent": True,
+                    "message_id": f"msg-priv-{len(sent_calls)}",
+                }
+            return {"success": True, "response": "ok", "tool_calls": []}
+
+        plg.ctx.call_capability = _cap
+
+        # 1. 记录一条早于本次试跑的管理员私聊“不要，别搞了”并模拟该旧轮结束
+        await plg.after_receive(
+            message=_private_msg("m-old-stop", "不要，别搞了")
+        )
+        plg._pending_sources.pop("priv_admin_md5", None)
+        plg._turn_sources.pop("priv_admin_md5", None)
+
+        # 2. 时间推到当前，发起 admin_direct 私聊预览试跑并完成 digest-card.png 挂载
+        clock[0] = time.time()
+        grant = {
+            "scheduled_admin": True,
+            "admin_direct": True,
+            "source_chat_id": "priv_admin_md5",
+            "source_platform": "qq",
+            "source_msg_id": "admin-preview",
+        }
+        profile = plg.profiles.get("digest")
+        row1 = plg.threads.create(
+            profile,
+            "试跑简报1",
+            chat_id="10001",
+            platform="qq",
+            user_id="",
+            owner="chat",
+            workspace="digest",
+            grant=grant,
+        )
+        tid = row1["thread_id"]
+        route1 = await plg.bridge.route("priv_admin_md5", "admin-preview", 0)
+        rev1 = plg.threads.enqueue(
+            tid,
+            "试跑简报1",
+            "10001",
+            return_route=route1,
+            input_context={"grant": grant},
+        )
+        work1 = await plg.runtime._work(plg.threads.get(tid, "10001"))
+        png_bytes = _b64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+        )
+        work1.write_bytes("out/digest-card.png", png_bytes)
+        work1.commit()
+        atts1 = plg.runtime.files.attach(
+            plg.threads.get(tid, "10001"), work1, ["out/digest-card.png"]
+        )
+        plg.threads.finish(
+            tid,
+            "10001",
+            {"text": "已生成并挂载独立游戏简报图卡（2 条精选）。", "attachments": atts1},
+            [],
+            rev1,
+        )
+        await plg.bridge.submitted(route1)
+
+        # 3. Pulse._returns 唤醒管理员私聊，须保留标准前缀并提示 share 与忽略旧消息
+        clock[0] += 2.0
+        await plg.pulse._returns()
+        assert len(wake_calls) == 1
+        assert wake_calls[0]["stream_id"] == "priv_admin_md5"
+        assert wake_calls[0]["intent"].startswith(
+            "之前由本会话真实用户消息触发的 Agent 线程已有结果。"
+        )
+        assert "maisya_agent(action='share'" in wake_calls[0]["intent"]
+        assert "旧" in wake_calls[0]["intent"]
+
+        # 4. Planner 受旧聊天记录影响误调用 wait({}) -> after_planner 须自动兜底 share 发送预览图给私聊，且绝不发往群
+        await plg.before_planner(
+            session_id="priv_admin_md5",
+            tool_definitions=[{"name": "maisya_agent"}, {"name": "wait"}],
+            items=[],
+        )
+        await plg.after_planner(
+            session_id="priv_admin_md5",
+            output_items=[{"tool_call": {"func_name": "wait", "args": {}}}],
+        )
+        assert len(sent_calls) == 1
+        assert sent_calls[0]["stream_id"] == "priv_admin_md5"
+        assert any(seg.get("type") == "image" for seg in sent_calls[0]["segments"])
+        assert all(call["stream_id"] != "10001" for call in sent_calls)
+        delivery1 = plg.bridge.delivery(tid, rev1, "priv_admin_md5")
+        assert delivery1 is not None and delivery1["status"] == "sent"
+
+        # 5. 若试跑入队后确有更新的人类消息（> input_at）叫停，则 after_planner 调用 wait 不得再自动发送
+        clock[0] += 10.0
+        route2 = await plg.bridge.route("priv_admin_md5", "admin-preview-2", 0)
+        rev2 = plg.threads.enqueue(
+            tid,
+            "试跑简报2",
+            "10001",
+            return_route=route2,
+            input_context={"grant": grant},
+        )
+        work2 = await plg.runtime._work(plg.threads.get(tid, "10001"))
+        work2.write_bytes("out/digest-card-2.png", png_bytes)
+        work2.commit()
+        atts2 = plg.runtime.files.attach(
+            plg.threads.get(tid, "10001"), work2, ["out/digest-card-2.png"]
+        )
+        plg.threads.finish(
+            tid,
+            "10001",
+            {"text": "第二轮预览图卡", "attachments": atts2},
+            [],
+            rev2,
+        )
+        await plg.bridge.submitted(route2)
+
+        clock[0] += 2.0
+        await plg.pulse._returns()
+        await plg.before_planner(
+            session_id="priv_admin_md5",
+            tool_definitions=[{"name": "maisya_agent"}, {"name": "wait"}],
+            items=[],
+        )
+        clock[0] = time.time() + 50.0
+        await plg.after_receive(
+            message=_private_msg("m-fresh-stop", "刚发错了，这次先别发")
+        )
+        plg._pending_sources.pop("priv_admin_md5", None)
+        plg._turn_sources.pop("priv_admin_md5", None)
+        await plg.after_planner(
+            session_id="priv_admin_md5",
+            output_items=[{"tool_call": {"func_name": "wait", "args": {}}}],
+        )
+        assert len(sent_calls) == 1
+        assert plg.bridge.delivery(tid, rev2, "priv_admin_md5") is None
+    finally:
+        await plg.on_unload()
