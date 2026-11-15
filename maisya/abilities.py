@@ -83,6 +83,7 @@ class Profile:
     allow_chats: tuple[str, ...] = ()
     model_name: str = ""
     max_tokens: int | None = None
+    context_tokens: int | None = None
     temperature: float | None = None
     max_steps: int | None = None
     web_provider: str = ""
@@ -254,6 +255,7 @@ class Profiles:
             "model_list",
             "task",
             "max_tokens",
+            "context_tokens",
             "temperature",
             "max_steps",
             "web_provider",
@@ -354,6 +356,11 @@ class Profiles:
             type(max_tokens) is not int or not 1 <= max_tokens <= 1000000
         ):
             raise ValueError("max_tokens 必须在 1 到 1000000 之间")
+        context_tokens = config.get("context_tokens")
+        if context_tokens is not None and (
+            type(context_tokens) is not int or not 8192 <= context_tokens <= 2000000
+        ):
+            raise ValueError("context_tokens 必须在 8192 到 2000000 之间")
         temperature = config.get("temperature")
         if temperature is not None:
             if type(temperature) not in (int, float) or not 0.0 <= float(temperature) <= 2.0:
@@ -430,6 +437,7 @@ class Profiles:
             allow_chats=tuple(config.get("allow_chats", [])),
             model_name=model_name,
             max_tokens=max_tokens,
+            context_tokens=context_tokens,
             temperature=temperature,
             max_steps=max_steps,
             web_provider=web_provider,

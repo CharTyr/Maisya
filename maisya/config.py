@@ -32,7 +32,8 @@ class Settings(PluginConfigBase):
     agent_timeout: int = Field(default=180, ge=10, le=900)
     agent_max_active: int = Field(default=8, ge=1, le=32)
     thread_idle_seconds: int = Field(default=900, ge=0, le=86400)
-    thread_context_chars: int = Field(default=48000, ge=24000, le=256000)
+    thread_context_tokens: int = Field(default=262144, ge=16384, le=2000000)
+    thread_context_chars: int = Field(default=48000, ge=24000, le=2000000)
     web_provider: str = Field(
         default="auto",
         pattern=WEB_PROVIDER_PATTERN,

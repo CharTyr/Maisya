@@ -15,6 +15,23 @@ from pathlib import Path
 
 from .abilities import Profile
 from .bridge import record_return
+from .context_budget import (
+    DEFAULT_CONTEXT_TOKENS,
+    DEFAULT_MIN_PRUNE_CHARS,
+    DEFAULT_TAIL_TOKENS,
+    MIN_CONTEXT_TOKENS,
+    PRUNE_MIN_RECLAIM_TOKENS,
+    THREAD_READ_DEFAULT_MAX_CHARS,
+    build_static_handoff,
+    estimate_messages_tokens,
+    estimate_tokens,
+    extract_exact_anchors,
+    extract_verbatim_user_messages,
+    format_thread_history_prompt,
+    is_context_overflow_error,
+    prune_tool_outputs,
+    resolve_context_budget,
+)
 from .pathsafe import safe_chmod
 from .scout import validate_arguments
 from .workspaces import completed_thread
@@ -550,12 +567,74 @@ class ThreadStore:
             caps[largest_idx] = new_cap
         return _render(caps)
 
-    def compact(self, thread_id, chat_id, *, max_chars=48000):
+    def prune_history(
+        self,
+        thread_id,
+        chat_id,
+        *,
+        tail_tokens=DEFAULT_TAIL_TOKENS,
+        min_prune_chars=DEFAULT_MIN_PRUNE_CHARS,
+        min_reclaim_tokens=PRUNE_MIN_RECLAIM_TOKENS,
+    ) -> bool:
+        """Tier-1 零成本裁剪：归档并折叠保护区之前的重复或超大旧工具输出。"""
         row = self.get(thread_id, chat_id)
         history = row["history"]
-        if len(encode(history)) <= max_chars:
-            return row["summary"]
-        blocks = []
+        _, stats = prune_tool_outputs(
+            history,
+            tail_tokens=tail_tokens,
+            min_prune_chars=min_prune_chars,
+            event_seq="__EVENT_SEQ__",
+        )
+        if (
+            not stats["pruned_entries"]
+            or stats["reclaimed_tokens"] < min_reclaim_tokens
+        ):
+            return False
+        with self.connect() as db, db:
+            cur = db.execute(
+                "SELECT history, processed_revision, state FROM agent_threads WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            if cur is None or cur["state"] == "closed":
+                return False
+            cur_history = json.loads(cur["history"] or "[]")
+            _, cur_stats = prune_tool_outputs(
+                cur_history,
+                tail_tokens=tail_tokens,
+                min_prune_chars=min_prune_chars,
+                event_seq="__EVENT_SEQ__",
+            )
+            if (
+                not cur_stats["pruned_entries"]
+                or cur_stats["reclaimed_tokens"] < min_reclaim_tokens
+            ):
+                return False
+            archive_seq = self.event(
+                db,
+                thread_id,
+                "context_prune",
+                cur["processed_revision"],
+                {
+                    "reclaimed_tokens": cur_stats["reclaimed_tokens"],
+                    "protect_from": cur_stats["protect_from"],
+                    "items": cur_stats["pruned_entries"],
+                },
+            )
+            final_history, _ = prune_tool_outputs(
+                cur_history,
+                tail_tokens=tail_tokens,
+                min_prune_chars=min_prune_chars,
+                event_seq=archive_seq,
+            )
+            db.execute(
+                'UPDATE agent_threads SET history=? WHERE thread_id=? AND state!="closed"',
+                (encode(final_history), thread_id),
+            )
+        return True
+
+    @staticmethod
+    def _group_history_blocks(history: list[dict]) -> list[list[dict]]:
+        blocks: list[list[dict]] = []
         for message in history:
             if (
                 message.get("role") == "tool"
@@ -565,6 +644,271 @@ class ThreadStore:
                 blocks[-1].append(message)
             else:
                 blocks.append([message])
+        return blocks
+
+    @staticmethod
+    def _parse_prior_summary(summary_raw: str | None) -> tuple[list[int], list[dict], str, dict, list[str]]:
+        prior_events: list[int] = []
+        prior_runs: list[dict] = []
+        prior_handoff = ""
+        prior_anchors: dict = {}
+        prior_user_msgs: list[str] = []
+        if isinstance(summary_raw, str) and summary_raw.strip():
+            try:
+                prev_summary = json.loads(summary_raw)
+            except ValueError:
+                prev_summary = None
+            if isinstance(prev_summary, dict):
+                raw_events = prev_summary.get("archive_events")
+                if isinstance(raw_events, list):
+                    for item in raw_events:
+                        if isinstance(item, int) and not isinstance(item, bool):
+                            prior_events.append(item)
+                elif isinstance(prev_summary.get("archive_event"), int) and not isinstance(
+                    prev_summary.get("archive_event"), bool
+                ):
+                    prior_events.append(prev_summary["archive_event"])
+                raw_runs = prev_summary.get("archived_runs")
+                if isinstance(raw_runs, list):
+                    prior_runs = [item for item in raw_runs if isinstance(item, dict)]
+                if isinstance(prev_summary.get("handoff"), str):
+                    prior_handoff = prev_summary["handoff"]
+                if isinstance(prev_summary.get("anchors"), dict):
+                    prior_anchors = prev_summary["anchors"]
+                if isinstance(prev_summary.get("user_messages"), list):
+                    prior_user_msgs = [
+                        str(x) for x in prev_summary["user_messages"] if isinstance(x, str)
+                    ]
+        return prior_events, prior_runs, prior_handoff, prior_anchors, prior_user_msgs
+
+    def _collect_run_digest(self, blocks: list[list[dict]], *, skip_indices: set[int]) -> tuple[list[str], list[str], list[str]]:
+        goals: list[str] = []
+        tools: list[str] = []
+        highlights: list[str] = []
+        for index, block in enumerate(blocks):
+            if index in skip_indices:
+                continue
+            for msg in block:
+                role = msg.get("role")
+                if role == "user":
+                    raw_text = str(msg.get("content") or "")
+                    if raw_text.startswith(
+                        (
+                            "<thread_inputs>",
+                            "<thread_history>",
+                            "<memory_context>",
+                            "<activity_interrupted>",
+                            "<previous_runs>",
+                        )
+                    ):
+                        continue
+                    snippet = _clean_input_title(raw_text)
+                    if snippet and snippet not in goals and len(goals) < 3:
+                        goals.append(snippet)
+                elif role == "assistant":
+                    for call in msg.get("tool_calls") or []:
+                        if not isinstance(call, dict):
+                            continue
+                        fn = call.get("function") or {}
+                        if not isinstance(fn, dict):
+                            fn = {}
+                        tool_name = str(
+                            fn.get("name") or call.get("func_name") or ""
+                        ).strip()[:64]
+                        if tool_name and tool_name not in tools and len(tools) < 8:
+                            tools.append(tool_name)
+                    asst_text = re.sub(
+                        r"\s+", " ", str(msg.get("content") or "")
+                    ).strip()
+                    if asst_text:
+                        highlights.append(asst_text[:100])
+        return goals, tools, highlights[-2:]
+
+    def _compact_by_tokens(
+        self,
+        row: dict,
+        thread_id: str,
+        *,
+        max_tokens: int,
+        tail_tokens: int | None,
+        handoff_summary: str | None,
+        redact,
+        force: bool,
+    ) -> str:
+        history = row["history"]
+        cur_tokens = estimate_messages_tokens(history)
+        if not force and cur_tokens <= max_tokens:
+            return row["summary"]
+        blocks = self._group_history_blocks(history)
+        if not blocks:
+            return row["summary"]
+
+        base_tail = (
+            int(tail_tokens)
+            if tail_tokens is not None
+            else min(24_000, max(1_200, int(max_tokens * 0.15)))
+        )
+        if force:
+            tail_budget = min(base_tail, max(200, cur_tokens // 3))
+        else:
+            tail_budget = max(400, base_tail)
+
+        # 计算末尾保留区：仅保留 tail_budget 内的尾部消息块（并始终保留最后一块，紧急超限且仅 1 块时下文兜底裁剪）
+        tail_start = len(blocks)
+        acc = 0
+        for idx in range(len(blocks) - 1, -1, -1):
+            blk_tokens = estimate_messages_tokens(blocks[idx])
+            if idx < len(blocks) - 1 and acc + blk_tokens > tail_budget:
+                break
+            acc += blk_tokens
+            tail_start = idx
+        if force and tail_start == 0 and len(blocks) > 1:
+            tail_start = len(blocks) - 1
+
+        selected = set(range(tail_start, len(blocks)))
+        archived_blocks = [blocks[idx] for idx in range(tail_start)]
+        archived_messages = [msg for blk in archived_blocks for msg in blk]
+
+        with self.connect() as db, db:
+            archive_seq = self.event(
+                db,
+                thread_id,
+                "context_archive",
+                row["processed_revision"],
+                {"history": history, "previous_index": row["summary"]},
+            )
+            truncated_last = None
+            last_idx = len(blocks) - 1
+            retained_tokens_limit = max(512, tail_budget)
+            if (
+                len(selected) == 1
+                and last_idx in selected
+                and estimate_messages_tokens(blocks[last_idx]) > retained_tokens_limit
+            ):
+                has_tools = bool(
+                    blocks[last_idx][0].get("tool_calls")
+                    and any(m.get("role") == "tool" for m in blocks[last_idx])
+                )
+                if has_tools:
+                    truncated_last = self._truncate_tool_block(
+                        blocks[last_idx],
+                        target_chars=max(512, retained_tokens_limit * 2),
+                        archive_seq=archive_seq,
+                    )
+                elif force:
+                    trimmed_blk = []
+                    for msg in blocks[last_idx]:
+                        copied = dict(msg)
+                        raw_c = copied.get("content")
+                        if isinstance(raw_c, str) and len(raw_c) > 1600:
+                            copied["content"] = (
+                                raw_c[:600]
+                                + f"\n...[紧急压缩已截断，完整原文见 event_seq={archive_seq}]...\n"
+                                + raw_c[-600:]
+                            )
+                        trimmed_blk.append(copied)
+                    truncated_last = trimmed_blk
+
+            retained = []
+            for idx in range(tail_start, len(blocks)):
+                if idx == last_idx and truncated_last is not None:
+                    retained.extend(truncated_last)
+                else:
+                    retained.extend(blocks[idx])
+
+            (
+                prior_events,
+                prior_runs,
+                prior_handoff,
+                prior_anchors,
+                prior_user_msgs,
+            ) = self._parse_prior_summary(row.get("summary"))
+
+            goals, tools, highlights = self._collect_run_digest(
+                blocks, skip_indices=selected
+            )
+            merged_anchors = extract_exact_anchors(
+                archived_messages, prior_anchors=prior_anchors, redact=redact
+            )
+            merged_user_msgs = extract_verbatim_user_messages(
+                archived_messages, prior_messages=prior_user_msgs, redact=redact
+            )
+            if isinstance(handoff_summary, str) and handoff_summary.strip():
+                final_handoff = str(
+                    redact(handoff_summary.strip()) if redact else handoff_summary.strip()
+                )[:3000]
+            else:
+                final_handoff = build_static_handoff(
+                    archived_messages,
+                    previous_handoff=prior_handoff,
+                    anchors=merged_anchors,
+                    user_messages=merged_user_msgs,
+                    tools=tools,
+                    highlights=highlights,
+                    redact=redact,
+                )
+
+            run_entry = {
+                "archive_event": archive_seq,
+                "revision": row["processed_revision"],
+                "goals": goals,
+                "tools": tools,
+                "highlights": highlights,
+            }
+            archive_events = [x for x in prior_events if x != archive_seq] + [
+                archive_seq
+            ]
+            archive_events = archive_events[-20:]
+            archived_runs = [
+                r for r in prior_runs if r.get("archive_event") != archive_seq
+            ] + [run_entry]
+            summary_obj = {
+                "mode": "token_v2",
+                "archive_event": archive_seq,
+                "archive_events": archive_events,
+                "read_tool": "thread_read",
+                "handoff": final_handoff,
+                "anchors": merged_anchors,
+                "user_messages": merged_user_msgs,
+                "note": "这是交班摘要与精确锚点；完整历史保存在本线程，核对全文或未折叠细节时使用 thread_read。",
+                "archived_runs": archived_runs,
+            }
+            while len(encode(summary_obj)) > 5600 and len(summary_obj["archived_runs"]) > 0:
+                summary_obj["archived_runs"].pop(0)
+            summary = encode(summary_obj)
+            db.execute(
+                'UPDATE agent_threads SET summary=?, history=? WHERE thread_id=? AND state!="closed"',
+                (summary, encode(retained), thread_id),
+            )
+        return summary
+
+    def compact(
+        self,
+        thread_id,
+        chat_id,
+        *,
+        max_chars=48000,
+        max_tokens=None,
+        tail_tokens=None,
+        handoff_summary=None,
+        redact=None,
+        force=False,
+    ):
+        row = self.get(thread_id, chat_id)
+        if max_tokens is not None:
+            return self._compact_by_tokens(
+                row,
+                thread_id,
+                max_tokens=max_tokens,
+                tail_tokens=tail_tokens,
+                handoff_summary=handoff_summary,
+                redact=redact,
+                force=force,
+            )
+        history = row["history"]
+        if len(encode(history)) <= max_chars:
+            return row["summary"]
+        blocks = self._group_history_blocks(history)
         user_blocks = [
             index
             for index, block in enumerate(blocks)
@@ -636,74 +980,15 @@ class ThreadStore:
                     retained.extend(truncated_last)
                 elif index in selected:
                     retained.extend(block)
-            prior_events: list[int] = []
-            prior_runs: list[dict] = []
-            if isinstance(row.get("summary"), str) and row["summary"].strip():
-                try:
-                    prev_summary = json.loads(row["summary"])
-                except ValueError:
-                    prev_summary = None
-                if isinstance(prev_summary, dict):
-                    raw_events = prev_summary.get("archive_events")
-                    if isinstance(raw_events, list):
-                        for item in raw_events:
-                            if isinstance(item, int) and not isinstance(item, bool):
-                                prior_events.append(item)
-                    elif isinstance(
-                        prev_summary.get("archive_event"), int
-                    ) and not isinstance(prev_summary.get("archive_event"), bool):
-                        prior_events.append(prev_summary["archive_event"])
-                    raw_runs = prev_summary.get("archived_runs")
-                    if isinstance(raw_runs, list):
-                        prior_runs = [
-                            item for item in raw_runs if isinstance(item, dict)
-                        ]
-            goals: list[str] = []
-            tools: list[str] = []
-            highlights: list[str] = []
-            for index, block in enumerate(blocks):
-                if index in selected or (
-                    index == last_idx and truncated_last is not None
-                ):
-                    continue
-                for msg in block:
-                    role = msg.get("role")
-                    if role == "user":
-                        raw_text = str(msg.get("content") or "")
-                        if raw_text.startswith(
-                            (
-                                "<thread_inputs>",
-                                "<thread_history>",
-                                "<memory_context>",
-                                "<activity_interrupted>",
-                            )
-                        ):
-                            continue
-                        snippet = _clean_input_title(raw_text)
-                        if snippet and snippet not in goals and len(goals) < 3:
-                            goals.append(snippet)
-                    elif role == "assistant":
-                        for call in msg.get("tool_calls") or []:
-                            if not isinstance(call, dict):
-                                continue
-                            fn = call.get("function") or {}
-                            if not isinstance(fn, dict):
-                                fn = {}
-                            tool_name = str(
-                                fn.get("name") or call.get("func_name") or ""
-                            ).strip()[:64]
-                            if (
-                                tool_name
-                                and tool_name not in tools
-                                and len(tools) < 8
-                            ):
-                                tools.append(tool_name)
-                        asst_text = re.sub(
-                            r"\s+", " ", str(msg.get("content") or "")
-                        ).strip()
-                        if asst_text:
-                            highlights.append(asst_text[:100])
-            highlights = highlights[-2:]
+            prior_events, prior_runs, _, _, _ = self._parse_prior_summary(
+                row.get("summary")
+            )
+            skip_indices = set(selected)
+            if truncated_last is not None:
+                skip_indices.add(last_idx)
+            goals, tools, highlights = self._collect_run_digest(
+                blocks, skip_indices=skip_indices
+            )
             run_entry = {
                 "archive_event": archive_seq,
                 "revision": row["processed_revision"],
@@ -746,7 +1031,7 @@ class ThreadStore:
         event_seq=0,
         offset=0,
         limit=5,
-        max_chars=6000,
+        max_chars=16000,
         allow_self=False,
     ):
         self.get(thread_id, chat_id, allow_self=allow_self)
@@ -770,7 +1055,7 @@ class ThreadStore:
             else:
                 rows = db.execute(
                     "SELECT seq, kind, payload FROM thread_events WHERE thread_id=? "
-                    'AND kind IN ("input", "result", "question", "tools", "context_archive") '
+                    'AND kind IN ("input", "result", "question", "tools", "context_archive", "context_prune") '
                     "AND instr(lower(payload), lower(?))>0 ORDER BY seq DESC LIMIT ?",
                     (thread_id, query, limit),
                 ).fetchall()
@@ -982,7 +1267,9 @@ class ThreadEngine:
         max_steps=16,
         timeout=180,
         max_active=8,
-        context_chars=48000,
+        context_chars=None,
+        context_tokens=None,
+        model_catalog=None,
         redact=lambda value: value,
         intents=None,
         serendipity=None,
@@ -993,7 +1280,22 @@ class ThreadEngine:
         self.max_steps = max_steps
         self.timeout = timeout
         self.max_active = max_active
-        self.context_chars = context_chars
+        self._legacy_char_budget = (
+            int(context_chars)
+            if context_chars is not None and context_tokens is None
+            else None
+        )
+        self.context_chars = int(context_chars) if context_chars is not None else 48000
+        self.context_tokens = (
+            int(context_tokens)
+            if context_tokens is not None
+            else (
+                max(MIN_CONTEXT_TOKENS, self._legacy_char_budget // 3)
+                if self._legacy_char_budget is not None
+                else DEFAULT_CONTEXT_TOKENS
+            )
+        )
+        self.model_catalog = model_catalog
         self.redact = redact
         self.intents = intents
         self.serendipity = serendipity
@@ -1150,13 +1452,6 @@ class ThreadEngine:
                 deferred = True
             if row["revision"] - row["processed_revision"] >= 32:
                 raise ValueError("该线程正在消化已有补充，请稍后再发")
-            if (
-                row["state"] in {"idle", "waiting"}
-                and time.time() - row["updated"] > self.idle_seconds
-            ):
-                await asyncio.to_thread(
-                    self.store.compact, thread_id, chat_id, max_chars=self.context_chars
-                )
             revision = await asyncio.to_thread(
                 self.store.enqueue,
                 thread_id,
@@ -1238,6 +1533,101 @@ class ThreadEngine:
                 remaining.append((revision, future))
         self.waiters[thread_id] = remaining
 
+    def _current_model_catalog(self):
+        return self.model_catalog() if callable(self.model_catalog) else self.model_catalog
+
+    async def _run_tier2_compact(
+        self,
+        thread_id,
+        store_chat,
+        profile,
+        history,
+        processed,
+        budget,
+        *,
+        force=False,
+    ):
+        await asyncio.to_thread(
+            self.store.checkpoint,
+            thread_id,
+            history,
+            processed,
+            "context_checkpoint",
+            {},
+        )
+        cur_row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
+        _, _, prev_handoff, _, _ = ThreadStore._parse_prior_summary(cur_row.get("summary"))
+        cur_tokens = estimate_messages_tokens(history)
+        tail_tok = (
+            min(budget["tail_tokens"], max(200, cur_tokens // 3))
+            if force
+            else budget["tail_tokens"]
+        )
+        blocks = ThreadStore._group_history_blocks(history)
+        tail_start = len(blocks)
+        acc = 0
+        for idx in range(len(blocks) - 1, -1, -1):
+            bt = estimate_messages_tokens(blocks[idx])
+            if idx < len(blocks) - 1 and acc + bt > tail_tok:
+                break
+            acc += bt
+            tail_start = idx
+        if force and tail_start == 0 and len(blocks) > 1:
+            tail_start = len(blocks) - 1
+        archived_turns = [m for blk in blocks[:tail_start] for m in blk]
+        handoff_summary = None
+        if archived_turns and hasattr(self.runtime, "summarize_compaction"):
+            try:
+                handoff_summary = await self.runtime.summarize_compaction(
+                    archived_turns,
+                    previous_handoff=prev_handoff,
+                    profile=profile,
+                )
+            except Exception:
+                handoff_summary = None
+        context_index = await asyncio.to_thread(
+            self.store.compact,
+            thread_id,
+            store_chat,
+            max_tokens=budget["trigger_tokens"],
+            tail_tokens=tail_tok,
+            handoff_summary=handoff_summary,
+            redact=self.redact,
+            force=force,
+        )
+        new_history = (
+            await asyncio.to_thread(self.store.get, thread_id, store_chat)
+        )["history"]
+        return context_index, new_history
+
+    @staticmethod
+    def _assemble_request_history(
+        history,
+        *,
+        context_index="",
+        memory_context="",
+        legacy_escape=False,
+    ):
+        req = list(history)
+        if context_index:
+            block_text = (
+                "<thread_history>" + html.escape(context_index) + "</thread_history>"
+                if legacy_escape
+                else format_thread_history_prompt(context_index)
+            )
+            req = [{"role": "user", "content": block_text}, *req]
+        if memory_context:
+            req = [
+                {
+                    "role": "user",
+                    "content": "<memory_context>"
+                    + html.escape(encode(memory_context))
+                    + "</memory_context>",
+                },
+                *req,
+            ]
+        return req
+
     async def _drive(self, thread_id, chat_id):
         row = await asyncio.to_thread(
             self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
@@ -1247,6 +1637,7 @@ class ThreadEngine:
         history, processed = row["history"], row["processed_revision"]
         context_index = row["summary"]
         deadline = asyncio.get_running_loop().time() + self.timeout
+        overflow_retried = False
         try:
             async with asyncio.timeout(self.timeout):
                 for _ in range(profile.max_steps or self.max_steps):
@@ -1297,37 +1688,68 @@ class ThreadEngine:
                                         + "</thread_inputs>",
                                     }
                                 )
-                    if len(encode(history)) > self.context_chars:
-                        await asyncio.to_thread(
-                            self.store.checkpoint,
-                            thread_id,
-                            history,
-                            processed,
-                            "context_checkpoint",
-                            {},
-                        )
-                        context_index = await asyncio.to_thread(
-                            self.store.compact,
-                            thread_id,
-                            store_chat,
-                            max_chars=self.context_chars,
-                        )
-                        history = (
+                    budget = None
+                    if self._legacy_char_budget is not None:
+                        if len(encode(history)) > self._legacy_char_budget:
                             await asyncio.to_thread(
-                                self.store.get, thread_id, store_chat
+                                self.store.checkpoint,
+                                thread_id,
+                                history,
+                                processed,
+                                "context_checkpoint",
+                                {},
                             )
-                        )["history"]
-                    request_history = history
-                    if context_index:
-                        request_history = [
-                            {
-                                "role": "user",
-                                "content": "<thread_history>"
-                                + html.escape(context_index)
-                                + "</thread_history>",
-                            },
-                            *history,
-                        ]
+                            context_index = await asyncio.to_thread(
+                                self.store.compact,
+                                thread_id,
+                                store_chat,
+                                max_chars=self._legacy_char_budget,
+                            )
+                            history = (
+                                await asyncio.to_thread(
+                                    self.store.get, thread_id, store_chat
+                                )
+                            )["history"]
+                    else:
+                        budget = resolve_context_budget(
+                            profile,
+                            default_context_tokens=self.context_tokens,
+                            model_catalog=self._current_model_catalog(),
+                        )
+                        overhead_tokens = (
+                            estimate_tokens(getattr(profile, "instructions", "") or "")
+                            + estimate_tokens(context_index or "")
+                            + len(getattr(profile, "tools", ()) or ()) * 120
+                        )
+                        prompt_tokens = overhead_tokens + estimate_messages_tokens(
+                            history
+                        )
+                        if prompt_tokens >= budget["prune_tokens"]:
+                            pruned = await asyncio.to_thread(
+                                self.store.prune_history,
+                                thread_id,
+                                store_chat,
+                                tail_tokens=budget["tail_tokens"],
+                            )
+                            if pruned:
+                                history = (
+                                    await asyncio.to_thread(
+                                        self.store.get, thread_id, store_chat
+                                    )
+                                )["history"]
+                                prompt_tokens = overhead_tokens + estimate_messages_tokens(
+                                    history
+                                )
+                        if prompt_tokens >= budget["trigger_tokens"]:
+                            context_index, history = await self._run_tier2_compact(
+                                thread_id,
+                                store_chat,
+                                profile,
+                                history,
+                                processed,
+                                budget,
+                                force=False,
+                            )
                     alive, changed = await self._boundary(
                         thread_id, processed, deadline
                     )
@@ -1335,6 +1757,7 @@ class ThreadEngine:
                         return
                     if changed:
                         continue
+                    memory_context = ""
                     if hasattr(self.runtime, "before"):
                         metadata = await asyncio.to_thread(
                             self.store.input_context, thread_id, processed
@@ -1347,17 +1770,54 @@ class ThreadEngine:
                                 "grant": metadata.get("grant", row["grant"]),
                             },
                         )
-                        if memory_context:
-                            request_history = [
-                                {
-                                    "role": "user",
-                                    "content": "<memory_context>"
-                                    + html.escape(encode(memory_context))
-                                    + "</memory_context>",
-                                },
-                                *request_history,
-                            ]
-                    response = await self.runtime.step(profile, request_history)
+                    request_history = self._assemble_request_history(
+                        history,
+                        context_index=context_index,
+                        memory_context=memory_context,
+                        legacy_escape=(self._legacy_char_budget is not None),
+                    )
+                    try:
+                        response = await self.runtime.step(profile, request_history)
+                    except (
+                        RuntimeError,
+                        ValueError,
+                        TypeError,
+                        KeyError,
+                        OSError,
+                        TimeoutError,
+                    ) as step_exc:
+                        if (
+                            not overflow_retried
+                            and self._legacy_char_budget is None
+                            and is_context_overflow_error(step_exc)
+                        ):
+                            overflow_retried = True
+                            if budget is None:
+                                budget = resolve_context_budget(
+                                    profile,
+                                    default_context_tokens=self.context_tokens,
+                                    model_catalog=self._current_model_catalog(),
+                                )
+                            context_index, history = await self._run_tier2_compact(
+                                thread_id,
+                                store_chat,
+                                profile,
+                                history,
+                                processed,
+                                budget,
+                                force=True,
+                            )
+                            request_history = self._assemble_request_history(
+                                history,
+                                context_index=context_index,
+                                memory_context=memory_context,
+                                legacy_escape=False,
+                            )
+                            response = await self.runtime.step(
+                                profile, request_history
+                            )
+                        else:
+                            raise
                     alive, changed = await self._boundary(
                         thread_id, processed, deadline
                     )
@@ -1407,14 +1867,20 @@ class ThreadEngine:
                                     }
                                 elif name == "thread_read":
                                     validate_arguments(name, arguments)
+                                    read_cap = (
+                                        min(6000, max(200, self._legacy_char_budget // 3))
+                                        if self._legacy_char_budget is not None
+                                        else min(
+                                            THREAD_READ_DEFAULT_MAX_CHARS,
+                                            max(2000, budget["window_tokens"] // 4),
+                                        )
+                                    )
                                     result = await asyncio.to_thread(
                                         self.store.read_history,
                                         thread_id,
                                         store_chat,
                                         **arguments,
-                                        max_chars=min(
-                                            6000, max(200, self.context_chars // 3)
-                                        ),
+                                        max_chars=read_cap,
                                     )
                                 elif name == "thread_later":
                                     validate_arguments(name, arguments)

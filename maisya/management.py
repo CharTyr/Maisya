@@ -164,6 +164,7 @@ class Management:
                                 "tools",
                                 "web_provider",
                                 "max_steps",
+                                "context_tokens",
                                 "bound",
                                 "enabled",
                                 "skills",

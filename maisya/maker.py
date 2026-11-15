@@ -141,6 +141,7 @@ class AgentRuntime(Scout):
                 fallback_models=live.fallback_models,
                 task=live.task,
                 max_tokens=live.max_tokens,
+                context_tokens=live.context_tokens,
                 temperature=live.temperature,
                 max_steps=live.max_steps,
                 web_provider=live.web_provider,

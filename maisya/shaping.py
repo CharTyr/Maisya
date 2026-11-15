@@ -104,6 +104,7 @@ _PROFILE_TOML_KEYS = {
     "fallback_models",
     "task",
     "max_tokens",
+    "context_tokens",
     "temperature",
     "max_steps",
     "web_provider",
@@ -883,6 +884,7 @@ _SETTINGS_INT_FIELDS = frozenset(
         "agent_timeout",
         "agent_max_active",
         "thread_idle_seconds",
+        "thread_context_tokens",
         "thread_context_chars",
         "daily_proactive_limit",
         "heartbeat_interval_minutes",
@@ -1231,6 +1233,7 @@ def profile_summary(plugin, profile_id: str) -> dict:
         "web_provider": p.web_provider,
         "max_steps": p.max_steps,
         "max_tokens": p.max_tokens,
+        "context_tokens": p.context_tokens,
         "temperature": p.temperature,
         "autonomous": p.autonomous,
         "read_only": p.environment == "readonly",
@@ -1387,7 +1390,7 @@ async def patch_profile(
                 cfg.pop(key, None)
             elif key in {"enabled", "bound"}:
                 cfg[key] = _coerce_bool(value, key)
-            elif key in {"max_tokens", "max_steps"}:
+            elif key in {"max_tokens", "max_steps", "context_tokens"}:
                 cfg[key] = _coerce_int(value, key)
             else:
                 cfg[key] = value
@@ -2671,6 +2674,7 @@ async def _apply_setup_profiles(
             "fallback_models",
             "network",
             "max_steps",
+            "context_tokens",
             "web_provider",
             "allow_chats",
             "add_allow_chats",

@@ -51,7 +51,7 @@
 
 ### 2. 高级设置（边界、执行预算、保险箱与外部接入）
 
-- **单轮活动预算与并发限制**：`agent_max_steps`（默认 `16` 步）、`agent_timeout`（默认 `180` 秒）、`agent_max_active`（最多并发活动线程数，默认 `8`）、`thread_idle_seconds`（闲置 `900` 秒）、`thread_context_chars`（单线程上下文字符预算 `48,000`，超出部分自动完整归档并保留索引回读）。
+- **单轮活动预算与并发限制**：`agent_max_steps`（默认 `16` 步）、`agent_timeout`（默认 `180` 秒）、`agent_max_active`（最多并发活动线程数，默认 `8`）、`thread_idle_seconds`（闲置 `900` 秒；闲置恢复不再强行截断前情）、`thread_context_tokens`（自适应 Token 上下文窗口默认 `262,144` / 256K，小家族模型自动向下封顶；55% 水位先折叠旧工具输出，75% 水位生成迭代交班摘要并完整归档原文）；`thread_context_chars` 仅保留旧版兼容。
 - **熟人边界与久违阈值**：`acquaintance_users`（填允许主动问候的私聊账号清单）与 `longing_quiet_hours`（默认 `72` 小时；设为 `0` 关闭久违触发）。
 - **容器沙箱与并发槽位**、**凭据保险箱**、**外部服务与只读接口（MCP / `@API` / 联网源）**、**外部 Webhook 事件通道**与 **运行自检诊断**：按需启用与排障。
 
@@ -113,7 +113,7 @@
 | `acquaintance_users` | list | `[]` | 允许冷私聊主动打招呼的熟识账号列表（`platform:user_id`） |
 | `longing_quiet_hours` | int | `72` | 熟识会话静默多久触发久违想念，`0` 为关闭 |
 | `agent_max_steps` / `agent_timeout` / `agent_max_active` | int | `16` / `180` / `8` | 单个活动每轮步数、单轮超时秒数、全插件最大并发活动线程数 |
-| `thread_idle_seconds` / `thread_context_chars` | int | `900` / `48000` | 闲置超时与线程原文归档前的上下文字符预算 |
+| `thread_idle_seconds` / `thread_context_tokens` | int | `900` / `262144` | 闲置时间阈值与自适应 Token 上下文窗口上限（未识别家族默认 256K；兼容旧版 `thread_context_chars`） |
 
 ### 角色 `profile.toml` 核心字段
 
@@ -127,5 +127,5 @@
 | `tools` / `skills` | 授权内置工具清单，以及绑定的技能编号列表 |
 | `access` / `allow_chats` / `allow_users` | 可用范围：`everyone`、`admins` 或 `listed`（白名单，同时配会话和账号时取交集；`allow_users` 同时支持 `<platform>:<id>` 与 `<platform>:private:<id>`，并保留 OpenID 大小写） |
 | `mcp` / `apis` / `secrets` / `sandbox_targets` | 绑定的 MCP 服务、跨插件 API、保险箱句柄和仅 `admins` 可用的受控出站白名单 |
-| `web_provider` / `max_steps` / `max_tokens` / `temperature` | 按角色单独覆盖联网来源与采样/预算参数 |
+| `web_provider` / `max_steps` / `max_tokens` / `context_tokens` / `temperature` | 按角色单独覆盖联网来源与采样/Token 上下文窗口预算参数 |
 | `fish_seed` | 可选：绑定该角色小鱼头像样式种子 |

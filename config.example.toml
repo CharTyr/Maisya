@@ -3,6 +3,7 @@ agent_max_steps = 16
 agent_timeout = 180
 agent_max_active = 8
 thread_idle_seconds = 900
+thread_context_tokens = 262144
 thread_context_chars = 48000
 web_provider = "auto"
 sleep_window = ""

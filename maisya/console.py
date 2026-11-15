@@ -4,6 +4,14 @@ import json
 import sqlite3
 import time
 
+from .abilities import Profile
+from .context_budget import (
+    DEFAULT_CONTEXT_TOKENS,
+    estimate_message_tokens,
+    estimate_tokens,
+    resolve_context_budget,
+)
+
 
 def _excerpt_of(raw_result, redact, limit=140):
     try:
@@ -60,6 +68,8 @@ def snapshot(
     chat_id="",
     cursor=0,
     context_limit=48000,
+    context_tokens=DEFAULT_CONTEXT_TOKENS,
+    model_catalog=None,
     redact=lambda value: value,
     memory=None,
 ):
@@ -159,9 +169,11 @@ def snapshot(
             profile_text = str(profile.get("instructions", ""))
             notes_text = ""
             mem_ctx = {}
+            profile_for_budget = None
             if memory is not None:
                 try:
                     profile_obj = memory.profiles.get(row["profile"])
+                    profile_for_budget = profile_obj
                     profile_text = profile_obj.instructions
                     notes_text = memory.methods(profile_obj)
                 except (ValueError, OSError, RuntimeError, sqlite3.Error):
@@ -172,6 +184,19 @@ def snapshot(
                     )
                 except (ValueError, OSError, RuntimeError, sqlite3.Error):
                     mem_ctx = {}
+            if profile_for_budget is None and isinstance(profile, dict):
+                try:
+                    valid_fields = set(Profile.__dataclass_fields__)
+                    profile_for_budget = Profile(
+                        **{k: v for k, v in profile.items() if k in valid_fields}
+                    )
+                except (TypeError, ValueError):
+                    profile_for_budget = None
+            budget = resolve_context_budget(
+                profile_for_budget,
+                default_context_tokens=context_tokens,
+                model_catalog=model_catalog,
+            )
             system_chars = len(profile_text) + len(notes_text)
             memory_chars = (
                 len(row["summary"])
@@ -191,6 +216,27 @@ def snapshot(
                     for role in ("user", "assistant", "tool")
                 },
             }
+            system_tokens = estimate_tokens(profile_text) + estimate_tokens(notes_text)
+            memory_tokens = (
+                estimate_tokens(row["summary"])
+                + estimate_tokens(mem_ctx.get("memory", ""))
+                + estimate_tokens(mem_ctx.get("journal", ""))
+                + estimate_tokens(mem_ctx.get("heartbeat", ""))
+            )
+            token_sizes = {
+                "system": system_tokens,
+                "memory": memory_tokens,
+                "user": 0,
+                "assistant": 0,
+                "tool": 0,
+            }
+            for item in row["history"]:
+                cat_role = (
+                    item.get("role")
+                    if item.get("role") in {"user", "assistant", "tool"}
+                    else "assistant"
+                )
+                token_sizes[cat_role] += estimate_message_tokens(item)
             context_items = []
             if profile_text.strip():
                 context_items.append(
@@ -199,6 +245,7 @@ def snapshot(
                         "cat": "system",
                         "label": f"能力说明 ({row['profile']})",
                         "chars": len(profile_text),
+                        "tokens": estimate_tokens(profile_text),
                         "preview": str(redact(profile_text))[:800],
                     }
                 )
@@ -209,6 +256,7 @@ def snapshot(
                         "cat": "system",
                         "label": "方法笔记 (NOTES.md)",
                         "chars": len(notes_text),
+                        "tokens": estimate_tokens(notes_text),
                         "preview": str(redact(notes_text))[:800],
                     }
                 )
@@ -219,6 +267,7 @@ def snapshot(
                         "cat": "memory",
                         "label": "早期历史归档摘要",
                         "chars": len(row["summary"]),
+                        "tokens": estimate_tokens(row["summary"]),
                         "preview": str(redact(row["summary"]))[:800],
                     }
                 )
@@ -235,6 +284,7 @@ def snapshot(
                             "cat": "memory",
                             "label": mem_label,
                             "chars": len(mem_val),
+                            "tokens": estimate_tokens(mem_val),
                             "preview": str(redact(mem_val))[:800],
                         }
                     )
@@ -251,6 +301,7 @@ def snapshot(
                         "cat": cat,
                         "label": _history_label(item, base_idx + offset_idx + 1),
                         "chars": len(json.dumps(item, ensure_ascii=False)),
+                        "tokens": estimate_message_tokens(item),
                         "preview": _history_preview(item, redact),
                     }
                 )
@@ -259,32 +310,54 @@ def snapshot(
                 "FROM thread_events WHERE thread_id=? GROUP BY revision ORDER BY revision DESC LIMIT 24",
                 (thread_id,),
             ).fetchall()
+            has_pruned = (
+                db.execute(
+                    'SELECT 1 FROM thread_events WHERE thread_id=? AND kind="context_prune" LIMIT 1',
+                    (thread_id,),
+                ).fetchone()
+                is not None
+            )
             running = system_chars + memory_chars
+            running_tokens = system_tokens + memory_tokens
+            total_chars = sum(sizes.values())
+            total_tokens = sum(token_sizes.values())
             history_points = []
             for rev_row in reversed(rev_rows):
-                running += int(rev_row["span"] or 0)
+                span = int(rev_row["span"] or 0)
+                running += span
+                running_tokens += max(1, span // 3) if span > 0 else 0
                 history_points.append(
                     {
                         "rev": rev_row["revision"],
-                        "chars": min(running, sum(sizes.values()) or running),
+                        "chars": min(running, total_chars or running),
+                        "tokens": min(running_tokens, total_tokens or running_tokens),
                         "at": rev_row["ts"],
                     }
                 )
-            if not history_points and sum(sizes.values()) > 0:
+            if not history_points and (total_chars > 0 or total_tokens > 0):
                 history_points = [
                     {
                         "rev": row["revision"],
-                        "chars": sum(sizes.values()),
+                        "chars": total_chars,
+                        "tokens": total_tokens,
                         "at": row["updated"],
                     }
                 ]
             elif history_points:
-                history_points[-1]["chars"] = sum(sizes.values())
+                history_points[-1]["chars"] = total_chars
+                history_points[-1]["tokens"] = total_tokens
             selected["context"] = {
                 "messages": len(row["history"]),
-                "chars": sum(sizes.values()),
+                "chars": total_chars,
                 "limit": context_limit,
                 "roles": sizes,
+                "tokens": total_tokens,
+                "token_limit": budget["window_tokens"],
+                "trigger_tokens": budget["trigger_tokens"],
+                "prune_tokens": budget["prune_tokens"],
+                "budget_source": budget["source"],
+                "token_roles": token_sizes,
+                "pruned": has_pruned,
                 "archived": bool(row["summary"]),
                 "items": context_items,
                 "history_points": history_points,

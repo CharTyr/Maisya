@@ -346,6 +346,8 @@ class MaisyaPlugin(MaiBotPlugin):
             timeout=self.settings.agent_timeout,
             max_active=self.settings.agent_max_active,
             context_chars=self.settings.thread_context_chars,
+            context_tokens=self.settings.thread_context_tokens,
+            model_catalog=self.get_model_catalog,
             redact=self.vault.redact,
             intents=self.intents,
         )
@@ -627,6 +629,11 @@ class MaisyaPlugin(MaiBotPlugin):
         ):
             return False
 
+    def get_model_catalog(self) -> dict:
+        self.refresh_host_model_catalog()
+        cat = getattr(self, "_host_model_catalog", None)
+        return cat if isinstance(cat, dict) else {}
+
     _OPS_RECEIPT_TTL = 300.0
 
     def _prune_ops_receipts(self, now: float | None = None) -> None:
@@ -804,6 +811,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 self.engine.timeout = settings.agent_timeout
                 self.engine.max_active = settings.agent_max_active
                 self.engine.context_chars = settings.thread_context_chars
+                self.engine.context_tokens = settings.thread_context_tokens
                 if self.intents:
                     self.intents.daily_proactive_limit = settings.daily_proactive_limit
                 if self.pulse:
@@ -3950,6 +3958,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 chat_id=filter_chat,
                 cursor=cursor,
                 context_limit=self.settings.thread_context_chars,
+                context_tokens=self.settings.thread_context_tokens,
+                model_catalog=self.get_model_catalog(),
                 redact=self.vault.redact,
                 memory=self.memory,
             )

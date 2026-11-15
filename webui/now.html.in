@@ -926,8 +926,8 @@
 
     <div class="mil-screen" style="margin-bottom:14px">
       <div class="mil-row" style="justify-content:space-between;margin-bottom:8px">
-        <strong class="num" id="ctx-readout">0 / 48.0K 字符 (0%)</strong>
-        <button type="button" class="mil-help" id="ctx-bar-help" data-help="按角色来源统计字符占比，接近归档线时将由系统自动整理早期历史" aria-label="查看容量计量说明" aria-expanded="false">?</button>
+        <strong class="num" id="ctx-readout">0 / 262.1K tokens (0%)</strong>
+        <button type="button" class="mil-help" id="ctx-bar-help" data-help="按角色来源统计 Token 占比：55% 自动折叠旧工具输出，75% 触发结构化交班归档" aria-label="查看容量计量说明" aria-expanded="false">?</button>
       </div>
       <div class="mil-meter" id="ctx-meter"><i id="ctx-meter-bar"></i></div>
       <div class="ctx-cats" id="ctx-cats" style="margin-top:10px"></div>
@@ -1121,6 +1121,12 @@
 </script>
 <script>
 (() => {
+  if (typeof window.__maisyaDispose === "function") {
+    try { window.__maisyaDispose(); } catch (_) {}
+  }
+  const shellAbort = new AbortController();
+  const shellSig = shellAbort.signal;
+  let disposed = false;
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -1171,6 +1177,18 @@
   let queryQueue = Promise.resolve();
   let actionQueue = Promise.resolve();
   let timer = null;
+  window.__maisyaDispose = () => {
+    disposed = true;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+    if (mgmtAbort) {
+      mgmtAbort.abort();
+      mgmtAbort = null;
+    }
+    shellAbort.abort();
+  };
   let lastTriggerTarget = null;
   let lastSnapshotAt = 0;
   let pendingOutputTarget = null;
@@ -1226,11 +1244,12 @@
   };
   async function hostRpc(op, key, body) {
     const run = async () => {
+      if (disposed) return { success: false, aborted: true };
       const arg = op === "read"
         ? { section: key, payload: JSON.stringify(body || {}) }
         : { action: key, payload: JSON.stringify(body || {}) };
       const res = op === "read" ? await callMaibotRaw("query", "read", arg) : await callMaibotRaw("action", "write", arg);
-      if (res?.ui_style) {
+      if (!disposed && res?.ui_style) {
         savedUiStyle = res.ui_style;
         applyTheme();
       }
@@ -1284,6 +1303,7 @@
     });
   }
   function applyTheme(ctx) {
+    if (disposed) return;
     if (ctx) lastCtx = ctx;
     const c = ctx || lastCtx || window.maibot?.context || {};
     const theme = c.theme === "dark" ? "dark" : "light";
@@ -1301,7 +1321,7 @@
     window.dispatchEvent(new CustomEvent("maisya:themechange", { detail: { uiStyle: eff, dark: theme === "dark" } }));
   }
   applyTheme();
-  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail));
+  window.addEventListener("maibot:context", (ev) => applyTheme(ev.detail), { signal: shellSig });
   $("#ui-style-toggle")?.addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-ui-style") || "millennium";
     manualUiStyle = cur === "millennium" ? "maiwork" : "millennium";
@@ -1782,7 +1802,7 @@
     const cat = CATS[item.cat] || { name: item.cat };
     $("#ctx-modal-cat").textContent = cat.name;
     $("#ctx-modal-title").textContent = item.label || "上下文片段";
-    $("#ctx-modal-chars").textContent = `${item.chars || 0} 字符`;
+    $("#ctx-modal-chars").textContent = item.tokens != null ? `${item.tokens} tokens · ${item.chars || 0} 字符` : `${item.chars || 0} 字符`;
     $("#ctx-modal-body").textContent = item.preview || "（暂无可展示预览）";
     $("#ctx-scrim").hidden = false;
     $("#ctx-modal-close").focus();
@@ -1803,11 +1823,12 @@
       lbl.textContent = "—";
       return;
     }
-    const maxV = Math.max(limit || 48000, ...points.map((p) => p.chars || 0), 1);
+    const valOf = (p) => Number(p.tokens ?? p.chars ?? 0);
+    const maxV = Math.max(limit || 262144, ...points.map(valOf), 1);
     const W = 320, H = 96, pad = 10;
     const coords = points.map((p, idx) => {
       const x = points.length === 1 ? W / 2 : pad + (idx / (points.length - 1)) * (W - pad * 2);
-      const y = H - pad - ((p.chars || 0) / maxV) * (H - pad * 2);
+      const y = H - pad - (valOf(p) / maxV) * (H - pad * 2);
       return [x, y, p];
     });
     const lineD = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
@@ -1820,7 +1841,7 @@
       ${dots}
     `;
     const latest = points[points.length - 1];
-    lbl.textContent = `${points.length} 轮 · 当前 ${fmtK(latest.chars)}`;
+    lbl.textContent = `${points.length} 轮 · 当前 ${fmtK(valOf(latest))}`;
   }
 
   function renderContext(snap) {
@@ -1832,7 +1853,7 @@
     const sel = snap.selected;
     const ctx = sel?.context;
     if (!sel || !ctx) {
-      $("#ctx-readout").textContent = "0 / 48.0K 字符 (0%)";
+      $("#ctx-readout").textContent = "0 / 262.1K tokens (0%)";
       $("#ctx-health").textContent = "未选线程";
       $("#ctx-health").className = "mil-tag";
       $("#ctx-meter").className = "mil-meter";
@@ -1841,29 +1862,38 @@
       $("#ctx-map").innerHTML = `<p class="mil-hint" style="padding:16px">选择一条线程后展示上下文构成。</p>`;
       $("#ctx-grid").innerHTML = "";
       $("#ctx-items").innerHTML = `<p class="mil-hint" style="padding:10px">暂无上下文条目。</p>`;
-      renderSparkline([], 48000);
+      renderSparkline([], 262144);
       return;
     }
 
-    const used = Number(ctx.chars || 0);
-    const limit = Math.max(Number(ctx.limit || 48000), used, 1);
+    const useTokens = Number(ctx.token_limit || 0) > 0;
+    const unitLabel = useTokens ? "tokens" : "字符";
+    const used = Number((useTokens ? ctx.tokens : ctx.chars) ?? ctx.chars ?? 0);
+    const rawLimit = Number((useTokens ? ctx.token_limit : ctx.limit) ?? (useTokens ? 262144 : 48000));
+    const limit = Math.max(rawLimit, used, 1);
     const pct = Math.min(100, Math.round((used / limit) * 100));
-    $("#ctx-readout").textContent = `已用 ${fmtK(used)} / ${fmtK(limit)} 字符 (${pct}%) · ${ctx.messages || 0} 条消息`;
+    const triggerHint = useTokens && Number(ctx.trigger_tokens || 0) > 0 ? ` · 压缩线 ${fmtK(ctx.trigger_tokens)}` : "";
+    $("#ctx-readout").textContent = `已用 ${fmtK(used)} / ${fmtK(limit)} ${unitLabel} (${pct}%)${triggerHint} · ${ctx.messages || 0} 条消息`;
     $("#ctx-meter-bar").style.width = `${pct}%`;
-    $("#ctx-meter").className = `mil-meter${pct >= 88 ? " mil-meter--hot" : pct >= 70 ? " mil-meter--warn" : ""}`;
+    const nearTrigger = (useTokens && Number(ctx.trigger_tokens || 0) > 0 && used >= Number(ctx.trigger_tokens) * 0.9) || pct >= 70;
+    const hotTrigger = (useTokens && Number(ctx.trigger_tokens || 0) > 0 && used >= Number(ctx.trigger_tokens)) || pct >= 88;
+    $("#ctx-meter").className = `mil-meter${hotTrigger ? " mil-meter--hot" : nearTrigger ? " mil-meter--warn" : ""}`;
     const health = $("#ctx-health");
     if (ctx.archived) {
-      health.textContent = "已归档早期历史";
+      health.textContent = "已交班归档";
       health.className = "mil-tag mil-tag--warn";
-    } else if (pct >= 85) {
-      health.textContent = "接近归档线";
+    } else if (ctx.pruned) {
+      health.textContent = "已折叠旧工具输出";
+      health.className = "mil-tag mil-tag--ok";
+    } else if (hotTrigger || nearTrigger) {
+      health.textContent = "接近压缩水位";
       health.className = "mil-tag mil-tag--hot";
     } else {
       health.textContent = "健康";
       health.className = "mil-tag mil-tag--ok";
     }
 
-    const roles = ctx.roles || {};
+    const roles = (useTokens ? ctx.token_roles : ctx.roles) || ctx.roles || {};
     const catKeys = ["system", "memory", "user", "assistant", "tool"];
     const catTotals = Object.fromEntries(catKeys.map((k) => [k, Number(roles[k] || 0)]));
     $("#ctx-cats").innerHTML = [
@@ -1875,18 +1905,21 @@
     ].join("");
 
     // 构造明细列表（如后端未提供 items 时用角色汇总补足）
-    let items = Array.isArray(ctx.items) && ctx.items.length ? ctx.items.map((x) => ({ ...x, value: Math.max(1, Number(x.chars || 0)) })) : [];
+    const metricOf = (x) => Number((useTokens ? x.tokens : x.chars) ?? x.chars ?? 0);
+    let items = Array.isArray(ctx.items) && ctx.items.length
+      ? ctx.items.map((x) => { const m = metricOf(x); return { ...x, metric: m, value: Math.max(1, m) }; })
+      : [];
     if (!items.length) {
       items = catKeys
         .filter((k) => catTotals[k] > 0)
-        .map((k) => ({ id: `role-${k}`, cat: k, label: CATS[k].name, chars: catTotals[k], value: catTotals[k], preview: `${CATS[k].name}共占 ${catTotals[k]} 字符。` }));
+        .map((k) => ({ id: `role-${k}`, cat: k, label: CATS[k].name, chars: catTotals[k], tokens: catTotals[k], metric: catTotals[k], value: catTotals[k], preview: `${CATS[k].name}共占 ${catTotals[k]} ${unitLabel}。` }));
     }
     currentCtxItems = items;
 
     const free = Math.max(0, limit - used);
     const mapInputs = [...items];
     if (free > 0 && state.ctxCat === "all") {
-      mapInputs.push({ id: "free-space", cat: "free", label: "剩余可用空间", chars: free, value: free, preview: "" });
+      mapInputs.push({ id: "free-space", cat: "free", label: "剩余可用空间", chars: free, tokens: free, metric: free, value: free, preview: "" });
     }
     const stage = $("#ctx-map");
     const grid = $("#ctx-grid");
@@ -1900,7 +1933,8 @@
       stage.innerHTML = rects.map((r, idx) => {
         const dim = state.ctxCat !== "all" && r.item.cat !== state.ctxCat;
         const showTitle = r.w >= 54 && r.h >= 24;
-        return `<button type="button" class="cm-tile${dim ? " dim" : ""}" data-cat="${esc(r.item.cat)}" data-item-idx="${idx}" style="left:${r.x.toFixed(1)}px;top:${r.y.toFixed(1)}px;width:${r.w.toFixed(1)}px;height:${r.h.toFixed(1)}px" title="${esc(r.item.label)}: ${r.item.chars} 字符">${showTitle ? `<b>${esc(r.item.label)}</b><span>${fmtK(r.item.chars)}</span>` : ""}</button>`;
+        const mVal = Number(r.item.metric ?? r.item.chars ?? 0);
+        return `<button type="button" class="cm-tile${dim ? " dim" : ""}" data-cat="${esc(r.item.cat)}" data-item-idx="${idx}" style="left:${r.x.toFixed(1)}px;top:${r.y.toFixed(1)}px;width:${r.w.toFixed(1)}px;height:${r.h.toFixed(1)}px" title="${esc(r.item.label)}: ${mVal} ${unitLabel}">${showTitle ? `<b>${esc(r.item.label)}</b><span>${fmtK(mVal)}</span>` : ""}</button>`;
       }).join("");
       stage._rectItems = rects.map((r) => r.item);
     } else {
@@ -1920,7 +1954,8 @@
         totalCells--;
       }
       alloc.forEach(({ it, idx, count }) => {
-        for (let i = 0; i < count; i++) cells.push({ cat: it.cat, label: it.label, chars: it.chars, idx });
+        const mVal = Number(it.metric ?? it.chars ?? 0);
+        for (let i = 0; i < count; i++) cells.push({ cat: it.cat, label: it.label, chars: mVal, idx });
       });
       while (cells.length < 400) cells.push({ cat: "free", label: "剩余空间", chars: free, idx: -1 });
       grid.innerHTML = cells.map((c) => {
@@ -1932,16 +1967,17 @@
 
     const filteredRows = items
       .filter((it) => state.ctxCat === "all" || it.cat === state.ctxCat)
-      .sort((a, b) => b.chars - a.chars);
-    const maxItemChars = Math.max(1, ...filteredRows.map((x) => x.chars));
+      .sort((a, b) => Number(b.metric ?? b.chars ?? 0) - Number(a.metric ?? a.chars ?? 0));
+    const maxItemVal = Math.max(1, ...filteredRows.map((x) => Number(x.metric ?? x.chars ?? 0)));
     $("#ctx-items").innerHTML = filteredRows.length
       ? filteredRows.map((it) => {
           const origIdx = currentCtxItems.indexOf(it);
-          const pctW = Math.max(3, Math.round((it.chars / maxItemChars) * 100));
+          const rowVal = Number(it.metric ?? it.chars ?? 0);
+          const pctW = Math.max(3, Math.round((rowVal / maxItemVal) * 100));
           return `<button type="button" class="ci-row" data-ci-idx="${origIdx}">
             <span class="ctx-swatch" style="background:${(CATS[it.cat] || CATS.free).color}"></span>
             <span class="ci-row-name">${esc(it.label)}</span>
-            <span class="num" style="font-size:11.5px">${it.chars}</span>
+            <span class="num" style="font-size:11.5px">${rowVal}</span>
             <span class="ci-row-bar"><i style="width:${pctW}%"></i></span>
           </button>`;
         }).join("")
@@ -1963,13 +1999,14 @@
     const host = $("#threads");
     if (!list.length) {
       const hasFilter = Boolean(state.chatFilter || state.thFilter !== "all");
+      host._lastHtml = "";
       host.innerHTML = `<div style="padding:10px">
         <p class="mil-hint">${all.length || hasFilter ? "当前筛选下暂无线程。" : "还没有任何线程记录，可在下方发起第一个工作流。"}</p>
         ${hasFilter ? `<button type="button" class="mil-key mil-key--sm" id="clear-th-filters" style="margin-top:8px">清除筛选</button>` : ""}
       </div>`;
       return;
     }
-    host.innerHTML = list.map((t) => {
+    const threadsHtml = list.map((t) => {
       const st = STATE_LABEL[t.state] || ["未知", "", ""];
       const on = t.thread_id === state.threadId;
       const cm = chatMeta(snap, t.chat_id);
@@ -1989,6 +2026,10 @@
         </div>
       </button>`;
     }).join("");
+    if (host._lastHtml !== threadsHtml) {
+      host._lastHtml = threadsHtml;
+      host.innerHTML = threadsHtml;
+    }
   }
 
   function renderInspector(snap) {
@@ -2150,7 +2191,7 @@
   }
 
   async function refresh(reset = false) {
-    if (activePage !== "now") return;
+    if (disposed || activePage !== "now") return;
     const reqThread = state.threadId;
     const reqChat = state.chatFilter;
     const reqCursor = reset ? 0 : state.cursor;
@@ -2159,12 +2200,12 @@
       chat_id: reqChat,
       cursor: reqCursor,
     }));
-    if (activePage !== "now") return;
+    if (disposed || activePage !== "now") return;
     if (!snap?.success) {
       setNowFeedback(snap?.error || "现场快照读取失败", "mil-feedback mil-feedback--err");
       return;
     }
-    if (snap.ui_style) {
+    if (!disposed && snap.ui_style) {
       savedUiStyle = snap.ui_style;
       applyTheme();
     }
@@ -2173,12 +2214,12 @@
     const firstId = snap.threads?.[0]?.thread_id || "";
     if (!state.threadId && firstId) {
       switchThread(firstId);
-      if (activePage === "now") return refresh(true);
+      if (!disposed && activePage === "now") return refresh(true);
       return;
     }
     if (state.threadId && !snap.selected && firstId && state.threadId !== firstId) {
       switchThread(firstId);
-      if (activePage === "now") return refresh(true);
+      if (!disposed && activePage === "now") return refresh(true);
       return;
     }
     if (typeof snap.cursor === "number") state.cursor = snap.cursor;
@@ -2204,7 +2245,7 @@
       const p = navBtn.dataset.nav || navBtn.dataset.mobNav;
       if (Object.prototype.hasOwnProperty.call(PAGES, p)) switchWorkspaceTab(p);
     }
-  });
+  }, { signal: shellSig });
 
   $("#ms-now-view").addEventListener("click", (ev) => {
     const flowChat = ev.target.closest("[data-flow-chat]");
@@ -2468,7 +2509,7 @@
         $("#save")?.click();
       }
     }
-  });
+  }, { signal: shellSig });
 
   $("#open-launch").onclick = () => {
     if (activePage !== "now") return;
@@ -2483,7 +2524,7 @@
     if (activePage !== "now") return;
     drawFlowLines();
     if (state.lastSnap && state.ctxView === "map") renderContext(state.lastSnap);
-  });
+  }, { signal: shellSig });
 
   function initHelpPopovers() {
     const pop = $("#mil-help-pop");
@@ -2522,32 +2563,32 @@
         return;
       }
       if (!pop.hidden && !ev.target.closest("#mil-help-pop")) closePop();
-    });
+    }, { signal: shellSig });
     document.addEventListener("mouseenter", (ev) => {
       const btn = ev.target.closest?.(".mil-help");
       if (btn && !pinnedBtn && window.matchMedia?.("(hover: hover)").matches) openPop(btn);
-    }, true);
+    }, { capture: true, signal: shellSig });
     document.addEventListener("mouseleave", (ev) => {
       const btn = ev.target.closest?.(".mil-help");
       if (btn && activeBtn === btn && pinnedBtn !== btn && window.matchMedia?.("(hover: hover)").matches) closePop();
-    }, true);
+    }, { capture: true, signal: shellSig });
     document.addEventListener("focusin", (ev) => {
       const btn = ev.target.closest?.(".mil-help");
       if (btn && !pinnedBtn) openPop(btn);
-    });
+    }, { signal: shellSig });
     document.addEventListener("focusout", (ev) => {
       const btn = ev.target.closest?.(".mil-help");
       if (btn && activeBtn === btn && pinnedBtn !== btn) closePop();
-    });
+    }, { signal: shellSig });
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && !pop.hidden) closePop();
-    });
+    }, { signal: shellSig });
     window.addEventListener("scroll", () => {
       if (pop.hidden) return;
       if (pinnedBtn?.isConnected) openPop(pinnedBtn);
       else closePop();
-    }, { passive: true });
-    window.addEventListener("resize", closePop);
+    }, { passive: true, signal: shellSig });
+    window.addEventListener("resize", closePop, { signal: shellSig });
     return closePop;
   }
 
@@ -2665,6 +2706,7 @@
   }
 
   Promise.resolve(window.maibot?.ready).then(() => {
+    if (disposed) return;
     bootStarted = true;
     const readyHostTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
     if (!userNavigated && readyHostTab && Object.prototype.hasOwnProperty.call(PAGES, readyHostTab) && readyHostTab !== activePage) {
@@ -2674,7 +2716,7 @@
       refresh(true);
     }
     timer = setInterval(() => {
-      if (activePage !== "now") return;
+      if (disposed || activePage !== "now") return;
       if (!document.hidden && Date.now() - lastSnapshotAt >= 1800) refresh(false);
     }, 2400);
   });
