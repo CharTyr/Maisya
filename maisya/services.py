@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from jsonschema import Draft202012Validator, ValidationError
+from jsonschema import Draft202012Validator, SchemaError, ValidationError
 
 from .pathsafe import (
     is_absolute_program_path,
@@ -222,17 +222,65 @@ def validate_endpoint_targets(targets):
     return endpoints
 
 
-def validate(schema, arguments):
-    if (
-        not isinstance(schema, dict)
-        or len(json.dumps(schema)) > 65536
-        or '"$ref"' in json.dumps(schema)
-    ):
+def _resolve_local_pointer(root: dict, ref: str):
+    if ref == "#":
+        return root
+    if not isinstance(ref, str) or not ref.startswith("#/"):
         raise ValueError("能力参数 schema 无效或含未绑定引用")
-    Draft202012Validator.check_schema(schema)
+    cur = root
+    for raw_part in ref[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(cur, dict):
+            if part not in cur:
+                raise ValueError("能力参数 schema 无效或含未绑定引用")
+            cur = cur[part]
+        elif isinstance(cur, list):
+            if not part.isdigit():
+                raise ValueError("能力参数 schema 无效或含未绑定引用")
+            idx = int(part)
+            if idx < 0 or idx >= len(cur):
+                raise ValueError("能力参数 schema 无效或含未绑定引用")
+            cur = cur[idx]
+        else:
+            raise ValueError("能力参数 schema 无效或含未绑定引用")
+    if not isinstance(cur, (dict, bool)):
+        raise ValueError("能力参数 schema 无效或含未绑定引用")
+    return cur
+
+
+def _validate_local_refs(root: dict, node) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _validate_local_refs(root, item)
+        return
+    if not isinstance(node, dict):
+        return
+    if "$dynamicRef" in node or "$recursiveRef" in node:
+        raise ValueError("能力参数 schema 无效或含未绑定引用")
+    if "$ref" in node:
+        _resolve_local_pointer(root, node["$ref"])
+    for key, val in node.items():
+        if key in {"properties", "patternProperties", "$defs", "definitions"} and isinstance(val, dict):
+            for sub in val.values():
+                _validate_local_refs(root, sub)
+        else:
+            _validate_local_refs(root, val)
+
+
+def validate(schema, arguments):
+    if not isinstance(schema, dict):
+        raise ValueError("能力参数 schema 无效或含未绑定引用")
     try:
+        dumped = json.dumps(schema)
+    except (TypeError, ValueError):
+        raise ValueError("能力参数 schema 无效或含未绑定引用") from None
+    if len(dumped) > 65536:
+        raise ValueError("能力参数 schema 无效或含未绑定引用")
+    _validate_local_refs(schema, schema)
+    try:
+        Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(arguments)
-    except ValidationError:
+    except (ValidationError, SchemaError, RecursionError):
         raise ValueError("能力调用参数未通过 schema 校验") from None
 
 
@@ -746,14 +794,30 @@ class Services:
                 session.tools[tool].get("inputSchema", {}),
                 arguments["arguments"],
             )
-            key = context["thread_id"], context["revision"], context["_tool_call_id"]
+            raw_call_id = context["_tool_call_id"]
+            step_index = context.get("_step_index")
+            receipt_call_id = (
+                f"s{step_index}:{raw_call_id}"
+                if step_index is not None
+                else raw_call_id
+            )
+            key = context["thread_id"], context["revision"], receipt_call_id
             previous = await completed_thread(runtime.sandbox._receipt, key)
-            if previous:
-                return {
-                    "status": previous["status"],
-                    **json.loads(previous["result"]),
-                    "repeated": True,
-                }
+            if previous and previous.get("status") not in {
+                "running",
+                "interrupted",
+                "uncertain",
+            }:
+                try:
+                    prev_result = json.loads(previous.get("result") or "{}")
+                except (TypeError, ValueError):
+                    prev_result = {}
+                if isinstance(prev_result, dict) and prev_result:
+                    return {
+                        "status": previous["status"],
+                        **prev_result,
+                        "repeated": True,
+                    }
             await completed_thread(runtime.sandbox._receipt, key, status="running")
             try:
                 result = await session.request(
@@ -783,6 +847,8 @@ class Services:
             raise ValueError("MCP 内容数量超限")
         text, binary = [], []
         for item in content:
+            if not isinstance(item, dict):
+                raise ValueError("MCP 返回内容项格式无效")
             if item.get("type") == "text":
                 text.append(str(self.vault.redact(item.get("text", "")))[:12000])
             elif item.get("type") == "image":

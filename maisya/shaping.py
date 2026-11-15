@@ -7,16 +7,19 @@ import copy
 import inspect
 import json
 import re
+import shutil
 import sqlite3
 import time
 import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .abilities import READONLY_TOOLS
 from .config import Settings
 from .digest import DigestWorkspace
 from .intents import next_daily_due
-from .memory import MemoryLayers, parse_skill_meta
+from .memory import SKILL_ID_RE, MemoryLayers, parse_skill_meta
+from .pathsafe import path_is_link_like
 from .recipes import build_recipe_draft, serialize_profile_toml
 from .scout import call_capability
 from .trust import format_stream_spec, parse_stream_spec, session_rank_key
@@ -1425,7 +1428,12 @@ async def patch_profile(
             cfg["skills"] = cur_skills
 
         if add_tools or remove_tools:
-            cur_tools = list(cfg.get("tools") or ())
+            raw_tools = cfg.get("tools")
+            cur_tools = (
+                list(raw_tools)
+                if raw_tools is not None
+                else sorted(READONLY_TOOLS)
+            )
             for tid in add_tools or ():
                 if tid not in cur_tools:
                     cur_tools.append(tid)
@@ -1528,12 +1536,12 @@ async def patch_profile(
 
 
 def _split_frontmatter(raw: str) -> tuple[dict, str]:
-    text = raw or ""
+    text = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
     if text.startswith("---\n"):
-        end = text.find("\n---\n", 4)
-        if end != -1:
+        match = re.search(r"\n---(?:\n|$)", text[3:])
+        if match is not None:
             meta = parse_skill_meta("skill", text)
-            body = text[end + 5 :]
+            body = text[3 + match.end() :]
             return meta, body
     return {}, text
 
@@ -1545,8 +1553,75 @@ def _compose_skill_markdown(title: str, description: str, body: str) -> str:
     if description:
         header_lines.append(f"description: {json.dumps(description, ensure_ascii=False)}")
     header_lines.append("---")
-    clean_body = body.lstrip("\n")
+    clean_body = body.replace("\r\n", "\n").replace("\r", "\n").lstrip("\n")
     return "\n".join(header_lines) + ("\n\n" + clean_body if clean_body else "\n")
+
+
+def _merge_skill_frontmatter(
+    raw: str,
+    *,
+    target: str,
+    new_body: str,
+    title: str = "",
+    has_title: bool = False,
+    description: str = "",
+    has_description: bool = False,
+) -> str:
+    text = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    fm_block: str | None = None
+    if text.startswith("---\n"):
+        match = re.search(r"\n---(?:\n|$)", text[3:])
+        if match is not None:
+            fm_block = text[4 : 3 + match.start()]
+    clean_body = new_body.replace("\r\n", "\n").replace("\r", "\n").lstrip("\n")
+    if fm_block is None:
+        meta = parse_skill_meta(target, text)
+        final_title = title if has_title else str(meta.get("title") or target)
+        final_desc = description if has_description else str(meta.get("description") or "")
+        return _compose_skill_markdown(final_title, final_desc, clean_body)
+    out_lines: list[str] = []
+    seen_title = False
+    seen_desc = False
+    skip_indented = False
+    for line in fm_block.splitlines():
+        if skip_indented:
+            if line.startswith((" ", "\t")):
+                continue
+            skip_indented = False
+        key_match = re.match(r"^([A-Za-z0-9_-]+)\s*:(.*)$", line)
+        if key_match:
+            key = key_match.group(1)
+            val_rest = key_match.group(2).strip()
+            if key == "title" and has_title:
+                out_lines.append(f"title: {json.dumps(title, ensure_ascii=False)}")
+                seen_title = True
+                if not val_rest or val_rest in {"|", ">", "|-", ">-"}:
+                    skip_indented = True
+                continue
+            if key == "description" and has_description:
+                out_lines.append(
+                    f"description: {json.dumps(description, ensure_ascii=False)}"
+                )
+                seen_desc = True
+                if not val_rest or val_rest in {"|", ">", "|-", ">-"}:
+                    skip_indented = True
+                continue
+        out_lines.append(line)
+    if has_title and not seen_title:
+        out_lines.append(f"title: {json.dumps(title, ensure_ascii=False)}")
+    if has_description and not seen_desc:
+        out_lines.append(f"description: {json.dumps(description, ensure_ascii=False)}")
+    header = "\n".join(["---", *out_lines, "---"])
+    return header + ("\n\n" + clean_body if clean_body else "\n")
+
+
+def _require_existing_skill(plugin, target: str) -> None:
+    if not SKILL_ID_RE.fullmatch(target):
+        raise ValueError("技能编号仅允许小写字母、数字和短横线")
+    runtime_md = plugin.data_root / "abilities/skills" / target / "SKILL.md"
+    if runtime_md.is_file() or target in plugin.memory.preset_skills():
+        return
+    raise ValueError(f"技能不存在: {target}")
 
 
 async def _bind_skill_profiles(
@@ -1646,20 +1721,43 @@ async def handle_skill(
     unbind_profiles = _clean_str_list(opts.pop("unbind_profiles", []), label="unbind_profiles")
 
     if action == "read":
+        await completed_thread(_require_existing_skill, plugin, target)
         return await completed_thread(
             plugin.memory.read, "skill", target=target, version=version, allow_custom=True
         )
     if action == "history":
+        await completed_thread(_require_existing_skill, plugin, target)
         return {
             "kind": "skill",
             "target": target,
             "history": await completed_thread(plugin.memory.history, "skill", target=target),
         }
     if action == "delete":
-        return await completed_thread(plugin.memory.delete_skill, target)
+        await completed_thread(_require_existing_skill, plugin, target)
+        if await completed_thread(lambda: target in plugin.memory.preset_skills()):
+            raise ValueError("预置技能不能删除")
+        referencing_pids: list[str] = []
+        if plugin.profiles.path.is_dir():
+            for entry in sorted(plugin.profiles.path.iterdir()):
+                if not entry.is_dir() or path_is_link_like(entry):
+                    continue
+                try:
+                    prof = await completed_thread(plugin.profiles.get, entry.name)
+                except (ValueError, OSError):
+                    continue
+                if target in prof.skills:
+                    referencing_pids.append(prof.id)
+        for pid in referencing_pids:
+            await patch_profile(plugin, pid, {"remove_skills": [target]}, author=author)
+        del_res = await completed_thread(plugin.memory.delete_skill, target)
+        return {
+            **(del_res if isinstance(del_res, dict) else {"deleted": True}),
+            "unbound_profiles": referencing_pids,
+        }
     if action == "rollback":
         if version is None or expected_version is None:
             raise ValueError("回滚技能需要提供 version 与 expected_version")
+        await completed_thread(_require_existing_skill, plugin, target)
         return await completed_thread(
             plugin.memory.rollback,
             "skill",
@@ -1669,7 +1767,8 @@ async def handle_skill(
             allow_custom=True,
         )
     if action == "create":
-        _assert_no_secret(plugin, content or opts, "技能内容")
+        _assert_no_secret(plugin, content, "技能内容")
+        _assert_no_secret(plugin, opts, "技能内容")
         raw_content = content or ""
         if not raw_content.strip() and opts.get("body"):
             raw_content = _compose_skill_markdown(
@@ -1677,12 +1776,13 @@ async def handle_skill(
                 str(opts.get("description") or ""),
                 str(opts.get("body") or ""),
             )
+        has_fm = raw_content.lstrip().startswith(("---\n", "---\r\n"))
         res = await completed_thread(
             plugin.memory.create_skill,
             target,
             base=str(opts.get("base") or ""),
-            title="" if raw_content.lstrip().startswith("---\n") else str(opts.get("title") or ""),
-            description="" if raw_content.lstrip().startswith("---\n") else str(opts.get("description") or ""),
+            title="" if has_fm else str(opts.get("title") or ""),
+            description="" if has_fm else str(opts.get("description") or ""),
             content=raw_content,
             allow_custom=True,
         )
@@ -1693,8 +1793,10 @@ async def handle_skill(
         return res
     if action == "write":
         _assert_no_secret(plugin, content, "技能内容")
+        _assert_no_secret(plugin, opts, "技能内容")
         if expected_version is None:
             raise ValueError("覆盖写入技能必须提供 expected_version")
+        await completed_thread(_require_existing_skill, plugin, target)
         res = await completed_thread(
             plugin.memory.write,
             "skill",
@@ -1710,8 +1812,28 @@ async def handle_skill(
             )
         return res
     if action == "patch":
-        _assert_no_secret(plugin, opts or content, "技能更新内容")
-        if content or any(k in opts for k in ("title", "description", "body", "append", "prepend", "replace", "content")):
+        _assert_no_secret(plugin, content, "技能更新内容")
+        _assert_no_secret(plugin, opts, "技能更新内容")
+        has_text_edits = bool(
+            content
+            or any(
+                k in opts
+                for k in (
+                    "title",
+                    "description",
+                    "body",
+                    "append",
+                    "prepend",
+                    "replace",
+                    "content",
+                )
+            )
+        )
+        has_bind_edits = bool(bind_profiles or unbind_profiles)
+        if not has_text_edits and not has_bind_edits:
+            raise ValueError("更新技能必须提供修改字段、正文或绑定的角色列表")
+        await completed_thread(_require_existing_skill, plugin, target)
+        if has_text_edits:
             def _patch_skill_sync() -> dict:
                 cur = plugin.memory.read("skill", target=target, allow_custom=True)
                 if expected_version is not None and cur["version"] != expected_version:
@@ -1721,9 +1843,11 @@ async def handle_skill(
                 elif "content" in opts:
                     new_md = str(opts["content"])
                 else:
-                    meta, body = _split_frontmatter(cur["content"])
-                    title = str(opts.get("title") if "title" in opts else meta.get("title") or target)
-                    desc = str(opts.get("description") if "description" in opts else meta.get("description") or "")
+                    _meta, body = _split_frontmatter(cur["content"])
+                    has_title = "title" in opts
+                    has_description = "description" in opts
+                    title = str(opts["title"]) if has_title else ""
+                    desc = str(opts["description"]) if has_description else ""
                     new_body = str(opts["body"]) if "body" in opts else body
                     if "replace" in opts:
                         rep = opts["replace"]
@@ -1738,7 +1862,15 @@ async def handle_skill(
                         app = str(opts["append"] or "").strip()
                         if app and app not in new_body:
                             new_body = f"{new_body.rstrip()}\n{app}\n"
-                    new_md = _compose_skill_markdown(title, desc, new_body)
+                    new_md = _merge_skill_frontmatter(
+                        cur["content"],
+                        target=target,
+                        new_body=new_body,
+                        title=title,
+                        has_title=has_title,
+                        description=desc,
+                        has_description=has_description,
+                    )
                 return plugin.memory.write(
                     "skill",
                     new_md,
@@ -1750,7 +1882,13 @@ async def handle_skill(
 
             res = await completed_thread(_patch_skill_sync)
         else:
-            res = await completed_thread(plugin.memory.read, "skill", target=target, allow_custom=True)
+            def _read_and_check_version() -> dict:
+                cur = plugin.memory.read("skill", target=target, allow_custom=True)
+                if expected_version is not None and cur["version"] != expected_version:
+                    raise ValueError("技能版本已变化，请重新读取后再修改")
+                return cur
+
+            res = await completed_thread(_read_and_check_version)
         if bind_profiles or unbind_profiles:
             res["bound_profiles"] = await _bind_skill_profiles(
                 plugin, target, bind_profiles, unbind_profiles, author=author
@@ -1760,22 +1898,39 @@ async def handle_skill(
 
 
 async def handle_services_or_webhooks(
-    plugin, *, kind: str, action: str, content: str = "", patch: dict | None = None
+    plugin,
+    *,
+    kind: str,
+    action: str,
+    content: str = "",
+    patch: dict | None = None,
+    expected_version: str | int | None = None,
 ) -> dict:
     if action == "read":
         return await plugin.management.read(kind, "{}")
     if action not in {"patch", "write"}:
         raise ValueError(f"{kind} 仅支持 read / patch / write")
-    payload_data = patch if isinstance(patch, dict) and patch else None
-    if payload_data is None and content.strip():
+    if action == "write" and (
+        expected_version is None or not str(expected_version).strip()
+    ):
+        raise ValueError(f"覆盖写入 {kind} 必须提供 expected_version")
+    if patch is not None:
+        if not isinstance(patch, dict):
+            raise ValueError(f"修改 {kind} 需要提供 patch 对象或 JSON content")
+        payload_data = patch
+    elif content.strip():
         try:
             payload_data = json.loads(content)
         except ValueError as exc:
             raise ValueError(f"{kind} 写入内容必须是合法 JSON") from exc
+    else:
+        payload_data = None
     if not isinstance(payload_data, dict):
         raise ValueError(f"修改 {kind} 需要提供 patch 对象或 JSON content")
     _assert_no_secret(plugin, payload_data, kind)
     cur = await plugin.management.read(kind, "{}")
+    if expected_version is not None and str(expected_version) != str(cur["version"]):
+        raise ValueError(f"{kind} 版本已变化，请刷新后再修改")
     if action == "patch":
         merged = copy.deepcopy(cur.get("configuration") or {})
         for key, value in payload_data.items():
@@ -1788,7 +1943,14 @@ async def handle_services_or_webhooks(
     return await plugin.management.write(
         kind,
         json.dumps(
-            {"configuration": merged, "expected_version": cur["version"]},
+            {
+                "configuration": merged,
+                "expected_version": (
+                    expected_version
+                    if expected_version is not None
+                    else cur["version"]
+                ),
+            },
             ensure_ascii=False,
         ),
     )
@@ -2994,6 +3156,7 @@ async def _apply_setup_digest_sources(
 
         add_sem = asyncio.Semaphore(6)
         discover_sem = asyncio.Semaphore(4)
+        budget_deadline = time.monotonic() + 7.0
 
         async def _add_one(item: object) -> tuple[int, str | None]:
             if isinstance(item, dict):
@@ -3012,10 +3175,13 @@ async def _apply_setup_digest_sources(
             if not url:
                 return 0, None
             async with add_sem:
+                rem = budget_deadline - time.monotonic()
+                if rem <= 0.05:
+                    return 0, f"RSS 源 {url} 订阅超出 8s 总预算，已跳过"
                 try:
                     res = await asyncio.wait_for(
                         dw.add_feed(url, title=title, auto=auto_flag, origin="admin"),
-                        timeout=5.0,
+                        timeout=min(5.0, rem),
                     )
                     if res.get("ok"):
                         return 1, None
@@ -3024,7 +3190,7 @@ async def _apply_setup_digest_sources(
                         f"RSS 源 {url} 未订阅成功：{res.get('reason') or '未知原因'}",
                     )
                 except TimeoutError:
-                    return 0, f"RSS 源 {url} 订阅超时（>5s），已跳过"
+                    return 0, f"RSS 源 {url} 订阅超时，已跳过"
                 except (OSError, ValueError, RuntimeError, TypeError) as exc:
                     return 0, f"RSS 源 {url} 订阅异常：{exc}"
 
@@ -3033,9 +3199,13 @@ async def _apply_setup_digest_sources(
             if not url:
                 return 0, None
             async with discover_sem:
+                rem = budget_deadline - time.monotonic()
+                if rem <= 0.05:
+                    return 0, f"主页嗅探 {url} 超出 8s 总预算，已跳过"
                 try:
                     res = await asyncio.wait_for(
-                        dw.discover(url, origin="admin"), timeout=5.0
+                        dw.discover(url, origin="admin"),
+                        timeout=min(5.0, rem),
                     )
                     if res.get("ok"):
                         return 1, None
@@ -3044,7 +3214,7 @@ async def _apply_setup_digest_sources(
                         f"主页嗅探 {url} 未发现可用订阅：{res.get('reason') or '未知原因'}",
                     )
                 except TimeoutError:
-                    return 0, f"主页嗅探 {url} 超时（>5s），已跳过"
+                    return 0, f"主页嗅探 {url} 超时，已跳过"
                 except (OSError, ValueError, RuntimeError, TypeError) as exc:
                     return 0, f"主页嗅探 {url} 异常：{exc}"
 
@@ -3094,67 +3264,71 @@ async def _apply_setup_digest_sources(
             and callable(seed_fn)
             and (topics_raw or auto_seed is True or len(cur_feeds) == 0)
         ):
-            try:
-                sig = inspect.signature(seed_fn)
-                seed_kwargs: dict = {}
-                if "topics" in sig.parameters:
-                    seed_kwargs["topics"] = topics_raw
-                elif "topics_or_text" in sig.parameters:
-                    seed_kwargs["topics_or_text"] = " ".join(topics_raw)
-                if broad_flag is not None and "broad" in sig.parameters:
-                    seed_kwargs["broad"] = broad_flag
-                if seed_kwargs:
-                    seed_res = seed_fn(**seed_kwargs)
-                elif topics_raw and any(
-                    p.kind
-                    in (
-                        inspect.Parameter.POSITIONAL_ONLY,
-                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    )
-                    for p in sig.parameters.values()
-                ):
-                    first_param = next(
-                        p
-                        for p in sig.parameters.values()
-                        if p.kind
+            rem_seed = budget_deadline - time.monotonic()
+            if rem_seed <= 0.1:
+                warnings.append("初期试订源冷启动超出 8s 总预算，已跳过")
+            else:
+                try:
+                    sig = inspect.signature(seed_fn)
+                    seed_kwargs: dict = {}
+                    if "topics" in sig.parameters:
+                        seed_kwargs["topics"] = topics_raw
+                    elif "topics_or_text" in sig.parameters:
+                        seed_kwargs["topics_or_text"] = " ".join(topics_raw)
+                    if seed_kwargs:
+                        seed_res = seed_fn(**seed_kwargs)
+                    elif topics_raw and any(
+                        p.kind
                         in (
                             inspect.Parameter.POSITIONAL_ONLY,
                             inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         )
-                    )
-                    arg_val = (
-                        " ".join(topics_raw)
-                        if "text" in first_param.name or first_param.annotation is str
-                        else topics_raw
-                    )
-                    seed_res = seed_fn(arg_val)
-                else:
-                    seed_res = seed_fn()
-                if inspect.isawaitable(seed_res):
-                    seed_res = await asyncio.wait_for(seed_res, timeout=6.0)
-                if isinstance(seed_res, dict):
-                    seeded_items = (
-                        seed_res.get("added")
-                        if seed_res.get("added") is not None
-                        else seed_res.get("seeded")
-                    )
-                    if isinstance(seeded_items, (list, tuple, set)):
-                        seeded_count = len(seeded_items)
-                    elif seeded_items is not None:
-                        seeded_count = int(seeded_items or 0)
+                        for p in sig.parameters.values()
+                    ):
+                        first_param = next(
+                            p
+                            for p in sig.parameters.values()
+                            if p.kind
+                            in (
+                                inspect.Parameter.POSITIONAL_ONLY,
+                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            )
+                        )
+                        arg_val = (
+                            " ".join(topics_raw)
+                            if "text" in first_param.name or first_param.annotation is str
+                            else topics_raw
+                        )
+                        seed_res = seed_fn(arg_val)
                     else:
-                        seeded_count = int(seed_res.get("seeded_count") or 0)
-                    for key in ("warnings", "errors"):
-                        for w in seed_res.get(key) or ():
-                            if str(w).strip():
-                                warnings.append(str(w).strip())
-                    if seed_res.get("ok") is False and seed_res.get("reason"):
-                        warnings.append(f"冷启动试订提示：{seed_res['reason']}")
-                cur_sources = dw._load_sources()
-            except TimeoutError:
-                warnings.append("初期试订源冷启动超时（>6s），已跳过")
-            except (OSError, ValueError, RuntimeError, TypeError) as exc:
-                warnings.append(f"初期试订源冷启动异常：{exc}")
+                        seed_res = seed_fn()
+                    if inspect.isawaitable(seed_res):
+                        seed_res = await asyncio.wait_for(
+                            seed_res, timeout=min(6.0, rem_seed)
+                        )
+                    if isinstance(seed_res, dict):
+                        seeded_items = (
+                            seed_res.get("added")
+                            if seed_res.get("added") is not None
+                            else seed_res.get("seeded")
+                        )
+                        if isinstance(seeded_items, (list, tuple, set)):
+                            seeded_count = len(seeded_items)
+                        elif seeded_items is not None:
+                            seeded_count = int(seeded_items or 0)
+                        else:
+                            seeded_count = int(seed_res.get("seeded_count") or 0)
+                        for key in ("warnings", "errors"):
+                            for w in seed_res.get(key) or ():
+                                if str(w).strip():
+                                    warnings.append(str(w).strip())
+                        if seed_res.get("ok") is False and seed_res.get("reason"):
+                            warnings.append(f"冷启动试订提示：{seed_res['reason']}")
+                    cur_sources = dw._load_sources()
+                except TimeoutError:
+                    warnings.append("初期试订源冷启动超时（>6s），已跳过")
+                except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                    warnings.append(f"初期试订源冷启动异常：{exc}")
 
         feeds_after = list(cur_sources.get("feeds") or ())
         return {
@@ -3926,7 +4100,7 @@ async def execute_shape(
     content: str = "",
     patch: dict | None = None,
     version: int | None = None,
-    expected_version: int | None = None,
+    expected_version: int | str | None = None,
     base: str = "scout",
     url: str = "",
     preview_token: str = "",
@@ -4027,29 +4201,41 @@ async def execute_shape(
             opts = dict(raw_opts or {}) if isinstance(raw_opts, dict) else {}
             base_id = str(opts.pop("base", base or "scout") or "scout")
             await completed_thread(plugin.profiles.clone, base_id, target)
-            if opts:
-                return _redact(
-                    plugin,
-                    await patch_profile(
+            try:
+                await completed_thread(plugin.memory.seed_profile, target)
+                if opts:
+                    return _redact(
                         plugin,
-                        target,
-                        opts,
-                        current_chat_id=current_chat_id,
-                        current_platform=current_platform,
-                        author=author,
-                    ),
+                        await patch_profile(
+                            plugin,
+                            target,
+                            opts,
+                            current_chat_id=current_chat_id,
+                            current_platform=current_platform,
+                            author=author,
+                        ),
+                    )
+                doc_res = await completed_thread(
+                    plugin.memory.read,
+                    "profile",
+                    target=target,
+                    document=document,
+                    allow_custom=True,
                 )
-            doc_res = await completed_thread(
-                plugin.memory.read,
-                "profile",
-                target=target,
-                document=document,
-                allow_custom=True,
-            )
-            prof_info = await completed_thread(profile_summary, plugin, target)
-            return _redact(plugin, {**doc_res, "profile": prof_info})
+                prof_info = await completed_thread(profile_summary, plugin, target)
+                return _redact(plugin, {**doc_res, "profile": prof_info})
+            except BaseException:
+                def _cleanup_created_profile() -> None:
+                    pdir = plugin.profiles.path / target
+                    if pdir.is_dir() and not path_is_link_like(pdir):
+                        shutil.rmtree(pdir, ignore_errors=True)
+                    plugin.memory.purge_profile(target)
+
+                await completed_thread(_cleanup_created_profile)
+                raise
         if action == "delete":
             deleted_res = await completed_thread(plugin.profiles.delete, target)
+            await completed_thread(plugin.memory.purge_profile, target)
             return {
                 "kind": "profile",
                 "target": target,
@@ -4075,7 +4261,12 @@ async def execute_shape(
         return _redact(
             plugin,
             await handle_services_or_webhooks(
-                plugin, kind=kind, action=action, content=content, patch=patch
+                plugin,
+                kind=kind,
+                action=action,
+                content=content,
+                patch=patch,
+                expected_version=expected_version,
             ),
         )
 

@@ -23,8 +23,16 @@ import zipfile
 from pathlib import Path
 
 from .abilities import ALLOWED_TASKS, FISH_SEED_RE, HOST_TOOLS, READONLY_TOOLS, SANDBOX_TOOLS
-from .memory import SKILL_ID_RE, MemoryLayers, _is_archive_junk, _normalize_archive_path, parse_skill_meta
-from .pathsafe import path_is_link_like
+from .memory import (
+    PRESETS_DIR,
+    SKILL_ID_RE,
+    _SKILL_FILE_MAX_BYTES,
+    MemoryLayers,
+    _is_archive_junk,
+    _normalize_archive_path,
+    parse_skill_meta,
+)
+from .pathsafe import check_part, path_is_link_like
 from .vault import VaultError, atomic_private_write, private_directory, relative_symlink_parts
 
 RECIPE_SCHEMA_VERSION = 1
@@ -54,6 +62,7 @@ _PROFILE_KEY_ORDER = (
     "task",
     "model",
     "model_name",
+    "model_list",
     "fallback_models",
     "max_tokens",
     "context_tokens",
@@ -268,6 +277,45 @@ def validate_public_recipe_url(url: str) -> str:
     return clean
 
 
+_REMOTE_FETCH_BUDGET_S = 7.5
+_MAX_REMOTE_REDIRECTS = 4
+
+
+class _FetchHTTPError(ValueError):
+    def __init__(self, code: int):
+        super().__init__(f"拉取公开配方失败 (HTTP {code})")
+        self.code = code
+
+
+def _github_tree_or_blob_candidates(raw_url: str) -> list[tuple[str, str]]:
+    clean = str(raw_url or "").strip()
+    parsed = urllib.parse.urlsplit(clean)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    parts = [p for p in path.split("/") if p]
+    if host != "github.com" or len(parts) < 4 or parts[2] not in {"tree", "blob"}:
+        return []
+    owner, repo = parts[0], parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    candidates: list[tuple[str, str]] = []
+    if parts[2] == "blob":
+        for split_idx in range(4, min(len(parts), 10)):
+            ref = "/".join(urllib.parse.unquote(p) for p in parts[3:split_idx])
+            rest = "/".join(parts[split_idx:])
+            candidates.append(
+                (f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{rest}", "")
+            )
+    else:
+        for split_idx in range(4, min(len(parts) + 1, 10)):
+            ref = "/".join(urllib.parse.unquote(p) for p in parts[3:split_idx])
+            subpath_hint = "/".join(parts[split_idx:])
+            candidates.append(
+                (f"https://codeload.github.com/{owner}/{repo}/zip/{ref}", subpath_hint)
+            )
+    return candidates
+
+
 def normalize_public_recipe_url(raw_url: str) -> tuple[str, str]:
     """将常见 GitHub 页面链接转换为可直接下载的公开归档/原始文件链接，并返回可选子目录提示。"""
     clean = str(raw_url or "").strip()
@@ -287,11 +335,11 @@ def normalize_public_recipe_url(raw_url: str) -> tuple[str, str]:
             tag_ref = "/".join(parts[4:])
             return f"https://codeload.github.com/{owner}/{repo}/zip/{tag_ref}", ""
         if len(parts) >= 4 and parts[2] == "blob":
-            ref = parts[3]
+            ref = urllib.parse.unquote(parts[3])
             rest = "/".join(parts[4:])
             return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{rest}", ""
         if len(parts) >= 4 and parts[2] == "tree":
-            ref = parts[3]
+            ref = urllib.parse.unquote(parts[3])
             subpath_hint = "/".join(parts[4:])
             return f"https://codeload.github.com/{owner}/{repo}/zip/{ref}", subpath_hint
     if host == "gist.github.com":
@@ -329,10 +377,25 @@ def _looks_like_recipe_archive(raw: bytes) -> bool:
 
 
 def _http_get_safe(
-    start_url: str, *, opener=None, headers: dict[str, str], timeout: int
+    start_url: str,
+    *,
+    opener=None,
+    headers: dict[str, str],
+    timeout: float,
+    deadline: float | None = None,
 ) -> tuple[bytes, str]:
+    budget_end = (
+        deadline
+        if deadline is not None
+        else time.monotonic() + min(float(timeout or _REMOTE_FETCH_BUDGET_S), _REMOTE_FETCH_BUDGET_S)
+    )
+    if time.monotonic() >= budget_end:
+        raise ValueError("拉取公开配方超时（超过 8 秒预算）")
     current, host, pinned_ip, _port = _resolve_public_endpoint(start_url)
-    for _hop in range(6):
+    for _hop in range(_MAX_REMOTE_REDIRECTS):
+        remaining = budget_end - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("拉取公开配方超时（超过 8 秒预算）")
         hop_opener = opener or urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             _NoRedirectHandler(),
@@ -341,10 +404,12 @@ def _http_get_safe(
         )
         req = urllib.request.Request(current, headers=headers, method="GET")
         try:
-            with hop_opener.open(req, timeout=timeout) as resp:
+            with hop_opener.open(req, timeout=remaining) as resp:
                 chunks = []
                 total = 0
                 while True:
+                    if time.monotonic() >= budget_end:
+                        raise ValueError("拉取公开配方超时（超过 8 秒预算）")
                     block = resp.read(65536)
                     if not block:
                         break
@@ -363,19 +428,28 @@ def _http_get_safe(
                 return raw, filename
         except urllib.error.HTTPError as err:
             if err.code in {301, 302, 303, 307, 308}:
+                if time.monotonic() >= budget_end:
+                    raise ValueError("拉取公开配方超时（超过 8 秒预算）") from None
                 location = err.headers.get("Location")
                 if not location:
                     raise ValueError("远程链接重定向缺少目标地址") from None
                 next_url = urllib.parse.urljoin(current, location)
                 current, host, pinned_ip, _port = _resolve_public_endpoint(next_url)
                 continue
-            raise ValueError(f"拉取公开配方失败 (HTTP {err.code})") from None
+            raise _FetchHTTPError(err.code) from None
+        except (TimeoutError, socket.timeout):
+            raise ValueError("无法连接公开配方地址: 请求超时") from None
         except urllib.error.URLError as err:
             raise ValueError(f"无法连接公开配方地址: {err.reason}") from None
     raise ValueError("公开配方链接重定向次数过多")
 
 
-def fetch_public_recipe_bytes(url: str, *, timeout: int = 15) -> tuple[bytes, str, str]:
+def fetch_public_recipe_bytes(
+    url: str, *, timeout: float = _REMOTE_FETCH_BUDGET_S
+) -> tuple[bytes, str, str]:
+    deadline = time.monotonic() + min(
+        float(timeout or _REMOTE_FETCH_BUDGET_S), _REMOTE_FETCH_BUDGET_S
+    )
     raw_parsed = urllib.parse.urlsplit(str(url or "").strip())
     raw_host = (raw_parsed.hostname or "").lower()
     raw_parts = [p for p in raw_parsed.path.rstrip("/").split("/") if p]
@@ -390,20 +464,45 @@ def fetch_public_recipe_bytes(url: str, *, timeout: int = 15) -> tuple[bytes, st
         elif len(raw_parts) >= 2 and re.fullmatch(r"[A-Za-z0-9_-]{6,64}", raw_parts[1]):
             gist_fallback_id = raw_parts[1]
 
-    normalized_url, subpath_hint = normalize_public_recipe_url(url)
+    candidates = _github_tree_or_blob_candidates(url)
+    if not candidates:
+        candidates = [normalize_public_recipe_url(url)]
     headers = {
         "User-Agent": "Maisya-RecipeFetcher/1.0",
         "Accept": "application/zip, application/octet-stream, application/gzip, application/json, text/plain, */*",
     }
-    raw, filename = _http_get_safe(
-        normalized_url, headers=headers, timeout=timeout
-    )
+    raw = b""
+    filename = ""
+    subpath_hint = ""
+    last_404: _FetchHTTPError | None = None
+    for idx, (cand_url, cand_subpath) in enumerate(candidates):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("拉取公开配方超时（超过 8 秒预算）")
+        try:
+            raw, filename = _http_get_safe(
+                cand_url, headers=headers, timeout=remaining, deadline=deadline
+            )
+            subpath_hint = cand_subpath
+            last_404 = None
+            break
+        except _FetchHTTPError as err:
+            if err.code == 404 and idx + 1 < len(candidates):
+                last_404 = err
+                continue
+            raise
+    if last_404 is not None:
+        raise last_404
     if gist_fallback_id and not _looks_like_recipe_archive(raw):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("拉取公开配方超时（超过 8 秒预算）")
         api_headers = {**headers, "Accept": "application/vnd.github+json, application/json"}
         raw, _ = _http_get_safe(
             f"https://api.github.com/gists/{gist_fallback_id}",
             headers=api_headers,
-            timeout=timeout,
+            timeout=remaining,
+            deadline=deadline,
         )
         filename = f"gist-{gist_fallback_id}.json"
     return raw, filename, subpath_hint
@@ -824,12 +923,22 @@ def _assemble_recipe_bundle(plugin, profile_id: str, options: dict | None = None
             data_skill_dir = plugin.data_root / "abilities/skills" / skill_id
             if path_is_link_like(data_skill_dir):
                 raise ValueError("技能路径不能经过符号链接")
-            if (data_skill_dir / "SKILL.md").is_file() or path_is_link_like(data_skill_dir / "SKILL.md"):
+            preset_skill_dir = directory / "preset/skills" / skill_id
+            if (data_skill_dir / "SKILL.md").is_file() or path_is_link_like(
+                data_skill_dir / "SKILL.md"
+            ):
                 managed_root = plugin.data_root
                 skill_dir = data_skill_dir
-            else:
+            elif (preset_skill_dir / "SKILL.md").is_file() or path_is_link_like(
+                preset_skill_dir / "SKILL.md"
+            ):
                 managed_root = directory
-                skill_dir = directory / "preset/skills" / skill_id
+                skill_dir = preset_skill_dir
+            else:
+                managed_root = PRESETS_DIR
+                skill_dir = PRESETS_DIR / "skills" / skill_id
+                if path_is_link_like(skill_dir):
+                    raise ValueError("技能路径不能经过符号链接")
             source_md = skill_dir / "SKILL.md"
             try:
                 layers = relative_symlink_parts(source_md, managed_root)
@@ -837,7 +946,7 @@ def _assemble_recipe_bundle(plugin, profile_id: str, options: dict | None = None
                 raise ValueError("技能路径不能经过符号链接") from None
             if any(path_is_link_like(layer) for layer in layers):
                 raise ValueError("技能路径不能经过符号链接")
-            md_bytes = MemoryLayers._bytes(source_md)
+            md_bytes = MemoryLayers._bytes(source_md, max_bytes=_SKILL_FILE_MAX_BYTES)
             if not md_bytes:
                 raise ValueError(f"角色绑定的技能缺失: {skill_id}")
             files[f"preset/skills/{skill_id}/SKILL.md"] = md_bytes
@@ -845,12 +954,18 @@ def _assemble_recipe_bundle(plugin, profile_id: str, options: dict | None = None
             for extra_path in sorted(skill_dir.rglob("*")):
                 if extra_path == source_md or extra_path.is_dir():
                     continue
-                if extra_path.is_symlink():
+                try:
+                    extra_layers = relative_symlink_parts(extra_path, managed_root)
+                except VaultError:
+                    raise ValueError("技能附属文件路径不能经过符号链接") from None
+                if any(path_is_link_like(layer) for layer in extra_layers):
                     raise ValueError("技能附属文件路径不能经过符号链接")
                 rel_extra = extra_path.relative_to(skill_dir)
                 if any(part.startswith(".") for part in rel_extra.parts):
                     continue
-                extra_bytes = MemoryLayers._bytes(extra_path)
+                extra_bytes = MemoryLayers._bytes(
+                    extra_path, max_bytes=_SKILL_FILE_MAX_BYTES
+                )
                 if len(extra_bytes) > MAX_RECIPE_FILE_BYTES:
                     raise ValueError(f"技能附属文件过大: {skill_id}/{rel_extra.as_posix()}")
                 files[f"preset/skills/{skill_id}/{rel_extra.as_posix()}"] = extra_bytes
@@ -972,6 +1087,15 @@ def export_recipe_archive(plugin, profile_id: str, options: dict | None = None) 
     }
 
 
+def _validated_archive_rel(raw_name: str) -> str:
+    rel = _normalize_archive_path(raw_name)
+    if not rel or _is_archive_junk(rel):
+        return ""
+    for part in rel.split("/"):
+        check_part(part)
+    return rel
+
+
 def _extract_archive_files(
     raw_bytes: bytes, *, subpath_hint: str = "", return_prefix: bool = False
 ) -> dict[str, bytes] | tuple[dict[str, bytes], str]:
@@ -1013,8 +1137,8 @@ def _extract_archive_files(
                             continue
                         if fmeta.get("truncated"):
                             raise ValueError("Gist 文件过大已被截断，请改用 .zip 配方包链接")
-                        rel = _normalize_archive_path(str(fname))
-                        if not rel or _is_archive_junk(rel):
+                        rel = _validated_archive_rel(str(fname))
+                        if not rel:
                             continue
                         data = str(fmeta.get("content") or "").encode("utf-8")
                         if len(data) > MAX_RECIPE_FILE_BYTES:
@@ -1042,8 +1166,8 @@ def _extract_archive_files(
                 for info in infos:
                     if (info.external_attr >> 16) & 0o170000 not in {0, 0o100000, 0o040000}:
                         raise ValueError("配方压缩包不接受符号链接或特殊文件")
-                    rel = _normalize_archive_path(info.filename)
-                    if not rel or info.is_dir() or _is_archive_junk(rel):
+                    rel = _validated_archive_rel(info.filename)
+                    if not rel or info.is_dir():
                         continue
                     if rel in entries:
                         raise ValueError(f"配方压缩包存在重复路径: {rel}")
@@ -1071,8 +1195,8 @@ def _extract_archive_files(
                         continue
                     if member.issym() or member.islnk() or member.isdev() or member.isfifo():
                         raise ValueError("配方压缩包不接受符号链接或特殊文件")
-                    rel = _normalize_archive_path(member.name)
-                    if not rel or member.isdir() or not member.isfile() or _is_archive_junk(rel):
+                    rel = _validated_archive_rel(member.name)
+                    if not rel or member.isdir() or not member.isfile():
                         continue
                     if member.size > MAX_RECIPE_FILE_BYTES:
                         raise ValueError(f"配方文件过大: {rel}")
@@ -1163,6 +1287,7 @@ def _parse_and_validate_recipe_files(plugin, files: dict[str, bytes], *, fallbac
         "title",
         "model",
         "model_name",
+        "model_list",
         "fallback_models",
         "task",
         "max_tokens",
@@ -1188,6 +1313,15 @@ def _parse_and_validate_recipe_files(plugin, files: dict[str, bytes], *, fallbac
     }
     if set(raw_cfg) - allowed_fields:
         raise ValueError("配方 profile.toml 包含未声明字段")
+    if "model_list" in raw_cfg:
+        ml = raw_cfg["model_list"]
+        if (
+            not isinstance(ml, list)
+            or len(ml) > 16
+            or not all(isinstance(m, str) and 1 <= len(m.strip()) <= 256 for m in ml)
+        ):
+            raise ValueError("配方 model_list 字段格式无效")
+        raw_cfg["model_list"] = [m.strip() for m in ml]
     fish_seed = raw_cfg.get("fish_seed", "")
     if fish_seed != "" and (
         not isinstance(fish_seed, str) or not FISH_SEED_RE.fullmatch(fish_seed)
@@ -1229,7 +1363,9 @@ def _parse_and_validate_recipe_files(plugin, files: dict[str, bytes], *, fallbac
     bundled_skills: dict[str, dict] = {}
     for rel, data in sorted(files.items()):
         parts = rel.split("/")
-        if len(parts) >= 4 and parts[0] == "preset" and parts[1] == "skills":
+        if len(parts) >= 2 and parts[0] == "preset" and parts[1] == "skills":
+            if len(parts) < 4:
+                raise ValueError(f"配方内技能目录结构无效: {rel}")
             sk_id = parts[2]
             if not SKILL_ID_RE.fullmatch(sk_id):
                 raise ValueError(f"配方内技能编号无效: {sk_id}")
@@ -1661,12 +1797,27 @@ def _install_bundled_skills(
     return installed
 
 
+def _is_routine_chat_enabled(plugin, chat_id: str, platform: str = "qq") -> bool:
+    target = str(chat_id or "").strip()
+    if not target:
+        return False
+    plat = str(platform or "").strip() or "qq"
+    if hasattr(plugin, "enabled_for") and plugin.enabled_for(target, plat):
+        return True
+    if hasattr(plugin, "resolve_known_session_id"):
+        known = plugin.resolve_known_session_id(target)
+        if known and hasattr(plugin, "enabled_for") and plugin.enabled_for(known, plat):
+            return True
+    return target in getattr(getattr(plugin, "settings", None), "enabled_chats", ())
+
+
 def _prevalidate_routine_mount(
     plugin,
     *,
     routines: list[dict],
     selected_ids: list[str],
     chat_id: str,
+    platform: str = "qq",
     final_enabled: bool,
     final_bound: bool,
 ) -> None:
@@ -1677,7 +1828,7 @@ def _prevalidate_routine_mount(
         return
     if plugin.intents is None:
         raise ValueError("意图调度器尚未就绪，无法挂载例行任务")
-    if chat_id not in plugin.settings.enabled_chats:
+    if not _is_routine_chat_enabled(plugin, chat_id, platform):
         raise ValueError("挂载例行任务的目标会话尚未在 enabled_chats 中启用")
     if not final_enabled or not final_bound:
         raise ValueError(
@@ -1696,7 +1847,7 @@ def _mount_selected_routines(
 ) -> list[dict]:
     if not selected_ids or not chat_id or plugin.intents is None:
         return []
-    if chat_id not in plugin.settings.enabled_chats:
+    if not _is_routine_chat_enabled(plugin, chat_id, platform):
         raise ValueError("挂载例行任务的目标会话尚未在 enabled_chats 中启用")
     profile = plugin.profiles.get(profile_id)
     if not profile.enabled or not profile.bound:
@@ -1747,7 +1898,7 @@ def import_recipe_archive(
     target: str,
     mode: str = "copy",
     install_skills: bool = True,
-    overwrite_skills: bool = False,
+    overwrite_skills: bool | None = None,
     mount_routines: list[str] | None = None,
     routine_chat_id: str = "",
     routine_platform: str = "qq",
@@ -1756,6 +1907,9 @@ def import_recipe_archive(
         raise ValueError("目标角色编号无效（仅允许字母开头，含字母、数字、下划线或连字符）")
     if mode not in {"copy", "update"}:
         raise ValueError("导入模式仅支持 copy（另存副本）或 update（平滑升级）")
+    effective_overwrite_skills = (
+        (mode == "update") if overwrite_skills is None else bool(overwrite_skills)
+    )
 
     files = _extract_archive_files(raw_bytes)
     parsed = _parse_and_validate_recipe_files(plugin, files, fallback_id=target)
@@ -1793,6 +1947,7 @@ def import_recipe_archive(
             routines=parsed["routines"],
             selected_ids=list(mount_routines or []),
             chat_id=str(routine_chat_id or "").strip(),
+            platform=routine_platform,
             final_enabled=copy_cfg.get("enabled", True) is not False,
             final_bound=bool(copy_cfg["bound"]),
         )
@@ -1823,7 +1978,7 @@ def import_recipe_archive(
 
         installed_skills = (
             _install_bundled_skills(
-                plugin, parsed["bundled_skills"], overwrite=overwrite_skills
+                plugin, parsed["bundled_skills"], overwrite=effective_overwrite_skills
             )
             if install_skills
             else []
@@ -1885,6 +2040,7 @@ def import_recipe_archive(
         routines=parsed["routines"],
         selected_ids=list(mount_routines or []),
         chat_id=str(routine_chat_id or "").strip(),
+        platform=routine_platform,
         final_enabled=bool(merged_cfg["enabled"]),
         final_bound=bool(merged_cfg["bound"]),
     )
@@ -1958,7 +2114,7 @@ def import_recipe_archive(
     updated_profile = plugin.profiles.get(target)
     installed_skills = (
         _install_bundled_skills(
-            plugin, parsed["bundled_skills"], overwrite=overwrite_skills or mode == "update"
+            plugin, parsed["bundled_skills"], overwrite=effective_overwrite_skills
         )
         if install_skills
         else []

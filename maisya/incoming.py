@@ -43,10 +43,36 @@ class Incoming:
         self.validate(config)
         return config
 
+    def _assert_thread_binding(self, row: dict, *, chat: str, chat_token: str) -> None:
+        row_chat = str(row.get("chat_id") or "")
+        row_aliases = (
+            self.plugin.chat_aliases_for(row_chat, row.get("platform", ""))
+            if row_chat
+            else set()
+        )
+        if (
+            (row_chat != chat and chat not in row_aliases and chat_token not in row_aliases)
+            or row.get("state") == "closed"
+            or not self.plugin._activity_permitted({**row, "grant": {}})
+        ):
+            raise ValueError("外部续接只允许无需真实用户授权的未关闭原目标线程")
+
+    async def _ensure_proactive_quota(self, intent_target: str) -> None:
+        quota_fn = self.plugin.intents.proactive_quota_available
+        params = inspect.signature(quota_fn).parameters
+        if "target" in params:
+            quota_ok = await completed_thread(quota_fn, intent_target)
+        else:
+            quota_ok = await completed_thread(quota_fn)
+        if not quota_ok:
+            raise ValueError("普通惦记已达到每日上限")
+
     def validate(self, config, *, strict_enabled=False):
         if not isinstance(config, dict) or len(config) > 16:
             raise ValueError("最多登记 16 个事件通道")
         for name, channel in config.items():
+            if not isinstance(name, str):
+                raise ValueError("事件通道名称必须为字符串")
             self.plugin.vault._validate_handle(name)
             if not isinstance(channel, dict) or set(channel) - {
                 "target",
@@ -58,15 +84,31 @@ class Incoming:
                 "enabled",
             }:
                 raise ValueError("事件通道含未知字段")
-            if not _valid_webhook_target(channel.get("target", "")) or channel.get(
-                "kind"
-            ) not in {"proactive", "silent"}:
+            target = channel.get("target", "")
+            secret_handle = channel.get("secret_handle", "")
+            if (
+                not isinstance(target, str)
+                or not _valid_webhook_target(target)
+                or channel.get("kind") not in {"proactive", "silent"}
+            ):
                 raise ValueError("事件通道需要固定目标（如 qq:group:12345678）与 proactive/silent 类型")
-            self.plugin.vault._validate_handle(channel.get("secret_handle", ""))
-            has_profile = bool(channel.get("profile"))
-            has_thread = bool(channel.get("thread_id"))
+            if not isinstance(secret_handle, str):
+                raise ValueError("凭据句柄必须为字符串")
+            self.plugin.vault._validate_handle(secret_handle)
+            raw_profile = channel.get("profile")
+            raw_thread = channel.get("thread_id")
+            if raw_profile is not None and not isinstance(raw_profile, str):
+                raise ValueError("事件通道角色编号必须为字符串")
+            if raw_thread is not None and not isinstance(raw_thread, str):
+                raise ValueError("事件通道线程编号必须为字符串")
+            profile_id = (raw_profile or "").strip()
+            thread_id = (raw_thread or "").strip()
+            has_profile = bool(profile_id)
+            has_thread = bool(thread_id)
             if has_profile and has_thread:
                 raise ValueError("事件通道不能同时指定 profile 和 thread_id")
+            if not has_profile and not has_thread and channel.get("kind") == "silent":
+                raise ValueError("silent 事件通道必须绑定 profile 或 thread_id")
             if channel.get("workspace"):
                 if not has_profile:
                     raise ValueError("事件通道指定 workspace 时必须同时指定 profile")
@@ -75,7 +117,7 @@ class Incoming:
                 ):
                     raise ValueError("事件通道工作区编号格式无效")
             if has_profile:
-                ability = self.plugin.profiles.get(channel["profile"])
+                ability = self.plugin.profiles.get(profile_id)
                 if strict_enabled and not ability.enabled:
                     raise ValueError("事件通道绑定的角色已停用")
                 allowed = (
@@ -83,25 +125,17 @@ class Incoming:
                 )
                 if not allowed:
                     raise ValueError("事件通道绑定的角色必须允许自主使用")
-            elif channel.get("kind") == "silent":
-                chat_token = _extract_target_chat(channel["target"])
+            elif has_thread:
+                chat_token = _extract_target_chat(target)
                 chat = (
                     "self"
                     if chat_token == "self"
                     else (self.plugin.resolve_known_session_id(chat_token) or chat_token)
                 )
                 row = self.plugin.threads.get(
-                    channel.get("thread_id", ""), chat, allow_self=chat == "self"
+                    thread_id, chat, allow_self=chat == "self"
                 )
-                row_aliases = (
-                    self.plugin.chat_aliases_for(row["chat_id"], row.get("platform", ""))
-                    if row.get("chat_id")
-                    else set()
-                )
-                if (
-                    row["chat_id"] != chat and chat_token not in row_aliases
-                ) or not self.plugin._activity_permitted({**row, "grant": {}}):
-                    raise ValueError("外部续接只允许无需真实用户授权的原目标线程")
+                self._assert_thread_binding(row, chat=chat, chat_token=chat_token)
 
     async def receive(self, channel, event_id, timestamp, payload, signature):
         if not isinstance(event_id, str) or not re.fullmatch(
@@ -141,6 +175,8 @@ class Incoming:
         event = json.loads(payload)
         if not isinstance(event, dict) or set(event) - {"reason", "data"}:
             raise ValueError("事件内容仅接受 reason 和 data")
+        if "reason" in event and not isinstance(event["reason"], str):
+            raise ValueError("事件 reason 必须为字符串")
         digest = hashlib.sha256(
             json.dumps(
                 event, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -177,6 +213,12 @@ class Incoming:
                         else {}
                     ),
                 }
+            redacted_event = self.plugin.vault.redact(event)
+            reason_text = (
+                self.plugin.vault.redact(event.get("reason", ""))
+                or f"处理外部事件 {channel}"
+            )
+            intent_reason = reason_text.strip()[:500] or f"处理外部事件 {channel}"
             if binding.get("profile"):
                 ability = await completed_thread(
                     self.plugin.profiles.get, binding["profile"]
@@ -184,11 +226,6 @@ class Incoming:
                 self.plugin.runtime.available(ability)
                 if not ability.autonomous:
                     raise PermissionError("事件通道绑定的角色不允许自主执行")
-                redacted_event = self.plugin.vault.redact(event)
-                reason_text = (
-                    self.plugin.vault.redact(event.get("reason", ""))
-                    or f"处理外部事件 {channel}"
-                )
                 prompt = (
                     reason_text
                     + "\n<external_event>"
@@ -196,16 +233,8 @@ class Incoming:
                     + "</external_event>"
                 )
                 self.plugin.engine._validate_input(prompt, 0)
-                intent_reason = reason_text.strip()[:500] or f"处理外部事件 {channel}"
                 if binding["kind"] == "proactive":
-                    quota_fn = self.plugin.intents.proactive_quota_available
-                    params = inspect.signature(quota_fn).parameters
-                    if "target" in params:
-                        quota_ok = await completed_thread(quota_fn, intent_target)
-                    else:
-                        quota_ok = await completed_thread(quota_fn)
-                    if not quota_ok:
-                        raise ValueError("普通惦记已达到每日上限")
+                    await self._ensure_proactive_quota(intent_target)
                 run_chat = "self" if target_chat == "self" else target_chat
                 started = await self.plugin.engine.start(
                     ability,
@@ -255,15 +284,30 @@ class Incoming:
                     "status": intent["status"],
                     "thread_id": started["thread_id"],
                 }
+            bound_thread = str(binding.get("thread_id") or "").strip()
+            if bound_thread:
+                row = await completed_thread(
+                    self.plugin.threads.get,
+                    bound_thread,
+                    target_chat,
+                    allow_self=target_chat == "self",
+                )
+                self._assert_thread_binding(
+                    row, chat=target_chat, chat_token=raw_target_chat
+                )
+            elif binding["kind"] == "silent":
+                raise ValueError("silent 事件通道缺少有效目标线程")
+            if binding["kind"] == "proactive":
+                await self._ensure_proactive_quota(intent_target)
             intent = await completed_thread(
                 self.plugin.intents.schedule,
                 kind=binding["kind"],
                 source="webhook",
                 target=intent_target,
                 due_at=self.plugin.intents.clock(),
-                reason=self.plugin.vault.redact(event.get("reason", "")),
-                thread_id=binding.get("thread_id", ""),
-                payload={"event": self.plugin.vault.redact(event), "platform": platform},
+                reason=intent_reason,
+                thread_id=bound_thread,
+                payload={"event": redacted_event, "platform": platform},
                 event_key=key,
                 event_digest=digest,
             )

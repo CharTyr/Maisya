@@ -2683,7 +2683,11 @@ class Management:
             target=str(options.get("target") or "").strip(),
             mode=str(options.get("mode") or "copy").strip(),
             install_skills=options.get("install_skills", True) is not False,
-            overwrite_skills=options.get("overwrite_skills", False) is True,
+            overwrite_skills=(
+                options.get("overwrite_skills")
+                if isinstance(options.get("overwrite_skills"), bool)
+                else None
+            ),
             mount_routines=options.get("mount_routines")
             if isinstance(options.get("mount_routines"), list)
             else [],
