@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import time
 import tomllib
 import uuid
@@ -360,8 +361,9 @@ class Management:
             if not isinstance(raw_slot, str):
                 raise ValueError("默认回落模型类别格式无效")
             slot = raw_slot.strip()
-            if not TASK_RE.fullmatch(slot) or self.plugin.vault.contains_secret(
-                slot.encode()
+            if slot and (
+                not TASK_RE.fullmatch(slot)
+                or self.plugin.vault.contains_secret(slot.encode())
             ):
                 raise ValueError("默认回落模型类别格式无效")
 
@@ -384,7 +386,9 @@ class Management:
         else:
             cfg["model_name"] = ""
             cfg["fallback_models"] = []
-        if slot is not None:
+        if slot == "":
+            cfg.pop("task", None)
+        elif slot is not None:
             cfg["task"] = slot
         rendered = serialize_profile_toml(cfg)
         saved = self.plugin.memory.write(
@@ -547,6 +551,7 @@ class Management:
         hid = str(raw_hid).strip() if raw_hid is not None else ""
 
         restore_version: int | None = None
+        reverted_tid: str | None = None
         if hid:
             ver_match = re.fullmatch(r"v?(\d+)", hid, re.IGNORECASE)
             if ver_match:
@@ -556,6 +561,12 @@ class Management:
                 if ver == current["version"]:
                     raise ValueError("当前已是该历史版本，请选择更早的版本")
                 restore_version = ver
+                if (
+                    len(history) >= 2
+                    and history[1]["version"] == ver
+                    and str(history[0].get("author") or "").startswith("thread:")
+                ):
+                    reverted_tid = str(history[0]["author"])[7:]
             else:
                 matched_idx = next(
                     (
@@ -567,16 +578,23 @@ class Management:
                 )
                 if matched_idx is None:
                     raise ValueError("未找到对应的学习笔记记录")
+                author = str(history[matched_idx].get("author") or "")
+                if author.startswith("thread:"):
+                    reverted_tid = author[7:]
                 if matched_idx + 1 < len(history):
                     restore_version = history[matched_idx + 1]["version"]
-                elif history[matched_idx]["author"].startswith("thread:"):
+                elif author.startswith("thread:"):
                     restore_version = 0
                 else:
                     raise ValueError("没有更早的笔记版本可撤回")
         elif len(history) >= 2:
             restore_version = history[1]["version"]
-        elif len(history) == 1 and history[0]["author"].startswith("thread:"):
+            top_author = str(history[0].get("author") or "")
+            if top_author.startswith("thread:"):
+                reverted_tid = top_author[7:]
+        elif len(history) == 1 and str(history[0].get("author") or "").startswith("thread:"):
             restore_version = 0
+            reverted_tid = str(history[0]["author"])[7:]
         else:
             raise ValueError("没有可撤回的笔记历史版本")
 
@@ -595,6 +613,12 @@ class Management:
                 target=profile_id,
                 expected_version=current["version"],
             )
+        if reverted_tid and getattr(self.plugin, "threads", None) is not None:
+            with self.plugin.threads.connect() as db, db:
+                db.execute(
+                    "UPDATE learning_receipts SET status = 'reverted' WHERE thread_id = ? AND status = 'applied'",
+                    (reverted_tid,),
+                )
         return {
             "profile_id": profile_id,
             "target": profile_id,
@@ -858,13 +882,168 @@ class Management:
                 intents.append(item)
             return {
                 "intents": intents,
-                "learning": [
-                    dict(row)
-                    for row in db.execute(
-                        "SELECT thread_id,revision,status FROM learning_receipts ORDER BY rowid DESC LIMIT 30"
-                    )
-                ],
+                "learning": self._learning_receipts(db),
             }
+
+    @staticmethod
+    def _compact_receipt_text(text: str, limit: int = 80) -> str:
+        """将换行与多余空白折叠为单行预览文本。"""
+        compact = " ".join(str(text or "").split())
+        if len(compact) <= limit:
+            return compact
+        return compact[: max(1, limit - 1)].rstrip() + "…"
+
+    def _safe_redact(self, text: str) -> str:
+        """经由凭据保险箱脱敏展示文本。"""
+        if not text:
+            return ""
+        vault = getattr(self.plugin, "vault", None)
+        return vault.redact(text) if vault is not None else text
+
+    def _note_diff_excerpt(
+        self,
+        profile: str,
+        matched: dict | None,
+        prev: dict | None,
+        fallback_summary: str,
+    ) -> str:
+        """提炼该次学习修订新增的笔记要点，失败时回落线程摘要。"""
+        candidate = ""
+        if profile and matched is not None and getattr(self.plugin, "memory", None) is not None:
+            try:
+                cur_text = str(
+                    self.plugin.memory.read(
+                        "notes", target=profile, version=matched["version"]
+                    ).get("content")
+                    or ""
+                )
+                prev_lines: set[str] = set()
+                if prev is not None:
+                    prev_text = str(
+                        self.plugin.memory.read(
+                            "notes", target=profile, version=prev["version"]
+                        ).get("content")
+                        or ""
+                    )
+                    prev_lines = {ln.strip() for ln in prev_text.splitlines() if ln.strip()}
+                cur_lines = [ln.strip() for ln in cur_text.splitlines() if ln.strip()]
+                added = [ln for ln in cur_lines if ln not in prev_lines]
+                chosen = added[0] if added else (cur_lines[-1] if cur_lines else "")
+                candidate = chosen.lstrip("-*• ").strip()
+            except (ValueError, TypeError, KeyError, OSError, RuntimeError, sqlite3.Error):
+                candidate = ""
+        text = candidate or fallback_summary
+        return self._compact_receipt_text(self._safe_redact(text), limit=100)
+
+    def _learning_receipts(self, db) -> list[dict]:
+        """关联线程、消息与笔记版本，返回可展示且可撤回的学习回执。"""
+        rows = db.execute(
+            """
+            SELECT
+                lr.thread_id,
+                lr.revision,
+                lr.status,
+                COALESCE(at.profile, '') AS profile,
+                COALESCE(at.chat_id, '') AS chat_id,
+                COALESCE(at.summary, '') AS thread_summary,
+                COALESCE(at.updated, 0) AS updated,
+                COALESCE(
+                    (
+                        SELECT te.payload
+                        FROM thread_events te
+                        WHERE te.thread_id = lr.thread_id AND te.kind = 'input'
+                        ORDER BY te.seq ASC
+                        LIMIT 1
+                    ),
+                    ''
+                ) AS input_json
+            FROM learning_receipts lr
+            LEFT JOIN agent_threads at ON at.thread_id = lr.thread_id
+            ORDER BY lr.rowid DESC
+            LIMIT 30
+            """
+        ).fetchall()
+
+        history_cache: dict[str, list[dict]] = {}
+        title_cache: dict[str, str] = {}
+        memory = getattr(self.plugin, "memory", None)
+        profiles = getattr(self.plugin, "profiles", None)
+
+        items: list[dict] = []
+        for row in rows:
+            tid = str(row["thread_id"] or "")
+            status = str(row["status"] or "")
+            profile = str(row["profile"] or "")
+            chat_id = str(row["chat_id"] or "")
+            thread_summary = str(row["thread_summary"] or "").strip()
+
+            input_text = ""
+            raw_json = str(row["input_json"] or "").strip()
+            if raw_json:
+                try:
+                    parsed = json.loads(raw_json)
+                    if isinstance(parsed, dict):
+                        input_text = str(parsed.get("text") or "").strip()
+                except ValueError:
+                    input_text = ""
+
+            if profile and profile not in history_cache:
+                if memory is not None:
+                    try:
+                        history_cache[profile] = list(memory.history("notes", target=profile))
+                    except (ValueError, TypeError, KeyError, OSError, RuntimeError, sqlite3.Error):
+                        history_cache[profile] = []
+                else:
+                    history_cache[profile] = []
+                prof_title = profile
+                if profiles is not None:
+                    try:
+                        prof_title = profiles.get(profile).title or profile
+                    except (ValueError, KeyError):
+                        prof_title = profile
+                title_cache[profile] = prof_title
+
+            history = history_cache.get(profile, []) if profile else []
+            matched_idx = next(
+                (
+                    i
+                    for i, h in enumerate(history)
+                    if h.get("author") in {tid, f"thread:{tid}"}
+                ),
+                None,
+            )
+            matched = history[matched_idx] if matched_idx is not None else None
+            prev = (
+                history[matched_idx + 1]
+                if matched_idx is not None and matched_idx + 1 < len(history)
+                else None
+            )
+
+            summary = self._note_diff_excerpt(profile, matched, prev, thread_summary)
+            raw_topic = self._compact_receipt_text(self._safe_redact(input_text), limit=48)
+            prof_label = title_cache.get(profile, profile)
+            topic = raw_topic or summary or (f"{prof_label} 笔记修订" if prof_label else "自动笔记回执")
+
+            raw_at = (matched or {}).get("updated") or row["updated"] or 0
+            at = float(raw_at) if raw_at else 0.0
+            can_undo = bool(profile and status == "applied" and matched is not None)
+
+            items.append(
+                {
+                    "thread_id": tid,
+                    "revision": int(row["revision"] or 0),
+                    "status": status,
+                    "profile": profile,
+                    "chat_id": chat_id,
+                    "topic": topic,
+                    "summary": summary,
+                    "version": matched["version"] if matched is not None else None,
+                    "history_id": f"thread:{tid}" if can_undo else "",
+                    "at": at,
+                    "can_undo": can_undo,
+                }
+            )
+        return items
 
     def _transfer(self, options):
         self.transfers = {

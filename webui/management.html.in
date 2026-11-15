@@ -2142,6 +2142,55 @@ html.dark .out-ico--ws { color: #fde047; }
       if (!sig?.aborted) hostSay(text, isErr);
     };
 
+    const fmtReceiptTime = (raw) => {
+      if (!raw) return "";
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return String(raw);
+      const d = new Date(n * 1000);
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mi = String(d.getMinutes()).padStart(2, "0");
+      return `${mm}-${dd} ${hh}:${mi}`;
+    };
+
+    const renderIntentStatusCell = (item, statusTxt) => {
+      if (item.status !== "pending") return `<span class="mil-tag">${esc(statusTxt)}</span>`;
+      const cancelBtn = `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(item.intent_id)}"${item.protected ? ' aria-label="取消受保护的定时工作流"' : ""}>取消</button>`;
+      if (item.protected) return `<div class="mil-row" style="gap:6px"><span class="mil-tag">受保护</span>${cancelBtn}</div>`;
+      return cancelBtn;
+    };
+
+    const renderLearningCards = (rows, { resolveChat, statusLabels }) => {
+      const list = Array.isArray(rows) ? rows : [];
+      if (!list.length) return `<span class="mil-hint">暂无自动笔记回执</span>`;
+      return list.map((entry) => {
+        if (!entry || typeof entry !== "object") return `<div class="ms-receipt-card"><span>${esc(String(entry || ""))}</span></div>`;
+        const title = entry.topic || entry.title || entry.summary || entry.note || entry.content || entry.kind || "笔记回执";
+        const statusKey = String(entry.status || "");
+        const status = statusLabels[statusKey] || statusKey || "已记录";
+        const chatRaw = String(entry.chat_id || entry.target || "").replace(/^chat:/, "");
+        const chatTxt = chatRaw ? (resolveChat ? resolveChat(chatRaw) : chatRaw) : "";
+        const timeTxt = fmtReceiptTime(entry.at);
+        const verTxt = entry.version ? `v${entry.version}` : "";
+        const metaParts = [chatTxt, entry.profile || "", verTxt, timeTxt].filter(Boolean);
+        const histId = entry.history_id || (entry.thread_id ? `thread:${entry.thread_id}` : "");
+        const blockedStatus = ["reverted", "empty", "full", "rejected", "interrupted", "pending"].includes(statusKey);
+        const canUndo = Boolean(entry.profile && histId && entry.can_undo !== false && !blockedStatus);
+        const undoBtn = canUndo
+          ? `<button type="button" class="mil-key mil-key--sm" data-undo-learning="${esc(entry.profile)}" data-history-id="${esc(histId)}">撤回</button>`
+          : "";
+        const summaryHtml = entry.summary && entry.summary !== title
+          ? `<span class="ms-receipt-meta">${esc(String(entry.summary))}</span>`
+          : "";
+        return `<div class="ms-receipt-card">
+          <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><div class="mil-row" style="gap:6px"><span class="mil-tag">${esc(String(status))}</span>${undoBtn}</div></div>
+          ${summaryHtml}
+          ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
+        </div>`;
+      }).join("");
+    };
+
     const mStyle = () => document.documentElement.getAttribute("data-ui-style") || "millennium";
     const mIsMil = () => mStyle() === "millennium";
     const mIsDark = () => document.documentElement.classList.contains("dark");
@@ -2640,7 +2689,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $("#cfg-title").value = p.title || "";
       $("#cfg-env").value = p.environment === "sandbox" ? "sandbox" : "readonly";
       $("#cfg-access").value = ["everyone", "admins", "listed"].includes(p.access) ? p.access : "everyone";
-      $("#cfg-task").value = ["utils", "planner", "replyer", "fast_model", "vlm"].includes(p.task) ? p.task : (p.task === "" ? "" : "utils");
+      $("#cfg-task").value = ["utils", "planner", "replyer", "fast_model", "vlm"].includes(p.task) ? p.task : "";
       if ($("#cfg-model-name")) $("#cfg-model-name").value = "";
       $("#cfg-web").value = p.web_provider || "";
       $("#cfg-steps").value = p.max_steps ?? "";
@@ -2831,28 +2880,43 @@ html.dark .out-ico--ws { color: #fde047; }
     }
 
     let assetLoadSeq = 0;
+    let activeAssetKey = "";
     let hostModelsProbed = false;
     let discoveryLoaded = false;
     let discoveryPromise = null;
+    function setEditorBusy(busy) {
+      for (const sel of ["#content", "#save", "#cfg-task", "#cfg-model-picker", "#cfg-model-name", "#cfg-model-add", "#cfg-model-apply"]) {
+        const el = $(sel);
+        if (el) el.disabled = busy;
+      }
+      if (busy && $("#cfg-model-clear")) $("#cfg-model-clear").disabled = true;
+    }
     async function loadAsset(preserveDraft = false) {
       const seq = ++assetLoadSeq;
       renderDocModeUI();
-      if (viewMode === "skills-gallery" || viewMode === "discovery") return;
+      if (viewMode === "skills-gallery" || viewMode === "discovery") {
+        activeAssetKey = "";
+        return;
+      }
       const q = targetQuery();
       if (!q.target) {
+        activeAssetKey = "";
         $("#content").value = "";
-        $("#content").disabled = false;
-        $("#save").disabled = false;
+        setEditorBusy(false);
         $("#version").textContent = "未选择";
         return;
       }
+      const docName = $("#document")?.value || "";
+      activeAssetKey = `${viewMode}:${docName}:${q.target}`;
       const prevDraft = $("#content").value;
-      $("#content").disabled = true;
-      $("#save").disabled = true;
+      setEditorBusy(true);
       try {
         const r = await rpc("read", "asset", q);
         if (sig?.aborted || seq !== assetLoadSeq) return;
-        if (!r?.success) return say(r?.error || "读取资产失败", true);
+        if (!r?.success) {
+          activeAssetKey = "";
+          return say(r?.error || "读取资产失败", true);
+        }
         if ($("#feedback")?.classList.contains("mil-feedback--err")) say("");
         if (preserveDraft && prevDraft !== (r.content || "")) {
           $("#local-draft").value = prevDraft;
@@ -2876,8 +2940,8 @@ html.dark .out-ico--ws { color: #fde047; }
         if (!sig?.aborted && viewMode === "skill-editor" && $("#document").value === "skill") syncSkillVisualFromMarkdown();
       } finally {
         if (!sig?.aborted && seq === assetLoadSeq) {
-          $("#content").disabled = false;
-          $("#save").disabled = false;
+          setEditorBusy(false);
+          if ($("#cfg-model-clear")) $("#cfg-model-clear").disabled = getTomlModelChain().length === 0;
         }
       }
     }
@@ -3236,9 +3300,14 @@ html.dark .out-ico--ws { color: #fde047; }
       }
       const docTab = ev.target.closest("[data-doc-tab]");
       if (docTab) {
-        $("#document").value = docTab.dataset.docTab;
-        if (docTab.dataset.docTab !== "skill") viewMode = "roles";
+        const nextDoc = docTab.dataset.docTab;
+        const nextView = nextDoc !== "skill" ? "roles" : viewMode;
+        const nextKey = `${nextView}:${nextDoc}:${selectedProfile}`;
+        const unchanged = $("#document").value === nextDoc && viewMode === nextView && activeAssetKey === nextKey;
+        $("#document").value = nextDoc;
+        if (nextDoc !== "skill") viewMode = "roles";
         renderCatalog();
+        if (unchanged) return;
         say("");
         await loadAsset(false);
         return;
@@ -3351,7 +3420,7 @@ html.dark .out-ico--ws { color: #fde047; }
       $(`#${id}`).addEventListener("input", () => {
         setDirty(true);
         const val = $(`#${id}`).value.trim();
-        writeTomlKey(key, (val || key !== "web_provider") ? tomlStr(val) : null);
+        writeTomlKey(key, (val || (key !== "web_provider" && key !== "task")) ? tomlStr(val) : null);
         if (id === "cfg-task") renderModelChainEditor();
         if (id === "cfg-access") renderRoleScopeEditor();
       });
@@ -4301,7 +4370,8 @@ html.dark .out-ico--ws { color: #fde047; }
       }
       await loadCatalog();
       if (sig?.aborted) return;
-      await loadAsset(false);
+      const bootKey = `${viewMode}:${$("#document")?.value || ""}:${selectedProfile}`;
+      if (activeAssetKey !== bootKey) await loadAsset(false);
       if (sig?.aborted) return;
       discoveryPromise = refreshDiscovery().finally(() => {
         discoveryPromise = null;
@@ -5373,6 +5443,12 @@ html.dark .out-ico--ws { color: #fde047; }
       completed: "已完成",
       cancelled: "已取消",
       failed: "已结束",
+      applied: "已应用",
+      reverted: "已撤回",
+      empty: "无新增",
+      full: "已达上限",
+      rejected: "未通过",
+      interrupted: "已中断",
     };
 
     function applyOverviewData(r) {
@@ -5436,9 +5512,7 @@ html.dark .out-ico--ws { color: #fde047; }
         const kindTxt = i.kind_label || MEM_INTENT_KINDS[i.kind] || i.kind || "计划";
         const statusTxt = MEM_INTENT_STATES[i.status] || i.status || "等待中";
         const srcTxt = MEM_INTENT_KINDS[i.source] || i.source || "系统";
-        const ctlHtml = i.status === "pending"
-          ? (i.protected ? `<span class="mil-tag">受保护</span>` : `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>`)
-          : `<span class="mil-tag">${esc(statusTxt)}</span>`;
+        const ctlHtml = renderIntentStatusCell(i, statusTxt);
         return `<div class="exp-card">
           <div class="mil-row" style="justify-content:space-between">
             <span><span class="mil-tag">${esc(kindTxt)}</span> <strong>${esc(i.reason || "定时执行")}</strong></span>
@@ -5448,22 +5522,10 @@ html.dark .out-ico--ws { color: #fde047; }
         </div>`;
       }).join("") || `<p class="mil-hint">暂无意图记录</p>`;
 
-      const learnRows = Array.isArray(r.learning) ? r.learning : [];
-      $("#learning").innerHTML = learnRows.length
-        ? learnRows.map((entry) => {
-            if (!entry || typeof entry !== "object") return `<div class="ms-receipt-card"><span>${esc(String(entry || ""))}</span></div>`;
-            const title = entry.topic || entry.title || entry.summary || entry.note || entry.content || entry.kind || "笔记回执";
-            const status = MEM_INTENT_STATES[entry.status] || entry.status || "已记录";
-            const metaParts = [entry.chat_id ? targetName(entry.chat_id) : "", entry.profile || "", entry.at || ""].filter(Boolean);
-            const undoBtn = entry.profile
-              ? `<button type="button" class="mil-key mil-key--sm" data-undo-learning="${esc(entry.profile)}" data-history-id="${esc(entry.version ?? entry.thread_id ?? "")}">撤回</button>`
-              : "";
-            return `<div class="ms-receipt-card">
-              <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><div class="mil-row" style="gap:6px"><span class="mil-tag">${esc(String(status))}</span>${undoBtn}</div></div>
-              ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
-            </div>`;
-          }).join("")
-        : `<span class="mil-hint">暂无自动笔记回执</span>`;
+      $("#learning").innerHTML = renderLearningCards(r.learning, {
+        resolveChat: targetName,
+        statusLabels: MEM_INTENT_STATES,
+      });
     }
 
     async function loadIntents() {
@@ -5622,6 +5684,12 @@ html.dark .out-ico--ws { color: #fde047; }
       completed: "已完成",
       cancelled: "已取消",
       failed: "已结束",
+      applied: "已应用",
+      reverted: "已撤回",
+      empty: "无新增",
+      full: "已达上限",
+      rejected: "未通过",
+      interrupted: "已中断",
     };
     const PROACTIVE_OPTION_LABELS = {
       "": "跟随全局分寸",
@@ -6158,9 +6226,7 @@ html.dark .out-ico--ws { color: #fde047; }
           const kindTxt = i.kind_label || INTENT_KIND_LABELS[i.kind] || i.kind || "计划";
           const statusTxt = INTENT_STATUS_LABELS[i.status] || i.status || "等待中";
           const rawTarget = String(i.target || "").replace(/^chat:/, "");
-          const ctlHtml = i.status === "pending"
-            ? (i.protected ? `<span class="mil-tag">受保护</span>` : `<button type="button" class="mil-key mil-key--sm mil-key--danger" data-cancel-intent="${esc(i.intent_id)}">取消</button>`)
-            : `<span class="mil-tag">${esc(statusTxt)}</span>`;
+          const ctlHtml = renderIntentStatusCell(i, statusTxt);
           return `<div class="exp-card">
             <div class="mil-row" style="justify-content:space-between">
               <span><span class="mil-tag">${esc(kindTxt)}</span> <strong>${esc(i.reason || "定时执行")}</strong></span>
@@ -6170,23 +6236,10 @@ html.dark .out-ico--ws { color: #fde047; }
           </div>`;
         }).join("") || `<p class="mil-hint">暂无意图记录</p>`;
 
-        const learnRows = Array.isArray(ir.learning) ? ir.learning : [];
-        $("#learning").innerHTML = learnRows.length
-          ? learnRows.map((entry) => {
-              if (!entry || typeof entry !== "object") return `<div class="ms-receipt-card"><span>${esc(String(entry || ""))}</span></div>`;
-              const title = entry.topic || entry.title || entry.summary || entry.note || entry.content || entry.kind || "笔记回执";
-              const status = INTENT_STATUS_LABELS[entry.status] || entry.status || "已记录";
-              const chatRaw = String(entry.chat_id || entry.target || "").replace(/^chat:/, "");
-              const metaParts = [chatRaw ? friendlyStreamName(chatRaw) : "", entry.profile || "", entry.at || ""].filter(Boolean);
-              const undoBtn = entry.profile
-                ? `<button type="button" class="mil-key mil-key--sm" data-undo-learning="${esc(entry.profile)}" data-history-id="${esc(entry.version ?? entry.thread_id ?? "")}">撤回</button>`
-                : "";
-              return `<div class="ms-receipt-card">
-                <div class="ms-receipt-head"><strong>${esc(String(title))}</strong><div class="mil-row" style="gap:6px"><span class="mil-tag">${esc(String(status))}</span>${undoBtn}</div></div>
-                ${metaParts.length ? `<span class="ms-receipt-meta">${esc(metaParts.join(" · "))}</span>` : ""}
-              </div>`;
-            }).join("")
-          : `<span class="mil-hint">暂无自动笔记回执</span>`;
+        $("#learning").innerHTML = renderLearningCards(ir.learning, {
+          resolveChat: friendlyStreamName,
+          statusLabels: INTENT_STATUS_LABELS,
+        });
       }
     }
 
@@ -6496,6 +6549,10 @@ html.dark .out-ico--ws { color: #fde047; }
         const name = ($("#wh-b-name")?.value || "").trim();
         const rawTarget = ($("#wh-b-target")?.value || "").trim();
         if (!name || !rawTarget) return say("请先填写通道代号和目标会话", true);
+        const secret = ($("#wh-b-secret")?.value || "").trim();
+        if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(secret)) {
+          return say("请填写有效的签名凭据句柄（字母开头，仅含字母、数字、下划线或连字符，1-64 位）", true);
+        }
         let cfg = {};
         try {
           cfg = JSON.parse($("#webhook-config").value || "{}");
@@ -6504,16 +6561,17 @@ html.dark .out-ico--ws { color: #fde047; }
           return say(`下方 JSON 存在语法错误，请先修正：${e?.message || ""}`, true);
         }
         const normTarget = rawTarget === "self" ? "self" : (rawTarget.startsWith("chat:") ? rawTarget : `chat:${normalizeStreamInput(rawTarget)}`);
+        const kind = $("#wh-b-kind")?.value === "silent" ? "silent" : "proactive";
         const entry = {
           target: normTarget,
-          kind: $("#wh-b-kind")?.value || "proactive",
+          kind,
           profile: $("#wh-b-profile")?.value || "scout",
+          secret_handle: secret,
         };
-        const secret = ($("#wh-b-secret")?.value || "").trim();
-        if (secret) entry.secret_handle = secret;
         cfg[name] = entry;
         $("#webhook-config").value = JSON.stringify(cfg, null, 2);
         renderWebhookCards(cfg);
+        closeMobileSheet();
         say(`已将 ${name} 写入通道配置，点击「保存事件通道」生效。`);
       };
     }
