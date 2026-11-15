@@ -367,7 +367,7 @@ class MaisyaPlugin(MaiBotPlugin):
             ),
             admins=lambda: self.admins,
             enabled_chats=lambda: self.settings.enabled_chats,
-            longing_quiet_hours=getattr(self.settings, "longing_quiet_hours", 72),
+            longing_quiet_hours=getattr(self.settings, "longing_quiet_hours", 0),
             activity=self.messages.activity_for,
             platform_for=self.messages.platform_for,
             redact=self.vault.redact,
@@ -1178,6 +1178,27 @@ class MaisyaPlugin(MaiBotPlugin):
                 return format_stream_spec(plat, "group" if gid else "private", gid or uid)
         return ""
 
+    def _chat_arena(self, chat_id: str, platform: str = "") -> str:
+        raw = str(chat_id or "").strip()
+        if not raw:
+            return ""
+        parsed = parse_stream_spec(raw)
+        if parsed is not None:
+            return parsed[1]
+        if self.messages:
+            route = self.messages.route_for(raw)
+            if isinstance(route, dict) and route.get("chat_type") in {
+                "group",
+                "private",
+            }:
+                return str(route["chat_type"])
+        spec = self.canonical_stream_spec(raw, platform)
+        if spec:
+            parsed_spec = parse_stream_spec(spec)
+            if parsed_spec is not None:
+                return parsed_spec[1]
+        return ""
+
     def _enriched_session_entry(self, sid: str, streams: dict) -> dict:
         entry: dict = {"session_id": sid}
         s_meta = streams.get(sid) if isinstance(streams, dict) else None
@@ -1383,7 +1404,9 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.bridge.new_input(identity.session_id)
                 if self.intents and not identity.is_plugin_relayed:
                     await asyncio.to_thread(
-                        self.intents.note_received, identity.session_id
+                        self.intents.note_received,
+                        identity.session_id,
+                        engaged=not bool(identity.group_id),
                     )
             elif admin_bootstrap:
                 self._record_bootstrap_message(identity)
@@ -1765,6 +1788,31 @@ class MaisyaPlugin(MaiBotPlugin):
                     is False
                 ):
                     raise PermissionError("引用受限线程需要当前管理员授权")
+            caller_arena = await asyncio.to_thread(self._chat_arena, chat_id, platform)
+
+            async def _guard_private_from_thread(
+                dest_chat_id: str, dest_platform: str, prev_row
+            ) -> None:
+                dest_arena = await asyncio.to_thread(
+                    self._chat_arena, dest_chat_id, dest_platform
+                )
+                if dest_arena != "group" or not (
+                    not cross_chat
+                    or caller_arena == "group"
+                    or delivery_mode != "current"
+                ):
+                    return
+                if (
+                    prev_row.get("owner") == "chat"
+                    and await asyncio.to_thread(
+                        self._chat_arena,
+                        prev_row.get("chat_id") or "",
+                        prev_row.get("platform") or "",
+                    )
+                    == "private"
+                ):
+                    raise PermissionError("私聊线程结果默认不可直接注入群聊线程")
+
             def _effective_wait_for(target_profile: str) -> float | int:
                 if delivery_mode == "target":
                     return 0
@@ -1821,6 +1869,10 @@ class MaisyaPlugin(MaiBotPlugin):
                             allow_self=True,
                             allow_any_chat=is_admin_caller,
                         )
+                        if owner == "chat":
+                            await _guard_private_from_thread(
+                                effective_chat_id, effective_platform, row
+                            )
                         message += (
                             "\n<previous_result>"
                             + html.escape(
@@ -1954,16 +2006,45 @@ class MaisyaPlugin(MaiBotPlugin):
                             effective_admin and effective_chat_id == chat_id
                         ),
                     )
+                    if (
+                        self.intents
+                        and identity is not None
+                        and not identity.is_plugin_relayed
+                        and isinstance(result, dict)
+                        and result.get("sent") is True
+                        and caller_arena == "group"
+                    ):
+                        await asyncio.to_thread(
+                            self.intents.note_received, chat_id, engaged=True
+                        )
                 elif action == "stop":
                     if (
-                        identity
-                        and row["owner"] == "chat"
-                        and row["user_id"] != identity.user_id
+                        row["owner"] == "chat"
+                        and bool(row.get("user_id"))
                         and not is_admin_caller
+                        and (identity is None or row["user_id"] != identity.user_id)
                     ):
-                        raise PermissionError("停止线程需要发起人或管理员身份")
+                        raise PermissionError("停止该线程需要发起人或管理员身份")
                     result = await self.engine.stop(thread_id, chat_id=row_chat)
                 else:
+                    thread_arena = await asyncio.to_thread(
+                        self._chat_arena,
+                        row_chat,
+                        row.get("platform") or effective_platform,
+                    )
+                    if (
+                        row["owner"] == "chat"
+                        and bool(row.get("user_id"))
+                        and thread_arena == "group"
+                        and not is_admin_caller
+                        and (identity is None or row["user_id"] != identity.user_id)
+                    ):
+                        if steer:
+                            raise PermissionError("群聊中强制转向线程需要发起人或管理员身份")
+                        if not row.get("workspace_id"):
+                            raise PermissionError(
+                                "群聊个人委托线程仅限发起人或管理员继续补充或回答提问"
+                            )
                     self.runtime.available(self.profiles.get(row["profile"]))
                     if from_threads:
                         for previous in from_threads:
@@ -1974,6 +2055,12 @@ class MaisyaPlugin(MaiBotPlugin):
                                 allow_self=True,
                                 allow_any_chat=is_admin_caller,
                             )
+                            if row["owner"] == "chat":
+                                await _guard_private_from_thread(
+                                    row_chat,
+                                    row.get("platform") or effective_platform,
+                                    prev_row,
+                                )
                             message += (
                                 "\n<previous_result>"
                                 + html.escape(
@@ -2152,6 +2239,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.authorize_admin_source, source_msg_id, chat_id, platform
                 )
             )
+            caller_arena = await asyncio.to_thread(self._chat_arena, chat_id, platform)
             raw_target_chat = str(target_chat or "").strip()
             if raw_target_chat.lower() == "all":
                 if not is_admin_caller:
@@ -2197,6 +2285,16 @@ class MaisyaPlugin(MaiBotPlugin):
                     allow_self=True,
                     allow_any_chat=is_admin_caller,
                 )
+                if (
+                    caller_arena == "group"
+                    and raw_target_chat.lower() == "all"
+                    and row["owner"] == "chat"
+                    and await asyncio.to_thread(
+                        self._chat_arena, row["chat_id"], row.get("platform") or ""
+                    )
+                    == "private"
+                ):
+                    continue
                 read_chat = (
                     row["chat_id"]
                     if is_admin_caller and row["owner"] == "chat"
@@ -2224,6 +2322,79 @@ class MaisyaPlugin(MaiBotPlugin):
                         if spec:
                             enriched["stream_spec"] = spec
                     readable.append((enriched, row))
+            if (
+                caller_arena == "private"
+                and not raw_target_chat
+                and scope == "available"
+                and kind in {"threads", "all"}
+                and identity is not None
+                and not identity.is_plugin_relayed
+                and bool(identity.user_id)
+                and self.enabled_for(chat_id, platform)
+            ):
+                seen_thread_ids = {r["thread_id"] for _, r in readable}
+                caller_plat = str(identity.platform or platform).lower()
+                cand_entries = await asyncio.to_thread(
+                    self.threads.search,
+                    query,
+                    search_chat_id,
+                    scope="chat",
+                    limit=limit * 3,
+                    all_chats=True,
+                )
+                for cand_item in cand_entries:
+                    cid = cand_item["thread_id"]
+                    if cid in seen_thread_ids:
+                        continue
+                    try:
+                        cand_row = await asyncio.to_thread(
+                            self.threads.get,
+                            cid,
+                            cand_item.get("chat_id") or search_chat_id,
+                            allow_self=False,
+                            allow_any_chat=True,
+                        )
+                    except (LookupError, PermissionError):
+                        continue
+                    if cand_row is None:
+                        continue
+                    cand_chat = cand_row.get("chat_id") or ""
+                    cand_plat = str(cand_row.get("platform") or "").lower()
+                    if (
+                        cand_row.get("owner") != "chat"
+                        or cand_plat != caller_plat
+                        or cand_row.get("user_id") != identity.user_id
+                    ):
+                        continue
+                    if (
+                        await asyncio.to_thread(self._chat_arena, cand_chat, cand_plat)
+                        != "group"
+                        or not self.enabled_for(cand_chat, cand_plat)
+                    ):
+                        continue
+                    try:
+                        snap_prof = Profile(**cand_row["profile_snapshot"])
+                        cur_prof = self.profiles.get(cand_row["profile"])
+                    except (OSError, ValueError, FileNotFoundError):
+                        continue
+                    if not all(
+                        prof.access == "everyone"
+                        and not prof.secrets
+                        and not prof.template
+                        for prof in (snap_prof, cur_prof)
+                    ):
+                        continue
+                    enriched = dict(cand_item)
+                    if enriched.get("chat_id") and enriched.get("chat_id") != "self":
+                        spec = self.canonical_stream_spec(
+                            enriched["chat_id"],
+                            cand_row.get("platform") or search_platform,
+                        )
+                        if spec:
+                            enriched["stream_spec"] = spec
+                    readable.append((enriched, cand_row))
+                    seen_thread_ids.add(cid)
+            readable = readable[:limit]
             redacted_rows = self.vault.redact([entry for entry, _ in readable])
             for (_, row), entry in zip(readable, redacted_rows):
                 self.bridge.stage(
@@ -2244,6 +2415,20 @@ class MaisyaPlugin(MaiBotPlugin):
                 if kind in {"memory", "journal", "all"}
                 else []
             )
+            if caller_arena == "group" and raw_target_chat.lower() == "all":
+                filtered_memories = []
+                for item in memories:
+                    if (
+                        item.get("kind") == "memory"
+                        and item.get("chat_id")
+                        and await asyncio.to_thread(
+                            self._chat_arena, item["chat_id"], ""
+                        )
+                        == "private"
+                    ):
+                        continue
+                    filtered_memories.append(item)
+                memories = filtered_memories
             memories = [
                 {
                     **item,
@@ -3276,6 +3461,14 @@ class MaisyaPlugin(MaiBotPlugin):
             for item in output
         )
         had_turn_sources = bool(self._turn_sources.get(chat_id))
+        has_agent_call = any(
+            (item.get("tool_call") or {}).get("func_name") == "maisya_agent"
+            and not (
+                isinstance(item.get("tool_result"), dict)
+                and item["tool_result"].get("success") is False
+            )
+            for item in output
+        )
         if (
             has_wait_stop
             and not has_reply
@@ -3377,6 +3570,13 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             if can_plan:
                 await self.bridge.plan(chat_id, calls)
+        if (
+            self.intents
+            and had_turn_sources
+            and (has_reply or has_agent_call)
+            and await asyncio.to_thread(self._chat_arena, chat_id, platform) == "group"
+        ):
+            await asyncio.to_thread(self.intents.note_received, chat_id, engaged=True)
         return {"action": "continue"}
 
     @HookHandler(

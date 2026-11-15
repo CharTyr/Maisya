@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import re
+import sqlite3
 import time
 import uuid
 
@@ -204,13 +205,11 @@ class Intents:
             if kind == "proactive" and not bypass_limits:
                 limit = int(self.daily_proactive_limit)
                 start, end = self._day_bounds(now)
-                used = db.execute(
-                    "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
-                    "AND source IN ('afterglow','serendipity','longing','later') "
-                    "AND created>=? AND created<? AND status!='cancelled'",
-                    (start, end),
-                ).fetchone()["count"]
-                if limit <= 0 or used >= limit:
+                arena = self._target_arena(
+                    db, target, payload if isinstance(payload, dict) else None
+                )
+                counts = self._proactive_counts(db, start, end)
+                if limit <= 0 or counts[arena] >= limit:
                     raise ValueError("普通惦记已达到每日上限")
             db.execute(
                 "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL)",
@@ -307,7 +306,9 @@ class Intents:
         with self.store.connect() as db, db:
             db.execute("UPDATE intents SET status='pending' WHERE status='claimed'")
 
-    def note_received(self, chat_id):
+    def note_received(self, chat_id, *, engaged: bool = True):
+        if not engaged:
+            return
         with self.store.connect() as db, db:
             db.execute(
                 "INSERT INTO social_state (chat_id, locked) VALUES (?, 0) "
@@ -371,20 +372,67 @@ class Intents:
             raise ValueError("同一事件编号已绑定另一份内容")
         return self.get(old["intent_id"])
 
-    def proactive_quota_available(self, *, now=None) -> bool:
+    def _target_arena(self, db, target: str, payload: dict | None = None) -> str:
+        raw_target = str(target or "").strip()
+        chat_id = (
+            raw_target.split(":", 1)[1]
+            if raw_target.startswith("chat:")
+            else raw_target
+        )
+        parsed = parse_stream_spec(chat_id)
+        if parsed is not None:
+            return parsed[1]
+        if chat_id:
+            try:
+                route = db.execute(
+                    "SELECT chat_type FROM session_routes WHERE session_id=?",
+                    (chat_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                route = None
+            if route and route["chat_type"] in {"group", "private"}:
+                return str(route["chat_type"])
+        if isinstance(payload, dict) and payload.get("chat_type") in {
+            "group",
+            "private",
+        }:
+            return str(payload["chat_type"])
+        return "group"
+
+    def _proactive_counts(self, db, start: float, end: float) -> dict[str, int]:
+        rows = db.execute(
+            "SELECT target, payload FROM intents WHERE kind='proactive' "
+            "AND source IN ('afterglow','serendipity','longing','later') "
+            "AND created>=? AND created<? AND status NOT IN ('cancelled','failed')",
+            (start, end),
+        ).fetchall()
+        counts = {"group": 0, "private": 0}
+        for row in rows:
+            raw_payload = row["payload"]
+            try:
+                parsed_payload = json.loads(raw_payload) if raw_payload else None
+            except (TypeError, ValueError):
+                parsed_payload = None
+            arena = self._target_arena(
+                db,
+                row["target"],
+                parsed_payload if isinstance(parsed_payload, dict) else None,
+            )
+            counts[arena] = counts.get(arena, 0) + 1
+        return counts
+
+    def proactive_quota_available(self, target: str = "", *, now=None) -> bool:
         limit = int(self.daily_proactive_limit)
         if limit <= 0:
             return False
         now = self.clock() if now is None else now
         start, end = self._day_bounds(now)
         with self.store.connect() as db:
-            used = db.execute(
-                "SELECT COUNT(*) AS count FROM intents WHERE kind='proactive' "
-                "AND source IN ('afterglow','serendipity','longing','later') "
-                "AND created>=? AND created<? AND status!='cancelled'",
-                (start, end),
-            ).fetchone()["count"]
-        return used < limit
+            counts = self._proactive_counts(db, start, end)
+            if target:
+                arena = self._target_arena(db, target)
+                return counts[arena] < limit
+            return counts["group"] < limit or counts["private"] < limit
 
     def longing_ready(self, chat_id, *, now=None, cooldown=7 * 86400) -> bool:
         now = self.clock() if now is None else now
@@ -417,9 +465,21 @@ class Intents:
     def acquaintance_allowed(
         self, chat_id, *, admins=(), acquaintances=(), payload=None
     ) -> bool:
-        trusted = {
-            str(x).strip().lower() for x in (*admins, *acquaintances) if str(x).strip()
-        }
+        trusted: set[str] = set()
+        for raw in (*admins, *acquaintances):
+            text = str(raw or "").strip()
+            if ":" not in text:
+                continue
+            parsed = parse_stream_spec(text)
+            if parsed is not None:
+                plat_spec, kind_spec, tid_spec = parsed
+                if kind_spec == "private":
+                    trusted.add(f"{plat_spec}:{tid_spec}")
+                continue
+            p, u = text.split(":", 1)
+            p_norm, u_norm = p.strip().lower(), u.strip()
+            if p_norm and u_norm:
+                trusted.add(f"{p_norm}:{u_norm}")
         with self.store.connect() as db:
             route = db.execute(
                 "SELECT platform, chat_type, user_id, human_count "
@@ -444,7 +504,7 @@ class Intents:
         ).strip().lower()
         uid = str(
             (payload or {}).get("user_id") or (route["user_id"] if route else "")
-        ).strip().lower()
+        ).strip()
         return bool(plat and uid and f"{plat}:{uid}" in trusted)
 
     def mark_proactive(self, target):
