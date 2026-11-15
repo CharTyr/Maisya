@@ -37,7 +37,7 @@ jobs:
           "maibot-plugin-sdk>=2.8.1,<=2.21.0"
           pytest pytest-asyncio
           "cryptography>=46,<51" "jsonschema>=4.23,<5"
-          pydantic playwright
+          pydantic playwright pillow
       - name: Install Chromium for Playwright
         if: matrix.os == 'ubuntu-latest'
         run: python -m playwright install --with-deps chromium

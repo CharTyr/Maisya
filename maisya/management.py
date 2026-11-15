@@ -69,6 +69,58 @@ _IMAGE_MIME = {
 }
 
 
+_SLEEP_WINDOW_VALUE_RE = re.compile(
+    r"^(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?$"
+)
+
+
+def _normalize_sleep_window_setting(value) -> str:
+    """校验并规范设置页的免打扰时段，完整保留分钟精度与 00-24。"""
+    if not isinstance(value, str):
+        raise ValueError("sleep_window 必须是字符串（如 01-08、23:30-07:00 或 00-24）")
+    text = value.strip()
+    if not text:
+        return ""
+    match = _SLEEP_WINDOW_VALUE_RE.fullmatch(text)
+    if match is None:
+        raise ValueError(
+            "sleep_window 格式应为 HH-HH 或 HH:MM-HH:MM（如 01-08、23:30-07:00 或 00-24）"
+        )
+    sh, sm_raw, eh, em_raw = match.groups()
+    start_h = int(sh)
+    start_m = int(sm_raw or 0)
+    end_h = int(eh)
+    end_m = int(em_raw or 0)
+    if (
+        not (0 <= start_h <= 24 and 0 <= end_h <= 24)
+        or not (0 <= start_m <= 59 and 0 <= end_m <= 59)
+        or (start_h == 24 and start_m != 0)
+        or (end_h == 24 and end_m != 0)
+    ):
+        raise ValueError("sleep_window 小时范围为 0-24（24 时仅限 24 或 24:00），分钟为 00-59")
+    if sm_raw is not None or em_raw is not None:
+        return f"{start_h:02d}:{start_m:02d}-{end_h:02d}:{end_m:02d}"
+    return f"{start_h:02d}-{end_h:02d}"
+
+
+def _validate_tz_offset_minutes_setting(value) -> int:
+    """校验时区偏移（分钟），拒绝布尔与浮点并约束在 -720..840。"""
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError("tz_offset_minutes 必须是 -720 到 840 之间的整数分钟偏移")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not re.fullmatch(r"[+-]?\d+", stripped):
+            raise ValueError("tz_offset_minutes 必须是 -720 到 840 之间的整数分钟偏移")
+        parsed = int(stripped)
+    elif isinstance(value, int):
+        parsed = value
+    else:
+        raise ValueError("tz_offset_minutes 必须是 -720 到 840 之间的整数分钟偏移")
+    if not -720 <= parsed <= 840:
+        raise ValueError("tz_offset_minutes 必须在 -720 到 840 分钟之间")
+    return parsed
+
+
 def _media_kind(name: str) -> tuple[str, str]:
     suffix = Path(name).suffix.lower()
     if suffix in _IMAGE_MIME:
@@ -2303,6 +2355,18 @@ class Management:
                             pass
                         normalized_levels[key] = v
                     raw_settings["chat_proactive_levels"] = normalized_levels
+                if raw_settings.get("tz_offset_minutes") is None:
+                    raw_settings["tz_offset_minutes"] = plugin.settings.tz_offset_minutes
+                else:
+                    raw_settings["tz_offset_minutes"] = _validate_tz_offset_minutes_setting(
+                        raw_settings["tz_offset_minutes"]
+                    )
+                if raw_settings.get("sleep_window") is None:
+                    raw_settings["sleep_window"] = plugin.settings.sleep_window
+                else:
+                    raw_settings["sleep_window"] = _normalize_sleep_window_setting(
+                        raw_settings["sleep_window"]
+                    )
             await self._persist_settings(raw_settings)
             result = self._settings()
         elif action == "ui_style":
@@ -2414,7 +2478,10 @@ class Management:
                 updated = re.sub(r"(?m)^enabled\s*=.*$", replacement, text, count=1)
             else:
                 updated = (text.rstrip("\n") + "\n" + replacement + "\n").lstrip("\n")
-            expected = options.get("expected_version") or current["version"]
+            raw_expected = options.get("expected_version")
+            if raw_expected is not None and type(raw_expected) is not int:
+                raise ValueError("角色配置版本格式无效")
+            expected = current["version"] if raw_expected is None else raw_expected
             saved = await completed_thread(
                 plugin.memory.write,
                 "profile",
