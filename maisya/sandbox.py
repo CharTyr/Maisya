@@ -243,6 +243,9 @@ class Sandbox:
         self.table = "ms_" + self.instance
         self.networks = {}
         self.containers = {}
+        self._network_lock = asyncio.Lock()
+        self._active_networks = {}
+        self._container_networks = {}
         self.ready = False
         self.closing = False
         self.instance_lock = None
@@ -444,92 +447,130 @@ class Sandbox:
         if path is not None and shutil.disk_usage(Path(path).parent).free < 2 * 1024**3:
             raise RuntimeError("工作区盘剩余空间不足 2 GiB")
 
-    async def _network(self, mode, targets=()):
+    async def _network(self, mode, targets=(), hold=False):
         if mode == "none":
             return "none"
+        targets = () if targets is None else targets
         key = json.dumps([mode, targets], sort_keys=True)
-        if key in self.networks:
-            expected = self.networks[key]
-            await self._check_network(expected)
-            return expected["name"]
-        suffix = len(self.networks)
-        if suffix >= 8:
-            raise RuntimeError("本次运行的网络策略过多")
-        name = self.network + "-" + str(suffix)
-        bridge = "br-ms-" + self.instance[:6] + str(suffix)
-        table = self.table + "_" + str(suffix)
-        base = ipaddress.ip_network(self.settings.subnet)
-        subnet = (
-            str(list(base.subnets(new_prefix=28))[suffix])
-            if base.prefixlen < 28
-            else str(base)
-        )
-        routes = await self.runner(["ip", "-j", "route", "show", "table", "all"])
-        if routes.code:
-            raise RuntimeError("无法核实沙箱子网是否冲突")
-        candidate = ipaddress.ip_network(subnet)
-        for route in json.loads(routes.output):
-            destination = route.get("dst", "default")
-            if destination != "default" and candidate.overlaps(
-                ipaddress.ip_network(destination, strict=False)
-            ):
-                raise RuntimeError("沙箱子网与现有路由冲突，请配置独立网段")
-        addresses = json.loads(
-            (await self.runner(["ip", "-j", "address", "show"])).output
-        )
-        host_addresses = list(self.settings.host_addresses) + [
-            item["local"]
-            for interface in addresses
-            for item in interface.get("addr_info", [])
-        ]
-        policy = NetworkPolicy(
-            mode, host_addresses=host_addresses, dns=self.settings.dns, targets=targets
-        )
-        rules = policy.nft_rules(table, bridge, subnet)
-        entry = {
-            "name": name,
-            "bridge": bridge,
-            "table": table,
-            "subnet": subnet,
-            "rules": rules,
-        }
-        self.networks[key] = entry
-        await completed_thread(
-            self._resource, "network", name, {**entry, "socket": self.settings.socket}
-        )
-        try:
-            result = await self.runner(["nft", "-f", "-"], stdin=rules.encode())
-            if result.code:
-                raise RuntimeError("无法建立出站防火墙")
-            await self._legacy_prepare(entry)
+        async with self._network_lock:
+            if key in self.networks:
+                expected = self.networks.pop(key)
+                self.networks[key] = expected
+                await self._check_network(expected)
+                if hold:
+                    name = expected["name"]
+                    self._active_networks[name] = self._active_networks.get(name, 0) + 1
+                return expected["name"]
+            if len(self.networks) >= 8:
+                in_use_names = set(self._container_networks.values())
+                evict_key = None
+                evict_entry = None
+                for cand_key, cand_entry in self.networks.items():
+                    cname = cand_entry["name"]
+                    if (
+                        self._active_networks.get(cname, 0) == 0
+                        and cname not in in_use_names
+                    ):
+                        evict_key = cand_key
+                        evict_entry = cand_entry
+                        break
+                if evict_entry is None:
+                    raise RuntimeError("本次运行的网络策略过多")
+                await self._remove_network(evict_entry)
+                self.networks.pop(evict_key, None)
+            used_slots = {
+                item["slot"]
+                for item in self.networks.values()
+                if isinstance(item.get("slot"), int)
+            }
+            suffix = next(
+                (i for i in range(8) if i not in used_slots),
+                len(self.networks),
+            )
+            name = self.network + "-" + str(suffix)
+            bridge = "br-ms-" + self.instance[:6] + str(suffix)
+            table = self.table + "_" + str(suffix)
+            base = ipaddress.ip_network(self.settings.subnet)
+            subnet = (
+                str(list(base.subnets(new_prefix=28))[suffix])
+                if base.prefixlen < 28
+                else str(base)
+            )
+            routes = await self.runner(["ip", "-j", "route", "show", "table", "all"])
+            if routes.code:
+                raise RuntimeError("无法核实沙箱子网是否冲突")
+            candidate = ipaddress.ip_network(subnet)
+            for route in json.loads(routes.output):
+                destination = route.get("dst", "default")
+                if destination != "default" and candidate.overlaps(
+                    ipaddress.ip_network(destination, strict=False)
+                ):
+                    raise RuntimeError("沙箱子网与现有路由冲突，请配置独立网段")
+            addresses = json.loads(
+                (await self.runner(["ip", "-j", "address", "show"])).output
+            )
+            host_addresses = list(self.settings.host_addresses) + [
+                item["local"]
+                for interface in addresses
+                for item in interface.get("addr_info", [])
+            ]
+            policy = NetworkPolicy(
+                mode,
+                host_addresses=host_addresses,
+                dns=self.settings.dns,
+                targets=targets,
+            )
+            rules = policy.nft_rules(table, bridge, subnet)
+            entry = {
+                "name": name,
+                "bridge": bridge,
+                "table": table,
+                "subnet": subnet,
+                "rules": rules,
+                "slot": suffix,
+            }
+            self.networks[key] = entry
             await completed_thread(
                 self._resource,
                 "network",
                 name,
                 {**entry, "socket": self.settings.socket},
             )
-            await self.docker(
-                "network",
-                "create",
-                "--driver",
-                "bridge",
-                "--ipv6=false",
-                "--subnet",
-                subnet,
-                "--opt",
-                "com.docker.network.bridge.name=" + bridge,
-                "--opt",
-                "com.docker.network.bridge.enable_icc=false",
-                "--label",
-                "maisya.instance=" + self.instance,
-                name,
-            )
-            await self._check_network(entry)
-        except BaseException:
-            await self._remove_network(entry)
-            self.networks.pop(key, None)
-            raise
-        return name
+            try:
+                result = await self.runner(["nft", "-f", "-"], stdin=rules.encode())
+                if result.code:
+                    raise RuntimeError("无法建立出站防火墙")
+                await self._legacy_prepare(entry)
+                await completed_thread(
+                    self._resource,
+                    "network",
+                    name,
+                    {**entry, "socket": self.settings.socket},
+                )
+                await self.docker(
+                    "network",
+                    "create",
+                    "--driver",
+                    "bridge",
+                    "--ipv6=false",
+                    "--subnet",
+                    subnet,
+                    "--opt",
+                    "com.docker.network.bridge.name=" + bridge,
+                    "--opt",
+                    "com.docker.network.bridge.enable_icc=false",
+                    "--label",
+                    "maisya.instance=" + self.instance,
+                    name,
+                )
+                await self._check_network(entry)
+            except BaseException:
+                await self._remove_network(entry)
+                self.networks.pop(key, None)
+                raise
+            if hold:
+                self._active_networks[name] = self._active_networks.get(name, 0) + 1
+            return name
 
     async def _check_network(self, entry):
         observed = {}
@@ -569,7 +610,9 @@ class Sandbox:
             == 0
             else "FORWARD"
         )
-        chain = "MS" + self.instance + str(len(self.networks) - 1)
+        slot = entry.get("slot")
+        chain_suffix = str(slot) if isinstance(slot, int) else str(max(0, len(self.networks) - 1))
+        chain = "MS" + self.instance + chain_suffix
         entry["legacy"] = {"hook": hook, "chain": chain}
         await completed_thread(
             self._resource,
@@ -637,7 +680,7 @@ class Sandbox:
             ).fetchone()
             if status:
                 db.execute(
-                    "INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id,revision,call_id) DO UPDATE SET status=excluded.status,result=excluded.result",
+                    "INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id,revision,call_id) DO UPDATE SET container=CASE WHEN excluded.container!='' THEN excluded.container ELSE executions.container END, status=excluded.status, result=excluded.result",
                     (
                         *key,
                         container,
@@ -646,6 +689,40 @@ class Sandbox:
                     ),
                 )
             return dict(old) if old else None
+
+    @staticmethod
+    def _write_resolv_file(path: Path, dns_servers) -> None:
+        path.write_text(
+            "".join(f"nameserver {resolver}\n" for resolver in dns_servers),
+            encoding="utf-8",
+        )
+        safe_chmod(path, 0o644)
+
+    @staticmethod
+    def _normalize_host_mappings(host_mappings, targets) -> list[tuple[str, str]]:
+        if not host_mappings:
+            return []
+        if not isinstance(host_mappings, dict):
+            raise ValueError("域名映射配置无效")
+        allowed_ips = {
+            str(ipaddress.ip_address(item[0]))
+            for item in (targets or ())
+            if isinstance(item, (tuple, list)) and len(item) >= 1
+        }
+        normalized: list[tuple[str, str]] = []
+        for host, ip_raw in host_mappings.items():
+            if (
+                not isinstance(host, str)
+                or not isinstance(ip_raw, str)
+                or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host)
+                or ".." in host
+            ):
+                raise ValueError("受限域名映射的主机名无效")
+            addr = str(ipaddress.ip_address(ip_raw.strip()))
+            if allowed_ips and addr not in allowed_ips:
+                raise ValueError("受限域名映射的 IP 不在目标放行清单中")
+            normalized.append((host.lower(), addr))
+        return normalized
 
     def _own(self, work):
         for directory, _children, files in os.walk(work.path):
@@ -665,12 +742,17 @@ class Sandbox:
         targets=(),
         secrets=None,
         entrypoint=None,
+        step_index=None,
+        host_mappings=None,
     ):
         if not self.ready or self.closing:
             raise RuntimeError(self.error or "沙箱正在关闭")
         if not isinstance(command, str) or not command.strip() or len(command) > 16000:
             raise ValueError("脚本命令无效")
-        key = row["thread_id"], row["revision"], call_id
+        receipt_call_id = (
+            f"step:{int(step_index)}:{call_id}" if step_index is not None else call_id
+        )
+        key = row["thread_id"], row["revision"], receipt_call_id
         async with self.slot:
             if not self.ready or self.closing:
                 raise RuntimeError("执行器已停止")
@@ -686,112 +768,146 @@ class Sandbox:
                 raise PermissionError("线程已停止或本次受限执行授权已失效")
             old = await asyncio.to_thread(self._receipt, key)
             if old:
-                return {
-                    "status": old["status"],
-                    **json.loads(old["result"]),
-                    "repeated": True,
-                }
-            network = await self._network(mode, targets)
-            container = "maisya-" + self.instance + "-" + uuid.uuid4().hex[:12]
-            await completed_thread(self._own, work)
-            arguments = [
-                "create",
-                "--pull",
-                "never",
-                "--name",
-                container,
-                "--label",
-                "maisya.instance=" + self.instance,
-                "--runtime",
-                self.settings.runtime,
-                "--network",
-                network,
-                "--read-only",
-                "--user",
-                "10000:10000",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-                "--pids-limit",
-                "128",
-                "--ulimit",
-                "core=0:0",
-                "--ulimit",
-                "nofile=256:256",
-                "--cpus",
-                "1",
-                "--memory",
-                str(self.settings.memory_mib) + "m",
-                "--memory-swap",
-                str(self.settings.memory_mib) + "m",
-                "--log-driver",
-                "none",
-                "--workdir",
-                "/work/project",
-                "--env",
-                "HOME=/work/cache",
-                "--env",
-                "PYTHONNOUSERSITE=1",
-                "--tmpfs",
-                "/tmp:rw,nosuid,nodev,size=64m,uid=10000,gid=10000",
-            ]
-            for name in ("project", "in", "out", "cache"):
-                arguments += [
-                    "--mount",
-                    f"type=bind,src={work.path / name},dst=/work/{name}"
-                    + (",readonly" if name == "in" else ""),
-                ]
-            if network != "none":
-                for resolver in self.settings.dns:
-                    arguments += ["--dns", resolver]
-                # gVisor 沙箱够不到宿主的 127.0.0.11 embedded resolver（gVisor issue #7469），
-                # user-defined bridge 下 --dns 只作上游不写 nameserver；直接挂一个可达的 resolv.conf。
-                resolv = work.path / ".resolv.conf"
-                resolv.write_text(
-                    "".join(
-                        f"nameserver {resolver}\n"
-                        for resolver in self.settings.dns
-                    ),
-                    encoding="utf-8",
-                )
-                safe_chmod(resolv, 0o644)
-                arguments += [
-                    "--mount",
-                    f"type=bind,src={resolv},dst=/etc/resolv.conf,readonly",
-                ]
-            for handle, path in (secrets or {}).items():
+                try:
+                    old_result = json.loads(old["result"]) if old["result"] else {}
+                except ValueError:
+                    old_result = {}
+                old_status = old["status"]
+                if old_status in {
+                    "uncertain",
+                    "running",
+                    "cleanup_unconfirmed",
+                } or (
+                    old_status == "completed"
+                    and isinstance(old_result, dict)
+                    and bool(old_result)
+                ):
+                    return {
+                        "status": old_status,
+                        **(old_result if isinstance(old_result, dict) else {}),
+                        "repeated": True,
+                    }
+            validated_mappings = (
+                self._normalize_host_mappings(host_mappings, targets)
+                if mode == "restricted"
+                else []
+            )
+            for handle in secrets or {}:
                 if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", handle):
                     raise ValueError("凭据句柄无效")
-                arguments += [
-                    "--mount",
-                    f"type=bind,src={path},dst=/run/secrets/{handle},readonly",
+            targets_arg = () if targets is None else targets
+            network = await self._network(mode, targets_arg, True)
+            active_network_ref = network if network != "none" else ""
+            container = "maisya-" + self.instance + "-" + uuid.uuid4().hex[:12]
+            entered_container_try = False
+            try:
+                await completed_thread(self._own, work)
+                arguments = [
+                    "create",
+                    "--pull",
+                    "never",
+                    "--name",
+                    container,
+                    "--label",
+                    "maisya.instance=" + self.instance,
+                    "--runtime",
+                    self.settings.runtime,
+                    "--network",
+                    network,
+                    "--read-only",
+                    "--user",
+                    "10000:10000",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--pids-limit",
+                    "128",
+                    "--ulimit",
+                    "core=0:0",
+                    "--ulimit",
+                    "nofile=256:256",
+                    "--cpus",
+                    "1",
+                    "--memory",
+                    str(self.settings.memory_mib) + "m",
+                    "--memory-swap",
+                    str(self.settings.memory_mib) + "m",
+                    "--log-driver",
+                    "none",
+                    "--workdir",
+                    "/work/project",
+                    "--env",
+                    "HOME=/work/cache",
+                    "--env",
+                    "PYTHONNOUSERSITE=1",
+                    "--tmpfs",
+                    "/tmp:rw,nosuid,nodev,size=64m,uid=10000,gid=10000",
                 ]
-            if entrypoint:
-                arguments += [
-                    "--entrypoint",
-                    entrypoint[0],
-                    self.settings.image,
-                    *entrypoint[1:],
-                ]
-            else:
-                arguments += [
-                    "--entrypoint",
-                    "/bin/sh",
-                    self.settings.image,
-                    "-c",
-                    command,
-                ]
-            await asyncio.to_thread(
-                self._receipt, key, container=container, status="preparing"
-            )
-            self.containers[row["thread_id"]] = container
-            await completed_thread(
-                self._resource,
-                "container",
-                container,
-                {"socket": self.settings.socket, "thread_id": row["thread_id"]},
-            )
+                for name in ("project", "in", "out", "cache"):
+                    arguments += [
+                        "--mount",
+                        f"type=bind,src={work.path / name},dst=/work/{name}"
+                        + (",readonly" if name == "in" else ""),
+                    ]
+                if mode == "restricted":
+                    for host, addr in validated_mappings:
+                        arguments += ["--add-host", f"{host}:{addr}"]
+                elif network != "none":
+                    for resolver in self.settings.dns:
+                        arguments += ["--dns", resolver]
+                    # gVisor 沙箱够不到宿主的 127.0.0.11 embedded resolver（gVisor issue #7469），
+                    # user-defined bridge 下 --dns 只作上游不写 nameserver；直接挂一个可达的 resolv.conf。
+                    resolv = work.path / ".resolv.conf"
+                    await asyncio.to_thread(
+                        self._write_resolv_file, resolv, self.settings.dns
+                    )
+                    arguments += [
+                        "--mount",
+                        f"type=bind,src={resolv},dst=/etc/resolv.conf,readonly",
+                    ]
+                for handle, path in (secrets or {}).items():
+                    arguments += [
+                        "--mount",
+                        f"type=bind,src={path},dst=/run/secrets/{handle},readonly",
+                    ]
+                if entrypoint:
+                    arguments += [
+                        "--entrypoint",
+                        entrypoint[0],
+                        self.settings.image,
+                        *entrypoint[1:],
+                    ]
+                else:
+                    arguments += [
+                        "--entrypoint",
+                        "/bin/sh",
+                        self.settings.image,
+                        "-c",
+                        command,
+                    ]
+                await asyncio.to_thread(
+                    self._receipt, key, container=container, status="preparing"
+                )
+                self.containers[row["thread_id"]] = container
+                if active_network_ref:
+                    self._container_networks[container] = active_network_ref
+                await completed_thread(
+                    self._resource,
+                    "container",
+                    container,
+                    {"socket": self.settings.socket, "thread_id": row["thread_id"]},
+                )
+            except BaseException:
+                if active_network_ref and not entered_container_try:
+                    self._container_networks.pop(container, None)
+                    remaining = max(0, self._active_networks.get(active_network_ref, 0) - 1)
+                    if remaining:
+                        self._active_networks[active_network_ref] = remaining
+                    else:
+                        self._active_networks.pop(active_network_ref, None)
+                raise
+            entered_container_try = True
             monitor = None
             attached_task = None
             prior_quarantined = bool(work.quarantined)
@@ -915,6 +1031,15 @@ class Sandbox:
                         cancel_during_cleanup = True
                 if terminated_ok:
                     self.containers.pop(row["thread_id"], None)
+                    if active_network_ref:
+                        self._container_networks.pop(container, None)
+                        remaining = max(
+                            0, self._active_networks.get(active_network_ref, 0) - 1
+                        )
+                        if remaining:
+                            self._active_networks[active_network_ref] = remaining
+                        else:
+                            self._active_networks.pop(active_network_ref, None)
                     _, c_fgt = await _uninterruptible_await(
                         asyncio.to_thread(self._forget, container)
                     )

@@ -445,6 +445,23 @@ def is_absolute_program_path(raw: str) -> bool:
     return bool(_DRIVE_ABS_RE.match(raw))
 
 
+def is_native_absolute_program_path(raw: str) -> bool:
+    """按当前宿主操作系统原生规则校验可执行程序绝对路径，拒绝相对路径、UNC 与跨平台不兼容前缀。"""
+    if (
+        not isinstance(raw, str)
+        or not raw
+        or "\x00" in raw
+        or "\r" in raw
+        or "\n" in raw
+    ):
+        return False
+    if raw.startswith("//") or raw.startswith("\\\\"):
+        return False
+    if os.name == "nt":
+        return bool(_DRIVE_ABS_RE.match(raw))
+    return raw.startswith("/") and not _DRIVE_ABS_RE.match(raw)
+
+
 def _env_ci(name: str, default: str = "") -> str:
     if name in os.environ:
         return os.environ[name]

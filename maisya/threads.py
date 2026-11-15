@@ -9,7 +9,7 @@ import re
 import sqlite3
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
@@ -34,7 +34,48 @@ from .context_budget import (
 )
 from .pathsafe import rmtree_safe, safe_chmod
 from .scout import validate_arguments
-from .workspaces import completed_thread
+from .workspaces import completed_thread, file_lock
+
+
+_PRESERVED_GRANT_FLAGS = (
+    "scheduled_admin",
+    "console_admin",
+    "admin",
+    "admin_verified",
+)
+
+
+def _merge_grant_dict(existing_grant: dict, incoming_grant: dict) -> dict:
+    """合并线程级 grant，保留权限标记与非空来源字段，同时支持显式 admin_direct=False 解除预览粘性。"""
+    merged = dict(existing_grant) if isinstance(existing_grant, dict) else {}
+    incoming = incoming_grant if isinstance(incoming_grant, dict) else {}
+    for key, value in incoming.items():
+        if key in _PRESERVED_GRANT_FLAGS:
+            if merged.get(key) is True or value is True:
+                merged[key] = True
+            elif key not in merged:
+                merged[key] = value
+            continue
+        if key == "admin_direct":
+            if value is False:
+                merged["admin_direct"] = False
+            elif value is True or merged.get("admin_direct") is True:
+                merged["admin_direct"] = True
+            elif key not in merged:
+                merged[key] = value
+            continue
+        if isinstance(key, str) and key.startswith("source_"):
+            non_empty = (
+                bool(value.strip()) if isinstance(value, str) else value is not None and bool(value)
+            )
+            if non_empty:
+                merged[key] = value
+            continue
+        if value is not None and (
+            not isinstance(value, str) or value != "" or key not in merged
+        ):
+            merged[key] = value
+    return merged
 
 
 def encode(value):
@@ -444,37 +485,70 @@ class ThreadStore:
     def enqueue(
         self, thread_id, message, chat_id, return_route=None, input_context=None
     ):
-        row = self.get(thread_id, chat_id)
-        if row["state"] == "closed":
-            raise ValueError("线程已关闭；请通过 from_threads 引用旧结果开启新线程")
-        revision = row["revision"] + 1
-        with self.connect() as db, db:
-            db.execute(
-                'UPDATE agent_threads SET revision=?, state="active", questions=?, updated=? WHERE thread_id=?',
-                (
-                    revision,
-                    0 if row["state"] == "idle" else row["questions"],
-                    time.time(),
-                    thread_id,
-                ),
-            )
-            payload = {"text": message, "context": input_context or {}}
-            if (
-                isinstance(input_context, dict)
-                and "grant" in input_context
-                and isinstance(input_context["grant"], dict)
-            ):
+        self.get(thread_id, chat_id)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                cur = db.execute(
+                    "SELECT revision, state, questions FROM agent_threads WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()
+                if cur is None:
+                    raise ValueError("线程不存在")
+                if cur["state"] == "closed":
+                    raise ValueError("线程已关闭；请通过 from_threads 引用旧结果开启新线程")
+                revision = int(cur["revision"]) + 1
                 db.execute(
-                    "UPDATE thread_context SET grant=? WHERE thread_id=?",
-                    (encode(input_context["grant"]), thread_id),
+                    'UPDATE agent_threads SET revision=?, state="active", questions=?, updated=? WHERE thread_id=?',
+                    (
+                        revision,
+                        0 if cur["state"] == "idle" else cur["questions"],
+                        time.time(),
+                        thread_id,
+                    ),
                 )
-            if return_route:
-                payload["return_route"] = return_route
-                db.execute(
-                    "INSERT INTO return_members VALUES (?, ?, ?)",
-                    (return_route["group_id"], thread_id, revision),
-                )
-            self.event(db, thread_id, "input", revision, payload)
+                payload = {"text": message, "context": input_context or {}}
+                if (
+                    isinstance(input_context, dict)
+                    and "grant" in input_context
+                    and isinstance(input_context["grant"], dict)
+                ):
+                    grant_row = db.execute(
+                        "SELECT grant FROM thread_context WHERE thread_id=?",
+                        (thread_id,),
+                    ).fetchone()
+                    existing_grant = {}
+                    if grant_row and grant_row["grant"]:
+                        try:
+                            parsed_grant = json.loads(grant_row["grant"])
+                            if isinstance(parsed_grant, dict):
+                                existing_grant = parsed_grant
+                        except (TypeError, ValueError):
+                            existing_grant = {}
+                    merged_grant = _merge_grant_dict(
+                        existing_grant, input_context["grant"]
+                    )
+                    if grant_row is None:
+                        db.execute(
+                            'INSERT INTO thread_context (thread_id, workspace_id, grant) VALUES (?, "", ?)',
+                            (thread_id, encode(merged_grant)),
+                        )
+                    else:
+                        db.execute(
+                            "UPDATE thread_context SET grant=? WHERE thread_id=?",
+                            (encode(merged_grant), thread_id),
+                        )
+                if return_route:
+                    payload["return_route"] = return_route
+                    db.execute(
+                        "INSERT INTO return_members VALUES (?, ?, ?)",
+                        (return_route["group_id"], thread_id, revision),
+                    )
+                self.event(db, thread_id, "input", revision, payload)
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
         return revision
 
     def input_context(self, thread_id, revision):
@@ -657,21 +731,27 @@ class ThreadStore:
             r"th_[a-f0-9]{16}", thread_id
         ):
             raise ValueError("线程编号无效")
-        with self.connect() as db, db:
-            row = db.execute(
-                "SELECT thread_id,chat_id,state FROM agent_threads WHERE thread_id=?",
-                (thread_id,),
-            ).fetchone()
-            if row is None:
-                raise ValueError("活动记录不存在")
-            if row["state"] in {"active", "waiting"}:
-                raise ValueError("运行中或等待中的活动不能直接删除，请先停止线程")
-            if thread_id in self._named_workspace_thread_ids(db):
-                raise ValueError("该活动绑定了持久工作区，不能直接删除记录")
-            self._delete_threads_tx(db, [thread_id])
-        ws_dir, has_out = _implicit_ws_has_out(workspace_root, thread_id)
-        if ws_dir is not None and not has_out:
-            rmtree_safe(ws_dir, ignore_errors=True)
+        lock_ctx = (
+            file_lock(workspace_root / ".capacity.lock")
+            if workspace_root is not None
+            else nullcontext()
+        )
+        with lock_ctx:
+            with self.connect() as db, db:
+                row = db.execute(
+                    "SELECT thread_id,chat_id,state FROM agent_threads WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("活动记录不存在")
+                if row["state"] in {"active", "waiting"}:
+                    raise ValueError("运行中或等待中的活动不能直接删除，请先停止线程")
+                if thread_id in self._named_workspace_thread_ids(db):
+                    raise ValueError("该活动绑定了持久工作区，不能直接删除记录")
+                self._delete_threads_tx(db, [thread_id])
+            ws_dir, has_out = _implicit_ws_has_out(workspace_root, thread_id)
+            if ws_dir is not None and not has_out:
+                rmtree_safe(ws_dir, ignore_errors=True)
         return {"deleted": thread_id, "chat_id": row["chat_id"]}
 
     def prune_junk_threads(
@@ -682,65 +762,82 @@ class ThreadStore:
     ) -> dict:
         """批量清理废记录（已停止未交付、报错结束、空结果且无附件/持久工作区/out）。"""
         scope = [c for c in (chat_ids or []) if isinstance(c, str) and c]
-        with self.connect() as db, db:
-            if scope:
-                placeholders = ",".join("?" * len(scope))
-                rows = db.execute(
-                    f"SELECT thread_id,chat_id,state,result FROM agent_threads WHERE chat_id IN ({placeholders})",
-                    tuple(scope),
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    "SELECT thread_id,chat_id,state,result FROM agent_threads"
-                ).fetchall()
-            tables = {
-                row[0]
-                for row in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
-            named_ws_ids = self._named_workspace_thread_ids(db)
-            delivered_ids = (
-                {
-                    row["thread_id"]
+        lock_ctx = (
+            file_lock(workspace_root / ".capacity.lock")
+            if workspace_root is not None
+            else nullcontext()
+        )
+        with lock_ctx:
+            with self.connect() as db, db:
+                if scope:
+                    placeholders = ",".join("?" * len(scope))
+                    rows = db.execute(
+                        f"SELECT thread_id,chat_id,state,result FROM agent_threads WHERE chat_id IN ({placeholders})",
+                        tuple(scope),
+                    ).fetchall()
+                else:
+                    rows = db.execute(
+                        "SELECT thread_id,chat_id,state,result FROM agent_threads"
+                    ).fetchall()
+                tables = {
+                    row[0]
                     for row in db.execute(
-                        "SELECT DISTINCT thread_id FROM result_deliveries"
+                        "SELECT name FROM sqlite_master WHERE type='table'"
                     ).fetchall()
                 }
-                if "result_deliveries" in tables
-                else set()
-            )
-            attachment_ids = (
-                {
-                    row["thread_id"]
-                    for row in db.execute(
-                        "SELECT DISTINCT thread_id FROM attachments WHERE thread_id IS NOT NULL"
-                    ).fetchall()
-                }
-                if "attachments" in tables
-                else set()
-            )
-            targets = [
-                row["thread_id"]
-                for row in rows
-                if _is_junk_thread_row(
-                    row,
-                    delivered_ids=delivered_ids,
-                    named_ws_ids=named_ws_ids,
-                    attachment_ids=attachment_ids,
-                    workspace_root=workspace_root,
+                named_ws_ids = self._named_workspace_thread_ids(db)
+                delivered_ids = (
+                    {
+                        row["thread_id"]
+                        for row in db.execute(
+                            "SELECT DISTINCT thread_id FROM result_deliveries"
+                        ).fetchall()
+                    }
+                    if "result_deliveries" in tables
+                    else set()
                 )
-            ]
-            self._delete_threads_tx(db, targets)
-        for tid in targets:
-            ws_dir, has_out = _implicit_ws_has_out(workspace_root, tid)
-            if ws_dir is not None and not has_out:
-                rmtree_safe(ws_dir, ignore_errors=True)
+                attachment_ids = (
+                    {
+                        row["thread_id"]
+                        for row in db.execute(
+                            "SELECT DISTINCT thread_id FROM attachments WHERE thread_id IS NOT NULL"
+                        ).fetchall()
+                    }
+                    if "attachments" in tables
+                    else set()
+                )
+                targets = [
+                    row["thread_id"]
+                    for row in rows
+                    if _is_junk_thread_row(
+                        row,
+                        delivered_ids=delivered_ids,
+                        named_ws_ids=named_ws_ids,
+                        attachment_ids=attachment_ids,
+                        workspace_root=workspace_root,
+                    )
+                ]
+                self._delete_threads_tx(db, targets)
+            for tid in targets:
+                ws_dir, has_out = _implicit_ws_has_out(workspace_root, tid)
+                if ws_dir is not None and not has_out:
+                    rmtree_safe(ws_dir, ignore_errors=True)
         return {"deleted": targets, "count": len(targets)}
 
     @staticmethod
     def _truncate_tool_block(block, *, target_chars: int, archive_seq: int):
         assistant_msg = dict(block[0])
+        if isinstance(assistant_msg.get("tool_calls"), list):
+            copied_calls = []
+            for call in assistant_msg["tool_calls"]:
+                if isinstance(call, dict):
+                    copied = dict(call)
+                    if isinstance(copied.get("function"), dict):
+                        copied["function"] = dict(copied["function"])
+                    copied_calls.append(copied)
+                else:
+                    copied_calls.append(call)
+            assistant_msg["tool_calls"] = copied_calls
         asst_content = str(assistant_msg.get("content") or "")
         if len(asst_content) > 400:
             assistant_msg["content"] = asst_content[:400] + "..."
@@ -779,6 +876,29 @@ class ThreadStore:
         encoded_len = len(encode(_render(caps)))
         if encoded_len <= target_chars:
             return _render(caps)
+
+        # 若 assistant tool_calls arguments 本身过大导致无法在 target_chars 内保留工具输出，
+        # 在保持 call id / function.name / tool_call_id 配对不变的前提下把超大 arguments 折叠为有效 JSON。
+        calls_list = assistant_msg.get("tool_calls")
+        if isinstance(calls_list, list) and len(encode(_render([0] * len(parsed)))) > target_chars:
+            indexed_calls = []
+            for c_idx, call in enumerate(calls_list):
+                if isinstance(call, dict) and isinstance(call.get("function"), dict):
+                    raw_args = call["function"].get("arguments")
+                    args_str = raw_args if isinstance(raw_args, str) else encode(raw_args)
+                    indexed_calls.append((len(args_str), c_idx, call["function"]))
+            indexed_calls.sort(key=lambda item: item[0], reverse=True)
+            for args_len, _, fn_dict in indexed_calls:
+                if len(encode(_render([0] * len(parsed)))) <= target_chars:
+                    break
+                if args_len > 120:
+                    fn_dict["arguments"] = encode(
+                        {"_truncated": True, "archive_seq": archive_seq}
+                    )
+            if len(encode(_render([0] * len(parsed)))) > target_chars:
+                cur_asst_text = str(assistant_msg.get("content") or "")
+                if len(cur_asst_text) > 80:
+                    assistant_msg["content"] = cur_asst_text[:80] + "..."
 
         # Estimate available raw inner chars after assistant_msg, per-message overhead, and notices
         skeleton_caps = [0] * len(parsed)
@@ -1045,16 +1165,22 @@ class ThreadStore:
                         target_chars=max(512, retained_tokens_limit * 2),
                         archive_seq=archive_seq,
                     )
-                elif force:
+                else:
+                    per_block_chars = max(512, retained_tokens_limit * 2)
+                    msg_count = max(1, len(blocks[last_idx]))
+                    per_msg_budget = max(240, (per_block_chars - 120 * msg_count) // msg_count)
+                    half = min(600, max(100, per_msg_budget // 2))
+                    min_truncate_len = half * 2 + 120
+                    tag = "紧急" if force else "上下文"
                     trimmed_blk = []
                     for msg in blocks[last_idx]:
                         copied = dict(msg)
                         raw_c = copied.get("content")
-                        if isinstance(raw_c, str) and len(raw_c) > 1600:
+                        if isinstance(raw_c, str) and len(raw_c) > min_truncate_len:
                             copied["content"] = (
-                                raw_c[:600]
-                                + f"\n...[紧急压缩已截断，完整原文见 event_seq={archive_seq}]...\n"
-                                + raw_c[-600:]
+                                raw_c[:half]
+                                + f"\n...[{tag}压缩已截断，完整原文见 event_seq={archive_seq}]...\n"
+                                + raw_c[-half:]
                             )
                         trimmed_blk.append(copied)
                     truncated_last = trimmed_blk
@@ -1562,6 +1688,7 @@ class ThreadEngine:
         self.locks = {}
         self.waiters = {}
         self._finishing: set[str] = set()
+        self._deferred_queue: list[tuple[str, str, bool]] = []
         self._starting = 0
         self._starting_bg = 0
         self._submission_lock = asyncio.Lock()
@@ -1574,20 +1701,174 @@ class ThreadEngine:
             return 2
         return self.max_active
 
-    def _has_capacity(self, *, background: bool) -> bool:
-        total = len(self.tasks) + self._starting
+    def _has_capacity(
+        self,
+        *,
+        background: bool,
+        free_total: int = 0,
+        free_bg: int = 0,
+    ) -> bool:
+        total = max(0, len(self.tasks) - free_total) + self._starting
         if total >= self.max_active:
             return False
         if background:
-            return (
-                len(self.background_tasks) + self._starting_bg
-                < self._background_limit()
-                and total < self.max_active
-            )
+            bg_active = max(0, len(self.background_tasks) - free_bg) + self._starting_bg
+            return bg_active < self._background_limit() and total < self.max_active
         return total < self.max_active
+
+    def _enqueue_deferred(
+        self, thread_id: str, run_chat: str, *, background: bool
+    ) -> None:
+        for idx, (tid, cur_chat, cur_bg) in enumerate(self._deferred_queue):
+            if tid == thread_id:
+                self._deferred_queue[idx] = (
+                    tid,
+                    run_chat or cur_chat,
+                    cur_bg and background,
+                )
+                return
+        self._deferred_queue.append((thread_id, run_chat, background))
+
+    def _drop_deferred(self, thread_id: str) -> None:
+        self._deferred_queue = [
+            entry for entry in self._deferred_queue if entry[0] != thread_id
+        ]
+
+    def _cleanup_waiter(self, thread_id: str, target_future) -> None:
+        items = self.waiters.get(thread_id)
+        if not items:
+            return
+        remaining = [
+            (rev, fut)
+            for rev, fut in items
+            if fut is not target_future and not fut.done()
+        ]
+        if remaining:
+            self.waiters[thread_id] = remaining
+        else:
+            self.waiters.pop(thread_id, None)
+
+    def _prune_idle_state_locked(self, thread_id: str) -> None:
+        """在持有 _submission_lock 时清理已完全空闲线程的残余内存字典条目。"""
+        if thread_id in self.tasks:
+            return
+        if any(tid == thread_id for tid, _, _ in self._deferred_queue):
+            return
+        if self.waiters.get(thread_id):
+            return
+        self.waiters.pop(thread_id, None)
+        self.chats.pop(thread_id, None)
+        lock_obj = self.locks.get(thread_id)
+        if lock_obj is not None and not lock_obj.locked():
+            self.locks.pop(thread_id, None)
+
+    async def _drain_deferred_locked(
+        self, *, free_total: int = 0, free_bg: int = 0
+    ) -> None:
+        if self.closing or not self._deferred_queue:
+            return
+        remaining = []
+        for idx, (tid, queued_chat, entry_bg) in enumerate(self._deferred_queue):
+            if self.closing:
+                remaining.extend(self._deferred_queue[idx:])
+                break
+            if tid in self.tasks:
+                if not entry_bg:
+                    self.background_tasks.discard(tid)
+                continue
+            if not self._has_capacity(
+                background=entry_bg, free_total=free_total, free_bg=free_bg
+            ):
+                remaining.append((tid, queued_chat, entry_bg))
+                continue
+            try:
+                row = await asyncio.to_thread(
+                    self.store.get,
+                    tid,
+                    queued_chat,
+                    allow_self=True,
+                    allow_any_chat=True,
+                )
+            except (ValueError, PermissionError):
+                continue
+            if (
+                row["state"] == "closed"
+                or row["processed_revision"] >= row["revision"]
+            ):
+                continue
+            run_chat = row["chat_id"] if row["owner"] != "self" else "self"
+            if row["state"] != "active":
+                activated = await asyncio.to_thread(self.store.activate, tid)
+                if not activated:
+                    continue
+            self.chats[tid] = run_chat
+            if entry_bg:
+                self.background_tasks.add(tid)
+            self.tasks[tid] = asyncio.create_task(self._drive(tid, run_chat))
+        self._deferred_queue = remaining
 
     async def recover(self):
         await asyncio.to_thread(self.store.recover)
+
+    async def _send_locked(
+        self,
+        thread_id,
+        message,
+        *,
+        chat_id,
+        create_waiter: bool = True,
+        return_route=None,
+        input_context=None,
+        steer: bool = False,
+        background: bool = False,
+        defer_if_full: bool = False,
+        auto_drain: bool = False,
+    ):
+        row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
+        deferred = False
+        if thread_id not in self.tasks and not self._has_capacity(
+            background=background
+        ):
+            if not defer_if_full:
+                raise ValueError("当前 Agent 线程已满，请稍后再试")
+            deferred = True
+        if row["revision"] - row["processed_revision"] >= 32:
+            raise ValueError("该线程正在消化已有补充，请稍后再发")
+        revision = await asyncio.to_thread(
+            self.store.enqueue,
+            thread_id,
+            self.redact(message),
+            chat_id,
+            return_route,
+            input_context,
+        )
+        if deferred:
+            if auto_drain:
+                run_chat = row["chat_id"] if row["owner"] != "self" else "self"
+                self._enqueue_deferred(thread_id, run_chat, background=background)
+            return public(await asyncio.to_thread(self.store.get, thread_id, chat_id)), None
+        self._drop_deferred(thread_id)
+        future = None
+        if create_waiter:
+            future = asyncio.get_running_loop().create_future()
+            self.waiters.setdefault(thread_id, []).append((revision, future))
+        if (
+            steer
+            and row["state"] == "active"
+            and thread_id in self.tasks
+            and thread_id not in self._finishing
+        ):
+            self.tasks[thread_id].cancel()
+        if not background and thread_id in self.tasks:
+            self.background_tasks.discard(thread_id)
+        if thread_id not in self.tasks:
+            self.chats[thread_id] = chat_id
+            if background:
+                self.background_tasks.add(thread_id)
+            self.tasks[thread_id] = asyncio.create_task(
+                self._drive(thread_id, chat_id)
+            )
+        return public(await asyncio.to_thread(self.store.get, thread_id, chat_id)), future
 
     async def start(
         self,
@@ -1606,27 +1887,17 @@ class ThreadEngine:
         from_threads=None,
         background: bool = False,
         defer_if_full: bool = False,
+        auto_drain: bool = False,
     ):
         self._validate_input(message, wait_seconds)
-        if self.closing:
-            raise ValueError("当前 Agent 线程已满，请稍后再试")
-        if not defer_if_full and not self._has_capacity(background=background):
-            raise ValueError("当前 Agent 线程已满，请稍后再试")
-        reserve = self._has_capacity(background=background)
-        if reserve:
-            self._starting += 1
-            if background:
-                self._starting_bg += 1
-        released = [not reserve]
-
-        def _release():
-            if not released[0]:
-                released[0] = True
-                self._starting -= 1
-                if background:
-                    self._starting_bg -= 1
-
-        try:
+        row = None
+        future = None
+        result = None
+        async with self._submission_lock:
+            if self.closing:
+                raise ValueError("当前 Agent 线程已满，请稍后再试")
+            if not defer_if_full and not self._has_capacity(background=background):
+                raise ValueError("当前 Agent 线程已满，请稍后再试")
             row = await asyncio.to_thread(
                 self.store.create,
                 profile,
@@ -1638,34 +1909,41 @@ class ThreadEngine:
                 workspace=workspace,
                 grant=grant,
             )
-            await self.send(
-                row["thread_id"],
-                message,
-                chat_id=chat_id,
-                wait_seconds=0,
-                return_route=return_route,
-                input_context={
-                    "grant": grant or {},
-                    "references": references or [],
-                    "from_threads": from_threads or [],
-                },
-                background=background,
-                defer_if_full=defer_if_full,
-                _release_reservation=_release,
-            )
-        finally:
-            _release()
-        waiters = self.waiters.get(row["thread_id"], [])
-        if wait_seconds and waiters:
+            tid = row["thread_id"]
             try:
-                return await asyncio.wait_for(
-                    asyncio.shield(waiters[0][1]), wait_seconds
-                )
+                async with self.locks.setdefault(tid, asyncio.Lock()):
+                    result, future = await self._send_locked(
+                        tid,
+                        message,
+                        chat_id=chat_id,
+                        create_waiter=bool(wait_seconds),
+                        return_route=return_route,
+                        input_context={
+                            "grant": grant or {},
+                            "references": references or [],
+                            "from_threads": from_threads or [],
+                        },
+                        background=background,
+                        defer_if_full=defer_if_full,
+                        auto_drain=auto_drain,
+                    )
+            except BaseException:
+                self._prune_idle_state_locked(tid)
+                try:
+                    await asyncio.to_thread(self.store.delete_thread, tid)
+                except Exception:
+                    pass
+                raise
+            self._prune_idle_state_locked(tid)
+        if wait_seconds and future is not None:
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), wait_seconds)
             except TimeoutError:
-                pass
-        return public(
-            await asyncio.to_thread(self.store.get, row["thread_id"], chat_id)
-        )
+                self._cleanup_waiter(row["thread_id"], future)
+            except BaseException:
+                self._cleanup_waiter(row["thread_id"], future)
+                raise
+        return result
 
     @staticmethod
     def _validate_input(message, wait_seconds):
@@ -1686,7 +1964,7 @@ class ThreadEngine:
         steer=False,
         background: bool = False,
         defer_if_full: bool = False,
-        _release_reservation=None,
+        auto_drain: bool = False,
     ):
         self._validate_input(message, wait_seconds)
         if type(steer) is not bool:
@@ -1694,97 +1972,75 @@ class ThreadEngine:
         input_context = {**(input_context or {}), "steer": steer}
         if self.closing:
             raise ValueError("插件正在关闭")
-        async with (
-            self._submission_lock,
-            self.locks.setdefault(thread_id, asyncio.Lock()),
-        ):
-            if _release_reservation is not None:
-                _release_reservation()
-            row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
-            deferred = False
-            if thread_id not in self.tasks and not self._has_capacity(
-                background=background
-            ):
-                if not defer_if_full:
-                    raise ValueError("当前 Agent 线程已满，请稍后再试")
-                deferred = True
-            if row["revision"] - row["processed_revision"] >= 32:
-                raise ValueError("该线程正在消化已有补充，请稍后再发")
-            revision = await asyncio.to_thread(
-                self.store.enqueue,
-                thread_id,
-                self.redact(message),
-                chat_id,
-                return_route,
-                input_context,
-            )
-            if deferred:
-                return public(
-                    await asyncio.to_thread(self.store.get, thread_id, chat_id)
-                )
-            future = asyncio.get_running_loop().create_future()
-            self.waiters.setdefault(thread_id, []).append((revision, future))
-            if (
-                steer
-                and row["state"] == "active"
-                and thread_id in self.tasks
-                and thread_id not in self._finishing
-            ):
-                self.tasks[thread_id].cancel()
-            if not background and thread_id in self.tasks:
-                self.background_tasks.discard(thread_id)
-            if thread_id not in self.tasks:
-                self.chats[thread_id] = chat_id
-                if background:
-                    self.background_tasks.add(thread_id)
-                self.tasks[thread_id] = asyncio.create_task(
-                    self._drive(thread_id, chat_id)
-                )
-        if wait_seconds:
+        future = None
+        result = None
+        async with self._submission_lock:
+            try:
+                async with self.locks.setdefault(thread_id, asyncio.Lock()):
+                    result, future = await self._send_locked(
+                        thread_id,
+                        message,
+                        chat_id=chat_id,
+                        create_waiter=bool(wait_seconds),
+                        return_route=return_route,
+                        input_context=input_context,
+                        steer=steer,
+                        background=background,
+                        defer_if_full=defer_if_full,
+                        auto_drain=auto_drain,
+                    )
+            finally:
+                self._prune_idle_state_locked(thread_id)
+        if wait_seconds and future is not None:
             try:
                 return await asyncio.wait_for(asyncio.shield(future), wait_seconds)
             except TimeoutError:
-                pass
-        return public(await asyncio.to_thread(self.store.get, thread_id, chat_id))
+                self._cleanup_waiter(thread_id, future)
+            except BaseException:
+                self._cleanup_waiter(thread_id, future)
+                raise
+        return result
 
     async def kick_queued(
         self, thread_id: str, chat_id: str, *, background: bool = True
     ) -> bool:
-        async with (
-            self._submission_lock,
-            self.locks.setdefault(thread_id, asyncio.Lock()),
-        ):
-            if self.closing or thread_id in self.tasks:
-                return False
+        async with self._submission_lock:
+            self._drop_deferred(thread_id)
             try:
-                row = await asyncio.to_thread(
-                    self.store.get,
-                    thread_id,
-                    chat_id,
-                    allow_self=True,
-                    allow_any_chat=True,
-                )
-            except (ValueError, PermissionError):
-                return False
-            if (
-                row["state"] == "closed"
-                or row["processed_revision"] >= row["revision"]
-            ):
-                return False
-            if not self._has_capacity(background=background):
-                return False
-            run_chat = row["chat_id"] if row["owner"] != "self" else "self"
-            if row["state"] != "active":
-                activated = await asyncio.to_thread(self.store.activate, thread_id)
-                if not activated:
-                    return False
-            self.chats[thread_id] = run_chat
-            if background:
-                self.background_tasks.add(thread_id)
-            self.tasks[thread_id] = asyncio.create_task(
-                self._drive(thread_id, run_chat)
-            )
-            return True
+                async with self.locks.setdefault(thread_id, asyncio.Lock()):
+                    if self.closing or thread_id in self.tasks:
+                        return False
+                    try:
+                        row = await asyncio.to_thread(
+                            self.store.get,
+                            thread_id,
+                            chat_id,
+                            allow_self=True,
+                            allow_any_chat=True,
+                        )
+                    except (ValueError, PermissionError):
+                        return False
+                    if (
+                        row["state"] == "closed"
+                        or row["processed_revision"] >= row["revision"]
+                    ):
+                        return False
+                    if not self._has_capacity(background=background):
+                        return False
+                    run_chat = row["chat_id"] if row["owner"] != "self" else "self"
+                    if row["state"] != "active":
+                        activated = await asyncio.to_thread(self.store.activate, thread_id)
+                        if not activated:
+                            return False
+                    self.chats[thread_id] = run_chat
+                    if background:
+                        self.background_tasks.add(thread_id)
+                    self.tasks[thread_id] = asyncio.create_task(
+                        self._drive(thread_id, run_chat)
+                    )
+                    return True
+            finally:
+                self._prune_idle_state_locked(thread_id)
 
     def _resolve(self, thread_id, row):
         remaining = []
@@ -1794,7 +2050,10 @@ class ThreadEngine:
                     future.set_result(public(row))
             else:
                 remaining.append((revision, future))
-        self.waiters[thread_id] = remaining
+        if remaining:
+            self.waiters[thread_id] = remaining
+        else:
+            self.waiters.pop(thread_id, None)
 
     def _current_model_catalog(self):
         return self.model_catalog() if callable(self.model_catalog) else self.model_catalog
@@ -1808,25 +2067,24 @@ class ThreadEngine:
         processed,
         budget,
         *,
+        overhead_tokens=0,
         force=False,
     ):
-        await asyncio.to_thread(
-            self.store.checkpoint,
-            thread_id,
-            history,
-            processed,
-            "context_checkpoint",
-            {},
-        )
         cur_row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
-        _, _, prev_handoff, _, _ = ThreadStore._parse_prior_summary(cur_row.get("summary"))
         cur_tokens = estimate_messages_tokens(history)
+        effective_max_tokens = max(
+            256, int(budget["trigger_tokens"]) - max(0, int(overhead_tokens or 0))
+        )
+        if not force and cur_tokens <= effective_max_tokens:
+            return cur_row.get("summary") or "", history
         tail_tok = (
             min(budget["tail_tokens"], max(200, cur_tokens // 3))
             if force
             else budget["tail_tokens"]
         )
         blocks = ThreadStore._group_history_blocks(history)
+        if not blocks:
+            return cur_row.get("summary") or "", history
         tail_start = len(blocks)
         acc = 0
         for idx in range(len(blocks) - 1, -1, -1):
@@ -1838,6 +2096,27 @@ class ThreadEngine:
         if force and tail_start == 0 and len(blocks) > 1:
             tail_start = len(blocks) - 1
         archived_turns = [m for blk in blocks[:tail_start] for m in blk]
+        retained_limit = max(512, max(400, int(tail_tok)) if not force else int(tail_tok))
+        can_truncate_single = (
+            len(blocks) == 1
+            and estimate_messages_tokens(blocks[0]) > retained_limit
+        )
+        if not archived_turns and not can_truncate_single:
+            return cur_row.get("summary") or "", history
+        retained_tokens = sum(
+            estimate_messages_tokens(blk) for blk in blocks[tail_start:]
+        )
+        if not can_truncate_single and retained_tokens >= cur_tokens:
+            return cur_row.get("summary") or "", history
+        await asyncio.to_thread(
+            self.store.checkpoint,
+            thread_id,
+            history,
+            processed,
+            "context_checkpoint",
+            {},
+        )
+        _, _, prev_handoff, _, _ = ThreadStore._parse_prior_summary(cur_row.get("summary"))
         handoff_summary = None
         if archived_turns and hasattr(self.runtime, "summarize_compaction"):
             try:
@@ -1852,7 +2131,7 @@ class ThreadEngine:
             self.store.compact,
             thread_id,
             store_chat,
-            max_tokens=budget["trigger_tokens"],
+            max_tokens=effective_max_tokens,
             tail_tokens=tail_tok,
             handoff_summary=handoff_summary,
             redact=self.redact,
@@ -1903,16 +2182,28 @@ class ThreadEngine:
                 self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
             )
             store_chat = row["chat_id"]
-            profile = Profile(**row["profile_snapshot"])
+            raw_profile = Profile(**row["profile_snapshot"])
+            profile = (
+                await asyncio.to_thread(self.runtime.resolve_profile, raw_profile)
+                if hasattr(self.runtime, "resolve_profile")
+                else raw_profile
+            )
             history, processed = row["history"], row["processed_revision"]
             context_index = row["summary"]
             deadline = asyncio.get_running_loop().time() + self.timeout
             overflow_retried = False
             async with asyncio.timeout(self.timeout):
-                for _ in range(profile.max_steps or self.max_steps):
+                for step_index in range(profile.max_steps or self.max_steps):
                     pending = await asyncio.to_thread(
                         self.store.pending, thread_id, processed
                     )
+                    if pending:
+                        if hasattr(self.runtime, "resolve_profile"):
+                            profile = await asyncio.to_thread(
+                                self.runtime.resolve_profile, raw_profile
+                            )
+                        if hasattr(self.runtime, "begin_turn"):
+                            self.runtime.begin_turn(thread_id)
                     if row["workspace_id"]:
                         steering = []
                         for index, (revision, _text) in enumerate(pending):
@@ -2025,6 +2316,7 @@ class ThreadEngine:
                                 history,
                                 processed,
                                 budget,
+                                overhead_tokens=overhead_tokens,
                                 force=False,
                             )
                     alive, changed = await self._boundary(
@@ -2075,6 +2367,11 @@ class ThreadEngine:
                                     default_context_tokens=self.context_tokens,
                                     model_catalog=self._current_model_catalog(),
                                 )
+                            retry_overhead = (
+                                estimate_tokens(getattr(profile, "instructions", "") or "")
+                                + estimate_tokens(context_index or "")
+                                + len(getattr(profile, "tools", ()) or ()) * 120
+                            )
                             context_index, history = await self._run_tier2_compact(
                                 thread_id,
                                 store_chat,
@@ -2082,6 +2379,7 @@ class ThreadEngine:
                                 history,
                                 processed,
                                 budget,
+                                overhead_tokens=retry_overhead,
                                 force=True,
                             )
                             request_history = self._assemble_request_history(
@@ -2230,7 +2528,11 @@ class ThreadEngine:
                                     result = await self.runtime.call(
                                         name,
                                         arguments,
-                                        {**current, "_tool_call_id": call["id"]},
+                                        {
+                                            **current,
+                                            "_tool_call_id": call["id"],
+                                            "_step_index": step_index,
+                                        },
                                     )
                             except (ValueError, RuntimeError, PermissionError, OSError) as error:
                                 result = {
@@ -2385,45 +2687,60 @@ class ThreadEngine:
                         except Exception:
                             pass
                 finally:
-                    async with self.locks.setdefault(thread_id, asyncio.Lock()):
-                        self._finishing.discard(thread_id)
-                        was_background = thread_id in self.background_tasks
-                        if self.tasks.get(thread_id) is current_task:
-                            self.tasks.pop(thread_id, None)
-                        self.background_tasks.discard(thread_id)
-                        latest = None
-                        try:
-                            latest = await asyncio.to_thread(
-                                self.store.get,
-                                thread_id,
-                                store_chat,
-                                allow_self=(chat_id == "self"),
-                            )
-                        except Exception:
+                    async with self._submission_lock:
+                        thread_lock = self.locks.setdefault(thread_id, asyncio.Lock())
+                        async with thread_lock:
+                            self._finishing.discard(thread_id)
+                            was_background = thread_id in self.background_tasks
+                            is_current = self.tasks.get(thread_id) is current_task
                             latest = None
-                        if latest is not None:
-                            self._resolve(thread_id, latest)
-                        else:
-                            for _rev, fut in self.waiters.pop(thread_id, []):
-                                if not fut.done():
-                                    fut.set_result(
-                                        {
-                                            "thread_id": thread_id,
-                                            "state": "closed",
-                                            "result": {},
-                                        }
-                                    )
-                        if (
-                            latest is not None
-                            and not self.closing
-                            and latest["state"] == "active"
-                            and thread_id not in self.tasks
-                        ):
-                            if was_background:
-                                self.background_tasks.add(thread_id)
-                            self.tasks[thread_id] = asyncio.create_task(
-                                self._drive(thread_id, chat_id)
-                            )
+                            try:
+                                latest = await asyncio.to_thread(
+                                    self.store.get,
+                                    thread_id,
+                                    store_chat,
+                                    allow_self=(chat_id == "self"),
+                                )
+                            except Exception:
+                                latest = None
+                            if latest is not None:
+                                self._resolve(thread_id, latest)
+                            else:
+                                for _rev, fut in self.waiters.pop(thread_id, []):
+                                    if not fut.done():
+                                        fut.set_result(
+                                            {
+                                                "thread_id": thread_id,
+                                                "state": "closed",
+                                                "result": {},
+                                            }
+                                        )
+                            if (
+                                latest is not None
+                                and not self.closing
+                                and latest["state"] == "active"
+                                and (is_current or thread_id not in self.tasks)
+                            ):
+                                self._drop_deferred(thread_id)
+                                self.chats[thread_id] = chat_id
+                                if was_background:
+                                    self.background_tasks.add(thread_id)
+                                else:
+                                    self.background_tasks.discard(thread_id)
+                                self.tasks[thread_id] = asyncio.create_task(
+                                    self._drive(thread_id, chat_id)
+                                )
+                            elif is_current:
+                                await self._drain_deferred_locked(
+                                    free_total=1,
+                                    free_bg=(1 if was_background else 0),
+                                )
+                                self.tasks.pop(thread_id, None)
+                                self.background_tasks.discard(thread_id)
+                            else:
+                                self.background_tasks.discard(thread_id)
+                                await self._drain_deferred_locked()
+                        self._prune_idle_state_locked(thread_id)
 
             _, cancelled_in_finally = await _await_uninterruptible_coro(_finalize())
             if cancelled_in_finally and not had_error:
@@ -2465,17 +2782,31 @@ class ThreadEngine:
         return result
 
     async def stop(self, thread_id, *, chat_id):
-        async with self.locks.setdefault(thread_id, asyncio.Lock()):
-            row = await asyncio.to_thread(self.store.stop, thread_id, chat_id)
-            task = self.tasks.get(thread_id)
-            if task:
-                task.cancel()
-            self._resolve(thread_id, row)
+        async with self._submission_lock:
+            self._drop_deferred(thread_id)
+            async with self.locks.setdefault(thread_id, asyncio.Lock()):
+                row = await asyncio.to_thread(self.store.stop, thread_id, chat_id)
+                task = self.tasks.get(thread_id)
+                if task:
+                    task.cancel()
+                self._resolve(thread_id, row)
+            if not task:
+                await self._drain_deferred_locked()
+                self._prune_idle_state_locked(thread_id)
         if task:
             await asyncio.gather(task, return_exceptions=True)
-            if self.tasks.get(thread_id) is task:
-                self.tasks.pop(thread_id, None)
-                self.background_tasks.discard(thread_id)
+            async with self._submission_lock:
+                if self.tasks.get(thread_id) is task:
+                    was_background = thread_id in self.background_tasks
+                    await self._drain_deferred_locked(
+                        free_total=1,
+                        free_bg=(1 if was_background else 0),
+                    )
+                    self.tasks.pop(thread_id, None)
+                    self.background_tasks.discard(thread_id)
+                else:
+                    await self._drain_deferred_locked()
+                self._prune_idle_state_locked(thread_id)
         if hasattr(self.runtime, "stopped"):
             try:
                 await self.runtime.stopped(thread_id)
@@ -2491,16 +2822,26 @@ class ThreadEngine:
 
     async def drain(self):
         while self.tasks:
-            await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
+            pending = [t for t in self.tasks.values() if not t.done()]
+            if not pending:
+                for tid in [k for k, v in list(self.tasks.items()) if v.done()]:
+                    self.tasks.pop(tid, None)
+                    self.background_tasks.discard(tid)
+                continue
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def close(self):
         self.closing = True
-        for task in self.tasks.values():
+        self._deferred_queue.clear()
+        for task in list(self.tasks.values()):
             task.cancel()
         await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
         self.tasks.clear()
         self.background_tasks.clear()
+        self.chats.clear()
+        self.locks.clear()
         for waiters in self.waiters.values():
             for _, future in waiters:
                 if not future.done():
                     future.cancel()
+        self.waiters.clear()

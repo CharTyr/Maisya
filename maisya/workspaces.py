@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 from .pathsafe import (
+    _eloop_errnos,
     acquire_lock_handle,
     check_part,
     create_exclusive,
@@ -95,7 +96,7 @@ def regular_open(root, relative):
                     dir_fd=directory,
                 )
         except OSError as error:
-            if error.errno in {40, 62}:
+            if error.errno in _eloop_errnos():
                 raise ValueError("工作区不能包含符号链接") from None
             raise
         info = os.fstat(descriptor)
@@ -132,7 +133,7 @@ def write_workspace_bytes(root, relative, data, *, overwrite=True):
                         dir_fd=directory,
                     )
                 except OSError as error:
-                    if error.errno in {40, 62}:
+                    if error.errno in _eloop_errnos():
                         raise ValueError("工作区不能包含符号链接") from None
                     raise
                 try:
@@ -281,7 +282,9 @@ class WorkingCopy:
         if not isinstance(data, (bytes, bytearray)) or len(data) > self.owner.max_bytes:
             raise ValueError("写入内容过大或格式无效")
         raw = bytes(data)
-        files, used = self.owner.inventory(self.path)
+        files, used = self.owner.inventory(
+            self.path, roots=("project", "in", "out", "cache")
+        )
         previous = next((size for name, size in files if name == path), 0)
         if used - previous + len(raw) > self.owner.max_bytes:
             raise ValueError("工作区超过容量配额")
@@ -379,8 +382,10 @@ class Workspaces:
                 "CREATE TABLE IF NOT EXISTS attachments (handle TEXT PRIMARY KEY, chat_id TEXT, thread_id TEXT, revision INTEGER, name TEXT, kind TEXT, size INTEGER, digest TEXT, created REAL)"
             )
 
-    def inventory(self, path):
-        return inventory(path, max_bytes=self.max_bytes, max_files=self.max_files)
+    def inventory(self, path, *, roots=("project", "in", "out")):
+        return inventory(
+            path, roots=roots, max_bytes=self.max_bytes, max_files=self.max_files
+        )
 
     def read_checkpoint_outputs(self, row):
         workspace_id = (
@@ -390,47 +395,57 @@ class Workspaces:
         if not workspace_id.startswith("ws_") or not workspace_id[3:].isalnum():
             return []
         durable = self.root / workspace_id
-        pointer = durable / "current.json"
-        if not pointer.is_file() or path_is_link_like(pointer):
-            return []
-        try:
-            version = json.loads(pointer.read_text(encoding="utf-8")).get("version", "")
-        except (OSError, ValueError):
-            return []
-        if not re.fullmatch(r"v_[a-f0-9]{32}", version):
-            return []
-        source = durable / version
-        if not source.is_dir() or path_is_link_like(source):
-            return []
-        out_files, _size = inventory(
-            source, roots=("out",), max_bytes=self.max_bytes, max_files=self.max_files
-        )
-        items = []
-        total_out = 0
-        budget = min(self.max_bytes, 24 * 1024**2)
-        for rel, size in sorted(out_files):
-            if len(items) >= 32:
-                break
-            if size <= 0 or size > 6 * 1024**2 or total_out + size > budget:
-                continue
-            with regular_open(source, rel) as handle:
-                data = handle.read(6 * 1024**2 + 1)
-            if len(data) > 6 * 1024**2 or self.contains_secret(data):
-                continue
-            subpath = rel[4:] if rel.startswith("out/") else rel
-            if subpath:
-                items.append((subpath, data))
-                total_out += len(data)
-        return items
+        with self.capacity_lock():
+            pointer = durable / "current.json"
+            if not pointer.is_file() or path_is_link_like(pointer):
+                return []
+            try:
+                version = json.loads(pointer.read_text(encoding="utf-8")).get(
+                    "version", ""
+                )
+            except (OSError, ValueError):
+                return []
+            if not re.fullmatch(r"v_[a-f0-9]{32}", version):
+                return []
+            source = durable / version
+            if not source.is_dir() or path_is_link_like(source):
+                return []
+            out_files, _size = inventory(
+                source,
+                roots=("out",),
+                max_bytes=self.max_bytes,
+                max_files=self.max_files,
+            )
+            items = []
+            total_out = 0
+            budget = min(self.max_bytes, 24 * 1024**2)
+            for rel, size in sorted(out_files):
+                if len(items) >= 32:
+                    break
+                if size <= 0 or size > 6 * 1024**2 or total_out + size > budget:
+                    continue
+                with regular_open(source, rel) as handle:
+                    data = handle.read(6 * 1024**2 + 1)
+                if len(data) > 6 * 1024**2 or self.contains_secret(data):
+                    continue
+                subpath = rel[4:] if rel.startswith("out/") else rel
+                if subpath:
+                    items.append((subpath, data))
+                    total_out += len(data)
+            return items
 
     def usage(self):
-        return sum(
-            path.lstat().st_size
-            for path in self.root.rglob("*")
-            if path.is_file()
-            and not path_is_link_like(path)
-            and self.runtime not in path.parents
-        )
+        total = 0
+        for path in self.root.rglob("*"):
+            if self.runtime in path.parents:
+                continue
+            try:
+                if path_is_link_like(path) or not path.is_file():
+                    continue
+                total += path.lstat().st_size
+            except FileNotFoundError:
+                continue
+        return total
 
     @contextmanager
     def capacity_lock(self):

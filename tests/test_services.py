@@ -43,9 +43,17 @@ for line in sys.stdin:
     plugin.runtime.services = Services(
         plugin.data_root / "abilities/services.json", plugin.vault
     )
-    profile = replace(
-        plugin.profiles.get("scout"), mcp=("drawing",), tools=("mcp_call",)
+    profile_file = plugin.profiles.path / "scout/profile.toml"
+    profile_text = "\n".join(
+        line
+        for line in profile_file.read_text(encoding="utf-8").splitlines()
+        if not line.startswith(("tools =", "mcp ="))
     )
+    profile_file.write_text(
+        profile_text + '\ntools = ["mcp_call"]\nmcp = ["drawing"]\n',
+        encoding="utf-8",
+    )
+    profile = plugin.profiles.get("scout")
     row = plugin.threads.create(
         profile, "draw", chat_id="chat", platform="qq", user_id=""
     )

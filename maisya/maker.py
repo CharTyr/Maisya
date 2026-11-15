@@ -28,6 +28,32 @@ _PLAYWRIGHT_ERROR_MARKERS = (
     "executable doesn't exist",
 )
 
+_ACCESS_RANK = {"everyone": 0, "listed": 1, "admins": 2}
+_ENVIRONMENT_RANK = {"sandbox": 0, "readonly": 1}
+_NETWORK_RANK = {"public": 0, "restricted": 1, "none": 2}
+
+
+def _stricter_choice(first: str, second: str, ranks: dict[str, int], *, default_rank: int) -> str:
+    return first if ranks.get(first, default_rank) >= ranks.get(second, default_rank) else second
+
+
+def _tighten_allowlist(snapshot_items: tuple[str, ...], live_items: tuple[str, ...]) -> tuple[str, ...]:
+    """合并快照与实时白名单时只做单调收窄；非空交集为空则保留永不匹配的哨兵。"""
+    if snapshot_items and live_items:
+        live_set = set(live_items)
+        narrowed = tuple(item for item in snapshot_items if item in live_set)
+        return narrowed if narrowed else ("__disjoint__",)
+    return live_items or snapshot_items
+
+
+def _step_service_context(context: dict) -> dict:
+    """为服务/跨插件 API 调用生成按 step_index 隔离的 _tool_call_id 浅副本。"""
+    step_idx = context.get("_step_index")
+    if step_idx is None:
+        return context
+    raw_call_id = str(context.get("_tool_call_id") or "")
+    return {**context, "_tool_call_id": f"step:{int(step_idx)}:{raw_call_id}"}
+
 
 def _playwright_render_hint(message: str) -> str:
     """若 html2png 报错涉及缺失 Playwright/Chromium 内核，附加安装与降级交付提示。"""
@@ -72,6 +98,52 @@ class AgentRuntime(Scout):
             services=self.services,
             runtime=self,
         )
+
+    def resolve_profile(self, profile: Profile) -> Profile:
+        """统一合成快照与实时角色档案：刷新运行参数且只允许安全边界单调收窄。"""
+        profiles = getattr(self.memory, "profiles", None) if self.memory else None
+        if profiles is None:
+            return profile
+        prof_path = getattr(profiles, "path", None)
+        if prof_path is not None and not (prof_path / profile.id / "profile.toml").is_file():
+            return profile
+        live = profiles.get(profile.id)
+        if live is None:
+            return profile
+        return replace(
+            profile,
+            enabled=bool(profile.enabled and live.enabled),
+            bound=bool(profile.bound and live.bound),
+            access=_stricter_choice(profile.access, live.access, _ACCESS_RANK, default_rank=2),
+            environment=_stricter_choice(
+                profile.environment, live.environment, _ENVIRONMENT_RANK, default_rank=1
+            ),
+            network=_stricter_choice(profile.network, live.network, _NETWORK_RANK, default_rank=2),
+            allow_users=_tighten_allowlist(tuple(profile.allow_users), tuple(live.allow_users)),
+            allow_chats=_tighten_allowlist(tuple(profile.allow_chats), tuple(live.allow_chats)),
+            instructions=live.instructions,
+            model=live.model,
+            model_name=live.model_name,
+            fallback_models=live.fallback_models,
+            task=live.task,
+            max_tokens=live.max_tokens,
+            context_tokens=live.context_tokens,
+            temperature=live.temperature,
+            max_steps=live.max_steps,
+            web_provider=live.web_provider,
+            sandbox_targets=live.sandbox_targets,
+            skills=live.skills,
+            mcp=live.mcp,
+            apis=live.apis,
+            secrets=live.secrets,
+            template=live.template,
+            fish_seed=live.fish_seed,
+        )
+
+    def begin_turn(self, thread_id: str) -> None:
+        """在新一轮线程执行开始时清理上一轮残留的附件与重试计数。"""
+        self.attachments.pop(thread_id, None)
+        self.attachment_attempts.pop(thread_id, None)
 
     def effective_mode(self, profile):
         if profile.environment != "sandbox":
@@ -129,30 +201,9 @@ class AgentRuntime(Scout):
                 raise PermissionError("角色引用的服务、模板或只读 API 尚未登记")
 
     async def step(self, profile, history, *, max_steps=None):
+        profile = await completed_thread(self.resolve_profile, profile)
         await completed_thread(self.available, profile)
         if self.memory:
-            live = await completed_thread(self.memory.profiles.get, profile.id)
-            profile = replace(
-                profile,
-                enabled=live.enabled,
-                bound=live.bound,
-                instructions=live.instructions,
-                model=live.model,
-                model_name=live.model_name,
-                fallback_models=live.fallback_models,
-                task=live.task,
-                max_tokens=live.max_tokens,
-                context_tokens=live.context_tokens,
-                temperature=live.temperature,
-                max_steps=live.max_steps,
-                web_provider=live.web_provider,
-                sandbox_targets=live.sandbox_targets,
-                skills=live.skills,
-                mcp=live.mcp,
-                apis=live.apis,
-                secrets=live.secrets,
-                template=live.template,
-            )
             methods = await completed_thread(self.memory.methods, profile)
             profile = replace(
                 profile,
@@ -193,16 +244,11 @@ class AgentRuntime(Scout):
         return await super().step(profile, history)
 
     def before(self, context):
-        profile = Profile(**context["profile_snapshot"])
+        profile = self.resolve_profile(Profile(**context["profile_snapshot"]))
         self.available(profile)
         if self.permitted and not self.permitted(context):
             raise PermissionError("当前真实来源或会话不在档案范围内")
-        restricted = (
-            profile.access == "admins"
-            or self.memory
-            and self.memory.profiles.get(profile.id).access == "admins"
-        )
-        if restricted and not self.authorized(context):
+        if profile.access == "admins" and not self.authorized(context):
             raise PermissionError("继续受限线程需要当前真实管理员授权")
         return (
             self.memory.context(
@@ -260,7 +306,10 @@ class AgentRuntime(Scout):
             raise ValueError("引用输入无效")
         if not isinstance(previous_threads, list) or len(previous_threads) > 5:
             raise ValueError("引用线程无效")
-        if not Profile(**row["profile_snapshot"]).uses_workspace:
+        resolved_profile = await completed_thread(
+            self.resolve_profile, Profile(**row["profile_snapshot"])
+        )
+        if not resolved_profile.uses_workspace:
             return []
         if row["owner"] == "self":
             raise PermissionError("自身活动不自动导入会话引用输入")
@@ -596,18 +645,15 @@ class AgentRuntime(Scout):
 
     async def call(self, name, arguments, context):
         validate_arguments(name, arguments)
-        profile = Profile(**context["profile_snapshot"])
+        profile = await completed_thread(
+            self.resolve_profile, Profile(**context["profile_snapshot"])
+        )
         await completed_thread(self.available, profile)
         if self.permitted and not await completed_thread(self.permitted, context):
             raise PermissionError("当前真实来源或会话不在档案范围内")
-        live_restricted = (
-            self.memory
-            and (await completed_thread(self.memory.profiles.get, profile.id)).access
-            == "admins"
-        )
-        if (
-            profile.access == "admins" or live_restricted
-        ) and not await completed_thread(self.authorized, context):
+        if profile.access == "admins" and not await completed_thread(
+            self.authorized, context
+        ):
             raise PermissionError("本次活动的管理员授权已失效")
         if name in {
             "workspace_file",
@@ -730,10 +776,30 @@ class AgentRuntime(Scout):
                 attachments = await completed_thread(
                     self.files.attach, context, work, arguments["paths"]
                 )
-            except (ValueError, OSError):
-                self.attachment_attempts[context["thread_id"]] = attempts + 1
+            except (ValueError, OSError) as exc:
+                next_attempts = attempts + 1
+                self.attachment_attempts[context["thread_id"]] = next_attempts
+                if next_attempts >= 2:
+                    return {
+                        "error": f"本轮附件已尝试修正一次（{exc}），请直接返回可用文字与具体附件错误"
+                    }
                 raise
-            self.attachments[context["thread_id"]] = attachments
+            existing = list(self.attachments.get(context["thread_id"], ()))
+            seen_keys = {
+                (item.get("handle"), item.get("path"))
+                for item in existing
+                if isinstance(item, dict)
+            }
+            for item in attachments:
+                key = (
+                    (item.get("handle"), item.get("path"))
+                    if isinstance(item, dict)
+                    else item
+                )
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    existing.append(item)
+            self.attachments[context["thread_id"]] = existing
             return {"attachments": attachments}
         if name == "sandbox_exec":
             if profile.environment != "sandbox":
@@ -754,12 +820,42 @@ class AgentRuntime(Scout):
                 raise PermissionError("带私有凭据或受限网络的沙箱执行仅限当前管理员授权")
             work = await self._work(context)
             endpoints = ()
+            host_mappings = {}
             if profile.network == "restricted" and profile.sandbox_targets:
+                from ipaddress import ip_address
                 from .services import validate_endpoint_targets
 
-                endpoints = await completed_thread(
-                    validate_endpoint_targets, profile.sandbox_targets
-                )
+                def _resolve_targets():
+                    resolved_endpoints = []
+                    resolved_hosts = {}
+                    for raw_target in profile.sandbox_targets:
+                        raw_text = str(raw_target or "").strip()
+                        pairs = validate_endpoint_targets([raw_text])
+                        resolved_endpoints.extend(pairs)
+                        host_part = raw_text
+                        if raw_text.startswith("[") and "]:" in raw_text:
+                            host_part = raw_text[1 : raw_text.index("]:")]
+                        elif ":" in raw_text:
+                            host_part = raw_text.rsplit(":", 1)[0]
+                        host_part = host_part.strip().lower()
+                        if host_part and pairs:
+                            try:
+                                ip_address(host_part)
+                            except ValueError:
+                                resolved_hosts[host_part] = str(pairs[0][0])
+                    return tuple(dict.fromkeys(resolved_endpoints)), resolved_hosts
+
+                endpoints, host_mappings = await completed_thread(_resolve_targets)
+            exec_kwargs = {
+                "call_id": context["_tool_call_id"],
+                "step_index": context.get("_step_index"),
+                "timeout": arguments.get("timeout"),
+                "mode": profile.network,
+            }
+            if endpoints:
+                exec_kwargs["targets"] = endpoints
+            if host_mappings:
+                exec_kwargs["host_mappings"] = host_mappings
             if profile.secrets:
                 async with self.services.mount_secrets(
                     self, profile.secrets, work=work
@@ -769,11 +865,8 @@ class AgentRuntime(Scout):
                             context,
                             work,
                             arguments["command"],
-                            call_id=context["_tool_call_id"],
-                            timeout=arguments.get("timeout"),
-                            mode=profile.network,
-                            **({"targets": endpoints} if endpoints else {}),
                             secrets=secrets,
+                            **exec_kwargs,
                         )
                     )
             return self.redact(
@@ -781,20 +874,18 @@ class AgentRuntime(Scout):
                     context,
                     work,
                     arguments["command"],
-                    call_id=context["_tool_call_id"],
-                    timeout=arguments.get("timeout"),
-                    mode=profile.network,
-                    **({"targets": endpoints} if endpoints else {}),
+                    **exec_kwargs,
                 )
             )
+        service_ctx = _step_service_context(context)
         if name == "mcp_call":
             if not self.services:
                 raise RuntimeError("MCP 服务尚未登记")
-            return await self.services.call(profile, arguments, context, self)
+            return await self.services.call(profile, arguments, service_ctx, self)
         if name == "plugin_api":
             if not self.services:
                 raise RuntimeError("跨插件 API 尚未登记")
-            return await self.services.call_api(profile, arguments, context, self)
+            return await self.services.call_api(profile, arguments, service_ctx, self)
         if name == "credential_call":
             if profile.environment == "sandbox" and not self.sandbox.ready:
                 raise RuntimeError(self.sandbox.error or "固定凭据容器执行需要启用容器沙箱")
@@ -803,7 +894,7 @@ class AgentRuntime(Scout):
             ):
                 raise PermissionError("固定凭据模板需要本次真实管理员授权")
             return await self.services.credential(
-                profile, arguments["arguments"], context, self
+                profile, arguments["arguments"], service_ctx, self
             )
         return await super().call(name, arguments, context)
 
