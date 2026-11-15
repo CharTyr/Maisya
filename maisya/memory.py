@@ -11,9 +11,10 @@ import tempfile
 import time
 import zipfile
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
+from .abilities import _ensure_managed_dir, _has_relative_link
 from .pathsafe import (
     check_part,
     ensure_dirs,
@@ -23,7 +24,7 @@ from .pathsafe import (
     path_is_link_like,
     rmtree_safe,
 )
-from .vault import atomic_private_write, private_directory
+from .vault import atomic_private_write
 
 PRESETS_DIR = Path(__file__).resolve().parents[1] / "presets"
 SKILL_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
@@ -52,6 +53,12 @@ _ARCHIVE_JUNK_PARTS = frozenset(
     }
 )
 _ARCHIVE_JUNK_FILES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
+
+
+def _validate_tz_offset_minutes(tz_offset_minutes: int) -> int:
+    if type(tz_offset_minutes) is not int or not -720 <= tz_offset_minutes <= 840:
+        raise ValueError("时区偏移分钟数无效")
+    return tz_offset_minutes
 
 
 def _slug_skill_id(raw: str) -> str:
@@ -273,7 +280,17 @@ def parse_skill_meta(skill_id: str, content: str) -> dict:
 
 
 class MemoryLayers:
-    def __init__(self, root, store, profiles, vault, *, clock=time.time):
+    def __init__(
+        self,
+        root,
+        store,
+        profiles,
+        vault,
+        *,
+        clock=time.time,
+        tz_offset_minutes: int = 480,
+    ):
+        self.tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
         self.root, self.store, self.profiles, self.vault, self.clock = (
             root,
             store,
@@ -295,7 +312,7 @@ class MemoryLayers:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS experience_receipts (thread_id TEXT,revision INTEGER,PRIMARY KEY(thread_id,revision))"
             )
-        private_directory(root / "memory/self")
+        _ensure_managed_dir(root, root / "memory/self")
         heartbeat_preset = PRESETS_DIR / "memory/HEARTBEAT.md"
         for kind in ("journal", "heartbeat"):
             path = self._locate(kind)[1]
@@ -341,7 +358,9 @@ class MemoryLayers:
                 skill_file = source_dir / "SKILL.md"
                 if not skill_file.is_file() or path_is_link_like(skill_file):
                     continue
-                destination_dir = private_directory(root / "abilities/skills" / source_dir.name)
+                destination_dir = _ensure_managed_dir(
+                    root, root / "abilities/skills" / source_dir.name
+                )
                 destination = destination_dir / "SKILL.md"
                 preset_bytes = skill_file.read_bytes()
                 if not destination.exists() and not path_is_link_like(destination):
@@ -492,11 +511,12 @@ class MemoryLayers:
             directory = self.root / "memory/self"
         else:
             raise ValueError("未知记忆层")
-        private_directory(directory)
+        base_root = self.profiles.path if kind in {"profile", "notes"} else self.root
+        _ensure_managed_dir(base_root, directory)
         return f"{kind}:{target}:{document}", directory / document, document, target
 
     @staticmethod
-    def _bytes(path):
+    def _bytes(path, *, max_bytes: int = 131072):
         if has_dir_fd():
             try:
                 descriptor = os.open(
@@ -520,10 +540,13 @@ class MemoryLayers:
             if (
                 not stat.S_ISREG(info.st_mode)
                 or invalid_nlink
-                or info.st_size > 131072
+                or info.st_size > max_bytes
             ):
                 raise ValueError("记忆文件无效或过大")
-            return source.read(131073)
+            data = source.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise ValueError("记忆文件无效或过大")
+            return data
 
     LIMITS = {
         "memory": 16000,
@@ -607,7 +630,8 @@ class MemoryLayers:
         asset, path, document, target = self._locate(
             kind, target, chat_id, document, db=db
         )
-        content = self._bytes(path).decode("utf-8")
+        max_bytes = _SKILL_FILE_MAX_BYTES if kind == "skill" else 131072
+        content = self._bytes(path, max_bytes=max_bytes).decode("utf-8")
         old = db.execute(
             "SELECT * FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
             (asset,),
@@ -704,7 +728,7 @@ class MemoryLayers:
                 )
             raw_text = ""
             for cand in candidates:
-                raw = self._bytes(cand)
+                raw = self._bytes(cand, max_bytes=_SKILL_FILE_MAX_BYTES)
                 if raw:
                     raw_text = raw.decode("utf-8", errors="replace")
                     break
@@ -774,10 +798,12 @@ class MemoryLayers:
             )
         if base and base.strip():
             companions = self.read_skill_companions(base)
-            dest_root = private_directory(self.root / "abilities/skills" / target)
+            dest_root = _ensure_managed_dir(
+                self.root, self.root / "abilities/skills" / target
+            )
             for rel_posix, raw_data in companions:
                 dest_file = dest_root / rel_posix
-                private_directory(dest_file.parent)
+                _ensure_managed_dir(dest_root, dest_file.parent)
                 atomic_private_write(dest_file, raw_data)
         current = self.read("skill", target=target)
         return self.write(
@@ -875,21 +901,61 @@ class MemoryLayers:
                 collected.append((rel_clean, data))
         return collected
 
+    def _resolve_preset_skill_dir(
+        self, target: str, *, profile_id: str = "", rel_path: str = ""
+    ) -> Path | None:
+        if profile_id and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id):
+            preset_dir = self.profiles.path / profile_id / "preset/skills" / target
+            if path_is_link_like(preset_dir) or (
+                preset_dir.exists()
+                and _has_relative_link(self.profiles.path, preset_dir)
+            ):
+                raise ValueError("技能路径不能经过链接")
+            if (preset_dir / "SKILL.md").is_file() or (rel_path and preset_dir.is_dir()):
+                if (preset_dir / "SKILL.md").exists() and _has_relative_link(
+                    self.profiles.path, preset_dir / "SKILL.md"
+                ):
+                    raise ValueError("技能路径不能经过链接")
+                return preset_dir
+            return None
+        if not self.profiles.path.is_dir():
+            return None
+        fallback_match: Path | None = None
+        for prof_dir in sorted(self.profiles.path.iterdir()):
+            if (
+                path_is_link_like(prof_dir)
+                or not prof_dir.is_dir()
+                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", prof_dir.name)
+            ):
+                continue
+            cand = prof_dir / "preset/skills" / target
+            if path_is_link_like(cand) or (
+                cand.exists() and _has_relative_link(self.profiles.path, cand)
+            ):
+                raise ValueError("技能路径不能经过链接")
+            if not (cand / "SKILL.md").is_file() and not (rel_path and cand.is_dir()):
+                continue
+            if (cand / "SKILL.md").exists() and _has_relative_link(
+                self.profiles.path, cand / "SKILL.md"
+            ):
+                raise ValueError("技能路径不能经过链接")
+            if rel_path and (cand / rel_path).exists():
+                return cand
+            if fallback_match is None:
+                fallback_match = cand
+        return fallback_match
+
     def read_skill_companions(
         self, target: str, *, profile_id: str = ""
     ) -> list[tuple[str, bytes]]:
         if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
         skill_dir = self.root / "abilities/skills" / target
-        if (
-            not (skill_dir / "SKILL.md").is_file()
-            and profile_id
-            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id)
-        ):
-            preset_dir = self.profiles.path / profile_id / "preset/skills" / target
-            if (preset_dir / "SKILL.md").is_file() and not any(
-                path_is_link_like(p) for p in preset_dir.parents
-            ):
+        if not (skill_dir / "SKILL.md").is_file():
+            preset_dir = self._resolve_preset_skill_dir(
+                target, profile_id=profile_id
+            )
+            if preset_dir is not None:
                 skill_dir = preset_dir
         return self._collect_skill_companions(skill_dir)
 
@@ -899,13 +965,29 @@ class MemoryLayers:
             for rel, data in self.read_skill_companions(target, profile_id=profile_id)
         ]
 
-    def read_skill_file(self, target: str, rel_path: str) -> dict:
+    def read_skill_file(
+        self, target: str, rel_path: str, *, profile_id: str = ""
+    ) -> dict:
         if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
             raise ValueError("技能编号无效")
         rel = self._validate_companion_rel(rel_path)
         skill_dir = self.root / "abilities/skills" / target
-        if path_is_link_like(skill_dir) or not skill_dir.is_dir():
+        if path_is_link_like(skill_dir):
             raise ValueError("技能不存在")
+        if skill_dir.is_dir() and (
+            (skill_dir / "SKILL.md").is_file() or (skill_dir / rel).exists()
+        ):
+            if _has_relative_link(self.root, skill_dir):
+                raise ValueError("技能不存在")
+        else:
+            if skill_dir.is_dir() and _has_relative_link(self.root, skill_dir):
+                raise ValueError("技能不存在")
+            preset_dir = self._resolve_preset_skill_dir(
+                target, profile_id=profile_id, rel_path=rel
+            )
+            if preset_dir is None or path_is_link_like(preset_dir) or not preset_dir.is_dir():
+                raise ValueError("技能不存在")
+            skill_dir = preset_dir
         parts = rel.split("/")
         if has_dir_fd():
             cur_fd = os.open(skill_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -1094,7 +1176,7 @@ class MemoryLayers:
 
         imported: list[dict] = []
         with self._lock():
-            skills_root = private_directory(self.root / "abilities/skills")
+            skills_root = _ensure_managed_dir(self.root, self.root / "abilities/skills")
             for skill_id, md_text, companions in bundles:
                 dest_dir = skills_root / skill_id
                 if path_is_link_like(dest_dir):
@@ -1105,13 +1187,13 @@ class MemoryLayers:
                 try:
                     for rel_sub, comp_bytes in companions.items():
                         target_file = stage / rel_sub
-                        private_directory(target_file.parent)
+                        _ensure_managed_dir(stage, target_file.parent)
                         atomic_private_write(target_file, comp_bytes)
-                    private_directory(dest_dir)
+                    _ensure_managed_dir(skills_root, dest_dir)
                     self._clear_skill_companions(dest_dir)
                     for rel_sub, comp_bytes in companions.items():
                         target_file = dest_dir / rel_sub
-                        private_directory(target_file.parent)
+                        _ensure_managed_dir(dest_dir, target_file.parent)
                         atomic_private_write(target_file, comp_bytes)
                 finally:
                     if stage.exists():
@@ -1147,7 +1229,7 @@ class MemoryLayers:
             or not skill_file.is_file()
         ):
             raise ValueError("技能不存在")
-        main_bytes = self._bytes(skill_file)
+        main_bytes = self._bytes(skill_file, max_bytes=_SKILL_FILE_MAX_BYTES)
         if self.vault.contains_secret(main_bytes) or _SECRET_RE.search(
             main_bytes.decode("utf-8", errors="ignore")
         ):
@@ -1254,6 +1336,14 @@ class MemoryLayers:
                 allow_custom=allow_custom,
             )
 
+    def _journal_tz(self, tz_offset_minutes: int | None = None) -> timezone:
+        offset = (
+            self.tz_offset_minutes
+            if tz_offset_minutes is None
+            else _validate_tz_offset_minutes(tz_offset_minutes)
+        )
+        return timezone(timedelta(minutes=offset))
+
     def _write(
         self,
         kind,
@@ -1268,10 +1358,12 @@ class MemoryLayers:
     ):
         if kind == "memory" and isinstance(chat_id, str) and chat_id:
             chat_id = self._resolve_memory_chat_id(chat_id)
-        if kind == "journal" and content and not content.startswith("## "):
+        if kind == "journal" and content and not content.lstrip("\r\n ").startswith("## "):
             content = (
                 "## "
-                + datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
+                + datetime.fromtimestamp(self.clock(), self._journal_tz())
+                .date()
+                .isoformat()
                 + "\n"
                 + content
             )
@@ -1358,10 +1450,12 @@ class MemoryLayers:
             return entries
         return [line.strip() for line in lines if line.strip()]
 
-    def _recent_journal(self, content):
+    def _recent_journal(self, content, *, tz_offset_minutes: int | None = None):
+        tz = self._journal_tz(tz_offset_minutes)
+        normalized = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
         blocks = re.findall(
-            r"^## (\d{4}-\d{2}-\d{2})\n(.*?)(?=^## |\Z)",
-            content,
+            r"^##[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*(?:\n|\Z)(.*?)(?=^##[ \t]+\d{4}-\d{2}-\d{2}[ \t]*(?:\n|\Z)|\Z)",
+            normalized,
             re.MULTILINE | re.DOTALL,
         )
         now = self.clock()
@@ -1372,11 +1466,11 @@ class MemoryLayers:
         for day, text in blocks:
             try:
                 when = (
-                    datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
+                    datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=tz).timestamp()
                 )
             except ValueError:
                 continue
-            if now - 7 * 86400 < when <= now:
+            if now - 7 * 86400 < when <= now + 86400:
                 cleaned_body = text.strip()
                 if not cleaned_body:
                     continue
@@ -1455,9 +1549,9 @@ class MemoryLayers:
                     / skill
                     / "SKILL.md"
                 )
-                if any(path_is_link_like(parent) for parent in path.parents):
+                if _has_relative_link(self.profiles.path, path):
                     raise ValueError("技能路径不能经过链接")
-                content = self._bytes(path).decode("utf-8")
+                content = self._bytes(path, max_bytes=_SKILL_FILE_MAX_BYTES).decode("utf-8")
                 self._guard("skill", content, "", allow_custom=True)
             if not content.strip():
                 raise ValueError("角色引用的技能为空或不存在")
@@ -1592,7 +1686,9 @@ class MemoryLayers:
         if not text:
             return
         self._guard("journal", text, "")
-        day = datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
+        day = (
+            datetime.fromtimestamp(self.clock(), self._journal_tz()).date().isoformat()
+        )
         entry = text if text.startswith("- ") else f"- {text}"
         seed = (old["content"] + "\n\n## " + day + "\n" + entry).strip()
         content = self._recent_journal(seed)
