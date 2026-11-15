@@ -1,104 +1,96 @@
-# 运行环境、沙箱与外部接入
+# 运行环境、沙箱、安全存储与连接器
 
 [← 回到 README](../../README.md)
 
-这里说明什么场景不需要容器、什么场景才需要开启 `Docker + gVisor` 隔离沙箱，以及怎么把外部工具、MCP、跨插件接口、凭据和外部事件安全接进来。
+这里说明 `Maisya v0.3` 如何在免容器环境下开箱执行任务、何时需要开启 `DockerRunner` 隔离沙箱，以及如何安全使用凭据保险箱与 `abilities/services.json` 连接器。
 
 ---
 
-## 一、不用装容器先用起来：无容器轻量工作区模式
+## 一、免容器开箱执行：`HostWorkspaceRunner` 与群友安全边界
 
-在 Windows、macOS、普通桌面 Linux，或跑在 Docker 里不想套娃挂载 Docker socket 的 MaiBot 实例中，你都不必先部署 Docker + gVisor 才能使用工作区、联网查证与做图能力。
+在 Windows、macOS、普通 Linux 桌面或跑在容器里的 MaiBot 实例上，你不需要先配置 Docker 与 gVisor，即可直接使用联网查证、图卡报告制作和工作区脚本执行。
 
-当 `[sandbox] enabled = false`（默认值）时：
+当 `[sandbox] enabled = false`（默认值）时，执行权限按**真实触发身份**自动裁决：
 
-- **`scout` 与 `digest`**（`environment = "readonly"`）：联网检索、网页正文提取、人物与记忆只读查阅、`digest_feed` RSS 管理、以及调用宿主 `render.html2png` 离线把 HTML 渲染成高质量 PNG 海报图卡，全部直接可用。
-- **`maker` 等不依赖私密凭据与受控网段的工作区角色**：自动降级为 **无容器轻量工作区模式（`light_workspace`）**——通过跨平台文件锁与安全路径校验（兼容 Windows 盘符与大小写规范、拒绝 UNC 网络路径），持久工作区目录 `in / project / out`、文件读写、上游接力 `from_threads`、HTML 渲染和 `result_attach` 交付完全正常，只是对模型隐藏并拦截 `sandbox_exec` 任意命令执行。
-- **哪些角色仍要求容器沙箱就绪**：凡是在 `profile.toml` 中明确配置了 `secrets`（私有凭据单次挂载）、`sandbox_targets`（受控公网 `host:port` 白名单）或 `network = "restricted"` 的高权角色，在容器未开启前仍保持禁用锁定，防止边界降级。
+1. **已核验管理员轮次（默认直通 `HostWorkspaceRunner`）**：
+   - 允许在当前线程工作区副本 `project/` 下直接运行 Python / Bash / CLI 命令（`cwd` 锁定工作区副本）；
+   - 通过最小化环境变量构造（`minimal_subprocess_env()` + `PYTHONNOUSERSITE=1`）彻底剥离宿主机进程环境变量与敏感配置；
+   - 独立进程组运行并强制执行超时上限（默认 `60s`，可设最高 `180s`）与输出上限（默认 `2 MiB`）；
+   - 如档案启用受托凭据（`shared_secrets = true`），凭据仅在命令期间写入临时 `0o400` 只读目录 `MAISYA_SECRETS_DIR` 并于退出后立即销毁；标准输出与错误全量经过脱敏；
+   - 在默认 **`permission_mode = "ask_risky"`** 下，命中写工作区外路径、高危破坏性命令（如 `rm -rf`、`git reset --hard`、磁盘/服务启停、`sudo`）、外部写操作（如 `curl -X POST` / `ssh` / `scp` / `rsync`）或未授权敏感路径/首次注入凭据时，线程会暂停并请求管理员确认，批准后才放行并支持按 `once` / `session` / `always` 记住授权。
+2. **普通群友 / 非管理员轮次（无容器时自动锁定）**：
+   - 未开启 Docker 时，**硬拦截任意 Shell 拼接与自由代码执行**，防止通过提示词注入读取宿主机文件；
+   - 正常保留联网查证（`web`）、对话与记忆读取（`context`）、工作区文件读写及 HTML/图卡渲染（`workspace`）；若管理员在自定义档案的 `preset/scripts/` 下预置了只读 `.py` 脚本，则仅允许以无 Shell 参数数组直调固定脚本且零凭据注入。
 
-### Windows / macOS / Docker 环境实操注意点
+### 跨平台实操注意点
 
-- **HTML 渲染出图缺少浏览器内核时**：`render.html2png` 复用宿主环境提供的 Chromium。在 Windows、macOS 或精简 Docker 镜像里首次出图如果报错缺少 Playwright 浏览器可执行文件，请在**运行 MaiBot 的宿主环境**（宿主机或 MaiBot 所在容器）执行 `playwright install chromium`（Linux 环境按需补充 `playwright install-deps chromium`），无需启用容器沙箱。
-- **Docker + NapCat 跨容器传群文件**：如果 MaiBot 与 NapCat 跑在不同容器中、各自看不到对方磁盘路径，工作区导出的文件无法直接按路径投递；插件检测到 QQ 群文件路径投递失败时，会自动降级通过 `adapter.napcat.file.upload_group_file` 以 `base64://` 数据流兜底上传（受文件大小与名称校验保护），无需额外共享宿主机目录。
+- **HTML 渲染出图缺少浏览器内核**：`render.html2png` 复用宿主环境提供的 Chromium。首次作图如报错缺少 Playwright 浏览器，请在**运行 MaiBot 的宿主环境**执行 `playwright install chromium`（Linux 按需补充 `playwright install-deps chromium`），无需启用 Docker 沙箱。
+- **Docker + NapCat 跨容器传群文件**：若 MaiBot 与 NapCat 跑在不同容器中、各自看不到对方磁盘目录，QQ 群文件路径投递失败时会自动降级走 `adapter.napcat.file.upload_group_file` `base64://` 兜底上传。
 
 ---
 
-## 二、什么时候开 Docker + gVisor 沙箱，以及怎么启用
+## 二、按需开启可选 `DockerRunner` 隔离层
 
-当你需要让 Agent 在群聊或项目工作区里真正跑 Python/Node 脚本、安装第三方依赖包、运行受限白名单运维任务，或者把管理员凭据单次挂入 `/run/secrets/<handle>` 时，才需要开启完整沙箱。
+当你想让**非管理员（群友）也能在群聊安全执行自由 Python / Node 脚本**，或想对某个高风险自定义档案显式指定容器隔离（`execution_mode = "sandbox"`）时，再开启 Docker 沙箱即可。
 
-### 1. 环境要求与设计原则
+### 1. `v0.3` 降门槛隔离策略
 
-- 宿主机建议为带有 cgroup v2 的 Linux，安装好 Docker 与 **gVisor（`runsc`）** 运行时。
-- Maisya 采用**「工作区持久，执行容器一次一建」**：
-  - 每个线程把工作区安全副本映射成有字节和 inode 上限的独立隔离目录后才启动单次 `runsc` 容器；
-  - 容器强制非 root 用户、只读根文件系统、`cap-drop=ALL`、`no-new-privileges`，屏蔽宿主网络、局域网私网、云元数据与相邻容器；
-  - 命令退出或超时后确认全部进程结束、校验路径与大小配额（`openat2` / 目录句柄防软硬链接穿越）再原子提交检查点，随后立即销毁容器。
+- **不再强锁 `runsc` 与 `@sha256` 摘要**：默认配置下（`privileged_sandbox_mode = false`）支持普通镜像标签与常规 Docker 运行时；启动探测检测到宿主机安装了 gVisor（`runsc`）时自动附加 `--runtime=runsc`，未安装时平滑使用标准无特权容器（默认配置 `network_mode = "none"`、`readonly_rootfs = true`、`--cap-drop ALL`、`--security-opt no-new-privileges`、`--pids-limit 128`）。
+- **群友轮次强制无秘密、无宿主挂载**：非管理员在容器中仅挂载线程工作区 `/work/project`，绝不挂入宿主目录或任何主人凭据。
+- 若你仍需严格要求 `runsc` 与 `@sha256:` 不可变镜像摘要（如启用受限公网与专有容器网段隔离），可在 `config.toml` `[sandbox]` 中开启 `privileged_sandbox_mode = true`。
 
-### 2. 构建沙箱镜像与启用步骤
+### 2. 构建镜像与开启方法
 
-仓库内附带了可复现镜像定义（[`sandbox/Dockerfile`](../../sandbox/Dockerfile)，基于 Python 3.13 + Node 22 + 非 root 运行用户）与构建脚本 [`sandbox/build_image.sh`](../../sandbox/build_image.sh)：
+仓库提供了 [`sandbox/Dockerfile`](../../sandbox/Dockerfile) 与辅助构建脚本 [`sandbox/build_image.sh`](../../sandbox/build_image.sh)（包含 Python 3.13、Node 24 与非 root 运行用户 `65532:65532`）：
 
 ```bash
-# 1. 先以预览模式确认将执行的 docker build 命令
+# 1. 先预览构建计划（默认 dry-run）
 ./sandbox/build_image.sh
 
-# 2. 实际构建固定镜像 maisya-sandbox:py313
+# 2. 实际构建本地镜像 maisya-sandbox:local（也可按需自行打 tag 如 maisya-sandbox:latest）
 ./sandbox/build_image.sh --execute
 ```
 
-构建完成后，在管理台 **`设置 → 高级设置 → 容器沙箱与并发`**（或 `config.toml` `[sandbox]`）开启 `enabled = true` 并填好 `image = "maisya-sandbox:py313"` 与 `max_concurrent`（默认 `2`，范围 `1..8`），然后在 **`设置 → 运行健康`** 点一下「刷新检查」确认沙箱状态变为就绪。
+构建完成后，在管理台 **`设置 → 基础运行`** 打开 Docker 隔离开关，或在 `config.toml` `[sandbox]` 中设置 `enabled = true` 并填写你构建好的 `image`（如 `"maisya-sandbox:local"`）及 `max_concurrent`（默认 `2`，范围 `1..8`）。
 
 ---
 
-## 三、凭据保险箱（`/vault`）
+## 三、安全存储与凭据保险箱（`/vault`）
 
-不要把 API Key、访问令牌或签名密钥直接写进提示词、手账或技能文件。请统一放进凭据保险箱：
+不要把 API Key、Token 或 SSH 私钥写进提示词、手账或技能文件。请统一放进凭据保险箱：
 
 - **录入方式**：
-  1. 在管理台 **`设置 → 高级设置 → 凭据保险箱`** 填写句柄名与密钥明文保存（回显列表中永远只列句柄名，看不到内容）；
-  2. 或用核验过的管理员账号在**私聊**发送 `/vault set <句柄名> <密钥>`（命令进入插件时消息正文即先行替换为脱敏文本，不会把明文留进聊天历史库）。
-- **物理存储与自动脱敏**：使用 `Fernet` 加密并设 `0600` 权限存放在 `<宿主根>/data/maisya/vault/`；线程控制台输出、错误堆栈、学习摘要及能力配方导出前均会扫描所有已知凭据与常见密钥正则并脱敏拦截。
+  1. 在管理台 **`设置 → 安全存储`** 填写句柄名、类型/域名备注与密钥明文保存（界面与列表只展示元数据名录，不回显明文）；
+  2. 或使用已核验的管理员账号在**私聊**发送 `/vault set <句柄名> <密钥>`（进入插件时先脱敏原消息文本再存密文）。
+- **存储与脱敏**：使用 `Fernet` 加密并设 `0600` 权限存于 `<宿主根>/data/maisya/vault/`；同步维护非敏感索引 `vault_meta.json` 供管理员线程按句柄名引用，所有控制台、日志、输出与 `.zip` 档案导出均强制触发脱敏与秘密扫描拦截。
 
 ---
 
-## 四、外部服务登记：`abilities/services.json`
+## 四、外部连接器登记：`abilities/services.json`
 
-在管理台 **`设置 → 高级设置 → 外部服务与接口`**（对应外部数据目录 `<宿主根>/data/maisya/abilities/services.json`）可以统一登记四类外部能力，角色通过对应名字或开关授权使用：
+在 `<宿主根>/data/maisya/abilities/services.json`（也可经 `设置` / 管理 API 维护）统一登记四类连接器节点（`v0.3` 已移除旧版静态命令 `templates`，命令行任务统一交由工作区执行器处理）：
 
 ### 1. stdio MCP 服务（`servers`）
 
-由管理员固定好可执行程序路径、白名单工具名与环境变量绑定的保险箱句柄，按需以隔离进程启动（在 Linux 上额外支持降权执行）：
+由管理员固定可执行程序绝对路径（拒绝 UNC 路径）、允许工具名与保险箱环境变量绑定：
 
-- **跨平台安全环境**：`command` 必须填写本机绝对路径（Windows 拒绝 `\\host\share` 形式的 UNC 路径）；启动子进程时默认只透传最小必要系统环境变量（如 Windows 下仅保留 `SystemRoot`、`COMSPEC`、`PATHEXT`、`TEMP`/`TMP`、`USERPROFILE` 等基础运行变量，POSIX 下保留最小基础环境）并单独注入配置的保险箱绑定变量，防止把宿主过程其余环境变量或密钥带入外部 MCP 进程。
-- 群友共享的带 Key 查询工具可设 `readonly = true, access = "everyone"`，模型与群友只能看到查回的结果，拿不到环境变量里的 Key。
-- 管理员私有可写 MCP（`readonly = false, access = "admins"`）仅允许同时设为 `access = "admins"` 的角色在当前已核验管理员授权下调用。
+- 子进程默认仅透传最小必要系统环境变量（Linux 额外支持降权执行）；
+- 群友共享的带 Key 查询工具可设 `readonly = true, access = "everyone"`，群友只见查询结果、拿不到 Key；
+- 管理员私有可写 MCP（`readonly = false, access = "admins"`）仅对 `admins` 档案及已核验管理员轮次开放。
 
 ### 2. 跨插件 `@API`（`apis`）
 
-无需手写转接脚本，直接把同一个 MaiBot 实例里其他已安装插件公开的 `@API` 登记为白名单：
+将同实例下其他已安装插件公开的 `@API` 登记为白名单：
 
-- 设定 `plugin_id`、`api_name`、参数 JSON `schema` 与 `readonly` 标志；
-- 在角色配置中勾选工具 `plugin_api` 并填写授权调用的 API 别名即可。
+- 设 `plugin_id`、`api_name`、参数 JSON `schema` 与 `readonly` 标志；
+- 在自定义档案的连接器（`connectors`）中开启对应接口即可调用，底层通过宿主 `api.list` / `api.get` / `api.call` 执行并统一脱敏返回。
 
 ### 3. 自定义联网来源映射（`web`）
 
-当宿主统一联网没开启，且你想把 `web_search` / `web_fetch` 固定接到自己的搜索引擎（或想单独为某个角色指定 `web:<别名>`）时，可以在 `"web"` 节点定义 `providers` 和 `arg_map` / `defaults` 字段映射。
+当宿主统一联网未开启、或需要把 `web_search` / `web_fetch` 固定接到自建服务时，在 `"web"` 节点定义 `providers` 与 `arg_map` / `defaults` 字段映射。
 
 ### 4. 平台文件实体读取器（`inputs`）
 
-当聊天适配器仅在消息里给出平台私有 `file_ref` 而未附带可下载公网 URL 时，可在 `"inputs"` 中按平台（如 `"qq"`）绑定一个专门把 `{message_id, file_ref}` 转成二进制资源的只读 MCP 工具，读回的字节安全写入工作区只读 `in/` 目录供后续分析处理。
+当平台消息只提供私有 `file_ref` 而没有公网下载链接时，在 `"inputs"` 按平台名（如 `"qq"`）绑定只读 MCP 读取器，将 `{message_id, file_ref}` 读回的二进制资源安全写入线程只读 `in/` 目录。
 
----
-
-## 五、签名外部事件 Webhook（`webhooks.json`）
-
-如果你想让外部脚本、GitHub 通知、监控告警或 CI 完成信号去触发 MaiBot 某个群里或某个自主角色的后续工作流，可以直接复用宿主已鉴权的静态 WebUI Action 通道（**不在主机新开任何未保护端口**）：
-
-1. 先用 `/vault set my_event_key <你的签名密钥>` 在保险箱存好 HMAC 密钥。
-2. 在 **`设置 → 高级设置 → 外部事件通道`** 添加通道：填目标会话（`qq:group:12345678`）、类型（`proactive` 过社交分寸闸唤醒群聊，或 `silent` 只在后台跑完更新工作区）、可选绑定自主 `profile` + `workspace`（接到事件后先跑线程整理分析再通知），并绑定刚才的凭据句柄。
-3. 推送端按 HMAC-SHA256 规范对 `{channel, event_id, timestamp, payload}` 计算签名后，携带已登录的宿主 `maibot_session` Cookie 调用宿主路由：
-   ```text
-   POST /api/webui/plugins/runtime/webui/chartyr.maisya/settings/actions/incoming_event
-   ```
-   接收端严格校验证书/登录态、5 分钟时间窗、16 KiB 载荷上限与 `event_id` 幂等防重放。
+> **关于外部事件监控**：`v0.3` 已移除高维护成本的 `webhooks.json` 与签名接收接口。持续状态监测与外部拉取告警请直接使用原生的 **`maisya_later(mode="watch", condition=..., every_seconds=...)`**（详见 [管理台与接入](../../docs/04-管理台与接入.md#七条件盯梢watch替代历史-webhook)）。
