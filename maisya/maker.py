@@ -8,12 +8,27 @@ import os
 import re
 import shlex
 import sqlite3
+import subprocess
+import sys
+import time
+import uuid
 from dataclasses import replace
+from pathlib import Path
 
 from .abilities import Profile
-from .sandbox import Sandbox
+from .pathsafe import minimal_subprocess_env, path_is_link_like
+from .runner import (
+    ApprovalRequired,
+    ExecutionRequest,
+    ExecutionResult,
+    HostWorkspaceRunner,
+    _command_preview,
+    _decode_and_redact,
+    _has_path_escape,
+)
+from .sandbox import DockerRunner, Sandbox, SandboxSettings
 from .scout import Scout, call_capability, checked, safe_url, validate_arguments
-from .trust import parse_stream_spec
+from .trust import PermissionGrantStore, parse_stream_spec
 from .workspaces import (
     Workspaces,
     completed_thread,
@@ -30,7 +45,10 @@ _PLAYWRIGHT_ERROR_MARKERS = (
 
 _ACCESS_RANK = {"everyone": 0, "listed": 1, "admins": 2}
 _ENVIRONMENT_RANK = {"sandbox": 0, "readonly": 1}
+_EXECUTION_RANK = {"host": 0, "sandbox": 1}
+_PERMISSION_RANK = {"autonomous": 0, "ask_risky": 1, "always_ask": 2}
 _NETWORK_RANK = {"public": 0, "restricted": 1, "none": 2}
+_SHELL_META_RE = re.compile(r"[\n\r|&;><$`\\]")
 
 
 def _stricter_choice(first: str, second: str, ranks: dict[str, int], *, default_rank: int) -> str:
@@ -78,9 +96,29 @@ class AgentRuntime(Scout):
         authorized,
         web_provider="auto",
         tz_offset_minutes=None,
+        grants=None,
+        host_runner=None,
+        docker_runner=None,
+        global_permission_mode="ask_risky",
     ):
         super().__init__(host, vault.redact, tz_offset_minutes=tz_offset_minutes)
         self.store, self.vault, self.authorized = store, vault, authorized
+        self.sandbox_settings = settings if isinstance(settings, SandboxSettings) else SandboxSettings()
+        if grants is not None:
+            self.grants = grants
+        elif getattr(store, "path", None) is not None:
+            self.grants = PermissionGrantStore(store.path)
+        else:
+            self.grants = None
+        self.host_runner = host_runner or HostWorkspaceRunner(
+            vault=vault, grants=self.grants
+        )
+        self._custom_docker_runner = docker_runner is not None
+        self.docker_runner = docker_runner or DockerRunner(
+            self.sandbox_settings, vault=vault, grants=self.grants
+        )
+        self._global_permission_mode = global_permission_mode
+        self._pending_pause_by_call = {}
         self.sandbox = Sandbox(
             settings, store, redact=vault.redact, authorized=authorized
         )
@@ -107,6 +145,247 @@ class AgentRuntime(Scout):
             services=self.services,
             runtime=self,
         )
+        self._ensure_pending_approvals_table()
+
+    def _ensure_pending_approvals_table(self) -> None:
+        connect = getattr(self.store, "connect", None)
+        if not callable(connect):
+            return
+        with connect() as db, db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS pending_approvals ("
+                "request_id TEXT PRIMARY KEY, "
+                "thread_id TEXT NOT NULL, "
+                "tool_call_id TEXT NOT NULL DEFAULT '', "
+                "action_key TEXT NOT NULL, "
+                "tool TEXT NOT NULL DEFAULT 'exec_command', "
+                "category TEXT NOT NULL DEFAULT 'risky', "
+                "risk_level TEXT NOT NULL DEFAULT 'risky', "
+                "command TEXT NOT NULL DEFAULT '', "
+                "reason TEXT NOT NULL DEFAULT '', "
+                "summary TEXT NOT NULL DEFAULT '', "
+                "scope TEXT NOT NULL DEFAULT '*', "
+                "session_id TEXT NOT NULL DEFAULT '', "
+                "targets TEXT NOT NULL DEFAULT '[]', "
+                "status TEXT NOT NULL DEFAULT 'pending', "
+                "decision TEXT NOT NULL DEFAULT '', "
+                "actor TEXT NOT NULL DEFAULT '', "
+                "created_at REAL NOT NULL, "
+                "resolved_at REAL)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pending_approvals_thread "
+                "ON pending_approvals (thread_id, status, created_at)"
+            )
+
+    def _get_global_permission_mode(self) -> str:
+        raw = (
+            self._global_permission_mode()
+            if callable(self._global_permission_mode)
+            else self._global_permission_mode
+        )
+        mode = str(raw or "ask_risky").strip()
+        return mode if mode in _PERMISSION_RANK else "ask_risky"
+
+    def _effective_permission_mode(self, profile: Profile) -> str:
+        g_mode = self._get_global_permission_mode()
+        p_mode = str(getattr(profile, "permission_mode", "") or "").strip()
+        if g_mode == "always_ask" or p_mode == "always_ask":
+            return "always_ask"
+        if p_mode in {"autonomous", "ask_risky"} and p_mode != "ask_risky":
+            return p_mode
+        return g_mode
+
+    def docker_available(self) -> bool:
+        return bool(
+            getattr(self.sandbox_settings, "enabled", False)
+            and (self.sandbox.ready or self._custom_docker_runner)
+        )
+
+    def pending_approval_for_thread(self, thread_id: str) -> dict | None:
+        connect = getattr(self.store, "connect", None)
+        if not callable(connect) or not thread_id:
+            return None
+        with connect() as db:
+            row = db.execute(
+                "SELECT request_id, thread_id, tool_call_id, action_key, tool, category, "
+                "risk_level, command, reason, summary, scope, session_id, targets, created_at "
+                "FROM pending_approvals WHERE thread_id=? AND status='pending' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            targets = json.loads(row["targets"] or "[]")
+        except ValueError:
+            targets = []
+        return {
+            "request_id": row["request_id"],
+            "thread_id": row["thread_id"],
+            "tool_call_id": row["tool_call_id"],
+            "action_key": row["action_key"],
+            "tool": row["tool"],
+            "category": row["category"],
+            "risk_level": row["risk_level"],
+            "command": self.redact(row["command"]),
+            "reason": self.redact(row["reason"]),
+            "summary": self.redact(row["summary"]),
+            "scope": row["scope"],
+            "session_id": row["session_id"],
+            "targets": targets if isinstance(targets, list) else [],
+            "created_at": float(row["created_at"] or 0.0),
+        }
+
+    def record_pending_approval(
+        self,
+        *,
+        thread_id: str,
+        tool_call_id: str,
+        tool: str,
+        approval: ApprovalRequired,
+        scope: str,
+        session_id: str,
+    ) -> dict:
+        request_id = "apr_" + uuid.uuid4().hex[:12]
+        cmd_preview = self.redact(_command_preview(approval.command))
+        reason = self.redact(approval.reason)
+        summary = self.redact(f"{reason}：{cmd_preview[:180]}" if cmd_preview else reason)
+        now = time.time()
+        targets_list = [str(t) for t in (approval.targets or ())]
+        item = {
+            "request_id": request_id,
+            "thread_id": thread_id,
+            "tool_call_id": tool_call_id,
+            "action_key": approval.action_key,
+            "tool": tool,
+            "category": approval.category,
+            "risk_level": approval.risk_level,
+            "command": cmd_preview,
+            "reason": reason,
+            "summary": summary,
+            "scope": scope or approval.scope or "*",
+            "session_id": session_id or thread_id,
+            "targets": targets_list,
+            "created_at": now,
+        }
+        connect = getattr(self.store, "connect", None)
+        if callable(connect):
+            with connect() as db, db:
+                db.execute(
+                    "UPDATE pending_approvals SET status='superseded', resolved_at=? "
+                    "WHERE thread_id=? AND status='pending' AND action_key=?",
+                    (now, thread_id, approval.action_key),
+                )
+                db.execute(
+                    "INSERT INTO pending_approvals "
+                    "(request_id, thread_id, tool_call_id, action_key, tool, category, "
+                    "risk_level, command, reason, summary, scope, session_id, targets, "
+                    "status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    (
+                        request_id,
+                        thread_id,
+                        tool_call_id,
+                        approval.action_key,
+                        tool,
+                        approval.category,
+                        approval.risk_level,
+                        cmd_preview,
+                        reason,
+                        summary,
+                        item["scope"],
+                        item["session_id"],
+                        json.dumps(targets_list, ensure_ascii=False),
+                        now,
+                    ),
+                )
+        if tool_call_id:
+            self._pending_pause_by_call[tool_call_id] = item
+        return item
+
+    def resolve_pending_approval(
+        self,
+        thread_id: str,
+        *,
+        decision: str,
+        request_id: str = "",
+        action_key: str = "",
+        actor: str = "",
+        note: str = "",
+    ) -> dict:
+        clean_decision = str(decision or "").strip().lower()
+        if clean_decision not in {"once", "session", "always", "deny"}:
+            raise ValueError("decision 必须为 once、session、always 或 deny")
+        connect = getattr(self.store, "connect", None)
+        if not callable(connect):
+            raise RuntimeError("当前存储不支持挂起审批记录")
+        now = time.time()
+        with connect() as db:
+            if request_id:
+                row = db.execute(
+                    "SELECT * FROM pending_approvals WHERE thread_id=? AND request_id=? AND status='pending'",
+                    (thread_id, request_id),
+                ).fetchone()
+            elif action_key:
+                row = db.execute(
+                    "SELECT * FROM pending_approvals WHERE thread_id=? AND action_key=? AND status='pending' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (thread_id, action_key),
+                ).fetchone()
+            else:
+                row = db.execute(
+                    "SELECT * FROM pending_approvals WHERE thread_id=? AND status='pending' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (thread_id,),
+                ).fetchone()
+            if row is None:
+                raise ValueError("该线程当前没有待确认的高风险操作")
+            row_data = dict(row)
+
+        grant_key = ""
+        if clean_decision in {"once", "session", "always"}:
+            if self.grants is None:
+                raise RuntimeError("权限授权存储尚未就绪")
+            grant_key = self.grants.grant(
+                scope=row_data["scope"] or "*",
+                action_key=row_data["action_key"],
+                tier=clean_decision,
+                session_id=row_data["session_id"] or thread_id,
+                kind=row_data["category"] or "exec",
+                note=note or row_data["summary"] or row_data["reason"],
+                actor=actor,
+            )
+
+        with connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            if clean_decision in {"once", "session", "always"}:
+                cursor = db.execute(
+                    "UPDATE pending_approvals SET status='approved', decision=?, actor=?, resolved_at=? "
+                    "WHERE request_id=? AND status='pending'",
+                    (clean_decision, actor, now, row_data["request_id"]),
+                )
+            else:
+                cursor = db.execute(
+                    "UPDATE pending_approvals SET status='denied', decision='deny', actor=?, resolved_at=? "
+                    "WHERE request_id=? AND status='pending'",
+                    (actor, now, row_data["request_id"]),
+                )
+            if not cursor.rowcount:
+                raise ValueError("该线程当前没有待确认的高风险操作")
+            db.execute(
+                "UPDATE agent_threads SET questions=0 WHERE thread_id=?",
+                (thread_id,),
+            )
+        return {
+            "request_id": row_data["request_id"],
+            "thread_id": thread_id,
+            "action_key": row_data["action_key"],
+            "decision": clean_decision,
+            "status": "denied" if clean_decision == "deny" else "approved",
+            "grant_key": grant_key,
+            "summary": self.redact(row_data["summary"]),
+            "resolved": True,
+        }
 
     def resolve_profile(self, profile: Profile) -> Profile:
         """统一合成快照与实时角色档案：刷新运行参数且只允许安全边界单调收窄。"""
@@ -127,10 +406,23 @@ class AgentRuntime(Scout):
             environment=_stricter_choice(
                 profile.environment, live.environment, _ENVIRONMENT_RANK, default_rank=1
             ),
+            execution_mode=_stricter_choice(
+                profile.execution_mode, live.execution_mode, _EXECUTION_RANK, default_rank=1
+            ),
+            permission_mode=_stricter_choice(
+                profile.permission_mode or "ask_risky",
+                live.permission_mode or "ask_risky",
+                _PERMISSION_RANK,
+                default_rank=1,
+            ),
+            session_mode=live.session_mode,
             network=_stricter_choice(profile.network, live.network, _NETWORK_RANK, default_rank=2),
             allow_users=_tighten_allowlist(tuple(profile.allow_users), tuple(live.allow_users)),
             allow_chats=_tighten_allowlist(tuple(profile.allow_chats), tuple(live.allow_chats)),
             instructions=live.instructions,
+            description=live.description,
+            icon_shape=live.icon_shape,
+            theme_color=live.theme_color,
             model=live.model,
             model_name=live.model_name,
             fallback_models=live.fallback_models,
@@ -141,11 +433,11 @@ class AgentRuntime(Scout):
             max_steps=live.max_steps,
             web_provider=live.web_provider,
             sandbox_targets=live.sandbox_targets,
+            shared_secrets=bool(profile.shared_secrets and live.shared_secrets),
             skills=live.skills,
             mcp=live.mcp,
             apis=live.apis,
             secrets=live.secrets,
-            template=live.template,
             fish_seed=live.fish_seed,
         )
 
@@ -155,11 +447,13 @@ class AgentRuntime(Scout):
         self.attachment_attempts.pop(thread_id, None)
 
     def effective_mode(self, profile):
-        if profile.environment != "sandbox":
-            return "readonly"
-        if self.sandbox.ready:
-            return "sandbox"
-        return "sandbox" if profile.requires_container else "light_workspace"
+        if getattr(profile, "execution_mode", "host") == "sandbox" or profile.environment == "sandbox":
+            if self.docker_available():
+                return "sandbox"
+            return "sandbox" if profile.requires_container else "light_workspace"
+        if getattr(profile, "uses_workspace", False) or "exec" in getattr(profile, "toolsets", ()):
+            return "host"
+        return "readonly"
 
     def available(self, profile):
         if not profile.enabled:
@@ -181,19 +475,14 @@ class AgentRuntime(Scout):
             and live.environment == "sandbox"
             and live.requires_container
         )
-        if needs_container and not self.sandbox.ready:
+        if needs_container and not self.docker_available():
             raise RuntimeError(self.sandbox.error or "沙箱尚未就绪")
         req_secrets = set(profile.secrets) | (set(live.secrets) if live else set())
         req_mcp = set(profile.mcp) | (set(live.mcp) if live else set())
         req_apis = set(profile.apis) | (set(live.apis) if live else set())
-        req_templates = {
-            t for t in (profile.template, live.template if live else "") if t
-        }
-        if (
-            req_secrets or req_templates or req_mcp or req_apis
-        ) and self.services is None:
+        if (req_secrets or req_mcp or req_apis) and self.services is None:
             raise RuntimeError("能力服务尚未登记")
-        if req_mcp or req_templates or req_apis:
+        if req_mcp or req_apis:
             configuration = self.services.load()
             if (
                 any(
@@ -202,14 +491,42 @@ class AgentRuntime(Scout):
                 or any(
                     name not in configuration.get("apis", {}) for name in req_apis
                 )
-                or any(
-                    tpl not in configuration.get("templates", {})
-                    for tpl in req_templates
-                )
             ):
-                raise PermissionError("角色引用的服务、模板或只读 API 尚未登记")
+                raise PermissionError("角色引用的服务或只读 API 尚未登记")
+
+    def _consume_pending_pause(self, history) -> dict | None:
+        if not self._pending_pause_by_call or not isinstance(history, list):
+            return None
+        for item in reversed(history):
+            if not isinstance(item, dict) or item.get("role") != "tool":
+                break
+            call_id = str(item.get("tool_call_id") or "")
+            if call_id and call_id in self._pending_pause_by_call:
+                return self._pending_pause_by_call.pop(call_id)
+        return None
 
     async def step(self, profile, history, *, max_steps=None, tz_offset_minutes=None):
+        pending_pause = self._consume_pending_pause(history)
+        if pending_pause is not None:
+            question = (
+                f"执行前需要管理员确认：{pending_pause['summary']}\n"
+                "请明确回复确认（once/session/always/deny），或在控制台批准后继续。"
+            )
+            return {
+                "text": "",
+                "calls": [
+                    {
+                        "id": f"apr_ask_{uuid.uuid4().hex[:10]}",
+                        "function": {
+                            "name": "ask_user",
+                            "arguments": {
+                                "question": question,
+                                "reason": "missing_input",
+                            },
+                        },
+                    }
+                ],
+            }
         profile = await completed_thread(self.resolve_profile, profile)
         await completed_thread(self.available, profile)
         if self.memory:
@@ -221,17 +538,26 @@ class AgentRuntime(Scout):
                 + methods
                 + "</methods>",
             )
-        if profile.environment == "sandbox" and not self.sandbox.ready:
-            profile = replace(
-                profile,
-                tools=tuple(
-                    name
-                    for name in profile.tools
-                    if name not in {"sandbox_exec", "credential_call"}
-                ),
-                instructions=profile.instructions
-                + "\n<runtime_mode>当前容器沙箱未就绪，自动运行于无容器轻量工作区模式：可使用 workspace_file、html_render、result_attach 及已授权的只读/联网工具完成整理、排版与出图；sandbox_exec 暂不可用（开启容器沙箱后自动恢复）。</runtime_mode>",
-            )
+        docker_ok = self.docker_available()
+        if not docker_ok:
+            if profile.execution_mode == "sandbox":
+                profile = replace(
+                    profile,
+                    tools=tuple(
+                        name
+                        for name in profile.tools
+                        if name not in {"sandbox_exec", "exec_command"}
+                    ),
+                    instructions=profile.instructions
+                    + "\n<runtime_mode>当前容器沙箱未就绪，自动运行于无容器轻量工作区模式：可使用 workspace_file、html_render、result_attach 及已授权的只读/联网工具完成整理、排版与出图（开启 Docker 沙箱后恢复容器执行）。</runtime_mode>",
+                )
+            elif "sandbox_exec" in profile.tools:
+                profile = replace(
+                    profile,
+                    tools=tuple(
+                        name for name in profile.tools if name != "sandbox_exec"
+                    ),
+                )
         if self.services and profile.mcp:
             descriptions = await completed_thread(self.services.describe, profile)
             profile = replace(
@@ -817,82 +1143,8 @@ class AgentRuntime(Scout):
                     existing.append(item)
             self.attachments[context["thread_id"]] = existing
             return {"attachments": attachments}
-        if name == "sandbox_exec":
-            if profile.environment != "sandbox":
-                raise PermissionError("当前角色未启用容器沙箱执行")
-            if not self.sandbox.ready:
-                raise RuntimeError(
-                    self.sandbox.error
-                    or "当前处于无容器轻量工作区模式，sandbox_exec 暂不可用；请改用 workspace_file、html_render、result_attach，或在设置中启用容器沙箱"
-                )
-            if (
-                profile.secrets
-                or profile.network == "restricted"
-                or profile.sandbox_targets
-            ) and (
-                profile.access != "admins"
-                or not await completed_thread(self.authorized, context)
-            ):
-                raise PermissionError("带私有凭据或受限网络的沙箱执行仅限当前管理员授权")
-            work = await self._work(context)
-            endpoints = ()
-            host_mappings = {}
-            if profile.network == "restricted" and profile.sandbox_targets:
-                from ipaddress import ip_address
-                from .services import validate_endpoint_targets
-
-                def _resolve_targets():
-                    resolved_endpoints = []
-                    resolved_hosts = {}
-                    for raw_target in profile.sandbox_targets:
-                        raw_text = str(raw_target or "").strip()
-                        pairs = validate_endpoint_targets([raw_text])
-                        resolved_endpoints.extend(pairs)
-                        host_part = raw_text
-                        if raw_text.startswith("[") and "]:" in raw_text:
-                            host_part = raw_text[1 : raw_text.index("]:")]
-                        elif ":" in raw_text:
-                            host_part = raw_text.rsplit(":", 1)[0]
-                        host_part = host_part.strip().lower()
-                        if host_part and pairs:
-                            try:
-                                ip_address(host_part)
-                            except ValueError:
-                                resolved_hosts[host_part] = str(pairs[0][0])
-                    return tuple(dict.fromkeys(resolved_endpoints)), resolved_hosts
-
-                endpoints, host_mappings = await completed_thread(_resolve_targets)
-            exec_kwargs = {
-                "call_id": context["_tool_call_id"],
-                "step_index": context.get("_step_index"),
-                "timeout": arguments.get("timeout"),
-                "mode": profile.network,
-            }
-            if endpoints:
-                exec_kwargs["targets"] = endpoints
-            if host_mappings:
-                exec_kwargs["host_mappings"] = host_mappings
-            if profile.secrets:
-                async with self.services.mount_secrets(
-                    self, profile.secrets, work=work
-                ) as secrets:
-                    return self.redact(
-                        await self.sandbox.execute(
-                            context,
-                            work,
-                            arguments["command"],
-                            secrets=secrets,
-                            **exec_kwargs,
-                        )
-                    )
-            return self.redact(
-                await self.sandbox.execute(
-                    context,
-                    work,
-                    arguments["command"],
-                    **exec_kwargs,
-                )
-            )
+        if name in {"exec_command", "sandbox_exec"}:
+            return await self._run_exec_tool(name, arguments, context, profile)
         service_ctx = _step_service_context(context)
         if name == "mcp_call":
             if not self.services:
@@ -902,17 +1154,204 @@ class AgentRuntime(Scout):
             if not self.services:
                 raise RuntimeError("跨插件 API 尚未登记")
             return await self.services.call_api(profile, arguments, service_ctx, self)
-        if name == "credential_call":
-            if profile.environment == "sandbox" and not self.sandbox.ready:
-                raise RuntimeError(self.sandbox.error or "固定凭据容器执行需要启用容器沙箱")
-            if not self.services or not await completed_thread(
-                self.authorized, context
-            ):
-                raise PermissionError("固定凭据模板需要本次真实管理员授权")
-            return await self.services.credential(
-                profile, arguments["arguments"], service_ctx, self
-            )
         return await super().call(name, arguments, context)
+
+    def _run_trusted_preset_script(
+        self, profile: Profile, raw_cmd: str, work, timeout: float
+    ) -> ExecutionResult | None:
+        if not isinstance(raw_cmd, str) or not raw_cmd.strip() or _SHELL_META_RE.search(raw_cmd):
+            return None
+        try:
+            tokens = shlex.split(raw_cmd)
+        except ValueError:
+            return None
+        if len(tokens) < 2:
+            return None
+        exe = os.path.basename(tokens[0]).lower()
+        if exe not in {"python", "python3"}:
+            return None
+        script_arg = tokens[1]
+        if not script_arg or script_arg.startswith("-") or not script_arg.endswith(".py"):
+            return None
+        profiles = getattr(self.memory, "profiles", None) if self.memory else None
+        if profiles is None:
+            return None
+        preset_dir = Path(profiles.path) / profile.id / "preset" / "scripts"
+        if path_is_link_like(preset_dir) or not preset_dir.is_dir():
+            return None
+        preset_root = preset_dir.resolve()
+        candidate_rel = Path(script_arg)
+        if candidate_rel.is_absolute() or ".." in candidate_rel.parts:
+            return None
+        # Accept either `preset/scripts/<name>.py` or `<name>.py`
+        rel_name = (
+            Path(*candidate_rel.parts[2:])
+            if candidate_rel.parts[:2] == ("preset", "scripts")
+            else candidate_rel
+        )
+        script_path = preset_dir / rel_name
+        if path_is_link_like(script_path):
+            return None
+        try:
+            resolved_script = script_path.resolve()
+        except OSError:
+            return None
+        if not resolved_script.is_relative_to(preset_root) or not resolved_script.is_file():
+            return None
+        extra_args = tokens[2:]
+        if _has_path_escape([sys.executable, *extra_args], work.path, shell=False):
+            return None
+        clamped_timeout = max(1.0, min(float(timeout), 60.0))
+        proc = subprocess.Popen(
+            [sys.executable, str(resolved_script), *extra_args],
+            cwd=str(work.path),
+            env=minimal_subprocess_env(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+        )
+        try:
+            out_raw, err_raw = proc.communicate(timeout=clamped_timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out_raw, err_raw = proc.communicate(timeout=2.0)
+            stdout, trunc_out = _decode_and_redact(
+                out_raw, limit=65536, vault=self.vault, secret_values=()
+            )
+            stderr, trunc_err = _decode_and_redact(
+                err_raw, limit=65536, vault=self.vault, secret_values=()
+            )
+            return ExecutionResult(
+                status="timeout",
+                exit_code=None,
+                stdout=stdout,
+                stderr=stderr,
+                truncated=trunc_out or trunc_err,
+                error=f"预置脚本超时（>{clamped_timeout}s）",
+                runner_name="preset_script",
+            )
+        stdout, trunc_out = _decode_and_redact(
+            out_raw, limit=65536, vault=self.vault, secret_values=()
+        )
+        stderr, trunc_err = _decode_and_redact(
+            err_raw, limit=65536, vault=self.vault, secret_values=()
+        )
+        status = "ok" if proc.returncode == 0 else "error"
+        return ExecutionResult(
+            status=status,
+            exit_code=proc.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            truncated=trunc_out or trunc_err,
+            error="" if proc.returncode == 0 else f"预置脚本退出码 {proc.returncode}",
+            runner_name="preset_script",
+        )
+
+    async def _run_exec_tool(
+        self, name: str, arguments: dict, context: dict, profile: Profile
+    ) -> dict:
+        is_admin = bool(await completed_thread(self.authorized, context))
+        docker_ok = self.docker_available()
+        work = await self._work(context)
+        command = arguments["command"]
+        timeout = float(arguments.get("timeout") or 60.0)
+        risk_hint = str(arguments.get("risk_hint") or "").strip()
+        raw_targets = arguments.get("targets") or profile.sandbox_targets or ()
+        targets = tuple(str(t).strip() for t in raw_targets if str(t).strip())
+        thread_id = str(context.get("thread_id") or "")
+        chat_id = str(context.get("chat_id") or "")
+        scope = f"chat:{chat_id}" if chat_id else "*"
+        eff_perm = self._effective_permission_mode(profile)
+
+        if not is_admin:
+            if not docker_ok:
+                if name == "exec_command":
+                    preset_res = await completed_thread(
+                        self._run_trusted_preset_script, profile, command, work, timeout
+                    )
+                    if preset_res is not None:
+                        if preset_res.status == "timeout":
+                            raise TimeoutError(self.redact(preset_res.error))
+                        return self.redact(preset_res.to_dict())
+                raise PermissionError(
+                    "当前未启用隔离 Docker 沙箱，普通会话禁止执行任意 Shell 或代码命令；仅可使用工作区文件或档案内建只读固定脚本"
+                )
+            # Non-admin with Docker enabled: strictly no secrets, no host mounts, no host network
+            req = ExecutionRequest(
+                command=command,
+                workspace=work.path,
+                is_admin=False,
+                actor=str(context.get("user_id") or ""),
+                scope=scope,
+                session_id=thread_id,
+                permission_mode=eff_perm,
+                secrets=(),
+                timeout=timeout,
+                shell=isinstance(command, str),
+                risk_hint=risk_hint,
+                targets=targets,
+                mount_secret_files=False,
+            )
+            exec_res = await self.docker_runner.execute(req)
+        else:
+            use_sandbox = name == "sandbox_exec" or profile.execution_mode == "sandbox"
+            if use_sandbox and not docker_ok:
+                raise RuntimeError(
+                    "当前档案或工具指定 Docker 沙箱执行，但 Docker 沙箱未启用或未就绪"
+                )
+            secrets_tuple = (
+                tuple(profile.secrets)
+                if (getattr(profile, "shared_secrets", True) and profile.secrets)
+                else ()
+            )
+            req = ExecutionRequest(
+                command=command,
+                workspace=work.path,
+                is_admin=True,
+                actor=str(context.get("user_id") or "admin"),
+                scope=scope,
+                session_id=thread_id,
+                permission_mode=eff_perm,
+                secrets=secrets_tuple,
+                timeout=timeout,
+                shell=isinstance(command, str),
+                risk_hint=risk_hint,
+                targets=targets,
+                mount_secret_files=bool(secrets_tuple),
+            )
+            runner = self.docker_runner if use_sandbox else self.host_runner
+            exec_res = await runner.execute(req)
+
+        if (
+            exec_res.status == "approval_required"
+            and exec_res.approval_required is not None
+        ):
+            pending = await completed_thread(
+                self.record_pending_approval,
+                thread_id=thread_id,
+                tool_call_id=str(context.get("_tool_call_id") or ""),
+                tool=name,
+                approval=exec_res.approval_required,
+                scope=scope,
+                session_id=thread_id,
+            )
+            return self.redact(
+                {
+                    "status": "approval_required",
+                    "pending_approval": True,
+                    "request_id": pending["request_id"],
+                    "action_key": pending["action_key"],
+                    "risk_level": pending["risk_level"],
+                    "category": pending["category"],
+                    "command": pending["command"],
+                    "reason": pending["reason"],
+                    "summary": pending["summary"],
+                }
+            )
+        if exec_res.status == "denied":
+            raise PermissionError(self.redact(exec_res.error or "执行请求被安全边界拒绝"))
+        return self.redact(exec_res.to_dict())
 
     def result(self, thread_id, result):
         attachments = self.attachments.get(thread_id)
@@ -948,6 +1387,18 @@ class AgentRuntime(Scout):
         await self.sandbox.close()
         await completed_thread(self.files.release_quarantines)
         await self.services.release_quarantines()
+        self.sandbox_settings = (
+            settings if isinstance(settings, SandboxSettings) else SandboxSettings()
+        )
+        cli_runner = (
+            self.docker_runner.cli_runner if self._custom_docker_runner else None
+        )
+        self.docker_runner = DockerRunner(
+            self.sandbox_settings,
+            vault=self.vault,
+            grants=self.grants,
+            cli_runner=cli_runner,
+        )
         self.sandbox = Sandbox(
             settings, self.store, redact=self.vault.redact, authorized=self.authorized
         )

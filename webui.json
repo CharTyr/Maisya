@@ -67,17 +67,6 @@
             "action": { "type": "string", "required": true, "max_length": 64 },
             "payload": { "type": "string", "max_length": 60000 }
           }
-        },
-        "incoming_event": {
-          "api": "maisya_incoming_event",
-          "version": "1",
-          "parameters": {
-            "channel": { "type": "string", "required": true, "max_length": 64 },
-            "event_id": { "type": "string", "required": true, "max_length": 128 },
-            "timestamp": { "type": "integer", "required": true, "minimum": 0, "maximum": 9007199254740991 },
-            "payload": { "type": "string", "required": true, "max_length": 16000 },
-            "signature": { "type": "string", "required": true, "max_length": 64 }
-          }
         }
       }
     }
