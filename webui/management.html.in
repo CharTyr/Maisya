@@ -1508,6 +1508,18 @@
     };
 
     function renderChats() {
+      const set = sState.data?.settings || sState.data || {};
+      const plgOn = Boolean(
+        sState.data?.plugin_enabled
+        ?? sState.data?.plugin?.enabled
+        ?? set.plugin_enabled
+        ?? set.plugin?.enabled
+        ?? sState.data?.pulse?.enabled
+      );
+      const plgEl = $("#set-plugin-enabled");
+      const plgTxt = $("#set-plugin-enabled-txt");
+      if (plgEl) plgEl.checked = plgOn;
+      if (plgTxt) plgTxt.textContent = plgOn ? "已启用（总开关开启）" : "未启用（暂停所有调度与注入）";
       const box = $("#set-chat-list");
       if (!box) return;
       const all = [...new Set([...sState.knownChats, ...sState.enabledChats])];
@@ -1736,7 +1748,14 @@
     }, { signal: sig });
 
     view.addEventListener("change", async (ev) => {
-      if (ev.target.dataset.setChat) {
+      if (ev.target.id === "set-plugin-enabled") {
+        const plgOn = Boolean(ev.target.checked);
+        const plgTxt = $("#set-plugin-enabled-txt");
+        if (plgTxt) plgTxt.textContent = plgOn ? "已启用（总开关开启）" : "未启用（暂停所有调度与注入）";
+        const r = await savePartialSettings({ plugin_enabled: plgOn, plugin: { enabled: plgOn } });
+        if (r?.success) await loadSettings();
+        else renderChats();
+      } else if (ev.target.dataset.setChat) {
         const cid = ev.target.dataset.setChat;
         const set = new Set(sState.enabledChats);
         if (ev.target.checked) set.add(cid); else set.delete(cid);

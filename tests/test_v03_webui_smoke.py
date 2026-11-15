@@ -62,6 +62,7 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
   let inflight = 0;
   let peakInflight = 0;
   const state = {{
+    plugin_enabled: false,
     ui_style: "millennium",
     permission_mode: "ask_risky",
     default_model: "gpt-main",
@@ -163,6 +164,7 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
       plugin_admins: ["qq:private:10001"],
       default_model: "gpt-main",
       permission_mode: "ask_risky",
+      plugin_enabled: false,
       sandbox_enabled: true,
       models: [{{ name: "gpt-main", provider: "openai" }}, {{ name: "claude-aux", provider: "anthropic" }}],
       items: [
@@ -288,6 +290,7 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
           if (sec === "settings") return {{
             success: true,
             version: 1,
+            plugin_enabled: state.plugin_enabled,
             ui_style: state.ui_style,
             permission_mode: state.permission_mode,
             known_chats: state.known_chats.map((cid) => ({{ stream_spec: cid, chat_id: cid, name: cid }})),
@@ -299,6 +302,7 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             available_models: state.models,
             docker: {{ enabled: state.sandbox_enabled, available: true }},
             settings: {{
+              plugin: {{ enabled: state.plugin_enabled }},
               ui_style: state.ui_style,
               default_model: state.default_model,
               daily_proactive_limit: state.daily_proactive_limit,
@@ -348,6 +352,13 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             return {{ success: true }};
           }}
           if (act === "onboarding_advance") {{
+            if (p.data && typeof p.data.plugin_enabled === "boolean") {{
+              state.plugin_enabled = p.data.plugin_enabled;
+              state.onboarding.plugin_enabled = p.data.plugin_enabled;
+            }} else if (p.data?.plugin && typeof p.data.plugin.enabled === "boolean") {{
+              state.plugin_enabled = p.data.plugin.enabled;
+              state.onboarding.plugin_enabled = p.data.plugin.enabled;
+            }}
             state.onboarding.current_step = p.target_step || "done";
             state.onboarding.sequence = Math.max(state.onboarding.sequence + 1, p.sequence || 1);
             return {{ success: true, onboarding: state.onboarding }};
@@ -401,6 +412,8 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             if (p.settings?.admins && p.settings.admins.length === 0 && state.host_admins.length === 0) {{
               return {{ success: false, error: "至少保留一位管理员" }};
             }}
+            if (typeof p.settings?.plugin_enabled === "boolean") state.plugin_enabled = p.settings.plugin_enabled;
+            else if (typeof p.settings?.plugin?.enabled === "boolean") state.plugin_enabled = p.settings.plugin.enabled;
             if (p.settings?.admins) state.plugin_admins = p.settings.admins;
             if (p.settings?.enabled_chats) state.enabled_chats = p.settings.enabled_chats;
             return {{ success: true, version: 2 }};
@@ -451,9 +464,12 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
             inside = page.evaluate("() => document.getElementById('onb-card')?.contains(document.activeElement)")
             assert inside, "Tab 焦点逃逸出引导弹窗"
 
-        # 推进到第 4 步 runtime
-        for _ in range(3):
-            page.locator("#onb-next").click()
+        # 推进到第 3 步 chats -> 初次冷启动即使后端 plugin_enabled=false 也默认勾选总开关；再推进到第 4 步 runtime
+        page.locator("#onb-next").click()
+        page.locator("#onb-next").click()
+        page.locator("#onb-plugin-enabled").wait_for(state="visible")
+        assert page.locator("#onb-plugin-enabled").is_checked()
+        page.locator("#onb-next").click()
         page.locator("#onb-probe-btn").wait_for(state="visible")
 
         # 连续两次点击“测试模型连通”：第一次慢失败、第二次快成功 -> 必须保留第 2 次结果、丢弃过期失败！
@@ -471,6 +487,7 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
             """() => window.__maibotCalls.filter(c => c.type === 'action' && c.name === 'write' && c.arg?.action === 'onboarding_advance').map(c => JSON.parse(c.arg.payload))"""
         )
         assert any(isinstance(c.get("data", {}).get("sandbox"), dict) for c in adv_calls)
+        assert any(c.get("data", {}).get("plugin_enabled") is True and c.get("data", {}).get("plugin", {}).get("enabled") is True for c in adv_calls)
         page.locator("#onb-next").click()
         onb_scrim.wait_for(state="hidden")
 
@@ -576,6 +593,13 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         chat_list_txt = page.locator("#set-chat-list").inner_text()
         assert "qq:group:100246809" in chat_list_txt and "qq:group:200112233" in chat_list_txt
         assert "object Object" not in chat_list_txt
+        assert page.locator("#set-plugin-enabled").is_checked()
+        page.locator("#set-plugin-enabled").uncheck()
+        page.wait_for_timeout(60)
+        assert not page.locator("#set-plugin-enabled").is_checked()
+        page.locator("#set-plugin-enabled").check()
+        page.wait_for_timeout(60)
+        assert page.locator("#set-plugin-enabled").is_checked()
 
         # 尝试移除最后一位管理员 -> 触发防自锁死错误提示
         page.locator('[data-set-del-admin="qq:private:10001"]').click()

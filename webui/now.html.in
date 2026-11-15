@@ -1292,6 +1292,7 @@
     stepNavSeq: 0,
     draftAdmins: null,
     draftChats: null,
+    draftPluginEnabled: null,
     draftModel: "",
     draftPerm: "",
     draftSandbox: null,
@@ -1433,10 +1434,25 @@
         </div>`;
     } else if (step === "chats") {
       onb.draftChats = [...enabledChats];
+      const rawPlg = info.plugin_enabled ?? info.plugin?.enabled ?? state.lastSnap?.plugin_enabled ?? state.lastSnap?.pulse?.enabled;
+      if (onb.draftPluginEnabled === null) {
+        const isFirstColdStart = (info.show === true && !info.completed_at && info.status !== "completed");
+        onb.draftPluginEnabled = rawPlg === undefined ? true : (isFirstColdStart && rawPlg === false ? true : Boolean(rawPlg));
+      }
       const allKnown = [...new Set([...knownChats, ...onb.draftChats])];
       pane.innerHTML = `
-        <div class="mil-silk">第 3 步 · 选择启用会话</div>
-        <div class="mil-hint">已核验管理员私聊会自动放行；群聊需明确打开白名单开关后才注入工具能力。</div>
+        <div class="mil-silk">第 3 步 · 启用总开关与会话范围</div>
+        <div class="mil-hint">请先保持插件总开关开启；已核验管理员私聊会自动放行，群聊需明确打开白名单开关后才注入工具能力。</div>
+        <div class="ms-entry-row">
+          <div class="ms-entry-meta">
+            <strong class="ms-entry-title">启用 Maisya 插件总开关</strong>
+            <span class="mil-hint">初次冷启动默认勾选开启，确保后续对话与能力调度可用</span>
+          </div>
+          <label class="mil-switch">
+            <input type="checkbox" id="onb-plugin-enabled" ${onb.draftPluginEnabled ? "checked" : ""} />
+            <span class="mil-switch-track"></span>
+          </label>
+        </div>
         <div class="ms-entry-list" id="onb-chat-list">
           ${allKnown.length ? allKnown.map((cid) => `<div class="ms-entry-row"><span class="ms-entry-code">${esc(cid)}</span><label class="mil-switch"><input type="checkbox" data-onb-chat="${esc(cid)}" ${onb.draftChats.includes(cid) ? "checked" : ""} /><span class="mil-switch-track"></span></label></div>`).join("") : `<div class="mil-hint">当前尚未检测到群聊记录，可在下方手动添加。</div>`}
         </div>
@@ -1562,7 +1578,12 @@
   function collectCurrentOnbStepData() {
     const step = ONB_STEPS[onb.stepIdx];
     if (step === "admins") return { admins: onb.draftAdmins || [] };
-    if (step === "chats") return { enabled_chats: onb.draftChats || [] };
+    if (step === "chats") {
+      const plgEl = $("#onb-plugin-enabled");
+      if (plgEl) onb.draftPluginEnabled = Boolean(plgEl.checked);
+      const plgOn = onb.draftPluginEnabled !== null ? Boolean(onb.draftPluginEnabled) : true;
+      return { enabled_chats: onb.draftChats || [], plugin_enabled: plgOn, plugin: { enabled: plgOn } };
+    }
     if (step === "runtime") {
       onb.draftModel = $("#onb-model")?.value || onb.draftModel;
       onb.draftPerm = $("#onb-perm")?.value || onb.draftPerm;
@@ -1849,6 +1870,7 @@
       onb.draftChats = [...cur];
       return;
     }
+    if (ev.target.id === "onb-plugin-enabled") onb.draftPluginEnabled = Boolean(ev.target.checked);
     if (ev.target.id === "onb-model") onb.draftModel = ev.target.value;
     if (ev.target.id === "onb-perm") onb.draftPerm = ev.target.value;
     if (ev.target.id === "onb-sandbox") onb.draftSandbox = Boolean(ev.target.checked);
