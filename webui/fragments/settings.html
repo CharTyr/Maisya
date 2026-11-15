@@ -304,13 +304,14 @@
               <div class="m-cfg-grid">
                 <input id="wh-b-name" class="mil-input mono" placeholder="通道代号（如 repo_push）" aria-label="通道代号" />
                 <input id="wh-b-target" class="mil-input mono" placeholder="目标会话（如 qq:group:100246809）" aria-label="目标会话" />
-                <input id="wh-b-profile" class="mil-input mono" placeholder="执行角色（如 scout）" value="scout" aria-label="执行角色" />
+                <select id="wh-b-profile" class="mil-select" aria-label="执行角色">
+                  <option value="scout">scout</option>
+                </select>
                 <select id="wh-b-kind" class="mil-select" aria-label="唤醒类型">
                   <option value="proactive">主动通知</option>
-                  <option value="digest">简报任务</option>
-                  <option value="later">定时延续</option>
+                  <option value="silent">静默记录</option>
                 </select>
-                <input id="wh-b-secret" class="mil-input mono" placeholder="签名凭据句柄（可选）" aria-label="签名凭据句柄" />
+                <input id="wh-b-secret" class="mil-input mono" required placeholder="签名凭据句柄（必填，如 gh_hook_key）" aria-label="签名凭据句柄（必填）" />
                 <button type="button" class="mil-key mil-key--on" id="wh-b-add">写入通道配置</button>
               </div>
             </div>
