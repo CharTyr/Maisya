@@ -127,9 +127,9 @@ HOST_TOOLS = (
         "sandbox_exec",
     }
 )
-SANDBOX_TOOLS = HOST_TOOLS | {"credential_call"}
+SANDBOX_TOOLS = HOST_TOOLS
 
-_TOOLSET_EXTRA_TOOLS = frozenset({"mcp_call", "plugin_api", "credential_call", "digest_feed"})
+_TOOLSET_EXTRA_TOOLS = frozenset({"mcp_call", "plugin_api", "digest_feed"})
 
 DEFAULT_INSTRUCTIONS = (
     "你是 MaiBot 调度的全能默认能力助手。根据当前要求自主查证，保留出处，区分事实和推断。"
@@ -623,10 +623,9 @@ class Profile:
             or self.sandbox_targets
             or self.network == "restricted"
             or self.template
-            or "credential_call" in self.tools
         ):
             return True
-        return not bool(set(self.tools) - {"sandbox_exec", "exec_command", "credential_call"})
+        return not bool(set(self.tools) - {"sandbox_exec", "exec_command"})
 
     @property
     def autonomous_config(self):
@@ -1027,7 +1026,6 @@ class Profiles:
             config.get("template")
             or sandbox_targets
             or network == "restricted"
-            or "credential_call" in tools
         ) and access != "admins":
             raise ValueError("私有凭据与限定执行模板必须仅管理员可用")
         if "enabled" in config and type(config["enabled"]) is not bool:
