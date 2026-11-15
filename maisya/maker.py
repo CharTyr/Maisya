@@ -13,6 +13,7 @@ from dataclasses import replace
 from .abilities import Profile
 from .sandbox import Sandbox
 from .scout import Scout, call_capability, checked, safe_url, validate_arguments
+from .trust import parse_stream_spec
 from .workspaces import (
     Workspaces,
     completed_thread,
@@ -128,7 +129,7 @@ class AgentRuntime(Scout):
                 raise PermissionError("角色引用的服务、模板或只读 API 尚未登记")
 
     async def step(self, profile, history, *, max_steps=None):
-        self.available(profile)
+        await completed_thread(self.available, profile)
         if self.memory:
             live = await completed_thread(self.memory.profiles.get, profile.id)
             profile = replace(
@@ -323,8 +324,12 @@ class AgentRuntime(Scout):
                     )
                     if result.get("exit_code") != 0:
                         raise RuntimeError("引用文件下载失败")
-                    with regular_open(work.path, "cache/" + cache_name) as source:
-                        content = source.read(6 * 1024**2 + 1)
+
+                    def _read_cached_ref():
+                        with regular_open(work.path, "cache/" + cache_name) as source:
+                            return source.read(6 * 1024**2 + 1)
+
+                    content = await completed_thread(_read_cached_ref)
                 elif data.get("file_ref"):
                     content = await self.services.input_file(
                         Profile(**row["profile_snapshot"]),
@@ -345,6 +350,14 @@ class AgentRuntime(Scout):
             (row.get("grant") or {}).get("scheduled_admin")
             or (row.get("grant") or {}).get("admin_direct")
         )
+        target_arena = (
+            await completed_thread(
+                self._chat_arena, row["chat_id"], row.get("platform", "")
+            )
+            if row.get("owner") == "chat"
+            else "self"
+        )
+        admin_checked: bool | None = None
         for previous_id in previous_threads:
             previous = await completed_thread(
                 self.store.get,
@@ -353,10 +366,39 @@ class AgentRuntime(Scout):
                 allow_self=True,
                 allow_any_chat=allow_any_chat,
             )
-            if previous["profile_snapshot"][
-                "access"
-            ] == "admins" and not await completed_thread(self.authorized, row):
-                raise PermissionError("引用受限线程需要当前管理员授权")
+            if target_arena == "group" and previous.get("owner") == "chat":
+                prev_arena = await completed_thread(
+                    self._chat_arena,
+                    previous["chat_id"],
+                    previous.get("platform", ""),
+                )
+                if prev_arena == "private":
+                    raise PermissionError("私聊线程结果默认不可直接注入群聊线程")
+            prev_profiles = [Profile(**previous["profile_snapshot"])]
+            if self.memory:
+                try:
+                    live_prev = await completed_thread(
+                        self.memory.profiles.get, previous["profile"]
+                    )
+                    prev_profiles.append(live_prev)
+                except (ValueError, OSError):
+                    pass
+            if any(prof.access == "admins" for prof in prev_profiles):
+                if admin_checked is None:
+                    admin_checked = bool(await completed_thread(self.authorized, row))
+                if not admin_checked:
+                    raise PermissionError("引用受限线程需要当前管理员授权")
+            for prof in prev_profiles:
+                if prof.access == "listed":
+                    if admin_checked is None:
+                        admin_checked = bool(await completed_thread(self.authorized, row))
+                    if not await completed_thread(
+                        self._listed_profile_permits,
+                        prof,
+                        row,
+                        is_admin=admin_checked,
+                    ):
+                        raise PermissionError("引用受限线程不在当前会话或来源白名单内")
             prev_res = self.redact(previous.get("result") or {})
             prev_text = str(prev_res.get("text") or "").strip()
             prev_links = prev_res.get("links") or []
@@ -457,6 +499,77 @@ class AgentRuntime(Scout):
         await completed_thread(work.commit)
         return imported
 
+    def _chat_arena(self, chat_id: str, platform: str = "") -> str:
+        cid = str(chat_id or "").strip()
+        if not cid:
+            return ""
+        if cid == "self":
+            return "self"
+        parsed = parse_stream_spec(cid)
+        if parsed is not None:
+            return parsed[1]
+        candidates = [cid]
+        aliases_fn = getattr(self.store, "chat_aliases", None)
+        if callable(aliases_fn):
+            try:
+                for alias in sorted(set(aliases_fn(cid, platform)) - {cid}):
+                    if isinstance(alias, str) and alias:
+                        parsed_alias = parse_stream_spec(alias)
+                        if parsed_alias is not None:
+                            return parsed_alias[1]
+                        candidates.append(alias)
+            except (TypeError, ValueError):
+                pass
+        with self.store.connect() as db:
+            has_routes = (
+                db.execute(
+                    'SELECT 1 FROM sqlite_master WHERE type="table" AND name="session_routes"'
+                ).fetchone()
+                is not None
+            )
+            if has_routes:
+                placeholders = ",".join("?" for _ in candidates)
+                rows = db.execute(
+                    f"SELECT chat_type, group_id, user_id FROM session_routes WHERE session_id IN ({placeholders})",
+                    tuple(candidates),
+                ).fetchall()
+                for route in rows:
+                    ctype = str(route["chat_type"] or "").strip().lower()
+                    if ctype in {"group", "private"}:
+                        return ctype
+                    if str(route["group_id"] or "").strip():
+                        return "group"
+                    if str(route["user_id"] or "").strip():
+                        return "private"
+        return ""
+
+    def _listed_profile_permits(
+        self, profile_obj: Profile, row: dict, *, is_admin: bool = False
+    ) -> bool:
+        chat_id = str(row.get("chat_id") or "")
+        platform = str(row.get("platform") or "")
+        plat = platform.strip().lower()
+        chat_candidates = [chat_id] if chat_id else [""]
+        aliases_fn = getattr(self.store, "chat_aliases", None)
+        if chat_id and callable(aliases_fn):
+            try:
+                for alias in sorted(set(aliases_fn(chat_id, platform)) - {chat_id}):
+                    if isinstance(alias, str) and alias:
+                        chat_candidates.append(alias)
+            except (TypeError, ValueError):
+                pass
+        raw_uid = str(row.get("user_id") or "")
+        user_candidates = [raw_uid]
+        if plat and raw_uid.startswith(f"{plat}:private:"):
+            user_candidates.append(raw_uid.split(":", 2)[2])
+        elif plat and raw_uid.startswith(f"{plat}:"):
+            user_candidates.append(raw_uid.split(":", 1)[1])
+        return any(
+            profile_obj.permits(cid, platform, user_id=cand_uid, is_admin=is_admin)
+            for cid in chat_candidates
+            for cand_uid in user_candidates
+        )
+
     def _import_bytes(self, work, relative, content, *, overwrite=False):
         existing_size = 0
         existed = False
@@ -484,7 +597,7 @@ class AgentRuntime(Scout):
     async def call(self, name, arguments, context):
         validate_arguments(name, arguments)
         profile = Profile(**context["profile_snapshot"])
-        self.available(profile)
+        await completed_thread(self.available, profile)
         if self.permitted and not await completed_thread(self.permitted, context):
             raise PermissionError("当前真实来源或会话不在档案范围内")
         live_restricted = (
@@ -519,7 +632,14 @@ class AgentRuntime(Scout):
                     extra_kwargs["web"] = self.web
                 if accepts_kwargs or "context" in params:
                     extra_kwargs["context"] = context
-                return await run_digest_tool(work, arguments, **extra_kwargs)
+                if inspect.iscoroutinefunction(run_digest_tool):
+                    return await run_digest_tool(work, arguments, **extra_kwargs)
+                result = await completed_thread(
+                    run_digest_tool, work, arguments, **extra_kwargs
+                )
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
             if name == "render_report":
                 from .report import render_report_artifact
 

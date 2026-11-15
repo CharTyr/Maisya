@@ -58,6 +58,41 @@ def _clean_input_title(raw_text: str) -> str:
     return cleaned[:80]
 
 
+_HOST_ABS_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9:/])"
+    r"(?:/(?:Users|root|home|tmp|var|etc|opt|mnt|srv|private|Volumes|usr|bin|lib)(?:/[^\s'\",;)\]]*)?"
+    r"|[A-Za-z]:\\[^\s'\",;)\]]+)"
+)
+
+
+def _safe_tool_error_message(error: Exception, redact=None) -> str:
+    """保留安全的工具业务报错，对系统底层 OS 路径与隐蔽凭据做兜底收敛。"""
+    if isinstance(error, OSError) and not isinstance(error, PermissionError):
+        if (
+            getattr(error, "errno", None) is not None
+            or getattr(error, "filename", None) is not None
+        ):
+            return "工具文件或系统操作未完成；请检查工作区路径与权限配置。"
+    raw = str(error or "").strip()
+    if redact is not None and raw:
+        raw = str(redact(raw))
+    scrubbed = _HOST_ABS_PATH_RE.sub("<path>", raw)
+    scrubbed = re.sub(r"\s+", " ", scrubbed).strip()
+    return scrubbed[:280] if scrubbed else "只读工具未完成；检查参数、来源范围或宿主能力配置。"
+
+
+async def _await_uninterruptible_coro(coro):
+    """在重复取消下保护清理协程跑完，返回 `(result, saw_cancel)`。"""
+    task = asyncio.ensure_future(coro)
+    saw_cancel = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            saw_cancel = True
+    return task.result(), saw_cancel
+
+
 def _summarize_tool_calls(calls: list) -> str:
     parts = []
     for call in (calls or [])[:3]:
@@ -305,6 +340,22 @@ class ThreadStore:
                                 "UPDATE agent_workspaces SET chat_id=? WHERE workspace_id=?",
                                 (chat_id, binding["workspace_id"]),
                             )
+                            if (
+                                db.execute(
+                                    'SELECT 1 FROM sqlite_master WHERE type="table" AND name="attachments"'
+                                ).fetchone()
+                                is not None
+                            ):
+                                db.execute(
+                                    "UPDATE attachments SET chat_id=? "
+                                    "WHERE thread_id=? OR thread_id IN ("
+                                    "SELECT thread_id FROM thread_context WHERE workspace_id=?)",
+                                    (
+                                        chat_id,
+                                        binding["thread_id"],
+                                        binding["workspace_id"],
+                                    ),
+                                )
                         db.execute(
                             "UPDATE agent_threads SET profile_snapshot=? WHERE thread_id=?",
                             (encode(updated), binding["thread_id"]),
@@ -789,6 +840,7 @@ class ThreadStore:
         ):
             return False
         with self.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
             cur = db.execute(
                 "SELECT history, processed_revision, state FROM agent_threads WHERE thread_id=?",
                 (thread_id,),
@@ -1231,8 +1283,14 @@ class ThreadStore:
         limit=5,
         max_chars=16000,
         allow_self=False,
+        allow_any_chat=False,
     ):
-        self.get(thread_id, chat_id, allow_self=allow_self)
+        self.get(
+            thread_id,
+            chat_id,
+            allow_self=allow_self,
+            allow_any_chat=allow_any_chat,
+        )
         if (
             not isinstance(query, str)
             or len(query) > 500
@@ -1446,11 +1504,12 @@ class ThreadStore:
             for item in found:
                 item["matches"] = self.read_history(
                     item["thread_id"],
-                    chat_id,
+                    item["chat_id"] if item["owner"] == "chat" else chat_id,
                     query=query,
                     limit=2,
                     max_chars=1800,
                     allow_self=True,
+                    allow_any_chat=True,
                 )
         return found
 
@@ -1502,6 +1561,7 @@ class ThreadEngine:
         self.chats = {}
         self.locks = {}
         self.waiters = {}
+        self._finishing: set[str] = set()
         self._starting = 0
         self._starting_bg = 0
         self._submission_lock = asyncio.Lock()
@@ -1664,7 +1724,12 @@ class ThreadEngine:
                 )
             future = asyncio.get_running_loop().create_future()
             self.waiters.setdefault(thread_id, []).append((revision, future))
-            if steer and row["state"] == "active" and thread_id in self.tasks:
+            if (
+                steer
+                and row["state"] == "active"
+                and thread_id in self.tasks
+                and thread_id not in self._finishing
+            ):
                 self.tasks[thread_id].cancel()
             if not background and thread_id in self.tasks:
                 self.background_tasks.discard(thread_id)
@@ -1827,16 +1892,22 @@ class ThreadEngine:
         return req
 
     async def _drive(self, thread_id, chat_id):
-        row = await asyncio.to_thread(
-            self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
-        )
-        store_chat = row["chat_id"]
-        profile = Profile(**row["profile_snapshot"])
-        history, processed = row["history"], row["processed_revision"]
-        context_index = row["summary"]
-        deadline = asyncio.get_running_loop().time() + self.timeout
-        overflow_retried = False
+        current_task = asyncio.current_task()
+        row = None
+        store_chat = chat_id
+        history = []
+        processed = 0
+        had_error = False
         try:
+            row = await asyncio.to_thread(
+                self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
+            )
+            store_chat = row["chat_id"]
+            profile = Profile(**row["profile_snapshot"])
+            history, processed = row["history"], row["processed_revision"]
+            context_index = row["summary"]
+            deadline = asyncio.get_running_loop().time() + self.timeout
+            overflow_retried = False
             async with asyncio.timeout(self.timeout):
                 for _ in range(profile.max_steps or self.max_steps):
                     pending = await asyncio.to_thread(
@@ -1923,6 +1994,14 @@ class ThreadEngine:
                             history
                         )
                         if prompt_tokens >= budget["prune_tokens"]:
+                            await asyncio.to_thread(
+                                self.store.checkpoint,
+                                thread_id,
+                                history,
+                                processed,
+                                "context_checkpoint",
+                                {},
+                            )
                             pruned = await asyncio.to_thread(
                                 self.store.prune_history,
                                 thread_id,
@@ -1930,11 +2009,11 @@ class ThreadEngine:
                                 tail_tokens=budget["tail_tokens"],
                             )
                             if pruned:
-                                history = (
-                                    await asyncio.to_thread(
-                                        self.store.get, thread_id, store_chat
-                                    )
-                                )["history"]
+                                refreshed = await asyncio.to_thread(
+                                    self.store.get, thread_id, store_chat
+                                )
+                                history = refreshed["history"]
+                                processed = refreshed["processed_revision"]
                                 prompt_tokens = overhead_tokens + estimate_messages_tokens(
                                     history
                                 )
@@ -2153,9 +2232,9 @@ class ThreadEngine:
                                         arguments,
                                         {**current, "_tool_call_id": call["id"]},
                                     )
-                            except (ValueError, RuntimeError, PermissionError, OSError):
+                            except (ValueError, RuntimeError, PermissionError, OSError) as error:
                                 result = {
-                                    "error": "只读工具未完成；检查参数、来源范围或宿主能力配置。"
+                                    "error": _safe_tool_error_message(error, self.redact)
                                 }
                             result = self.redact(result)
                             tool_results.append(
@@ -2225,24 +2304,36 @@ class ThreadEngine:
                     )
                 raise RuntimeError("线程达到本轮探索步数上限")
         except asyncio.CancelledError:
-            row = await completed_thread(self.store.get, thread_id, store_chat)
-            if not self.closing and row["state"] == "active":
-                history.append(
-                    {
-                        "role": "user",
-                        "content": "<activity_interrupted>当前活动已显式转向。正在执行的脚本取消并回退未提交文件；已开始的外部操作须核查现场后再决定是否重试。</activity_interrupted>",
-                    }
+            had_error = True
+            if row is not None:
+                latest, _ = await _await_uninterruptible_coro(
+                    asyncio.to_thread(
+                        self.store.get,
+                        thread_id,
+                        store_chat,
+                        allow_self=(chat_id == "self"),
+                    )
                 )
-                await completed_thread(
-                    self.store.checkpoint,
-                    thread_id,
-                    history,
-                    processed,
-                    "steer_interrupted",
-                    {"reason": "explicit_steering"},
-                )
+                if not self.closing and latest["state"] == "active":
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": "<activity_interrupted>当前活动已显式转向。正在执行的脚本取消并回退未提交文件；已开始的外部操作须核查现场后再决定是否重试。</activity_interrupted>",
+                        }
+                    )
+                    await _await_uninterruptible_coro(
+                        asyncio.to_thread(
+                            self.store.checkpoint,
+                            thread_id,
+                            history,
+                            processed,
+                            "steer_interrupted",
+                            {"reason": "explicit_steering"},
+                        )
+                    )
             raise
         except Exception as error:
+            had_error = True
             safe_errors = {
                 "当前角色的模型均未返回可用结果",
                 "线程达到本轮探索步数上限",
@@ -2258,30 +2349,85 @@ class ThreadEngine:
                 )
             )
             error_text = reason + "。可给原线程补充消息后继续。"
-            row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
-            await asyncio.to_thread(
-                self.store.finish,
-                thread_id,
-                store_chat,
-                {"error": error_text},
-                history,
-                processed,
-            )
-        finally:
-            if hasattr(self.runtime, "end"):
-                await self.runtime.end(thread_id)
-            async with self.locks.setdefault(thread_id, asyncio.Lock()):
-                was_background = thread_id in self.background_tasks
-                self.tasks.pop(thread_id, None)
-                self.background_tasks.discard(thread_id)
-                row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
-                self._resolve(thread_id, row)
-                if not self.closing and row["state"] == "active":
-                    if was_background:
-                        self.background_tasks.add(thread_id)
-                    self.tasks[thread_id] = asyncio.create_task(
-                        self._drive(thread_id, chat_id)
+            if row is None:
+                try:
+                    latest = await asyncio.to_thread(
+                        self.store.get,
+                        thread_id,
+                        chat_id,
+                        allow_self=(chat_id == "self"),
                     )
+                except Exception:
+                    latest = None
+                if latest is not None:
+                    store_chat = latest["chat_id"]
+                    history = latest["history"]
+                    processed = latest["processed_revision"]
+            else:
+                latest = row
+            if latest is not None:
+                await asyncio.to_thread(
+                    self.store.finish,
+                    thread_id,
+                    store_chat,
+                    {"error": error_text},
+                    history,
+                    processed,
+                )
+        finally:
+            self._finishing.add(thread_id)
+
+            async def _finalize():
+                try:
+                    if hasattr(self.runtime, "end"):
+                        try:
+                            await self.runtime.end(thread_id)
+                        except Exception:
+                            pass
+                finally:
+                    async with self.locks.setdefault(thread_id, asyncio.Lock()):
+                        self._finishing.discard(thread_id)
+                        was_background = thread_id in self.background_tasks
+                        if self.tasks.get(thread_id) is current_task:
+                            self.tasks.pop(thread_id, None)
+                        self.background_tasks.discard(thread_id)
+                        latest = None
+                        try:
+                            latest = await asyncio.to_thread(
+                                self.store.get,
+                                thread_id,
+                                store_chat,
+                                allow_self=(chat_id == "self"),
+                            )
+                        except Exception:
+                            latest = None
+                        if latest is not None:
+                            self._resolve(thread_id, latest)
+                        else:
+                            for _rev, fut in self.waiters.pop(thread_id, []):
+                                if not fut.done():
+                                    fut.set_result(
+                                        {
+                                            "thread_id": thread_id,
+                                            "state": "closed",
+                                            "result": {},
+                                        }
+                                    )
+                        if (
+                            latest is not None
+                            and not self.closing
+                            and latest["state"] == "active"
+                            and thread_id not in self.tasks
+                        ):
+                            if was_background:
+                                self.background_tasks.add(thread_id)
+                            self.tasks[thread_id] = asyncio.create_task(
+                                self._drive(thread_id, chat_id)
+                            )
+
+            _, cancelled_in_finally = await _await_uninterruptible_coro(_finalize())
+            if cancelled_in_finally and not had_error:
+                raise asyncio.CancelledError
 
     async def _boundary(self, thread_id, processed, deadline):
         state = await asyncio.to_thread(self.store.boundary, thread_id, processed)
