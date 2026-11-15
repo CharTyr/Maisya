@@ -77,9 +77,11 @@ class Pulse:
         chat_aliases=lambda chat_id, platform="": {chat_id},
         resolve_session=None,
         tz_offset_minutes=None,
+        watch_evaluator=None,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
+        self.watch_evaluator = watch_evaluator
         self.sleep_window, self.redact = sleep_window, redact
         if tz_offset_minutes is not None and not callable(tz_offset_minutes):
             tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
@@ -584,6 +586,8 @@ class Pulse:
                 thread_id="",
                 payload=next_payload,
                 bypass_limits=bypass,
+                mode=row.get("mode", "schedule"),
+                condition=row.get("condition", ""),
             )
         except ValueError as exc:
             logger.warning(
@@ -593,7 +597,362 @@ class Pulse:
                 exc,
             )
 
+    def _next_watch_due(self, row, now: float) -> float | None:
+        payload = row.get("payload") or {}
+        every = int(payload.get("every_seconds") or 0)
+        daily_at = str(payload.get("daily_at") or "").strip()
+        if every < 300 and not daily_at:
+            return None
+        if daily_at:
+            tz_offset = (
+                int(payload["tz_offset_minutes"])
+                if payload.get("tz_offset_minutes") is not None
+                else self._effective_tz_offset_minutes()
+            )
+            due_at, _ = next_daily_due(now, daily_at, tz_offset)
+        else:
+            due_at = now + every
+        return max(now + 60, float(due_at))
+
+    def _watch_prompt(self, row: dict, condition: str) -> str:
+        payload = row.get("payload") or {}
+        base = str(payload.get("prompt") or row.get("reason") or condition).strip()
+        recent_runs = payload.get("recent_runs")
+        history_block = ""
+        if recent_runs:
+            history_block = (
+                "\n<previous_runs>"
+                + html.escape(self.redact(json.dumps(recent_runs, ensure_ascii=False)))
+                + "</previous_runs>"
+            )
+        return (
+            base
+            + "\n<watch_contract>"
+            + f"\n条件：{html.escape(condition or row.get('reason') or '')}"
+            + "\n仅当满足触发条件或发现需要汇报的新变化时输出结论；"
+            + "若条件未满足或无变化，请仅输出 [WATCH:NO_CHANGE]，不要输出多余文字或声明附件。"
+            + "\n</watch_contract>"
+            + history_block
+        )
+
+    def _append_watch_summary(self, payload: dict, summary: str, now: float) -> dict:
+        next_payload = dict(payload or {})
+        next_payload.pop("wait_thread", None)
+        next_payload.pop("already_started", None)
+        next_payload.pop("return_routed_queued", None)
+        clean = self.redact(str(summary or "").strip())
+        if clean:
+            next_payload["last_watch_summary"] = clean[:360]
+            runs = [
+                dict(item)
+                for item in (next_payload.get("recent_runs") or [])
+                if isinstance(item, dict)
+            ]
+            runs.append({"at": int(now), "summary": clean[:360]})
+            runs = runs[-3:]
+            while len(runs) > 1 and len(json.dumps(runs, ensure_ascii=False)) > 1200:
+                runs.pop(0)
+            next_payload["recent_runs"] = runs
+        return next_payload
+
+    async def _handle_watch(self, row):
+        target = row["target"]
+        raw_chat_id = target.split(":", 1)[1]
+        payload = dict(row.get("payload") or {})
+        platform = str(payload.get("platform") or "")
+        if not platform and parse_stream_spec(raw_chat_id):
+            platform = parse_stream_spec(raw_chat_id)[0]
+        chat_id = await self._ensure_runtime_chat_id(raw_chat_id)
+        plugin_ok = self.plugin_enabled() if callable(self.plugin_enabled) else True
+        if not (
+            self.enabled(chat_id, platform)
+            or (plugin_ok and bool(payload.get("admin_direct")))
+        ):
+            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+            return
+
+        condition = str(
+            row.get("condition") or payload.get("condition") or row.get("reason") or ""
+        ).strip()
+        thread = None
+        triggered = False
+        summary = ""
+        attachments: list = []
+        links: list = []
+
+        if callable(self.watch_evaluator):
+            ctx = {
+                "chat_id": chat_id,
+                "platform": platform,
+                "condition": condition,
+                "now": self.intents.clock(),
+            }
+            params = inspect.signature(self.watch_evaluator).parameters
+            ev_res = (
+                self.watch_evaluator(row)
+                if len(params) == 1
+                else self.watch_evaluator(row, ctx)
+            )
+            if inspect.isawaitable(ev_res):
+                ev_res = await ev_res
+            if isinstance(ev_res, bool):
+                triggered = ev_res
+            elif isinstance(ev_res, dict):
+                triggered = bool(ev_res.get("triggered"))
+                summary = str(
+                    ev_res.get("summary") or ev_res.get("message") or ev_res.get("text") or ""
+                ).strip()
+                attachments = list(ev_res.get("attachments") or [])
+                links = list(ev_res.get("links") or [])
+        elif self.engine is not None and (
+            payload.get("profile") or self.profiles is not None
+        ):
+            if row.get("thread_id"):
+                try:
+                    thread = await asyncio.to_thread(
+                        self.bridge.store.get, row["thread_id"], chat_id, allow_self=True
+                    )
+                except (ValueError, PermissionError):
+                    thread = None
+                if thread is not None and (
+                    (self.engine.tasks.get(row["thread_id"]))
+                    or thread.get("state") == "active"
+                ):
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred", delay=2
+                    )
+                    return
+            else:
+                prof_id = str(payload.get("profile") or "").strip()
+                ability = None
+                if prof_id and self.profiles is not None:
+                    try:
+                        ability = await asyncio.to_thread(self.profiles.get, prof_id)
+                    except FileNotFoundError:
+                        await asyncio.to_thread(
+                            self.intents.finish,
+                            row["intent_id"],
+                            "failed",
+                            "profile_missing",
+                        )
+                        return
+                elif self.profiles is not None:
+                    for fallback_id in ("default", "scout"):
+                        try:
+                            ability = await asyncio.to_thread(
+                                self.profiles.get, fallback_id
+                            )
+                            break
+                        except FileNotFoundError:
+                            continue
+                if ability is None:
+                    await asyncio.to_thread(
+                        self.intents.finish,
+                        row["intent_id"],
+                        "failed",
+                        "profile_missing",
+                    )
+                    return
+                if not ability.enabled:
+                    now_ts = self.intents.clock()
+                    await asyncio.to_thread(
+                        self.intents.record_watch_check,
+                        row["intent_id"],
+                        checked_at=now_ts,
+                        triggered=False,
+                        next_due_at=self._next_watch_due(row, now_ts),
+                        wake_status="profile_disabled",
+                    )
+                    return
+                if not ability.autonomous and not payload.get("scheduled_admin"):
+                    now_ts = self.intents.clock()
+                    await asyncio.to_thread(
+                        self.intents.record_watch_check,
+                        row["intent_id"],
+                        checked_at=now_ts,
+                        triggered=False,
+                        next_due_at=self._next_watch_due(row, now_ts),
+                        wake_status="fresh_authorization_required",
+                    )
+                    return
+                workspace = str(
+                    payload.get("workspace") or f"watch_{row['intent_id']}"
+                ).strip()
+                grant = {}
+                if payload.get("scheduled_admin"):
+                    grant["scheduled_admin"] = True
+                if payload.get("admin_direct"):
+                    grant["admin_direct"] = True
+                started = await self._engine_call(
+                    "start",
+                    ability,
+                    self._watch_prompt(row, condition),
+                    chat_id=chat_id,
+                    platform=platform or "qq",
+                    user_id="",
+                    owner="chat",
+                    wait_seconds=0,
+                    workspace=workspace,
+                    grant=grant,
+                    background=True,
+                    defer_if_full=True,
+                )
+                started_tid = str((started or {}).get("thread_id") or "")
+                _, is_queued, thread = await self._thread_state_after_dispatch(
+                    started_tid, chat_id, started
+                )
+                if started_tid and (
+                    is_queued
+                    or (self.engine.tasks.get(started_tid))
+                    or (thread and thread.get("state") == "active")
+                ):
+                    updated_payload = {**payload, "wait_thread": True}
+                    await asyncio.to_thread(
+                        self.intents.update_thread,
+                        row["intent_id"],
+                        started_tid,
+                        updated_payload,
+                    )
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred", delay=2
+                    )
+                    return
+            result_obj = (
+                thread.get("result")
+                if isinstance(thread, dict) and isinstance(thread.get("result"), dict)
+                else {}
+            )
+            if result_obj.get("error"):
+                now_ts = self.intents.clock()
+                logger.warning(
+                    "盯梢线程执行失败 intent=%s thread=%s error=%s",
+                    row["intent_id"],
+                    thread.get("thread_id") if isinstance(thread, dict) else "",
+                    result_obj.get("error"),
+                )
+                await asyncio.to_thread(
+                    self.intents.record_watch_check,
+                    row["intent_id"],
+                    checked_at=now_ts,
+                    triggered=False,
+                    next_due_at=self._next_watch_due(row, now_ts),
+                    wake_status="thread_error",
+                    thread_id="",
+                )
+                return
+            summary = str(result_obj.get("text") or "").strip()
+            attachments = list(result_obj.get("attachments") or [])
+            from .share import links_in
+
+            try:
+                links = links_in(result_obj)
+            except ValueError:
+                links = []
+            explicit = result_obj.get("triggered")
+            if isinstance(explicit, bool):
+                triggered = explicit
+            elif (
+                not attachments
+                and not links
+                and (
+                    "[WATCH:NO_CHANGE]" in summary.upper()
+                    or summary.strip().upper() == "[NO_CHANGE]"
+                )
+            ):
+                triggered = False
+            else:
+                triggered = bool(summary or attachments or links)
+        else:
+            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+            return
+
+        now_ts = self.intents.clock()
+        next_due = self._next_watch_due(row, now_ts)
+        next_payload = self._append_watch_summary(
+            payload, "" if not triggered and "[WATCH:NO_CHANGE]" in summary.upper() else summary, now_ts
+        )
+        if not triggered:
+            await asyncio.to_thread(
+                self.intents.record_watch_check,
+                row["intent_id"],
+                checked_at=now_ts,
+                triggered=False,
+                next_due_at=next_due,
+                wake_status="watch_unmet",
+                payload=next_payload,
+                thread_id="",
+            )
+            return
+
+        if thread is not None and (summary or attachments or links):
+            await asyncio.to_thread(
+                self.bridge.stage,
+                thread,
+                chat_id,
+                archived=thread.get("owner") == "self",
+            )
+        wake_intent = (
+            "你安排的条件盯梢任务已命中触发条件，请结合当前对话自然汇报结论："
+            "纯文字结论可直接用 reply 提起；含图片、文件附件或准确链接请调用 maisya_agent(action=\"share\") 交付。\n"
+            "<maisya_watch>"
+            + html.escape(self.redact(condition or row["reason"]))
+            + "</maisya_watch>"
+        )
+        if summary:
+            wake_intent += (
+                "\n<watch_finding>"
+                + html.escape(self.redact(summary))
+                + "</watch_finding>"
+            )
+        if thread and (attachments or links):
+            hint_info: dict = {"thread_id": str(thread["thread_id"])}
+            handles = [
+                str(item.get("handle"))
+                for item in attachments
+                if isinstance(item, dict) and item.get("handle")
+            ]
+            if handles:
+                hint_info["attachment_handles"] = handles
+            if links:
+                hint_info["links"] = links[:12]
+            wake_intent += (
+                "\n<maisya_delivery_hint>"
+                + html.escape(json.dumps(hint_info, ensure_ascii=False))
+                + "</maisya_delivery_hint>"
+            )
+        status = await self._wake(
+            chat_id,
+            wake_intent,
+            reason="maisya:watch",
+            metadata={
+                "kind": row["kind"],
+                "mode": "watch",
+                "source": row["source"],
+                "intent_id": row["intent_id"],
+                "condition": condition,
+            },
+        )
+        if status in {"session_missing", "uncertain"}:
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "deferred"
+            )
+            return
+        await asyncio.to_thread(
+            self.intents.record_watch_check,
+            row["intent_id"],
+            checked_at=now_ts,
+            triggered=True,
+            triggered_at=now_ts,
+            next_due_at=next_due,
+            wake_status=status,
+            payload=next_payload,
+            thread_id="",
+        )
+
     async def _dispatch(self, row):
+        if str(row.get("mode") or "") == "watch" or row.get("source") == "watch":
+            await self._handle_watch(row)
+            return
         target = row["target"]
         raw_chat_id = target.split(":", 1)[1]
         platform = row["payload"].get("platform", "")
