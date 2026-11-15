@@ -20,7 +20,7 @@ Maisya/
 ├── AGENTS.md                     # 工程红线与 10 条架构不变式
 ├── HANDOFF.md                    # 当前交付快照、验收基线与接手核查项
 ├── codemap.md                    # 本代码地图
-├── maisya/                       # 28 个核心 Python 运行时模块 + viz.css 样式资产
+├── maisya/                       # 29 个核心 Python 运行时模块 + viz.css 样式资产
 ├── presets/                      # 预置灵魂、角色、技能与心跳模板
 ├── sandbox/                      # 容器镜像定义（Dockerfile、build_image.sh）
 ├── webui/                        # 双主题五页 WebUI 源码模板与编译产物
@@ -36,17 +36,17 @@ Maisya/
 
 - **生命周期与配置联动**：
   - `MaisyaPlugin.on_load()`：初始化 SQLite 存储、工作区、手账、保险箱、权限信任、服务/Webhook、`Bridge`/`Share`/`Pulse` 与 `Scout`/`Maker` 引擎，并同步宿主 `[[models]]` 脱敏清单至 `host_models.json`。
-  - `MaisyaPlugin.on_config_update()`：响应 `("bot", "model")` 等宿主配置热更新。
+  - `MaisyaPlugin.on_config_update()`：响应 `("bot", "model", "self")` 宿主配置热更新，同步引擎/意图/Pulse 参数并调用 `pulse.invalidate_caches()`。
   - `MaisyaPlugin.on_unload()`：有序排空线程、清理有界管理员引导缓存并关闭资源。
 - **Planner 工具（仅 3 个可见 + 1 个延迟）**：
-  - `maisya_agent`（`visibility="visible"`）：`start` / `send` / `stop` / `share`，支持并行 `wait_seconds=0`、接力 `from_threads`、工作区归一（`digest-feeds`→`digest`）、管理员跨会话 `target_chat` 与投递方式 `deliver_to`。
-  - `maisya_recall`（`visibility="visible"`）：按 `scope` 与 `kind` 检索过往线程、后台经历、`MEMORY.md` 与 `JOURNAL.md`，支持管理员 `target_chat="all"` 跨全部会话。
+  - `maisya_agent`（`visibility="visible"`）：`start` / `send` / `stop` / `share`，支持并行 `wait_seconds=0`、接力 `from_threads`（含 Private->Group 单向隔离墙阻断）、群聊个人线程/强制转向归属保护、工作区归一（`digest-feeds`→`digest`）、管理员跨会话 `target_chat` 与投递方式 `deliver_to`。
+  - `maisya_recall`（`visibility="visible"`）：按 `scope` 与 `kind` 检索过往线程、后台经历、`MEMORY.md` 与 `JOURNAL.md`，支持管理员 `target_chat="all"` 跨全部会话，执行 Private<->Group 单向隐私壁垒（群聊屏蔽私聊、同人已启用私聊可只读延续个人安全群线程）。
   - `maisya_later`（`visibility="visible"`）：`schedule` / `list` / `cancel`，支持 `kind=later|proactive|silent`、`daily_at`（HH:MM 不漂移）、`digest` 空 prompt 自动补全、`replace` 覆盖与管理员跨会话 `target_chat`。
   - `maisya_shape`（**无 `visibility` 标记，保持延迟工具**）：管理员一站式配置中心（新增复合 `setup` 一站式开通/偏好/试订/定时/试跑，并保留 `overview`/`settings`/`profile`/`skill`/`memory`/`digest_sources`/`notes`/`journal`/`heartbeat`/`services`/`webhooks`/`recipe` 细粒度操作）。
 - **宿主 Hooks & Command**：
-  - `chat.receive.after_process`（`maisya_receive`）：只读记录可信消息、`new_input`、`note_received`；未启用会话的已核验管理员写入 300s 内存缓存。
+  - `chat.receive.after_process`（`maisya_receive`）：只读记录可信消息、`new_input`、`note_received(engaged=not bool(group_id))`（群路人发言不解锁未回不连戳）；未启用会话的已核验管理员写入 300s 内存缓存，私聊仍严格受 `enabled_chats` 管控。
   - `maisaka.planner.before_request`（`maisya_planner`）：剔除内置 `subagent*`，按启用态与管理员权限裁剪档案/工具、提示延迟展开 `maisya_shape`、注入线程索引与手账快照。
-  - `maisaka.planner.after_response`（`maisya_planner_observe`）：关联本轮启动/补充调用到回接组并收尾权限快照。
+  - `maisaka.planner.after_response`（`maisya_planner_observe`）：关联本轮启动/补充调用到回接组、收尾权限快照，并在真实人类群轮次触发 `reply`/`maisya_agent` 时调用 `note_received(..., engaged=True)` 解锁群未回不连戳。
   - `maisaka.replyer.before_request`（`maisya_replyer`）：单次垫入已核实线程结果，或因已由 `share` 精确投递而抑制重复回复。
   - `send_service.before_send`（`maisya_redact`）：出站凭据与私密路径脱敏，非管理员消息剥离全体提及。
   - `@Command("vault")`（`^/vault(?:\s|$)`）：私聊录入/删除凭据句柄。
@@ -57,15 +57,15 @@ Maisya/
 
 ---
 
-## 3. `maisya/` 模块职责表（28 个 Python 模块 + `viz.css`）
+## 3. `maisya/` 模块职责表（29 个 Python 模块 + `viz.css`）
 
 | 模块 | 职责与核心类/函数 |
 |---|---|
-| [config.py](maisya/config.py) | `PluginSettings`、`Settings`（默认 `ui_style="millennium"`、`proactive_level="care"`）、三路合并（默认 < 文件 < 管理台已保存覆盖）与抗自锁死校验 |
+| [config.py](maisya/config.py) | `PluginSettings`、`Settings`（默认 `ui_style="millennium"`、`proactive_level="care"`、`longing_quiet_hours=0` 支持 `0` 关闭或 `12..720` 小时）、三路合并与抗自锁死校验 |
 | [trust.py](maisya/trust.py) | 可信来源消息 `Message` 校验、`session_routes` 双向映射、`<platform>:<group\|private>:<id>`（兼容 TG `::tg-topic::mt=` 话题与大小写敏感 OpenID）<-> MD5 `session_id` 解析、白名单与管理员鉴权 |
 | [abilities.py](maisya/abilities.py) | `Profile` / `Profiles`（含 `"render_report"` 进 `WORKSPACE_TOOLS`、幂等预设升级、`export()` 回退预设技能、`model_name` + `fallback_models` 顺序回退链、`allowed_chats`、兼容 `<platform>:private:<id>` 与大小写敏感 `allow_users`、技能与工具挂载边界）与 `Skills` 校验管理 |
-| [memory.py](maisya/memory.py) | `MemoryLayers`：全局技能、最新别名优先的会话 `MEMORY.md`、自视角 `JOURNAL.md`、`HEARTBEAT.md`、`memory_versions` 版本历史/回滚，以及 `learning_receipts`/`experience_receipts` |
-| [threads.py](maisya/threads.py) | `ThreadStore`、`agent_threads` / `thread_events` / `agent_workspaces` / `thread_context`；支持 `chat_aliases` 与预策划冷流工作区无缝接管 |
+| [memory.py](maisya/memory.py) | `MemoryLayers`：全局技能、最新别名优先的会话 `MEMORY.md`、自视角 `JOURNAL.md`（同日合并 `## YYYY-MM-DD` 区块与最早条目优先裁剪）、`HEARTBEAT.md`、`memory_versions` 版本历史/回滚，以及 `learning_receipts`/`experience_receipts` |
+| [threads.py](maisya/threads.py) | `ThreadStore` / `ThreadEngine`、`agent_threads` / `thread_events` / `agent_workspaces` / `thread_context`；交互与后台双并发车道（`background_tasks` / `_background_limit`）、`defer_if_full`、`kick_queued`、同步/异步 `serendipity`、多轮压缩目录（`archive_events`/`archived_runs` <= 2400 字）及冷流工作区接管 |
 | [workspaces.py](maisya/workspaces.py) | `Workspaces` / `WorkingCopy`：隔离临时拷贝 -> 验证后原子提交至 `in/`、`project/`、`out/`，附件清单（`attachments`）与防穿越文件打开 |
 | [pathsafe.py](maisya/pathsafe.py) | 跨平台文件系统安全原语：根目录逃逸/UNC/符号链接校验、大小写一致路径规范化、跨平台文件锁，以及隔离最小子进程环境变量构造 |
 | [scout.py](maisya/scout.py) | `Scout` 只读侦察与规划循环（注入实时北京时间防搜旧年份、`TOOL_DEFINITIONS` 含 `render_report` 与 `digest_feed.collect|seed`）、`model_list` 多模型异常顺次 fallback、`web.search` / `google-search-plugin` 自适应与阶段限步 |
@@ -75,14 +75,15 @@ Maisya/
 | [report.py](maisya/report.py) | `render_report_artifact`：为 `maker` 生成自包含 `out/*.html` 报告页（`layout="page"`）或 780px 零脚本长图卡（`layout="card"`），校验本地图片魔数并内联 base64 |
 | [page_date.py](maisya/page_date.py) | HTML / JSON-LD / `<time>` / 元标签与相对时间的多层级文章发布时间抽取器（`published_from_html` / `published_from_text`） |
 | [digest.py](maisya/digest.py) | `DigestWorkspace`、`STARTER_FEEDS`、`prefilter_search_item`、`collect`、`parse_feed_xml`、`run_digest_tool`：冷启动精选初订、RSS 发现/14 天试订/转正/退订、五维打分与内嵌 `viz_spec` 简报卡 |
+| [digest_card.py](maisya/digest_card.py) | 对齐 MaiWork 视觉品质的 `600px@2x=1200px` 资讯简报天空主题浅色图卡渲染与封面筛选 |
 | [sandbox.py](maisya/sandbox.py) | Docker + `runsc` (gVisor) 容器执行、`executions`/`execution_resources`、`secrets` 单次只读挂载，无容器自动降级 `light_workspace` |
 | [services.py](maisya/services.py) | 联网源绑定校验（`validate_web_bindings`）、公网目标校验（`validate_endpoint_targets`、防 SSRF）、跨平台 MCP 绝对路径校验与动态模板调用 |
 | [vault.py](maisya/vault.py) | 宿主加密保险箱，生成与管理不落明文的凭据句柄，全链路输出脱敏 `redact()` |
-| [incoming.py](maisya/incoming.py) | `Incoming`：Webhook 验签、幂等去重（`incoming_events`）与 `<platform>:<group\|private>:<id>` 路由投递 |
-| [bridge.py](maisya/bridge.py) | `Bridge`：`return_groups` / `return_members` / `return_intents` / `result_deliveries`；支持 `return_chat_id` 与同轮超时后自动转后台交付 |
+| [incoming.py](maisya/incoming.py) | `Incoming`：Webhook 验签、幂等去重（`incoming_events`）、先验后落盘 Inbox-first 持久排队（`defer_if_full=True` + 后台车道）与 `<platform>:<group\|private>:<id>` 路由投递 |
+| [bridge.py](maisya/bridge.py) | `Bridge`：`return_groups` / `return_members` / `return_intents` / `result_deliveries`；`material()` 附带 `chat_type` 与 `messages_since_trigger`，支持 `return_chat_id` 与同轮超时后自动转后台交付 |
 | [share.py](maisya/share.py) | `Share`：使用宿主 `maisaka.reply.generate` 与 `send.hybrid` 精准发出链接/文件/图片/私聊预览，并在跨容器场景支持 `adapter.napcat.file.upload_group_file` `base64://` 兜底 |
-| [intents.py](maisya/intents.py) | `Intent` 队列与 `social_state`：克制唤醒（睡眠免打扰、未回不连戳、熟人、每日额度）、`daily_at` 不漂移周期排班与 `scheduled_admin` 保护 |
-| [pulse.py](maisya/pulse.py) | `Pulse`：后台到期扫描、`Bridge` 回接认领（含 `inspect.signature` 兼容与 `admin_direct`）、`<maisya_workflow>` 唤醒目标会话 `planner` |
+| [intents.py](maisya/intents.py) | `Intent` 队列与 `social_state`：睡眠免打扰、参与式解锁 `note_received(engaged=...)`、大小写敏感 `acquaintance_allowed`、`group`/`private` 分舞台每日额度（排除 `failed`/`cancelled`）、`daily_at` 不漂移周期排班与 `scheduled_admin` 保护 |
+| [pulse.py](maisya/pulse.py) | `Pulse`：非阻塞派发（`wait_seconds=0`+`delay=2`/`silent` `kick_queued`）、单次失败不中断周期重排与 `<previous_runs>` 继承、零空闲 I/O（`HEARTBEAT.md` mtime 缓存/30s 节流/`invalidate_caches()`）、`<recent_journal>` 去重、群滚动 `<maisya_return>` 锚定，以及结合线程与记忆语料的双舞台 `propose_serendipity()` |
 | [learning.py](maisya/learning.py) | `Learning._learn()`：对复杂成功轨迹做异步经验提炼并回执，不阻断对话 |
 | [shaping.py](maisya/shaping.py) | `execute_shape`、`handle_setup`、`build_overview`、`resolve_chat_target`、`handle_digest_sources`、`patch_settings`/`patch_profile`：管理员对话式全量配置、合规规范化与回滚引擎 |
 | [recipes.py](maisya/recipes.py) | `1 + 2` 能力配方导入导出、隐私与凭据体检、公开 HTTPS 防 SSRF 拉取预览、缺件对齐、平滑升级与推荐例行任务一键挂载 |

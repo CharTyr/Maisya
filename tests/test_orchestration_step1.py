@@ -3,6 +3,7 @@ import base64
 import html
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -533,6 +534,11 @@ async def test_visible_maisya_later_workflow_wake_wording_and_link_staging(tmp_p
             db.execute(
                 "UPDATE intents SET due_at=0 WHERE intent_id=?", (ok["intent_id"],)
             )
+        now_box = [time.time()]
+        plugin.intents.clock = lambda: now_box[0]
+        await plugin.pulse.tick()
+        await plugin.engine.drain()
+        now_box[0] += 3
         await plugin.pulse.tick()
 
         assert len(wakes) == 1

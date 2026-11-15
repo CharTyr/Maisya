@@ -502,7 +502,8 @@ async def test_admin_custom_memory_skill_delete_and_scheduled_workflow_intent(tm
             return {"response": "今日总结完成", "tool_calls": []}
 
         plugin.runtime.step = fake_step
-        plugin.intents.clock = lambda: scheduled["intent"]["due_at"] + 1
+        now_box = [scheduled["intent"]["due_at"] + 1]
+        plugin.intents.clock = lambda: now_box[0]
         sent = []
 
         async def capability(name, **arguments):
@@ -513,7 +514,10 @@ async def test_admin_custom_memory_skill_delete_and_scheduled_workflow_intent(tm
 
         plugin.ctx.call_capability = capability
         await plugin.pulse.tick()
+        await plugin.engine.drain()
         assert seen == ["scout"]
+        now_box[0] += 3
+        await plugin.pulse.tick()
         assert sent and "今日总结完成" in str(sent[0][1])
 
         # Recurring intent automatically rescheduled itself for next run!

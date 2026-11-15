@@ -818,6 +818,8 @@ class MaisyaPlugin(MaiBotPlugin):
                         settings.heartbeat_interval_minutes * 60
                     )
                     self.pulse.heartbeat_profile = settings.heartbeat_profile
+                    if hasattr(self.pulse, "invalidate_caches"):
+                        self.pulse.invalidate_caches()
                 for thread_id in list(self.engine.tasks):
                     row = await asyncio.to_thread(
                         self.threads.get, thread_id, self.engine.chats[thread_id]
