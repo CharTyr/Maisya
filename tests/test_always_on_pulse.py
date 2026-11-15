@@ -270,7 +270,7 @@ async def test_recurring_survives_failures_safety_floor_and_recent_runs_carryove
         finally:
             plugin.profiles.get = orig_get
 
-        # Case E: wake failed (reject_wake returned False) -> STILL reschedules + recent_runs
+        # Case E: wake failed (reject_wake returned False) -> STILL reschedules WITHOUT polluting recent_runs
         now[0] += 86400  # fresh day quota
         plugin.intents.note_received(chat_id)
         iid_wake_fail = plugin.intents.schedule(
@@ -297,10 +297,45 @@ async def test_recurring_survives_failures_safety_floor_and_recent_runs_carryove
         ]
         assert len(rescheduled) == 1
         runs = rescheduled[0]["payload"].get("recent_runs") or []
-        assert len(runs) == 1
-        assert "[REDACTED]" in runs[0]["summary"]
-        assert "sk-secret123456" not in runs[0]["summary"]
+        assert runs == []
         plugin.intents.cancel(rescheduled[0]["intent_id"], f"chat:{chat_id}")
+
+        # Case F: wake accepted (done) -> reschedules WITH redacted summary in recent_runs
+        async def accept_capability(name, **kwargs):
+            if name == "maisaka.proactive.trigger":
+                wakes.append((kwargs.get("stream_id"), kwargs.get("intent")))
+                return {"success": True}
+            return {"success": True}
+
+        plugin.ctx.call_capability = accept_capability
+        now[0] += 86400
+        plugin.intents.note_received(chat_id)
+        iid_wake_ok = plugin.intents.schedule(
+            kind="proactive",
+            source="workflow",
+            target=f"chat:{chat_id}",
+            due_at=now[0],
+            reason="巡检唤醒成功",
+            payload=dict(base_payload),
+            bypass_limits=True,
+        )["intent_id"]
+        await plugin.pulse.tick()
+        await asyncio.gather(*list(plugin.engine.tasks.values()), return_exceptions=True)
+        now[0] += 3
+        await plugin.pulse.tick()
+        assert plugin.intents.get(iid_wake_ok)["status"] == "done"
+        rescheduled_ok = [
+            it
+            for it in plugin.intents.list(f"chat:{chat_id}")
+            if it["status"] == "pending"
+        ]
+        assert len(rescheduled_ok) == 1
+        runs_ok = rescheduled_ok[0]["payload"].get("recent_runs") or []
+        assert len(runs_ok) == 1
+        assert "[REDACTED]" in runs_ok[0]["summary"]
+        assert "sk-secret123456" not in runs_ok[0]["summary"]
+        plugin.intents.cancel(rescheduled_ok[0]["intent_id"], f"chat:{chat_id}")
+        plugin.intents.note_received(chat_id)
 
         # 3. _silent() failure survival (profile_disabled & fresh_authorization_required & done)
         for mode, p_override, expected_wake_status in (

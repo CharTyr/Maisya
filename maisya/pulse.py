@@ -10,11 +10,14 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .abilities import is_autonomous_snapshot
 from .bridge import _grant_admin_direct
-from .intents import next_daily_due
+from .intents import is_profileless_daily, next_daily_due
 from .memory import MemoryLayers
 from .scout import call_capability
 from .trust import parse_stream_spec
+
+logger = logging.getLogger(__name__)
 
 _SERENDIPITY_FILLERS = (
     "刚发现",
@@ -170,14 +173,30 @@ class Pulse:
         is_queued = isinstance(started, dict) and started.get("state") == "active"
         return False, is_queued, None
 
-    def _proactive_quota_available(self, target: str = "") -> bool:
+    def _proactive_quota_available(
+        self,
+        target: str = "",
+        *,
+        now=None,
+        exclude_intent_id: str = "",
+        payload: dict | None = None,
+    ) -> bool:
         if self.intents is None:
             return False
         fn = self.intents.proactive_quota_available
         params = inspect.signature(fn).parameters
+        has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        extra_kw = {}
+        for key, val in (
+            ("now", now),
+            ("exclude_intent_id", exclude_intent_id),
+            ("payload", payload),
+        ):
+            if val is not None and (key != "exclude_intent_id" or val) and (has_var_kw or key in params):
+                extra_kw[key] = val
         target_param = params.get("target")
         if target_param is not None and target_param.kind == inspect.Parameter.KEYWORD_ONLY:
-            return bool(fn(target=target))
+            return bool(fn(target=target, **extra_kw))
         if any(
             p.kind
             in (
@@ -187,10 +206,10 @@ class Pulse:
             )
             for p in params.values()
         ):
-            return bool(fn(target))
-        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
-            return bool(fn(target=target))
-        return bool(fn())
+            return bool(fn(target, **extra_kw))
+        if has_var_kw:
+            return bool(fn(target=target, **extra_kw))
+        return bool(fn(**extra_kw))
 
     def _chat_arena(self, chat_id: str) -> str:
         if callable(self.routes):
@@ -394,6 +413,17 @@ class Pulse:
                 },
             )
             await asyncio.to_thread(self.bridge.wake_status, rows, status)
+            if status == "accepted":
+                inline_fn = getattr(self.bridge, "inline", None)
+                if callable(inline_fn):
+                    seen_tids: set[str] = set()
+                    for r in rows:
+                        tid = str(r.get("thread_id") or "") if isinstance(r, dict) else ""
+                        if tid and tid not in seen_tids:
+                            seen_tids.add(tid)
+                            res = inline_fn(tid, chat_id)
+                            if inspect.isawaitable(res):
+                                await res
 
     async def _intents(self):
         rows = await asyncio.to_thread(self.intents.due, self.enabled)
@@ -410,7 +440,7 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred"
                 )
 
-    async def _reschedule_recurring(self, row, *, thread=None):
+    async def _reschedule_recurring(self, row, *, thread=None, record_run: bool = True):
         payload = row.get("payload") or {}
         every = int(payload.get("every_seconds") or 0)
         daily_at = str(payload.get("daily_at") or "").strip()
@@ -421,12 +451,14 @@ class Pulse:
         next_payload.pop("already_started", None)
         next_payload.pop("return_routed_queued", None)
         now = self.intents.clock()
-        if not str(payload.get("workspace") or "").strip():
-            result_text = (
-                str((thread.get("result") or {}).get("text") or "").strip()
-                if isinstance(thread, dict) and isinstance(thread.get("result"), dict)
-                else ""
-            )
+        result_obj = thread.get("result") if isinstance(thread, dict) else None
+        if (
+            record_run
+            and not str(payload.get("workspace") or "").strip()
+            and isinstance(result_obj, dict)
+            and not result_obj.get("error")
+        ):
+            result_text = str(result_obj.get("text") or "").strip()
             if result_text:
                 prev_runs = [
                     dict(item)
@@ -462,17 +494,30 @@ class Pulse:
         else:
             due_at = now + every
         due_at = max(now + 60, due_at)
-        await asyncio.to_thread(
-            self.intents.schedule,
-            kind=row["kind"],
-            source=row["source"],
-            target=row["target"],
-            due_at=due_at,
-            reason=row["reason"],
-            thread_id="",
-            payload=next_payload,
-            bypass_limits=True,
+        bypass = bool(
+            row.get("source") == "workflow"
+            or str(next_payload.get("profile") or "").strip()
+            or next_payload.get("scheduled_admin")
         )
+        try:
+            await asyncio.to_thread(
+                self.intents.schedule,
+                kind=row["kind"],
+                source=row["source"],
+                target=row["target"],
+                due_at=due_at,
+                reason=row["reason"],
+                thread_id="",
+                payload=next_payload,
+                bypass_limits=bypass,
+            )
+        except ValueError as exc:
+            logger.warning(
+                "循环意图续排跳过 intent=%s target=%s: %s",
+                row.get("intent_id"),
+                row.get("target"),
+                exc,
+            )
 
     async def _dispatch(self, row):
         target = row["target"]
@@ -501,7 +546,7 @@ class Pulse:
                     self.intents.finish, row["intent_id"], status, reason
                 )
                 if status == "failed":
-                    await self._reschedule_recurring(row)
+                    await self._reschedule_recurring(row, record_run=False)
                 return
         elif row["payload"].get("profile") and self.intents.in_sleep_window(self.sleep_window):
             await asyncio.to_thread(
@@ -548,7 +593,18 @@ class Pulse:
             and self.engine is not None
             and self.profiles is not None
         ):
-            ability = await asyncio.to_thread(self.profiles.get, row["payload"]["profile"])
+            try:
+                ability = await asyncio.to_thread(
+                    self.profiles.get, row["payload"]["profile"]
+                )
+            except FileNotFoundError:
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "profile_missing",
+                )
+                return
             if not ability.enabled:
                 await asyncio.to_thread(
                     self.intents.finish,
@@ -556,7 +612,7 @@ class Pulse:
                     "failed",
                     "profile_disabled",
                 )
-                await self._reschedule_recurring(row)
+                await self._reschedule_recurring(row, record_run=False)
                 return
             if not ability.autonomous and not row["payload"].get("scheduled_admin"):
                 await asyncio.to_thread(
@@ -565,7 +621,7 @@ class Pulse:
                     "failed",
                     "fresh_authorization_required",
                 )
-                await self._reschedule_recurring(row)
+                await self._reschedule_recurring(row, record_run=False)
                 return
             prompt = self._with_previous_runs_prompt(
                 row["payload"].get("prompt") or row["reason"],
@@ -722,6 +778,18 @@ class Pulse:
             )
         if thread and isinstance(thread.get("result"), dict):
             result_obj = thread["result"]
+            if result_obj.get("error"):
+                logger.warning(
+                    "线程执行失败，终止本次唤醒 intent=%s thread=%s error=%s",
+                    row["intent_id"],
+                    thread.get("thread_id"),
+                    result_obj.get("error"),
+                )
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "failed", "thread_error"
+                )
+                await self._reschedule_recurring(row, thread=thread, record_run=False)
+                return
             result_text = str(result_obj.get("text") or "")
             attachments = result_obj.get("attachments") or []
             from .share import links_in
@@ -779,7 +847,16 @@ class Pulse:
             },
         )
         if status == "accepted" and row["kind"] == "proactive":
-            await asyncio.to_thread(self.intents.mark_proactive, target)
+            mp_fn = self.intents.mark_proactive
+            mp_aliases = tuple(
+                x
+                for x in (chat_id, (row.get("payload") or {}).get("stream_spec") or "")
+                if x
+            )
+            if "aliases" in inspect.signature(mp_fn).parameters:
+                await asyncio.to_thread(mp_fn, target, aliases=mp_aliases)
+            else:
+                await asyncio.to_thread(mp_fn, target)
         done = (
             "done"
             if status == "accepted"
@@ -787,7 +864,9 @@ class Pulse:
         )
         await asyncio.to_thread(self.intents.finish, row["intent_id"], done, status)
         if done in {"done", "failed"}:
-            await self._reschedule_recurring(row, thread=thread)
+            await self._reschedule_recurring(
+                row, thread=thread, record_run=(done == "done")
+            )
 
     async def _silent(self, row):
         raw_target_chat = row["target"].split(":", 1)[1]
@@ -842,9 +921,18 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred"
                 )
                 return
-            ability = await asyncio.to_thread(
-                self.profiles.get, row["payload"]["profile"]
-            )
+            try:
+                ability = await asyncio.to_thread(
+                    self.profiles.get, row["payload"]["profile"]
+                )
+            except FileNotFoundError:
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "profile_missing",
+                )
+                return
             if not ability.enabled:
                 await asyncio.to_thread(
                     self.intents.finish,
@@ -852,7 +940,7 @@ class Pulse:
                     "failed",
                     "profile_disabled",
                 )
-                await self._reschedule_recurring(row)
+                await self._reschedule_recurring(row, record_run=False)
                 return
             if not ability.autonomous and not row["payload"].get("scheduled_admin"):
                 await asyncio.to_thread(
@@ -861,7 +949,7 @@ class Pulse:
                     "failed",
                     "fresh_authorization_required",
                 )
-                await self._reschedule_recurring(row)
+                await self._reschedule_recurring(row, record_run=False)
                 return
             prompt = self._with_previous_runs_prompt(
                 row["payload"].get("prompt") or row["reason"],
@@ -905,8 +993,9 @@ class Pulse:
             return
         thread_id = row["thread_id"]
         if not thread_id:
-            await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
-            await self._reschedule_recurring(row)
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "failed", "thread_missing"
+            )
             return
         try:
             thread = await asyncio.to_thread(
@@ -921,22 +1010,56 @@ class Pulse:
             await asyncio.to_thread(
                 self.intents.finish, row["intent_id"], "done", "thread_closed"
             )
-            await self._reschedule_recurring(row, thread=thread)
+            if str((row.get("payload") or {}).get("profile") or "").strip():
+                await self._reschedule_recurring(row, thread=thread)
             return
-        profile = thread["profile_snapshot"]
-        if (
-            profile.get("access") not in {"everyone", "listed"}
-            or profile.get("allow_users")
-            or profile.get("secrets")
-            or profile.get("template")
-        ) and not row["payload"].get("scheduled_admin"):
+        scheduled_admin = bool((row.get("payload") or {}).get("scheduled_admin"))
+        snapshot_ok = is_autonomous_snapshot(thread.get("profile_snapshot"))
+        prof_id = str(
+            (row.get("payload") or {}).get("profile")
+            or thread.get("profile")
+            or thread.get("profile_id")
+            or ""
+        ).strip()
+        if prof_id and self.profiles is not None:
+            try:
+                live_ability = await asyncio.to_thread(self.profiles.get, prof_id)
+            except FileNotFoundError:
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "profile_missing",
+                )
+                return
+            if not live_ability.enabled:
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "profile_disabled",
+                )
+                await self._reschedule_recurring(row, thread=thread, record_run=False)
+                return
+            if not scheduled_admin and (
+                not snapshot_ok or not live_ability.autonomous
+            ):
+                await asyncio.to_thread(
+                    self.intents.finish,
+                    row["intent_id"],
+                    "failed",
+                    "fresh_authorization_required",
+                )
+                await self._reschedule_recurring(row, thread=thread, record_run=False)
+                return
+        elif not scheduled_admin and not snapshot_ok:
             await asyncio.to_thread(
                 self.intents.finish,
                 row["intent_id"],
                 "failed",
                 "fresh_authorization_required",
             )
-            await self._reschedule_recurring(row, thread=thread)
+            await self._reschedule_recurring(row, thread=thread, record_run=False)
             return
         if thread["owner"] != "self" and not self.enabled(
             thread["chat_id"], thread["platform"]
@@ -1020,12 +1143,24 @@ class Pulse:
         source = row["source"]
         if level == "care" and source == "serendipity" and self._chat_arena(chat_id) != "private":
             return False, "care_blocks_serendipity"
-        allowed, reason = self.intents.social_gate(
-            row["target"], sleep_window=self.sleep_window
+        payload = row.get("payload") or {}
+        sg_fn = self.intents.social_gate
+        aliases = tuple(
+            x
+            for x in (
+                payload.get("stream_spec") if isinstance(payload, dict) else "",
+                payload.get("chat_id") if isinstance(payload, dict) else "",
+            )
+            if x
         )
+        if "aliases" in inspect.signature(sg_fn).parameters:
+            allowed, reason = sg_fn(
+                row["target"], sleep_window=self.sleep_window, aliases=aliases
+            )
+        else:
+            allowed, reason = sg_fn(row["target"], sleep_window=self.sleep_window)
         if not allowed:
             return allowed, reason
-        payload = row.get("payload") or {}
         if not payload.get("scheduled_admin") and not self.intents.acquaintance_allowed(
             chat_id,
             admins=self._admins(),
@@ -1033,6 +1168,20 @@ class Pulse:
             payload=payload,
         ):
             return False, "unfamiliar_chat"
+        row_bypass = bool(row.get("bypass_limits"))
+        can_bypass = (
+            source == "workflow"
+            or bool(str(payload.get("profile") or "").strip())
+            or bool(payload.get("scheduled_admin"))
+            or (row_bypass and not is_profileless_daily(source, payload))
+        )
+        if not can_bypass and not self._proactive_quota_available(
+            row["target"],
+            now=self.intents.clock(),
+            exclude_intent_id=row.get("intent_id", ""),
+            payload=payload if isinstance(payload, dict) else None,
+        ):
+            return False, "daily_proactive_limit"
         return True, ""
 
     def _recent_thread_corpus(self, chat_id: str, raw_chat_id: str = "") -> str:
@@ -1507,13 +1656,13 @@ class Pulse:
                 )
             if not plan:
                 return
-            queued_tid = await asyncio.to_thread(self._find_queued_heartbeat_tid)
-            if queued_tid and await self._handle_queued_heartbeat(queued_tid):
-                return
             ability = await asyncio.to_thread(
                 self.profiles.get, self.heartbeat_profile
             )
             if not ability.enabled or not ability.autonomous:
+                return
+            queued_tid = await asyncio.to_thread(self._find_queued_heartbeat_tid)
+            if queued_tid and await self._handle_queued_heartbeat(queued_tid):
                 return
             if not await asyncio.to_thread(self._claim_heartbeat, now):
                 if self._heartbeat_next_at <= now:
@@ -1556,7 +1705,10 @@ class Pulse:
             )
             if started_tid and is_queued:
                 self._queued_heartbeat_tid = started_tid
-        except (ValueError, PermissionError, RuntimeError, OSError, sqlite3.Error):
+        except (ValueError, PermissionError, RuntimeError, OSError, sqlite3.Error) as exc:
+            logger.warning(
+                "自主探索调度跳过 profile=%s: %s", self.heartbeat_profile, exc
+            )
             return
 
     def start(self):

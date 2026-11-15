@@ -569,7 +569,7 @@ async def test_one_shot_setup_from_private_and_group_chat(tmp_path, monkeypatch)
         mem_text = plugin.memory.read("memory", chat_id="qq:group:100246809")["content"]
         assert "已有偏好：关注本地离线模型" in mem_text
         assert "独立开发产品出海" in mem_text
-        assert "老群偏好" not in mem_text
+        assert "老群偏好：随便聊聊" in mem_text
 
         assert seeded_calls == ["独立开发 AI工具"]
         assert any("broken.invalid" in w for w in res["warnings"])

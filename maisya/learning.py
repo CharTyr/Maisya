@@ -2,10 +2,29 @@
 
 import asyncio
 import json
+import logging
+import re
 import sqlite3
 
+from .abilities import is_autonomous_snapshot
 from .scout import TOOL_DEFINITIONS, call_capability, checked
 from .workspaces import completed_thread
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_json_object(raw: str) -> dict:
+    text = str(raw or "").strip()
+    fenced = re.fullmatch(
+        r"```(?:[a-zA-Z0-9_-]+)?[ \t]*\r?\n([\s\S]*?)\r?\n```",
+        text,
+    )
+    if fenced:
+        text = fenced.group(1).strip()
+    loaded = json.loads(text)
+    if not isinstance(loaded, dict):
+        raise TypeError("提炼结果必须为 JSON 对象")
+    return loaded
 
 
 class Learning:
@@ -49,7 +68,9 @@ class Learning:
                 ):
                     continue
                 error = isinstance(value, dict) and (
-                    value.get("error") or value.get("exit_code", 0) != 0
+                    value.get("error")
+                    or value.get("exit_code", 0) != 0
+                    or value.get("ok") is False
                 )
                 if error:
                     failed.add(name)
@@ -71,10 +92,15 @@ class Learning:
         with self.memory.store.connect() as db, db:
             key = row["thread_id"], row["completed_revision"]
             if reserve:
+                if db.execute(
+                    "INSERT OR IGNORE INTO learning_receipts VALUES (?,?,?)",
+                    (*key, status),
+                ).rowcount:
+                    return True
                 return bool(
                     db.execute(
-                        "INSERT OR IGNORE INTO learning_receipts VALUES (?,?,?)",
-                        (*key, status),
+                        "UPDATE learning_receipts SET status=? WHERE thread_id=? AND revision=? AND status='interrupted'",
+                        (status, *key),
                     ).rowcount
                 )
             db.execute(
@@ -87,9 +113,7 @@ class Learning:
         if (
             self.closed
             or len(self.tasks) >= 8
-            or profile["access"] != "everyone"
-            or profile.get("secrets")
-            or profile.get("template")
+            or not is_autonomous_snapshot(profile)
             or not row.get("result", {}).get("text")
         ):
             return
@@ -133,7 +157,7 @@ class Learning:
                         max_tokens=500,
                     )
                 )
-                candidate = json.loads(response["response"])
+                candidate = _parse_json_object(response["response"])
                 note = candidate.get("note")
                 if not isinstance(note, str) or not 1 <= len(note) <= 500:
                     await completed_thread(self._receipt, row, "empty")
@@ -153,8 +177,53 @@ class Learning:
         except asyncio.CancelledError:
             await completed_thread(self._receipt, row, "interrupted")
             raise
-        except Exception:
+        except (
+            TimeoutError,
+            asyncio.TimeoutError,
+            RuntimeError,
+            sqlite3.Error,
+            OSError,
+        ) as exc:
+            logger.warning(
+                "学习提炼遇到瞬态错误，留待后续重试 thread=%s rev=%s: %s",
+                row["thread_id"],
+                row["completed_revision"],
+                exc,
+            )
+            await completed_thread(self._receipt, row, "interrupted")
+        except ValueError as exc:
+            if "版本" in str(exc):
+                logger.warning(
+                    "学习提炼写回版本冲突，留待后续重试 thread=%s rev=%s: %s",
+                    row["thread_id"],
+                    row["completed_revision"],
+                    exc,
+                )
+                await completed_thread(self._receipt, row, "interrupted")
+            else:
+                logger.warning(
+                    "学习提炼内容被拒绝 thread=%s rev=%s: %s",
+                    row["thread_id"],
+                    row["completed_revision"],
+                    exc,
+                )
+                await completed_thread(self._receipt, row, "rejected")
+        except (json.JSONDecodeError, TypeError, KeyError) as exc:
+            logger.warning(
+                "学习提炼输出无效，已标记拒绝 thread=%s rev=%s: %s",
+                row["thread_id"],
+                row["completed_revision"],
+                exc,
+            )
             await completed_thread(self._receipt, row, "rejected")
+        except Exception as exc:
+            logger.warning(
+                "学习提炼异常失败 thread=%s rev=%s: %s",
+                row["thread_id"],
+                row["completed_revision"],
+                exc,
+            )
+            await completed_thread(self._receipt, row, "interrupted")
 
     async def drain(self):
         while self.tasks:
