@@ -152,26 +152,44 @@ async def test_setup_unwraps_item_wrappers_and_coerces_scalars_first_try(tmp_pat
             "last_human_at": 2000.0,
         }
     ]
+    import socket
+    import urllib.parse
+    import maisya.digest as digest_mod
+
     plugin = await _boot_plugin(tmp_path, streams=streams)
     try:
-        added_feeds = []
-        seed_calls = []
+        fetched_urls = []
+        starter_hosts = {
+            (urllib.parse.urlparse(str(entry.get("url") or "")).hostname or "").lower()
+            for entry in digest_mod.STARTER_FEEDS
+        }
+        public_hosts = starter_hosts | {"feed.example", "news.example"}
+        real_getaddrinfo = socket.getaddrinfo
 
-        async def fake_add_feed(self, url, *, title="", auto=True, origin="manual"):
-            added_feeds.append((url, auto))
-            sources = self._load_sources()
-            feed = {"id": f"feed_{len(added_feeds)}", "url": url, "title": title or "Feed"}
-            sources["feeds"].append(feed)
-            self._save_sources(sources)
-            self.work.commit()
-            return {"ok": True, "feed": feed}
+        def offline_getaddrinfo(host, port, *args, **kwargs):
+            h = str(host or "").strip().lower().rstrip(".")
+            if h in public_hosts:
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+            return real_getaddrinfo(host, port, *args, **kwargs)
 
-        async def fake_seed(self, topics_or_text="", *, broad=False, max_add=4):
-            seed_calls.append((topics_or_text, broad))
-            return {"ok": True, "seeded": []}
+        def offline_fetch_public_bytes(url, timeout, max_bytes):
+            digest_mod._validate_public_url_with_ips(url)
+            fetched_urls.append(url)
+            return {
+                "body": (
+                    b'<?xml version="1.0" encoding="utf-8"?>'
+                    b"<rss version='2.0'><channel><title>Offline Feed</title>"
+                    b"<item><title>AI Update</title><link>https://feed.example/1</link>"
+                    b"<description>Summary</description></item></channel></rss>"
+                ),
+                "content_type": "application/rss+xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
 
-        monkeypatch.setattr(DigestWorkspace, "add_feed", fake_add_feed)
-        monkeypatch.setattr(DigestWorkspace, "seed_starter_feeds", fake_seed, raising=False)
+        monkeypatch.setattr(socket, "getaddrinfo", offline_getaddrinfo)
+        monkeypatch.setattr(digest_mod, "_sync_fetch_public_bytes", offline_fetch_public_bytes)
 
         await plugin.after_receive(message=_private_msg("m-setup-1", "配置测试群"))
 
@@ -214,8 +232,20 @@ async def test_setup_unwraps_item_wrappers_and_coerces_scalars_first_try(tmp_pat
         assert digest_prof.enabled is True
         assert digest_prof.model_list == ("gpt-6-luna", "backup-m")
         assert digest_prof.max_steps == 25
-        assert added_feeds == [("https://feed.example/rss.xml", False)]
-        assert seed_calls == [("开源AI", False)]
+        assert "https://feed.example/rss.xml" in fetched_urls
+        from maisya.digest import DigestWorkspace
+        from maisya.shaping import _find_digest_workspace_binding
+
+        binding = _find_digest_workspace_binding(plugin, "qq:group:100246809", "qq", "digest")
+        assert binding is not None
+        digest_row = plugin.threads.get(binding["thread_id"], binding["chat_id"], allow_any_chat=True)
+        assert digest_row is not None
+        with plugin.runtime.files.activity(digest_row) as work:
+            sources_now = DigestWorkspace(work)._load_sources()
+        by_url = {f.get("url"): f for f in sources_now["feeds"]}
+        assert by_url["https://feed.example/rss.xml"]["status"] == "active"
+        assert res["applied"]["digest_sources"]["seeded_count"] >= 1
+        assert any(f.get("origin") == "starter" for f in sources_now["feeds"])
         assert {s["daily_at"] for s in res["schedules"]} == {"09:00", "20:00"}
         assert res["trial_thread_id"] == ""
 
@@ -265,7 +295,7 @@ async def test_setup_unwraps_item_wrappers_and_coerces_scalars_first_try(tmp_pat
         assert lockout["success"] is False
 
         # Disabling digest via stringified/wrapped profiles[pid].enabled does not re-seed digest
-        seed_count_before = len(seed_calls)
+        fetched_count_before = len(fetched_urls)
         res_disable = await plugin.shape_tool(
             action="setup",
             kind="setup",
@@ -277,7 +307,7 @@ async def test_setup_unwraps_item_wrappers_and_coerces_scalars_first_try(tmp_pat
         )
         assert res_disable["success"] is True, res_disable
         assert plugin.profiles.get("digest").enabled is False
-        assert len(seed_calls) == seed_count_before
+        assert len(fetched_urls) == fetched_count_before
 
         # Invalid scalar types fail clearly
         for bad_patch in (
@@ -416,14 +446,36 @@ async def test_patch_settings_profile_and_digest_sources_unwrap_wrappers(tmp_pat
         assert p_res["profile"]["model_list"] == ["gpt-6-luna", "step-5-preview"]
         assert p_res["profile"]["max_steps"] == 22
 
-        # handle_digest_sources with {"item": ...} wrappers & string auto="false"
+        # handle_digest_sources with {"item": ...} wrappers & string auto="false" (real add_feed + SSRF check)
+        import socket
+        import maisya.digest as digest_mod
+
         seen = []
+        real_getaddrinfo = socket.getaddrinfo
 
-        async def fake_add_feed(self, url, *, title="", auto=True, origin="manual"):
-            seen.append((url, auto))
-            return {"ok": True, "feed": {"id": "f1", "url": url, "title": title}}
+        def offline_getaddrinfo_ds(host, port, *args, **kwargs):
+            if str(host or "").strip().lower().rstrip(".") == "news.example":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+            return real_getaddrinfo(host, port, *args, **kwargs)
 
-        monkeypatch.setattr(DigestWorkspace, "add_feed", fake_add_feed)
+        def offline_fetch_ds(url, timeout, max_bytes):
+            digest_mod._validate_public_url_with_ips(url)
+            seen.append(url)
+            return {
+                "body": (
+                    b'<?xml version="1.0" encoding="utf-8"?>'
+                    b"<rss version='2.0'><channel><title>News Example</title>"
+                    b"<item><title>Story</title><link>https://news.example/1</link>"
+                    b"<description>Desc</description></item></channel></rss>"
+                ),
+                "content_type": "application/rss+xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
+
+        monkeypatch.setattr(socket, "getaddrinfo", offline_getaddrinfo_ds)
+        monkeypatch.setattr(digest_mod, "_sync_fetch_public_bytes", offline_fetch_ds)
         d_res = await handle_digest_sources(
             plugin,
             action="patch",
@@ -435,6 +487,7 @@ async def test_patch_settings_profile_and_digest_sources_unwrap_wrappers(tmp_pat
             },
         )
         assert d_res["kind"] == "digest_sources"
-        assert seen == [("https://news.example/rss", False)]
+        assert seen == ["https://news.example/rss"]
+        assert d_res["feeds"][0]["status"] == "active"
     finally:
         await plugin.on_unload()

@@ -365,7 +365,9 @@ async def test_normalizers_profile_summary_and_later_workspace_defaults(tmp_path
     assert normalize_sleep_window("01-08") == "01-08"
     assert normalize_sleep_window("1:00-8:00") == "01-08"
     assert normalize_sleep_window("01:00 - 08:00") == "01-08"
-    assert normalize_sleep_window("23:30-7:00") == "23-07"
+    assert normalize_sleep_window("23:30-7:00") == "23:30-07:00"
+    assert normalize_sleep_window("00-24") == "00-24"
+    assert normalize_sleep_window("00:00-24:00") == "00-24"
     assert normalize_sleep_window("off") == ""
     assert normalize_sleep_window("关闭") == ""
     assert normalize_sleep_window("") == ""
@@ -493,30 +495,49 @@ async def test_one_shot_setup_from_private_and_group_chat(tmp_path, monkeypatch)
         plugin.memory.write("memory", "老群偏好：随便聊聊", chat_id=legacy_sid)
         plugin.memory.write("memory", "已有偏好：关注本地离线模型", chat_id=active_sid)
 
-        # Simulate 1 unreachable RSS feed (must go to warnings, NOT abort setup) + optional seed_starter_feeds
-        seeded_calls = []
+        # Offline DNS + real _validate_public_url_with_ips: 1 unreachable RSS feed must go to warnings (not abort setup), while real add_feed + seed_starter_feeds succeed
+        import socket
+        import maisya.digest as digest_mod
 
-        async def fake_add_feed(self, url, *, title="", auto=True, origin="manual"):
-            if "broken" in url:
-                return {"ok": False, "reason": "connection timeout"}
-            sources = self._load_sources()
-            feed = {"id": "feed_ok_1", "url": url, "title": title or "Indie Hackers"}
-            sources["feeds"].append(feed)
-            self._save_sources(sources)
-            self.work.commit()
-            return {"ok": True, "feed": feed}
+        real_getaddrinfo = socket.getaddrinfo
 
-        async def fake_seed(self, topics_or_text="", *, max_add=4):
-            seeded_calls.append(topics_or_text)
-            sources = self._load_sources()
-            if not any(f.get("id") == "seed_1" for f in sources["feeds"]):
-                sources["feeds"].append({"id": "seed_1", "url": "https://indie.example/rss", "title": "Starter Indie"})
-                self._save_sources(sources)
-                self.work.commit()
-            return {"ok": True, "seeded": [{"id": "seed_1"}]}
+        def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            host_str = str(host or "").strip().lower()
+            if host_str in {"broken.invalid"} or host_str.endswith(".invalid"):
+                raise socket.gaierror(8, "nodename nor servname provided")
+            if host_str in {"localhost", "127.0.0.1", "::1"}:
+                return real_getaddrinfo(host, port, family, type, proto, flags)
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("93.184.216.34", int(port) if port else 0),
+                )
+            ]
 
-        monkeypatch.setattr(DigestWorkspace, "add_feed", fake_add_feed)
-        monkeypatch.setattr(DigestWorkspace, "seed_starter_feeds", fake_seed, raising=False)
+        fetched_urls: list[str] = []
+
+        def fake_fetch(url, timeout, max_bytes):
+            digest_mod._validate_public_url_with_ips(url)
+            fetched_urls.append(url)
+            return {
+                "body": (
+                    b'<?xml version="1.0" encoding="utf-8"?>'
+                    b"<rss version='2.0'><channel><title>Offline RSS</title>"
+                    b"<item><title>AI Note</title><link>https://valid.example/item-1</link>"
+                    b"<description>Offline test RSS item</description></item>"
+                    b"</channel></rss>"
+                ),
+                "content_type": "application/rss+xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
+
+        monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+        monkeypatch.setattr(digest_mod, "_sync_fetch_public_bytes", fake_fetch)
 
         # Admin speaks from un-enabled private chat priv_admin_md5
         await plugin.after_receive(message=_private_msg("priv-m1", "帮我把独立开发小馆配好每天8点半和晚上7点半的简报，安静时段1点到8点"))
@@ -571,10 +592,11 @@ async def test_one_shot_setup_from_private_and_group_chat(tmp_path, monkeypatch)
         assert "独立开发产品出海" in mem_text
         assert "老群偏好：随便聊聊" in mem_text
 
-        assert seeded_calls == ["独立开发 AI工具"]
+        assert "https://valid.example/feed.xml" in fetched_urls
+        assert len([u for u in fetched_urls if u != "https://valid.example/feed.xml"]) >= 1
         assert any("broken.invalid" in w for w in res["warnings"])
         assert res["applied"]["digest_sources"]["workspace"] == "digest"
-        assert res["applied"]["digest_sources"]["feeds_total"] == 2
+        assert res["applied"]["digest_sources"]["feeds_total"] >= 2
 
         # Legacy schedule under old hash was cancelled; 2 deduplicated schedules created in "digest" workspace
         assert plugin.intents.get(old_intent["intent_id"])["status"] == "cancelled"

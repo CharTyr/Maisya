@@ -35,6 +35,18 @@ from .memory import (
 from .pathsafe import check_part, path_is_link_like
 from .vault import VaultError, atomic_private_write, private_directory, relative_symlink_parts
 
+def _preset_profile_ids() -> set[str]:
+    profiles_dir = PRESETS_DIR / "profiles"
+    if not profiles_dir.is_dir():
+        return set()
+    return {
+        entry.name
+        for entry in profiles_dir.iterdir()
+        if entry.is_dir()
+        and ((entry / "PROFILE.md").is_file() or (entry / "profile.toml").is_file())
+    }
+
+
 RECIPE_SCHEMA_VERSION = 1
 MAX_RECIPE_ARCHIVE_BYTES = 8 * 1024 * 1024
 MAX_RECIPE_UNPACKED_BYTES = 16 * 1024 * 1024
@@ -1698,7 +1710,7 @@ def build_recipe_preview(
                     "id": candidate_id,
                     "title": cur_prof.title,
                     "fish_seed": cur_prof.fish_seed,
-                    "is_preset": candidate_id in {"scout", "maker", "digest"},
+                    "is_preset": candidate_id in _preset_profile_ids(),
                     "enabled": cur_prof.enabled,
                     "bound": cur_prof.bound,
                     "access": cur_prof.access,
@@ -1756,19 +1768,31 @@ def _install_bundled_skills(
 ) -> list[str]:
     installed = []
     preset_set = plugin.memory.preset_skills()
+    skills_root = plugin.data_root / "abilities/skills"
+    if any(
+        path_is_link_like(layer)
+        for layer in relative_symlink_parts(skills_root, plugin.data_root)
+    ):
+        raise ValueError("目标技能根目录包含符号链接，拒绝更新")
     for sk_id, info in sorted(bundled_skills.items()):
         md_bytes = info.get("md") or b""
         if not md_bytes:
             continue
-        dest_dir = plugin.data_root / "abilities/skills" / sk_id
-        if dest_dir.is_symlink():
+        dest_dir = skills_root / sk_id
+        if any(
+            path_is_link_like(layer)
+            for layer in relative_symlink_parts(dest_dir, plugin.data_root)
+        ):
             raise ValueError("目标技能目录包含符号链接，拒绝更新")
-        exists = (dest_dir / "SKILL.md").is_file()
+        skill_md_path = dest_dir / "SKILL.md"
+        if path_is_link_like(skill_md_path):
+            raise ValueError("目标技能文件包含符号链接，拒绝更新")
+        exists = skill_md_path.is_file()
         if exists and (not overwrite or sk_id in preset_set):
             continue
         for sub_rel, comp_data in info.get("companions") or []:
             plugin.memory._guard_companion_bytes(sub_rel, comp_data)
-        private_directory(dest_dir)
+        private_directory(dest_dir, stop_at=plugin.data_root)
         if exists:
             plugin.memory._clear_skill_companions(dest_dir)
         cur = plugin.memory.read("skill", target=sk_id, allow_custom=True)
@@ -1786,29 +1810,122 @@ def _install_bundled_skills(
             cur_p = dest_dir
             for part in Path(sub_rel).parts[:-1]:
                 cur_p = cur_p / part
-                if cur_p.is_symlink():
+                if path_is_link_like(cur_p):
                     raise ValueError("技能附属文件目录包含符号链接，拒绝更新")
-                private_directory(cur_p)
+                private_directory(cur_p, stop_at=dest_dir)
             comp_file = dest_dir / sub_rel
-            if comp_file.is_symlink():
+            if path_is_link_like(comp_file):
                 raise ValueError("技能附属文件包含符号链接，拒绝更新")
             atomic_private_write(comp_file, comp_data)
         installed.append(sk_id)
     return installed
 
 
-def _is_routine_chat_enabled(plugin, chat_id: str, platform: str = "qq") -> bool:
+def _resolve_routine_chat(
+    plugin, chat_id: str, platform: str = ""
+) -> tuple[str, str, set[str]]:
+    """解析例行任务的目标会话规范流、真实平台以及全部别名。"""
+    from .trust import parse_stream_spec
+
     target = str(chat_id or "").strip()
+    hint_plat = str(platform or "").strip()
     if not target:
-        return False
-    plat = str(platform or "").strip() or "qq"
-    if hasattr(plugin, "enabled_for") and plugin.enabled_for(target, plat):
-        return True
+        return "", hint_plat, set()
+
+    parsed = parse_stream_spec(target)
+    resolved_plat = parsed[0] if parsed else ""
+    messages = getattr(plugin, "messages", None)
+
+    known_sid = ""
     if hasattr(plugin, "resolve_known_session_id"):
-        known = plugin.resolve_known_session_id(target)
-        if known and hasattr(plugin, "enabled_for") and plugin.enabled_for(known, plat):
+        known_sid = str(plugin.resolve_known_session_id(target) or "").strip()
+
+    if not resolved_plat and messages is not None:
+        for probe in (target, known_sid):
+            if not probe:
+                continue
+            route = messages.route_for(probe) if hasattr(messages, "route_for") else None
+            if isinstance(route, dict) and str(route.get("platform") or "").strip():
+                resolved_plat = str(route["platform"]).strip()
+                break
+            plat_from_msg = (
+                str(messages.platform_for(probe) or "").strip()
+                if hasattr(messages, "platform_for")
+                else ""
+            )
+            if plat_from_msg:
+                resolved_plat = plat_from_msg
+                break
+
+    if not resolved_plat:
+        enabled_chats = tuple(
+            getattr(getattr(plugin, "settings", None), "enabled_chats", ()) or ()
+        )
+        matched_plats: set[str] = set()
+        hint_matched = False
+        for entry in enabled_chats:
+            ep = parse_stream_spec(entry)
+            if not ep:
+                continue
+            if ep[2] == target or entry == target:
+                matched_plats.add(ep[0])
+                if hint_plat and ep[0] == hint_plat:
+                    hint_matched = True
+        if hint_matched:
+            resolved_plat = hint_plat
+        elif len(matched_plats) == 1 and (not hint_plat or hint_plat == "qq"):
+            resolved_plat = next(iter(matched_plats))
+
+    effective_plat = resolved_plat or hint_plat
+    canonical_chat = target
+    if parsed is not None:
+        canonical_chat = target
+    elif hasattr(plugin, "canonical_stream_spec"):
+        cand = str(plugin.canonical_stream_spec(target, effective_plat) or "").strip()
+        if cand:
+            canonical_chat = cand
+            cand_parsed = parse_stream_spec(cand)
+            if cand_parsed is not None:
+                effective_plat = cand_parsed[0]
+
+    aliases: set[str] = {target, canonical_chat}
+    if known_sid:
+        aliases.add(known_sid)
+    for probe in (target, canonical_chat, known_sid):
+        if not probe:
+            continue
+        if hasattr(plugin, "resolve_known_session_id"):
+            known = str(plugin.resolve_known_session_id(probe) or "").strip()
+            if known:
+                aliases.add(known)
+        if hasattr(plugin, "chat_aliases_for"):
+            for plat_probe in dict.fromkeys((effective_plat, hint_plat, "")):
+                aliases.update(
+                    str(a).strip()
+                    for a in (plugin.chat_aliases_for(probe, plat_probe) or ())
+                    if str(a).strip()
+                )
+    return canonical_chat, effective_plat, aliases
+
+
+def _is_routine_chat_enabled(plugin, chat_id: str, platform: str = "") -> bool:
+    canonical_chat, effective_plat, aliases = _resolve_routine_chat(
+        plugin, chat_id, platform
+    )
+    if not canonical_chat:
+        return False
+    enabled_chats = set(
+        getattr(getattr(plugin, "settings", None), "enabled_chats", ()) or ()
+    )
+    plat_candidates = [effective_plat] if effective_plat else ["qq", ""]
+    for probe in sorted(aliases):
+        if probe in enabled_chats:
             return True
-    return target in getattr(getattr(plugin, "settings", None), "enabled_chats", ())
+        if hasattr(plugin, "enabled_for"):
+            for plat_cand in plat_candidates:
+                if plugin.enabled_for(probe, plat_cand):
+                    return True
+    return False
 
 
 def _prevalidate_routine_mount(
@@ -1817,7 +1934,7 @@ def _prevalidate_routine_mount(
     routines: list[dict],
     selected_ids: list[str],
     chat_id: str,
-    platform: str = "qq",
+    platform: str = "",
     final_enabled: bool,
     final_bound: bool,
 ) -> None:
@@ -1843,7 +1960,7 @@ def _mount_selected_routines(
     routines: list[dict],
     selected_ids: list[str],
     chat_id: str,
-    platform: str = "qq",
+    platform: str = "",
 ) -> list[dict]:
     if not selected_ids or not chat_id or plugin.intents is None:
         return []
@@ -1853,8 +1970,13 @@ def _mount_selected_routines(
     if not profile.enabled or not profile.bound:
         raise ValueError("角色当前处于停用或待绑定凭据状态，请先完成本机绑定并启用后再挂载例行任务")
 
+    canonical_chat, effective_plat, aliases = _resolve_routine_chat(
+        plugin, chat_id, platform
+    )
     wanted = set(selected_ids)
-    existing_rows = plugin.intents.list(f"chat:{chat_id}")
+    existing_rows: list[dict] = []
+    for alias in sorted(aliases):
+        existing_rows.extend(plugin.intents.list(f"chat:{alias}"))
     existing_keys = set()
     for r in existing_rows:
         if r.get("status") not in {"pending", "deferred"}:
@@ -1870,7 +1992,7 @@ def _mount_selected_routines(
         if dedup in existing_keys:
             continue
         payload = {
-            "platform": platform or "qq",
+            "platform": effective_plat,
             "profile": profile_id,
             "workspace": rt.get("workspace") or "",
             "prompt": rt["prompt"],
@@ -1880,7 +2002,7 @@ def _mount_selected_routines(
         row = plugin.intents.schedule(
             kind=rt.get("kind") or "return",
             source="workflow",
-            target=f"chat:{chat_id}",
+            target=f"chat:{canonical_chat}",
             due_at=plugin.intents.clock() + int(rt.get("in_seconds") or 60),
             reason=rt["title"],
             payload=payload,
@@ -1901,7 +2023,7 @@ def import_recipe_archive(
     overwrite_skills: bool | None = None,
     mount_routines: list[str] | None = None,
     routine_chat_id: str = "",
-    routine_platform: str = "qq",
+    routine_platform: str = "",
 ) -> dict:
     if not isinstance(target, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", target):
         raise ValueError("目标角色编号无效（仅允许字母开头，含字母、数字、下划线或连字符）")
@@ -2049,13 +2171,18 @@ def import_recipe_archive(
     for rel, data in files.items():
         if rel.startswith("preset/"):
             dest = target_dir / rel
+            if any(
+                path_is_link_like(layer)
+                for layer in relative_symlink_parts(dest.parent, target_dir)
+            ):
+                raise ValueError("角色预设目录包含符号链接，拒绝更新")
             cur_p = target_dir
             for part in Path(rel).parts[:-1]:
                 cur_p = cur_p / part
-                if cur_p.is_symlink():
+                if path_is_link_like(cur_p):
                     raise ValueError("角色预设目录包含符号链接，拒绝更新")
-                private_directory(cur_p)
-            if dest.is_symlink():
+                private_directory(cur_p, stop_at=target_dir)
+            if path_is_link_like(dest):
                 raise ValueError("角色预设文件包含符号链接，拒绝更新")
             atomic_private_write(dest, data)
 
