@@ -14,15 +14,15 @@ def test_profile_package_includes_bound_method_skills(tmp_path):
         source, ThreadStore(source / "state.db"), profiles, Vault(source / "vault")
     )
     memory.write("skill", "先核实原始来源，再总结发现。", target="sources")
-    settings = memory.read("profile", target="scout", document="profile.toml")
+    settings = memory.read("profile", target="default", document="profile.toml")
     memory.write(
         "profile",
         settings["content"] + '\nskills=["sources"]\n',
-        target="scout",
+        target="default",
         document="profile.toml",
         expected_version=settings["version"],
     )
-    package = profiles.export("scout")
+    package = profiles.export("default")
     destination = tmp_path / "destination"
     destination.mkdir()
     imported = Profiles(destination / "abilities/profiles")
@@ -38,9 +38,9 @@ def test_profile_package_includes_bound_method_skills(tmp_path):
 
 def test_export_rejects_over_budget_uncompressed_assets(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
-    assets = profiles.path / "scout/preset"
+    assets = profiles.path / "default/preset"
     assets.mkdir()
     for index in range(3):
         (assets / f"asset-{index}").write_bytes(b"0" * (6 * 1024**2))
     with pytest.raises(ValueError, match="资产"):
-        profiles.export("scout")
+        profiles.export("default")

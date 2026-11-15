@@ -193,6 +193,73 @@ def _implicit_ws_has_out(
     return ws_dir, has_files
 
 
+def _repair_dangling_tool_calls(history: list[dict]) -> list[dict]:
+    """为历史中未收到 tool 回执的 tool_calls 补齐跳过回执，保证多轮上下文配对有效。"""
+    if not isinstance(history, list) or not history:
+        return []
+    repaired: list[dict] = []
+    idx = 0
+    total = len(history)
+    while idx < total:
+        msg = history[idx]
+        if not isinstance(msg, dict):
+            idx += 1
+            continue
+        copied = dict(msg)
+        repaired.append(copied)
+        tool_calls = copied.get("tool_calls") if copied.get("role") == "assistant" else None
+        idx += 1
+        if not isinstance(tool_calls, list) or not tool_calls:
+            continue
+        seen_ids: set[str] = set()
+        while idx < total and isinstance(history[idx], dict) and history[idx].get("role") == "tool":
+            tool_msg = dict(history[idx])
+            repaired.append(tool_msg)
+            call_id = tool_msg.get("tool_call_id")
+            if isinstance(call_id, str) and call_id:
+                seen_ids.add(call_id)
+            idx += 1
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            tc_id = tc.get("id")
+            if isinstance(tc_id, str) and tc_id and tc_id not in seen_ids:
+                seen_ids.add(tc_id)
+                repaired.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": encode(
+                            {
+                                "skipped": True,
+                                "reason": "线程已中断或停止，该工具调用未完成，已自动跳过。",
+                            }
+                        ),
+                    }
+                )
+    return repaired
+
+
+def _was_stopped_or_terminal(db, thread_id: str, state: str) -> bool:
+    if state in {"closed", "archived", "done"}:
+        return True
+    if state != "idle":
+        return False
+    stop_row = db.execute(
+        'SELECT MAX(seq) AS s FROM thread_events WHERE thread_id=? AND kind="stopped"',
+        (thread_id,),
+    ).fetchone()
+    stop_seq = int(stop_row["s"] or 0) if stop_row else 0
+    if not stop_seq:
+        return False
+    active_row = db.execute(
+        'SELECT MAX(seq) AS s FROM thread_events WHERE thread_id=? AND kind IN ("input", "reopened")',
+        (thread_id,),
+    ).fetchone()
+    active_seq = int(active_row["s"] or 0) if active_row else 0
+    return stop_seq > active_seq
+
+
 def _is_junk_thread_row(
     row,
     *,
@@ -205,7 +272,7 @@ def _is_junk_thread_row(
     tid = row["thread_id"]
     state = str(row["state"] or "")
     if (
-        state in {"active", "waiting"}
+        state in {"active", "waiting", "archived"}
         or tid in named_ws_ids
         or tid in attachment_ids
         or tid in delivered_ids
@@ -257,6 +324,9 @@ class ThreadStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS thread_context (thread_id TEXT PRIMARY KEY, workspace_id TEXT, grant TEXT)"
             )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS primary_threads (owner TEXT, chat_id TEXT, profile TEXT, thread_id TEXT, updated REAL, PRIMARY KEY (owner, chat_id, profile))"
+            )
         safe_chmod(path, 0o600)
 
     def connect(self):
@@ -275,6 +345,7 @@ class ThreadStore:
         owner="chat",
         workspace="",
         grant=None,
+        fresh_workspace: bool = False,
     ):
         if owner not in {"chat", "self"}:
             raise ValueError("线程归属无效")
@@ -313,6 +384,13 @@ class ThreadStore:
                         ).fetchone()
                         if binding is not None:
                             break
+                if binding and fresh_workspace:
+                    archived_name = f"{binding['name']}#archived_{str(binding['thread_id'])[-6:]}"
+                    db.execute(
+                        "UPDATE agent_workspaces SET name=? WHERE workspace_id=?",
+                        (archived_name, binding["workspace_id"]),
+                    )
+                    binding = None
                 if binding:
                     if binding["profile"] != profile.id:
                         raise ValueError("该工作区已绑定另一个角色")
@@ -336,35 +414,10 @@ class ThreadStore:
                             raise PermissionError(
                                 "受限工作区不能随档案权限修改向其他用户开放"
                             )
-                    if previous and previous["state"] != "closed":
-                        old = json.loads(
-                            encode(
-                                asdict(
-                                    Profile(**json.loads(previous["profile_snapshot"]))
-                                )
-                            )
-                        )
+                    if previous and not _was_stopped_or_terminal(
+                        db, binding["thread_id"], str(previous["state"] or "")
+                    ):
                         updated = json.loads(encode(asdict(profile)))
-                        if any(
-                            old[key] != updated[key]
-                            for key in (
-                                "access",
-                                "environment",
-                                "tools",
-                                "network",
-                                "mcp",
-                                "apis",
-                                "secrets",
-                                "template",
-                                "sandbox_targets",
-                                "bound",
-                                "allow_users",
-                                "allow_chats",
-                            )
-                        ):
-                            raise PermissionError(
-                                "工作区绑定线程的权限快照不同，请先停止原线程再显式续接"
-                            )
                         if (
                             binding["chat_id"] != chat_id
                             and previous["state"] == "active"
@@ -420,6 +473,16 @@ class ThreadStore:
                             encode([owner, chat_id, workspace]).encode()
                         ).hexdigest()[:24]
                     )
+                    while db.execute(
+                        "SELECT 1 FROM agent_workspaces WHERE workspace_id=?",
+                        (workspace_id,),
+                    ).fetchone():
+                        workspace_id = (
+                            "ws_"
+                            + hashlib.sha256(
+                                encode([owner, chat_id, workspace, uuid.uuid4().hex]).encode()
+                            ).hexdigest()[:24]
+                        )
                 db.execute(
                     "INSERT INTO agent_workspaces VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET chat_id=excluded.chat_id, thread_id=excluded.thread_id",
                     (workspace_id, owner, chat_id, workspace, profile.id, thread_id),
@@ -491,23 +554,44 @@ class ThreadStore:
             db.execute("BEGIN IMMEDIATE")
             try:
                 cur = db.execute(
-                    "SELECT revision, state, questions FROM agent_threads WHERE thread_id=?",
+                    "SELECT revision, state, questions, history FROM agent_threads WHERE thread_id=?",
                     (thread_id,),
                 ).fetchone()
                 if cur is None:
                     raise ValueError("线程不存在")
-                if cur["state"] == "closed":
-                    raise ValueError("线程已关闭；请通过 from_threads 引用旧结果开启新线程")
                 revision = int(cur["revision"]) + 1
-                db.execute(
-                    'UPDATE agent_threads SET revision=?, state="active", questions=?, updated=? WHERE thread_id=?',
-                    (
-                        revision,
-                        0 if cur["state"] == "idle" else cur["questions"],
-                        time.time(),
+                existing_history = json.loads(cur["history"] or "[]")
+                repaired_history = _repair_dangling_tool_calls(existing_history)
+                reset_questions = cur["state"] in {"idle", "done", "archived", "closed"}
+                if repaired_history != existing_history:
+                    db.execute(
+                        'UPDATE agent_threads SET revision=?, state="active", questions=?, history=?, updated=? WHERE thread_id=?',
+                        (
+                            revision,
+                            0 if reset_questions else cur["questions"],
+                            encode(repaired_history),
+                            time.time(),
+                            thread_id,
+                        ),
+                    )
+                else:
+                    db.execute(
+                        'UPDATE agent_threads SET revision=?, state="active", questions=?, updated=? WHERE thread_id=?',
+                        (
+                            revision,
+                            0 if reset_questions else cur["questions"],
+                            time.time(),
+                            thread_id,
+                        ),
+                    )
+                if cur["state"] in {"done", "archived", "closed"}:
+                    self.event(
+                        db,
                         thread_id,
-                    ),
-                )
+                        "reopened",
+                        revision - 1,
+                        {"from_state": cur["state"]},
+                    )
                 payload = {"text": message, "context": input_context or {}}
                 if (
                     isinstance(input_context, dict)
@@ -588,26 +672,64 @@ class ThreadStore:
                 (thread_id,),
             ).fetchone()
         if context and context["workspace_id"]:
-            return row is not None and row["state"] != "closed", False
-        return row is not None and row["state"] != "closed", row is not None and row[
+            return row is not None and row["state"] == "active", False
+        return row is not None and row["state"] == "active", row is not None and row[
             "revision"
         ] > processed
 
     def checkpoint(self, thread_id, history, processed, kind, payload):
         with self.connect() as db, db:
-            db.execute(
-                'UPDATE agent_threads SET history=?, processed_revision=? WHERE thread_id=? AND state!="closed"',
+            cursor = db.execute(
+                'UPDATE agent_threads SET history=?, processed_revision=? WHERE thread_id=? AND state="active"',
                 (encode(history), processed, thread_id),
             )
-            self.event(db, thread_id, kind, processed, payload)
+            if cursor.rowcount:
+                self.event(db, thread_id, kind, processed, payload)
 
-    def finish(self, thread_id, chat_id, result, history, processed, *, waiting=False):
+    def finish(
+        self,
+        thread_id,
+        chat_id,
+        result,
+        history,
+        processed,
+        *,
+        waiting=False,
+        state=None,
+    ):
         row = self.get(thread_id, chat_id)
+        if state == "done":
+            with self.connect() as db, db:
+                cursor = db.execute(
+                    'UPDATE agent_threads SET result=?, history=?, processed_revision=?, completed_revision=?, state="done", updated=? '
+                    'WHERE thread_id=? AND state IN ("active", "idle", "waiting")',
+                    (
+                        encode(result),
+                        encode(history),
+                        processed,
+                        processed,
+                        time.time(),
+                        thread_id,
+                    ),
+                )
+                if not cursor.rowcount:
+                    return False
+                event_seq = self.event(db, thread_id, "result", processed, result)
+                record_return(db, thread_id, processed, event_seq)
+                records = db.execute(
+                    'SELECT payload FROM thread_events WHERE thread_id=? AND kind IN ("input", "result", "question") ORDER BY seq',
+                    (thread_id,),
+                ).fetchall()
+                text = "\n".join(item["payload"] for item in records)
+                db.execute("DELETE FROM thread_search WHERE thread_id=?", (thread_id,))
+                db.execute("INSERT INTO thread_search VALUES (?, ?)", (thread_id, text))
+            return True
         fifo = bool(row["workspace_id"])
+        target_state = state if state in {"idle", "waiting", "done"} else ("waiting" if waiting else "idle")
         with self.connect() as db, db:
             cursor = db.execute(
                 "UPDATE agent_threads SET result=?, history=?, processed_revision=?, completed_revision=?, "
-                'state=CASE WHEN ? AND revision>? THEN "active" ELSE ? END, questions=questions+?, updated=? WHERE thread_id=? AND state!="closed" AND revision'
+                'state=CASE WHEN ? AND revision>? THEN "active" ELSE ? END, questions=questions+?, updated=? WHERE thread_id=? AND state="active" AND revision'
                 + (">=?" if fifo else "=?"),
                 (
                     encode(result),
@@ -616,7 +738,7 @@ class ThreadStore:
                     processed,
                     int(fifo),
                     processed,
-                    "waiting" if waiting else "idle",
+                    target_state,
                     int(waiting),
                     time.time(),
                     thread_id,
@@ -640,13 +762,22 @@ class ThreadStore:
 
     def stop(self, thread_id, chat_id):
         row = self.get(thread_id, chat_id)
+        repaired_history = _repair_dangling_tool_calls(row["history"])
         with self.connect() as db, db:
             db.execute(
-                'UPDATE agent_threads SET state="closed", completed_revision=revision, updated=? WHERE thread_id=?',
-                (time.time(), thread_id),
+                'UPDATE agent_threads SET state="idle", history=?, processed_revision=revision, completed_revision=revision, updated=? WHERE thread_id=?',
+                (encode(repaired_history), time.time(), thread_id),
             )
             self.event(db, thread_id, "stopped", row["revision"], {})
         return self.get(thread_id, chat_id)
+
+    def save_stopped_history(self, thread_id, history, processed):
+        repaired = _repair_dangling_tool_calls(history)
+        with self.connect() as db, db:
+            db.execute(
+                'UPDATE agent_threads SET history=? WHERE thread_id=? AND state="idle" AND revision=?',
+                (encode(repaired), thread_id, processed),
+            )
 
     def cleanup_error(self, thread_id, chat_id, message):
         row = self.get(thread_id, chat_id)
@@ -672,10 +803,141 @@ class ThreadStore:
     def activate(self, thread_id):
         with self.connect() as db, db:
             cursor = db.execute(
-                'UPDATE agent_threads SET state="active", updated=? WHERE thread_id=? AND state!="closed"',
+                'UPDATE agent_threads SET state="active", updated=? WHERE thread_id=? AND state IN ("idle", "waiting", "done", "archived", "closed")',
                 (time.time(), thread_id),
             )
             return cursor.rowcount > 0
+
+    def reopen(self, thread_id, chat_id=None, *, allow_self=False, allow_any_chat=False):
+        row = self.get(
+            thread_id,
+            chat_id or "",
+            allow_self=allow_self,
+            allow_any_chat=(allow_any_chat or chat_id is None),
+        )
+        repaired = _repair_dangling_tool_calls(row["history"])
+        with self.connect() as db, db:
+            db.execute(
+                'UPDATE agent_threads SET state="idle", history=?, updated=? WHERE thread_id=?',
+                (encode(repaired), time.time(), thread_id),
+            )
+            self.event(
+                db,
+                thread_id,
+                "reopened",
+                row["revision"],
+                {"from_state": row["state"]},
+            )
+        return self.get(
+            thread_id,
+            row["chat_id"],
+            allow_self=(row["owner"] == "self"),
+        )
+
+    def find_primary_thread(self, profile_id, chat_id, *, owner="chat"):
+        target_chat = "self" if owner == "self" else chat_id
+        with self.connect() as db:
+            primary = db.execute(
+                "SELECT thread_id FROM primary_threads WHERE owner=? AND chat_id=? AND profile=?",
+                (owner, target_chat, profile_id),
+            ).fetchone()
+            if (
+                primary is None
+                and owner == "chat"
+                and callable(getattr(self, "chat_aliases", None))
+            ):
+                try:
+                    aliases = sorted(set(self.chat_aliases(chat_id, "")) - {chat_id})
+                except (TypeError, ValueError):
+                    aliases = []
+                for alias in aliases:
+                    primary = db.execute(
+                        "SELECT thread_id FROM primary_threads WHERE owner=? AND chat_id=? AND profile=?",
+                        (owner, alias, profile_id),
+                    ).fetchone()
+                    if primary is not None:
+                        break
+            if primary is None:
+                return None
+            tid = primary["thread_id"]
+            row = db.execute(
+                "SELECT state, chat_id, owner FROM agent_threads WHERE thread_id=?",
+                (tid,),
+            ).fetchone()
+            if row is None or row["state"] in {"archived", "closed", "done"}:
+                return None
+            return self.get(
+                tid,
+                row["chat_id"],
+                allow_self=(row["owner"] == "self"),
+                allow_any_chat=(row["chat_id"] != chat_id and callable(getattr(self, "chat_aliases", None))),
+            )
+
+    def bind_primary_thread(self, profile_id, chat_id, thread_id, *, owner="chat"):
+        target_chat = "self" if owner == "self" else chat_id
+        with self.connect() as db, db:
+            db.execute(
+                "INSERT OR REPLACE INTO primary_threads VALUES (?, ?, ?, ?, ?)",
+                (owner, target_chat, profile_id, thread_id, time.time()),
+            )
+
+    def archive_thread(self, thread_id, chat_id=None, *, allow_self=False):
+        row = self.get(
+            thread_id,
+            chat_id or "",
+            allow_self=allow_self,
+            allow_any_chat=(chat_id is None),
+        )
+        with self.connect() as db, db:
+            db.execute(
+                'UPDATE agent_threads SET state="archived", updated=? WHERE thread_id=?',
+                (time.time(), thread_id),
+            )
+            db.execute(
+                "DELETE FROM primary_threads WHERE thread_id=?",
+                (thread_id,),
+            )
+            ws_rows = db.execute(
+                "SELECT workspace_id, name FROM agent_workspaces WHERE thread_id=?",
+                (thread_id,),
+            ).fetchall()
+            for ws_row in ws_rows:
+                ws_name = str(ws_row["name"] or "")
+                suffix = f"#archived_{thread_id[-6:]}"
+                if ws_name and "#archived_" not in ws_name:
+                    db.execute(
+                        "UPDATE agent_workspaces SET name=? WHERE workspace_id=?",
+                        (ws_name + suffix, ws_row["workspace_id"]),
+                    )
+            self.event(db, thread_id, "archived", row["revision"], {})
+        return self.get(
+            thread_id,
+            row["chat_id"],
+            allow_self=(row["owner"] == "self"),
+        )
+
+    def update_profile_snapshot(self, thread_id, profile, chat_id=None):
+        row = self.get(
+            thread_id,
+            chat_id or "",
+            allow_self=True,
+            allow_any_chat=(chat_id is None),
+        )
+        prev_scope = row["profile_snapshot"] if isinstance(row["profile_snapshot"], dict) else {}
+        widened = prev_scope.get("access") == "admins" and profile.access != "admins"
+        old_users = prev_scope.get("allow_users", [])
+        if old_users and (
+            not profile.allow_users or not set(profile.allow_users) <= set(old_users)
+        ):
+            widened = True
+        if widened:
+            raise PermissionError("受限工作区不能随档案权限修改向其他用户开放")
+        updated = json.loads(encode(asdict(profile)))
+        with self.connect() as db, db:
+            db.execute(
+                "UPDATE agent_threads SET profile_snapshot=? WHERE thread_id=?",
+                (encode(updated), thread_id),
+            )
 
     @staticmethod
     def _named_workspace_thread_ids(db) -> set[str]:
@@ -966,7 +1228,7 @@ class ThreadStore:
                 "SELECT history, processed_revision, state FROM agent_threads WHERE thread_id=?",
                 (thread_id,),
             ).fetchone()
-            if cur is None or cur["state"] == "closed":
+            if cur is None or cur["state"] in {"closed", "archived"}:
                 return False
             cur_history = json.loads(cur["history"] or "[]")
             _, cur_stats = prune_tool_outputs(
@@ -998,7 +1260,7 @@ class ThreadStore:
                 event_seq=archive_seq,
             )
             db.execute(
-                'UPDATE agent_threads SET history=? WHERE thread_id=? AND state!="closed"',
+                'UPDATE agent_threads SET history=? WHERE thread_id=? AND state NOT IN ("closed", "archived")',
                 (encode(final_history), thread_id),
             )
         return True
@@ -1254,7 +1516,7 @@ class ThreadStore:
                 summary_obj["archived_runs"].pop(0)
             summary = encode(summary_obj)
             db.execute(
-                'UPDATE agent_threads SET summary=?, history=? WHERE thread_id=? AND state!="closed"',
+                'UPDATE agent_threads SET summary=?, history=? WHERE thread_id=? AND state NOT IN ("closed", "archived")',
                 (summary, encode(retained), thread_id),
             )
         return summary
@@ -1394,7 +1656,7 @@ class ThreadStore:
                 summary_obj["archived_runs"].pop(0)
             summary = encode(summary_obj)
             db.execute(
-                'UPDATE agent_threads SET summary=?, history=? WHERE thread_id=? AND state!="closed"',
+                'UPDATE agent_threads SET summary=?, history=? WHERE thread_id=? AND state NOT IN ("closed", "archived")',
                 (summary, encode(retained), thread_id),
             )
         return summary
@@ -1641,6 +1903,143 @@ class ThreadStore:
                 )
         return found
 
+    def list_threads(
+        self,
+        *,
+        chat_id: str = "",
+        profile: str = "",
+        state: str | tuple[str, ...] | list[str] | set[str] = "",
+        keyword: str = "",
+        since: float | None = None,
+        until: float | None = None,
+        owner: str = "",
+        scope: str = "chat",
+        limit: int = 50,
+    ) -> list[dict]:
+        """按会话、档案、状态、关键词与时间窗口检索线程及归档记录。"""
+        limit = max(1, min(int(limit or 50), 200))
+        where: list[str] = []
+        params: list[object] = []
+
+        if scope == "self":
+            where.append('t.owner="self"')
+        elif chat_id:
+            cids = [chat_id]
+            if callable(getattr(self, "chat_aliases", None)):
+                try:
+                    cids = sorted(set(self.chat_aliases(chat_id, "")) | {chat_id})
+                except (TypeError, ValueError):
+                    cids = [chat_id]
+            if scope == "available":
+                if len(cids) > 1:
+                    placeholders = ",".join("?" for _ in cids)
+                    where.append(f'((t.owner="chat" AND t.chat_id IN ({placeholders})) OR t.owner="self")')
+                    params.extend(cids)
+                else:
+                    where.append('((t.owner="chat" AND t.chat_id=?) OR t.owner="self")')
+                    params.append(cids[0])
+            else:
+                if len(cids) > 1:
+                    placeholders = ",".join("?" for _ in cids)
+                    where.append(f'(t.owner="chat" AND t.chat_id IN ({placeholders}))')
+                    params.extend(cids)
+                else:
+                    where.append('(t.owner="chat" AND t.chat_id=?)')
+                    params.append(cids[0])
+
+        if owner in {"chat", "self"}:
+            where.append("t.owner=?")
+            params.append(owner)
+        if profile:
+            where.append("t.profile=?")
+            params.append(profile)
+        if state:
+            states = (
+                [state]
+                if isinstance(state, str)
+                else [str(s) for s in state if str(s)]
+            )
+            if len(states) == 1:
+                where.append("t.state=?")
+                params.append(states[0])
+            elif states:
+                placeholders = ",".join("?" for _ in states)
+                where.append(f"t.state IN ({placeholders})")
+                params.extend(states)
+        if since is not None:
+            where.append("t.updated>=?")
+            params.append(float(since))
+        if until is not None:
+            where.append("t.updated<=?")
+            params.append(float(until))
+
+        kw = str(keyword or "").strip()
+        join_clause = ""
+        if kw:
+            if re.fullmatch(r"th_[a-f0-9]{16}", kw):
+                where.append("t.thread_id=?")
+                params.append(kw)
+            else:
+                join_clause = " LEFT JOIN thread_search f ON t.thread_id=f.thread_id"
+                tokens = re.findall(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+", kw)
+                if tokens:
+                    for token in tokens:
+                        like_val = f"%{token}%"
+                        where.append(
+                            "(COALESCE(f.text, '') LIKE ? OR t.history LIKE ? OR t.result LIKE ?)"
+                        )
+                        params.extend([like_val, like_val, like_val])
+                else:
+                    like_val = f"%{kw}%"
+                    where.append(
+                        "(COALESCE(f.text, '') LIKE ? OR t.history LIKE ? OR t.result LIKE ?)"
+                    )
+                    params.extend([like_val, like_val, like_val])
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        sql = (
+            f"SELECT t.* FROM agent_threads t{join_clause}{where_sql} "
+            "ORDER BY t.updated DESC LIMIT ?"
+        )
+        params.append(limit)
+        with self.connect() as db:
+            rows = db.execute(sql, params).fetchall()
+            items: list[dict] = []
+            for row in rows:
+                tid = row["thread_id"]
+                ws_row = db.execute(
+                    "SELECT w.name FROM thread_context c JOIN agent_workspaces w "
+                    "ON w.workspace_id=c.workspace_id WHERE c.thread_id=?",
+                    (tid,),
+                ).fetchone()
+                ws_name = str(ws_row["name"]) if ws_row and ws_row["name"] else ""
+                first_in = db.execute(
+                    'SELECT payload FROM thread_events WHERE thread_id=? AND kind="input" ORDER BY seq ASC LIMIT 1',
+                    (tid,),
+                ).fetchone()
+                title = ""
+                if first_in:
+                    try:
+                        title = _clean_input_title(
+                            json.loads(first_in["payload"]).get("text", "")
+                        )
+                    except ValueError:
+                        title = ""
+                items.append(
+                    {
+                        "thread_id": tid,
+                        "profile": row["profile"],
+                        "owner": row["owner"],
+                        "chat_id": row["chat_id"],
+                        "state": row["state"],
+                        "title": title,
+                        "workspace": ws_name,
+                        "result": json.loads(row["result"]),
+                        "updated": row["updated"],
+                    }
+                )
+        return items
+
 
 class ThreadEngine:
     def __init__(
@@ -1794,7 +2193,7 @@ class ThreadEngine:
             except (ValueError, PermissionError):
                 continue
             if (
-                row["state"] == "closed"
+                row["state"] in {"closed", "archived"}
                 or row["processed_revision"] >= row["revision"]
             ):
                 continue
@@ -1890,53 +2289,126 @@ class ThreadEngine:
         background: bool = False,
         defer_if_full: bool = False,
         auto_drain: bool = False,
+        fresh: bool = False,
+        reuse_primary: bool | None = None,
     ):
         self._validate_input(message, wait_seconds)
+        is_persistent = (
+            bool(reuse_primary)
+            if reuse_primary is not None
+            else getattr(profile, "session_mode", "ephemeral") == "persistent"
+        )
+        if is_persistent and fresh:
+            existing_pre = await asyncio.to_thread(
+                self.store.find_primary_thread, profile.id, chat_id, owner=owner
+            )
+            if existing_pre is not None and existing_pre["thread_id"] in self.tasks:
+                await self.stop(
+                    existing_pre["thread_id"],
+                    chat_id=existing_pre["chat_id"],
+                )
         row = None
         future = None
         result = None
+        reused_existing = False
         async with self._submission_lock:
             if self.closing:
                 raise ValueError("当前 Agent 线程已满，请稍后再试")
-            if not defer_if_full and not self._has_capacity(background=background):
-                raise ValueError("当前 Agent 线程已满，请稍后再试")
-            row = await asyncio.to_thread(
-                self.store.create,
-                profile,
-                self.redact(message),
-                chat_id=chat_id,
-                platform=platform,
-                user_id=user_id,
-                owner=owner,
-                workspace=workspace,
-                grant=grant,
+            existing = (
+                await asyncio.to_thread(
+                    self.store.find_primary_thread, profile.id, chat_id, owner=owner
+                )
+                if is_persistent
+                else None
             )
-            tid = row["thread_id"]
-            try:
-                async with self.locks.setdefault(tid, asyncio.Lock()):
-                    result, future = await self._send_locked(
-                        tid,
-                        message,
-                        chat_id=chat_id,
-                        create_waiter=bool(wait_seconds),
-                        return_route=return_route,
-                        input_context={
-                            "grant": grant or {},
-                            "references": references or [],
-                            "from_threads": from_threads or [],
-                        },
-                        background=background,
-                        defer_if_full=defer_if_full,
-                        auto_drain=auto_drain,
-                    )
-            except BaseException:
-                self._prune_idle_state_locked(tid)
+            if existing is not None and fresh:
+                await asyncio.to_thread(
+                    self.store.archive_thread,
+                    existing["thread_id"],
+                    existing["chat_id"],
+                    allow_self=(owner == "self"),
+                )
+                existing = None
+
+            if existing is not None:
+                reused_existing = True
+                row = existing
+                tid = row["thread_id"]
+                await asyncio.to_thread(
+                    self.store.update_profile_snapshot, tid, profile, row["chat_id"]
+                )
                 try:
-                    await asyncio.to_thread(self.store.delete_thread, tid)
-                except Exception:
-                    pass
-                raise
-            self._prune_idle_state_locked(tid)
+                    async with self.locks.setdefault(tid, asyncio.Lock()):
+                        result, future = await self._send_locked(
+                            tid,
+                            message,
+                            chat_id=row["chat_id"],
+                            create_waiter=bool(wait_seconds),
+                            return_route=return_route,
+                            input_context={
+                                "grant": grant or {},
+                                "references": references or [],
+                                "from_threads": from_threads or [],
+                            },
+                            background=background,
+                            defer_if_full=defer_if_full,
+                            auto_drain=auto_drain,
+                        )
+                finally:
+                    self._prune_idle_state_locked(tid)
+            else:
+                if not defer_if_full and not self._has_capacity(background=background):
+                    raise ValueError("当前 Agent 线程已满，请稍后再试")
+                target_workspace = workspace or (
+                    f"profile_{profile.id}" if is_persistent else ""
+                )
+                row = await asyncio.to_thread(
+                    self.store.create,
+                    profile,
+                    self.redact(message),
+                    chat_id=chat_id,
+                    platform=platform,
+                    user_id=user_id,
+                    owner=owner,
+                    workspace=target_workspace,
+                    grant=grant,
+                    fresh_workspace=bool(is_persistent and fresh),
+                )
+                tid = row["thread_id"]
+                if is_persistent:
+                    await asyncio.to_thread(
+                        self.store.bind_primary_thread,
+                        profile.id,
+                        row["chat_id"] if owner != "self" else "self",
+                        tid,
+                        owner=owner,
+                    )
+                try:
+                    async with self.locks.setdefault(tid, asyncio.Lock()):
+                        result, future = await self._send_locked(
+                            tid,
+                            message,
+                            chat_id=row["chat_id"],
+                            create_waiter=bool(wait_seconds),
+                            return_route=return_route,
+                            input_context={
+                                "grant": grant or {},
+                                "references": references or [],
+                                "from_threads": from_threads or [],
+                            },
+                            background=background,
+                            defer_if_full=defer_if_full,
+                            auto_drain=auto_drain,
+                        )
+                except BaseException:
+                    self._prune_idle_state_locked(tid)
+                    if not reused_existing:
+                        try:
+                            await asyncio.to_thread(self.store.delete_thread, tid)
+                        except Exception:
+                            pass
+                    raise
+                self._prune_idle_state_locked(tid)
         if wait_seconds and future is not None:
             try:
                 return await asyncio.wait_for(asyncio.shield(future), wait_seconds)
@@ -1946,6 +2418,37 @@ class ThreadEngine:
                 self._cleanup_waiter(row["thread_id"], future)
                 raise
         return result
+
+    async def resume_thread(
+        self,
+        thread_id: str,
+        message: str = "",
+        *,
+        chat_id: str,
+        wait_seconds=20,
+        return_route=None,
+        input_context=None,
+        steer: bool = False,
+        background: bool = False,
+        defer_if_full: bool = False,
+        auto_drain: bool = False,
+    ):
+        """从 done / stopped / archived / closed 原地唤醒并可选追加新输入。"""
+        if not message or not str(message).strip():
+            row = await asyncio.to_thread(self.store.reopen, thread_id, chat_id)
+            return public(row)
+        return await self.send(
+            thread_id,
+            message,
+            chat_id=chat_id,
+            wait_seconds=wait_seconds,
+            return_route=return_route,
+            input_context=input_context,
+            steer=steer,
+            background=background,
+            defer_if_full=defer_if_full,
+            auto_drain=auto_drain,
+        )
 
     @staticmethod
     def _validate_input(message, wait_seconds):
@@ -2023,7 +2526,7 @@ class ThreadEngine:
                     except (ValueError, PermissionError):
                         return False
                     if (
-                        row["state"] == "closed"
+                        row["state"] in {"closed", "archived"}
                         or row["processed_revision"] >= row["revision"]
                     ):
                         return False
@@ -2047,7 +2550,7 @@ class ThreadEngine:
     def _resolve(self, thread_id, row):
         remaining = []
         for revision, future in self.waiters.get(thread_id, []):
-            if revision <= row["completed_revision"] or row["state"] == "closed":
+            if revision <= row["completed_revision"] or row["state"] in {"closed", "archived"}:
                 if not future.done():
                     future.set_result(public(row))
             else:
@@ -2238,13 +2741,15 @@ class ThreadEngine:
                 self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
             )
             store_chat = row["chat_id"]
-            raw_profile = Profile(**row["profile_snapshot"])
+            raw_profile = Profile.from_snapshot(row["profile_snapshot"])
             profile = (
                 await asyncio.to_thread(self.runtime.resolve_profile, raw_profile)
                 if hasattr(self.runtime, "resolve_profile")
                 else raw_profile
             )
-            history, processed = row["history"], row["processed_revision"]
+            history, processed = _repair_dangling_tool_calls(row["history"]), row["processed_revision"]
+            in_flight_assistant = None
+            in_flight_tools = []
             context_index = row["summary"]
             deadline = asyncio.get_running_loop().time() + self.timeout
             overflow_retried = False
@@ -2504,6 +3009,12 @@ class ThreadEngine:
                     calls = self._calls(response.get("tool_calls", []))
                     text = self.redact(str(response.get("response") or ""))
                     if calls:
+                        in_flight_assistant = {
+                            "role": "assistant",
+                            "content": text,
+                            "tool_calls": calls,
+                        }
+                        in_flight_tools = []
                         tool_messages = []
                         tool_results = []
                         redirecting = False
@@ -2558,7 +3069,7 @@ class ThreadEngine:
                                     if arguments.get("kind", "silent") == "serendipity":
                                         if (
                                             current["owner"] != "self"
-                                            or not Profile(**current["profile_snapshot"]).autonomous
+                                            or not Profile.from_snapshot(current["profile_snapshot"]).autonomous
                                             or not callable(self.serendipity)
                                         ):
                                             raise PermissionError("仅自身公开探索线程可提议偶遇分享")
@@ -2635,21 +3146,23 @@ class ThreadEngine:
                             tool_results.append(
                                 {"call_id": call["id"], "value": result}
                             )
-                            tool_messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call["id"],
-                                    "content": "<external_data>"
-                                    + encode(result)
-                                    .replace("<", "\\u003c")
-                                    .replace(">", "\\u003e")
-                                    + "</external_data>",
-                                }
-                            )
+                            tool_msg = {
+                                "role": "tool",
+                                "tool_call_id": call["id"],
+                                "content": "<external_data>"
+                                + encode(result)
+                                .replace("<", "\\u003c")
+                                .replace(">", "\\u003e")
+                                + "</external_data>",
+                            }
+                            tool_messages.append(tool_msg)
+                            in_flight_tools.append(tool_msg)
                         history += [
                             {"role": "assistant", "content": text, "tool_calls": calls},
                             *tool_messages,
                         ]
+                        in_flight_assistant = None
+                        in_flight_tools = []
                         await asyncio.to_thread(
                             self.store.checkpoint,
                             thread_id,
@@ -2709,8 +3222,13 @@ class ThreadEngine:
                         allow_self=(chat_id == "self"),
                     )
                 )
+                combined_history = list(history)
+                if locals().get("in_flight_assistant") is not None:
+                    combined_history.append(in_flight_assistant)
+                    combined_history.extend(locals().get("in_flight_tools") or [])
+                repaired = _repair_dangling_tool_calls(combined_history)
                 if not self.closing and latest["state"] == "active":
-                    history.append(
+                    repaired.append(
                         {
                             "role": "user",
                             "content": "<activity_interrupted>当前活动已显式转向。正在执行的脚本取消并回退未提交文件；已开始的外部操作须核查现场后再决定是否重试。</activity_interrupted>",
@@ -2720,10 +3238,21 @@ class ThreadEngine:
                         asyncio.to_thread(
                             self.store.checkpoint,
                             thread_id,
-                            history,
+                            repaired,
                             processed,
                             "steer_interrupted",
                             {"reason": "explicit_steering"},
+                        )
+                    )
+                elif latest["state"] == "idle" and (
+                    locals().get("in_flight_assistant") is not None or repaired != history
+                ):
+                    await _await_uninterruptible_coro(
+                        asyncio.to_thread(
+                            self.store.save_stopped_history,
+                            thread_id,
+                            repaired,
+                            processed,
                         )
                     )
             raise
@@ -2907,6 +3436,7 @@ class ThreadEngine:
                         self.background_tasks.discard(thread_id)
                     else:
                         await self._drain_deferred_locked()
+                    row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
                 finally:
                     self._prune_idle_state_locked(thread_id)
         if hasattr(self.runtime, "stopped"):

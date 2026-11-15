@@ -73,7 +73,7 @@ async def test_stop_surfaces_unconfirmed_cleanup_in_thread_result(tmp_path):
     with pytest.raises(RuntimeError, match="清理未确认"):
         await engine.stop(row["thread_id"], chat_id="chat-a")
     stopped = store.get(row["thread_id"], "chat-a")
-    assert stopped["state"] == "closed"
+    assert stopped["state"] == "idle"
     assert "清理未确认" in stopped["result"]["error"]
     await engine.close()
 
@@ -111,7 +111,7 @@ async def test_input_during_model_call_is_not_lost(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stop_prevents_late_result_and_closes_thread(tmp_path):
+async def test_stop_prevents_late_result_and_returns_idle_for_resume(tmp_path):
     runtime = Runtime()
     runtime.gate = asyncio.Event()
     store, engine = build(tmp_path, runtime)
@@ -119,10 +119,14 @@ async def test_stop_prevents_late_result_and_closes_thread(tmp_path):
     stopped = await engine.stop(first["thread_id"], chat_id="chat-a")
     runtime.gate.set()
     await engine.drain()
-    assert stopped["state"] == "closed"
-    assert store.get(first["thread_id"], "chat-a")["state"] == "closed"
-    with pytest.raises(ValueError):
-        await engine.send(first["thread_id"], "again", chat_id="chat-a")
+    assert stopped["state"] == "idle"
+    current = store.get(first["thread_id"], "chat-a")
+    assert current["state"] == "idle"
+    assert current["result"] == {}
+    resumed = await engine.send(first["thread_id"], "again", chat_id="chat-a")
+    assert resumed["thread_id"] == first["thread_id"]
+    assert resumed["state"] == "idle"
+    assert "again" in resumed["result"]["text"]
     await engine.close()
 
 
