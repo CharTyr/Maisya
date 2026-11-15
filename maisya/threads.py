@@ -240,11 +240,7 @@ def _repair_dangling_tool_calls(history: list[dict]) -> list[dict]:
     return repaired
 
 
-def _was_stopped_or_terminal(db, thread_id: str, state: str) -> bool:
-    if state in {"closed", "archived", "done"}:
-        return True
-    if state != "idle":
-        return False
+def _has_unresumed_stop(db, thread_id: str) -> bool:
     stop_row = db.execute(
         'SELECT MAX(seq) AS s FROM thread_events WHERE thread_id=? AND kind="stopped"',
         (thread_id,),
@@ -258,6 +254,14 @@ def _was_stopped_or_terminal(db, thread_id: str, state: str) -> bool:
     ).fetchone()
     active_seq = int(active_row["s"] or 0) if active_row else 0
     return stop_seq > active_seq
+
+
+def _was_stopped_or_terminal(db, thread_id: str, state: str) -> bool:
+    if state in {"closed", "archived", "done"}:
+        return True
+    if state != "idle":
+        return False
+    return _has_unresumed_stop(db, thread_id)
 
 
 def _is_junk_thread_row(
@@ -765,11 +769,40 @@ class ThreadStore:
         repaired_history = _repair_dangling_tool_calls(row["history"])
         with self.connect() as db, db:
             db.execute(
-                'UPDATE agent_threads SET state="idle", history=?, processed_revision=revision, completed_revision=revision, updated=? WHERE thread_id=?',
+                'UPDATE agent_threads SET state="idle", history=?, processed_revision=revision, updated=? WHERE thread_id=?',
                 (encode(repaired_history), time.time(), thread_id),
             )
+            has_intents = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='return_intents'"
+            ).fetchone()
+            if has_intents:
+                db.execute(
+                    "UPDATE return_intents SET consumed=1 WHERE thread_id=? AND consumed=0",
+                    (thread_id,),
+                )
             self.event(db, thread_id, "stopped", row["revision"], {})
         return self.get(thread_id, chat_id)
+
+    def is_stopped(self, thread_id: str, *, state: str | None = None) -> bool:
+        """判断线程是否处于未恢复的停止态（idle/archived/done 下最近停止事件晚于恢复事件）。"""
+        if state in {"active", "waiting"}:
+            return False
+        if state == "closed":
+            return True
+        with self.connect() as db:
+            if state is None:
+                row = db.execute(
+                    "SELECT state FROM agent_threads WHERE thread_id=?",
+                    (thread_id,),
+                ).fetchone()
+                if not row:
+                    return True
+                resolved_state = row["state"]
+                if resolved_state in {"active", "waiting"}:
+                    return False
+                if resolved_state == "closed":
+                    return True
+            return _has_unresumed_stop(db, thread_id)
 
     def save_stopped_history(self, thread_id, history, processed):
         repaired = _repair_dangling_tool_calls(history)
@@ -2547,10 +2580,17 @@ class ThreadEngine:
             finally:
                 self._prune_idle_state_locked(thread_id)
 
-    def _resolve(self, thread_id, row):
+    def _resolve(self, thread_id, row, *, stopped: bool = False):
+        waiters = self.waiters.get(thread_id, [])
+        if not waiters:
+            return
+        stopped_now = stopped or (
+            row["state"] in {"idle", "archived", "done"}
+            and self.store.is_stopped(thread_id, state=row["state"])
+        )
         remaining = []
-        for revision, future in self.waiters.get(thread_id, []):
-            if revision <= row["completed_revision"] or row["state"] in {"closed", "archived"}:
+        for revision, future in waiters:
+            if stopped_now or revision <= row["completed_revision"] or row["state"] in {"closed", "archived"}:
                 if not future.done():
                     future.set_result(public(row))
             else:
@@ -3448,7 +3488,7 @@ class ThreadEngine:
                     task = self.tasks.get(thread_id)
                     if task:
                         task.cancel()
-                    self._resolve(thread_id, row)
+                    self._resolve(thread_id, row, stopped=True)
                 if not task:
                     await self._drain_deferred_locked()
             finally:

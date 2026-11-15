@@ -3163,7 +3163,12 @@ class Management:
                 sb_merged["enabled"] = bool(raw_settings["sandbox_enabled"])
             merged["sandbox"] = sb_merged
         merged.pop("sandbox_enabled", None)
-        if "admins" in raw_settings:
+        if "admins" in raw_settings and (
+            not isinstance(raw_settings["admins"], list)
+            or bool(raw_settings["admins"])
+            or bool(self.plugin.admins)
+            or set(raw_settings) == {"admins"}
+        ):
             host_admins = list(self._admins_info().get("host_admins") or [])
             merged["admins"] = validate_admin_update(
                 raw_settings["admins"], actor="", host_admins=host_admins

@@ -284,7 +284,12 @@ class Share:
         elif target_chat_id:
             chat_id = target_chat_id
         revision = row["completed_revision"]
-        if row["state"] != "idle" or revision != row["revision"]:
+        stopped = (
+            await asyncio.to_thread(self.store.is_stopped, thread_id, state=row["state"])
+            if hasattr(self.store, "is_stopped")
+            else False
+        )
+        if row["state"] != "idle" or revision != row["revision"] or stopped:
             raise ValueError("分享需要已完成且仍有效的线程结果")
         old = await asyncio.to_thread(
             self.bridge.delivery, thread_id, revision, chat_id
@@ -437,6 +442,11 @@ class Share:
             if not is_admin:
                 expression = strip_mention_all(expression) or "结果放在这里。"
         current = await asyncio.to_thread(self.store.get, thread_id, source_chat_id)
+        stopped = (
+            await asyncio.to_thread(self.store.is_stopped, thread_id, state=current["state"])
+            if hasattr(self.store, "is_stopped")
+            else False
+        )
         if (
             self.closing
             or not (
@@ -445,6 +455,7 @@ class Share:
             )
             or current["state"] != "idle"
             or current["revision"] != revision
+            or stopped
         ):
             abort_status = "failed" if retried_main_sent else "cancelled"
             abort_msg_id = (

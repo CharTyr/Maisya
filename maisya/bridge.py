@@ -10,6 +10,17 @@ import uuid
 from .trust import parse_stream_spec
 
 
+_NOT_STOPPED_SQL = (
+    "NOT EXISTS ("
+    "SELECT 1 FROM thread_events s "
+    "WHERE s.thread_id=t.thread_id AND s.kind='stopped' "
+    "AND s.seq > COALESCE(("
+    "SELECT MAX(a.seq) FROM thread_events a "
+    "WHERE a.thread_id=t.thread_id AND a.kind IN ('input','reopened')"
+    "), 0))"
+)
+
+
 def _grant_admin_direct(raw_grant) -> bool:
     if isinstance(raw_grant, dict):
         return bool(raw_grant.get("admin_direct"))
@@ -121,7 +132,8 @@ class Bridge:
             if old and not can_retry:
                 return {"already_handled": True, **dict(old)}
             current = db.execute(
-                "SELECT state,revision,completed_revision FROM agent_threads WHERE thread_id=?",
+                "SELECT t.state,t.revision,t.completed_revision FROM agent_threads t "
+                "WHERE t.thread_id=? AND " + _NOT_STOPPED_SQL,
                 (thread_id,),
             ).fetchone()
             if (
@@ -393,7 +405,8 @@ class Bridge:
             "LEFT JOIN return_groups g ON g.group_id=i.group_id "
             "LEFT JOIN thread_context tc ON tc.thread_id=t.thread_id "
             "WHERE i.consumed=0 AND i.available_at>=? AND t.revision=i.revision "
-            "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting')"
+            "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting') "
+            "AND " + _NOT_STOPPED_SQL
             + where
             + " ORDER BY i.event_seq LIMIT 64",
             parameters,
@@ -642,10 +655,18 @@ class Bridge:
                     allow_self=True,
                     allow_any_chat=True,
                 )
+                stopped = (
+                    self.store.is_stopped(row["thread_id"], state=current["state"])
+                    if hasattr(self.store, "is_stopped")
+                    else False
+                )
                 if (
                     current["completed_revision"] == row["revision"]
                     and current["revision"] == row["revision"]
-                    and (current["state"] in {"idle", "waiting"} or row.get("archived"))
+                    and (
+                        (current["state"] in {"idle", "waiting"} and not stopped)
+                        or row.get("archived")
+                    )
                 ):
                     manual.append(row)
         if not ids:
@@ -656,7 +677,8 @@ class Bridge:
                 "JOIN agent_threads t ON t.thread_id=i.thread_id WHERE i.event_seq IN ("
                 + ",".join("?" for _ in ids)
                 + ") AND t.revision=i.revision "
-                "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting')",
+                "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting') "
+                "AND " + _NOT_STOPPED_SQL,
                 ids,
             ).fetchall()
         valid = {
@@ -684,7 +706,8 @@ class Bridge:
                 "SELECT 1 FROM return_intents i JOIN agent_threads t ON t.thread_id=i.thread_id "
                 "WHERE i.group_id=g.group_id AND i.origin='user' AND i.inline=0 AND i.consumed=0 "
                 "AND i.available_at BETWEEN ? AND ? AND t.revision=i.revision "
-                "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting')) "
+                "AND t.completed_revision=i.revision AND t.state IN ('idle','waiting') "
+                "AND " + _NOT_STOPPED_SQL + ") "
                 "ORDER BY g.deadline LIMIT 64",
                 (now - 15.0, now - 60.0, now, now, now - 1800, now),
             ).fetchall()
