@@ -519,7 +519,7 @@ def _tools_file_op(plugin, op: str, content: str, version: int | None, expected_
 
 async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: str, document: str, content: str, version: int | None, expected_version: int | None, current_chat_id: str, current_platform: str, author: str) -> dict:
     if op == "list":
-        skills = [s["skill_id"] for s in await completed_thread(plugin.memory.skills)]
+        skills = [s["skill_id"] if isinstance(s, dict) else str(s) for s in await completed_thread(plugin.memory.skills)]
         return {"kind": "file", "files": ["JOURNAL.md", "HEARTBEAT.md", "TOOLS.md", "MEMORY.md", *(f"skills/{s}/SKILL.md" for s in skills)]}
     f_kind, f_target, f_doc = _resolve_file_route(kind, target, document)
     if f_kind == "tools":
