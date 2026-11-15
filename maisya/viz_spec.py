@@ -387,8 +387,8 @@ def _validate_block(block: Any, profile: str, ctx: str, *, depth: int = 0) -> No
 
     if btype == "note":
         _req_str(block, "text", ctx)
-        tone = block.get("tone", "info")
-        if tone not in {"info", "warn"}:
+        tone = block.get("tone")
+        if tone is not None and tone not in {"info", "warn"}:
             raise SpecError(f"{ctx}: note.tone 仅支持 info 或 warn")
         return
 
@@ -868,14 +868,26 @@ def _render_line(block: dict[str, Any]) -> str:
     xs = [(_opt_scalar_text(pt, "x", "line") or _opt_scalar_text(pt, "label", "line")) for pt in points]
     ys = [float(pt["y"] if "y" in pt else pt["value"]) for pt in points]
 
-    w, h = 600.0, 210.0
-    pad_l, pad_r, pad_t, pad_b = 52.0, 24.0, 22.0, 34.0
-    plot_w = w - pad_l - pad_r
-    plot_h = h - pad_t - pad_b
+    def _est_text_px(text: str) -> float:
+        return sum(12.5 if ord(ch) > 127 else 7.5 for ch in text)
 
     y_min = min(ys)
     y_max = max(ys)
     span = y_max - y_min
+    y_ticks: list[tuple[float, str]] = [
+        (ratio, _fmt_num(y_max - span * ratio if span != 0 else y_max) + unit)
+        for ratio in (0.0, 0.5, 1.0)
+    ]
+
+    w, h = 600.0, 210.0
+    max_y_px = max((_est_text_px(lbl) for _, lbl in y_ticks), default=0.0)
+    first_x_half = _est_text_px(xs[0]) * 0.5 if xs else 0.0
+    pad_l = min(160.0, max(52.0, round(max_y_px + 18.0, 1), round(first_x_half + 10.0, 1)))
+    last_x_half = _est_text_px(xs[-1]) * 0.5 if xs else 0.0
+    pad_r = min(84.0, max(24.0, round(last_x_half + 8.0, 1)))
+    pad_t, pad_b = 22.0, 34.0
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
 
     coords: list[tuple[float, float, str, float]] = []
     n = len(points)
@@ -888,15 +900,14 @@ def _render_line(block: dict[str, Any]) -> str:
         coords.append((px, py, xv, yv))
 
     grid_lines: list[str] = []
-    for ratio in (0.0, 0.5, 1.0):
+    for ratio, tick_lbl in y_ticks:
         gy = pad_t + plot_h * ratio
-        val = y_max - span * ratio if span != 0 else y_max
         grid_lines.append(
             f'<line class="vs-line-grid" x1="{pad_l:.1f}" y1="{gy:.1f}" x2="{w - pad_r:.1f}" y2="{gy:.1f}"/>'
         )
         grid_lines.append(
             f'<text class="vs-line-axis" x="{pad_l - 8:.1f}" y="{gy + 4:.1f}" text-anchor="end">'
-            f"{_esc(_fmt_num(val) + unit)}</text>"
+            f"{_esc(tick_lbl)}</text>"
         )
 
     path_d = " ".join(
@@ -908,6 +919,10 @@ def _render_line(block: dict[str, Any]) -> str:
     step = max(1, (n + 5) // 6)
     x_labels: list[str] = []
     dots: list[str] = []
+    last_drawn_px: float | None = None
+    last_drawn_half = 0.0
+    end_px = coords[-1][0]
+    end_half = _est_text_px(coords[-1][2]) * 0.5
     for idx, (px, py, xv, yv) in enumerate(coords):
         dots.append(
             f'<circle class="vs-line-dot" cx="{px:.1f}" cy="{py:.1f}" r="3.6">'
@@ -918,10 +933,22 @@ def _render_line(block: dict[str, Any]) -> str:
                 f'<text class="vs-line-axis" x="{px:.1f}" y="{max(12.0, py - 8):.1f}" text-anchor="middle">'
                 f"{_esc(_fmt_num(yv))}</text>"
             )
-        if idx == 0 or idx == n - 1 or idx % step == 0:
+        cur_half = _est_text_px(xv) * 0.5
+        should_draw = False
+        if idx == 0:
+            should_draw = True
+        elif idx == n - 1:
+            should_draw = last_drawn_px is None or (px - last_drawn_px >= last_drawn_half + cur_half + 6.0)
+        elif idx % step == 0 and (n - 1 - idx) >= step:
+            clear_prev = last_drawn_px is None or (px - last_drawn_px >= last_drawn_half + cur_half + 10.0)
+            clear_end = (end_px - px) >= (cur_half + end_half + 10.0)
+            should_draw = clear_prev and clear_end
+        if should_draw:
             x_labels.append(
                 f'<text class="vs-line-axis" x="{px:.1f}" y="{h - 10:.1f}" text-anchor="middle">{_esc(xv)}</text>'
             )
+            last_drawn_px = px
+            last_drawn_half = cur_half
 
     svg = (
         f'<svg class="vs-line-svg" viewBox="0 0 {int(w)} {int(h)}" role="img" aria-label="{_esc(_opt_str(block, "title") or "趋势折线图")}">'
@@ -1108,19 +1135,18 @@ def _render_block(
             lbl = _opt_str(tab, "label", "title")
             rid = f"{group_name}-{idx}"
             checked = " checked" if idx == 0 else ""
-            active = " is-active" if idx == 0 else ""
             radios.append(
                 f'<input class="vs-tab-radio" type="radio" name="{_esc(group_name)}" id="{_esc(rid)}" data-tab-idx="{idx}"{checked}>'
             )
             labels.append(
-                f'<label class="vs-tab-lbl{active}" for="{_esc(rid)}" data-tab-idx="{idx}" role="tab" aria-selected="{"true" if idx == 0 else "false"}">{_esc(lbl)}</label>'
+                f'<label class="vs-tab-lbl" for="{_esc(rid)}" data-tab-idx="{idx}" role="tab" aria-selected="{"true" if idx == 0 else "false"}">{_esc(lbl)}</label>'
             )
             inner = "".join(
                 _render_block(child, uid=uid, counter=counter, static=static, image_resolver=image_resolver)
                 for child in tab["blocks"]
             )
             panels.append(
-                f'<div class="vs-tab-panel{active}" data-tab-idx="{idx}" role="tabpanel"><div class="vs-stack">{inner}</div></div>'
+                f'<div class="vs-tab-panel" data-tab-idx="{idx}" role="tabpanel"><div class="vs-stack">{inner}</div></div>'
             )
         return (
             _render_block_header(block)

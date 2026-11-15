@@ -88,10 +88,10 @@ _TEXT_PUBLISH_CUE_RE = re.compile(
 
 # Relative date expressions
 _CN_REL_RE = re.compile(
-    r"(?:^|\b|\s)(?:(刚刚|刚才|片刻前)|"
+    r"(?<![A-Za-z0-9_])(?:(刚刚|刚才|片刻前)|"
     r"(半)\s*(?:个)?\s*(小时|钟头|天|日|月)前|"
     r"(\d+)\s*(秒|分钟|分|小时|钟头|天|日|周|星期|个月|月|年)前|"
-    r"(今天|今日|昨天|昨日|前天)(?:\s*(\d{1,2}:\d{2}(?::\d{2})?))?)(?=$|\b|\s|[，。,.;；!！?？])"
+    r"(今天|今日|昨天|昨日|前天)(?:\s*(\d{1,2}:\d{2}(?::\d{2})?))?)(?![A-Za-z0-9_])"
 )
 
 _NUM_WORDS = {
@@ -120,37 +120,37 @@ _EN_REL_RE = re.compile(
 )
 
 _TEXT_DATE_PATTERNS = (
-    # ISO 8601 / YYYY-MM-DD HH:MM:SS TZ
+    # ISO 8601 / YYYY-MM-DD HH:MM:SS TZ (allow CJK adjacency without \b failure)
     re.compile(
-        r"\b((?:19|20)\d{2}[-/](?:1[0-2]|0?[1-9])[-/](?:3[01]|[12]\d|0?[1-9])"
-        r"(?:[T\s](?:2[0-3]|1\d|0?\d):[0-5]\d(?::[0-5]\d)?(?:\.\d+)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?)?)\b"
+        r"(?<![A-Za-z0-9_])((?:19|20)\d{2}[-/](?:1[0-2]|0?[1-9])[-/](?:3[01]|[12]\d|0?[1-9])"
+        r"(?:[T\s](?:2[0-3]|1\d|0?\d):[0-5]\d(?::[0-5]\d)?(?:\.\d+)?(?:\s*(?:Z|[+-]\d{2}:?\d{2}))?)?)(?![A-Za-z0-9_])"
     ),
     # Chinese dates: 2026年10月15日 14:30(:00)
     re.compile(
-        r"((?:19|20)\d{2}\s*年\s*(?:1[0-2]|0?[1-9])\s*月\s*(?:3[01]|[12]\d|0?[1-9])\s*[日号]?"
-        r"(?:\s*(?:2[0-3]|1\d|0?\d):[0-5]\d(?::[0-5]\d)?)?)"
+        r"(?<!\d)((?:19|20)\d{2}\s*年\s*(?:1[0-2]|0?[1-9])\s*月\s*(?:3[01]|[12]\d|0?[1-9])\s*[日号]?"
+        r"(?:\s*(?:2[0-3]|1\d|0?\d):[0-5]\d(?::[0-5]\d)?)?)(?![A-Za-z0-9_])"
     ),
     # Month DD, YYYY (optionally with time)
     re.compile(
-        r"\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"(?<![A-Za-z0-9_])((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
         r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
         r"\s+(?:3[01]|[12]\d|0?[1-9])(?:st|nd|rd|th)?,?\s+(?:19|20)\d{2}"
-        r"(?:[,\s]+(?:at\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)?)\b",
+        r"(?:[,\s]+(?:at\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)?)(?![A-Za-z0-9_])",
         re.I,
     ),
     # DD Month YYYY
     re.compile(
-        r"\b((?:3[01]|[12]\d|0?[1-9])(?:st|nd|rd|th)?\s+"
+        r"(?<![A-Za-z0-9_])((?:3[01]|[12]\d|0?[1-9])(?:st|nd|rd|th)?\s+"
         r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
         r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
-        r",?\s+(?:19|20)\d{2}(?:[,\s]+(?:at\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)?)\b",
+        r",?\s+(?:19|20)\d{2}(?:[,\s]+(?:at\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)?)(?![A-Za-z0-9_])",
         re.I,
     ),
 )
 
 _CN_MD_RE = re.compile(
-    r"(?:^|[\s:：(\[])((?:1[0-2]|0?[1-9])\s*月\s*(?:3[01]|[12]\d|0?[1-9])\s*[日号]"
-    r"(?:\s*(?:2[0-3]|1\d|0?\d):[0-5]\d(?::[0-5]\d)?)?)"
+    r"(?<![A-Za-z0-9_年])((?:1[0-2]|0?[1-9])\s*月\s*(?:3[01]|[12]\d|0?[1-9])\s*[日号]"
+    r"(?:\s*(?:2[0-3]|1\d|0?\d):[0-5]\d(?::[0-5]\d)?)?)(?![A-Za-z0-9_])"
 )
 
 _MONTHS = {
@@ -217,20 +217,25 @@ def _parse_hhmm(raw: str | None) -> tuple[int, int, int] | None:
     return hh, mm, ss
 
 
-def _apply_day_and_hhmm(base_ts: float, day_delta: int, hhmm: str | None) -> float:
-    dt = datetime.fromtimestamp(base_ts, tz=timezone.utc) + timedelta(days=day_delta)
+def _apply_day_and_hhmm(
+    base_ts: float, day_delta: int, hhmm: str | None, *, tz_offset_minutes: int = 480
+) -> float:
+    tz = timezone(timedelta(minutes=int(tz_offset_minutes)))
+    dt = datetime.fromtimestamp(base_ts, tz=tz) + timedelta(days=day_delta)
     parsed = _parse_hhmm(hhmm)
     if parsed is not None:
         hh, mm, ss = parsed
         dt = dt.replace(hour=hh, minute=mm, second=ss, microsecond=0)
     else:
         dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    return dt.timestamp()
+    return dt.astimezone(timezone.utc).timestamp()
 
 
-def _parse_relative_raw(text: str, now_ts: float) -> float | None:
+def _parse_relative_raw(
+    text: str, now_ts: float, *, tz_offset_minutes: int = 480
+) -> float | None:
     s = re.sub(r"\s+", " ", text).strip()
-    if not s or len(s) > 80:
+    if not s or len(s) > 200:
         return None
 
     m = _CN_REL_RE.search(s)
@@ -261,7 +266,9 @@ def _parse_relative_raw(text: str, now_ts: float) -> float | None:
                 return now_ts - n * 365 * 86400
         if day_word:
             delta = 0 if day_word in {"今天", "今日"} else (-1 if day_word in {"昨天", "昨日"} else -2)
-            return _apply_day_and_hhmm(now_ts, delta, hhmm)
+            return _apply_day_and_hhmm(
+                now_ts, delta, hhmm, tz_offset_minutes=tz_offset_minutes
+            )
 
     m_en = _EN_REL_RE.search(s)
     if m_en:
@@ -270,7 +277,9 @@ def _parse_relative_raw(text: str, now_ts: float) -> float | None:
             return now_ts
         if day_word:
             delta = 0 if day_word.lower() == "today" else -1
-            return _apply_day_and_hhmm(now_ts, delta, hhmm)
+            return _apply_day_and_hhmm(
+                now_ts, delta, hhmm, tz_offset_minutes=tz_offset_minutes
+            )
         if qty_s and unit_s:
             qty_l = qty_s.lower()
             n = int(qty_l) if qty_l.isdigit() else _NUM_WORDS.get(qty_l, 0)
@@ -296,17 +305,22 @@ def _parse_relative_raw(text: str, now_ts: float) -> float | None:
 
 def _is_relative_label(text: str) -> bool:
     s = re.sub(r"\s+", " ", text or "").strip()
-    if not s or len(s) > 48:
+    if not s or len(s) > 120:
         return False
     return bool(_CN_REL_RE.search(s) or _EN_REL_RE.search(s))
 
 
-def relative_ts(text: str, now: float | int | datetime | None = None) -> float | None:
+def relative_ts(
+    text: str,
+    now: float | int | datetime | None = None,
+    *,
+    tz_offset_minutes: int = 480,
+) -> float | None:
     """Resolve a relative time string into a bounded Unix timestamp, or None."""
     if not isinstance(text, str) or not text.strip():
         return None
     now_ts = _resolve_now(now)
-    ts = _parse_relative_raw(text, now_ts)
+    ts = _parse_relative_raw(text, now_ts, tz_offset_minutes=tz_offset_minutes)
     if ts is None or not _in_valid_window(ts, now_ts):
         return None
     return ts
@@ -330,7 +344,9 @@ def _make_utc_ts(
     return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc).timestamp()
 
 
-def _parse_absolute_ts(raw: Any, now_ts: float) -> float | None:
+def _parse_absolute_ts(
+    raw: Any, now_ts: float, *, tz_offset_minutes: int = 480
+) -> float | None:
     if raw is None or isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
@@ -368,7 +384,13 @@ def _parse_absolute_ts(raw: Any, now_ts: float) -> float | None:
         lambda m: f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}",
         iso_cand,
     )
-    if re.match(r"^(?:19|20)\d{2}-\d{2}-\d{2}(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[+-]\d{2}:\d{2})?)?$", iso_cand):
+    iso_cand = re.sub(
+        r"([T\s])(\d):(\d{2})",
+        lambda m: f"{m.group(1)}0{m.group(2)}:{m.group(3)}",
+        iso_cand,
+        count=1,
+    )
+    if re.match(r"^(?:19|20)\d{2}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[+-]\d{2}:\d{2})?)?$", iso_cand):
         try:
             dt = datetime.fromisoformat(iso_cand)
             if dt.tzinfo is None:
@@ -401,11 +423,17 @@ def _parse_absolute_ts(raw: Any, now_ts: float) -> float | None:
     if m_cn_short:
         hhmm = _parse_hhmm(m_cn_short.group(3)) if m_cn_short.group(3) else (0, 0, 0)
         if hhmm is not None:
-            cur_year = datetime.fromtimestamp(now_ts, tz=timezone.utc).year
-            for yr in (cur_year, cur_year - 1):
-                ts = _make_utc_ts(yr, int(m_cn_short.group(1)), int(m_cn_short.group(2)), *hhmm)
-                if ts is not None and _in_valid_window(ts, now_ts):
-                    return ts
+            local_tz = timezone(timedelta(minutes=int(tz_offset_minutes)))
+            cur_year = datetime.fromtimestamp(now_ts, tz=local_tz).year
+            mon_i, day_i = int(m_cn_short.group(1)), int(m_cn_short.group(2))
+            ts_cur = _make_utc_ts(cur_year, mon_i, day_i, *hhmm)
+            if ts_cur is not None and _in_valid_window(ts_cur, now_ts):
+                return ts_cur
+            # 仅当本年日期不存在（如平年 2月29日）或大幅超前 >180 天（跨年 1 月读 12 月旧文）时回卷到去年；近期未来日期禁止回卷
+            if ts_cur is None or (ts_cur - now_ts) > 180 * 86400.0:
+                ts_prev = _make_utc_ts(cur_year - 1, mon_i, day_i, *hhmm)
+                if ts_prev is not None and _in_valid_window(ts_prev, now_ts):
+                    return ts_prev
 
     # English Month DD, YYYY
     m_en1 = re.fullmatch(
@@ -453,39 +481,59 @@ def _parse_absolute_ts(raw: Any, now_ts: float) -> float | None:
     return None
 
 
-def normalize_date(raw: Any, now: float | int | datetime | None = None) -> str:
+def normalize_date(
+    raw: Any,
+    now: float | int | datetime | None = None,
+    *,
+    tz_offset_minutes: int = 480,
+) -> str:
     """Normalize a raw date value or relative expression into UTC ISO-8601, or ''."""
     now_ts = _resolve_now(now)
-    ts = _parse_absolute_ts(raw, now_ts)
+    ts = _parse_absolute_ts(raw, now_ts, tz_offset_minutes=tz_offset_minutes)
     if ts is None and isinstance(raw, str):
-        ts = relative_ts(raw, now=now_ts)
+        ts = relative_ts(raw, now=now_ts, tz_offset_minutes=tz_offset_minutes)
     if ts is None:
         return ""
     return _format_utc(ts)
 
 
-def _extract_date_from_line(line: str, now_ts: float) -> str:
+def _extract_date_from_line(
+    line: str, now_ts: float, *, tz_offset_minutes: int = 480
+) -> str:
     if not line or _NEGATIVE_HINT_RE.search(line):
         return ""
     for pat in _TEXT_DATE_PATTERNS:
         m = pat.search(line)
         if m:
-            norm = normalize_date(m.group(1), now=now_ts)
+            norm = normalize_date(
+                m.group(1), now=now_ts, tz_offset_minutes=tz_offset_minutes
+            )
             if norm:
                 return norm
     m_short = _CN_MD_RE.search(line)
-    if m_short:
-        norm = normalize_date(m_short.group(1), now=now_ts)
+    if m_short and not re.search(
+        r"(?:19|20)\d{2}\s*年\s*$", line[: m_short.start(1)]
+    ):
+        norm = normalize_date(
+            m_short.group(1), now=now_ts, tz_offset_minutes=tz_offset_minutes
+        )
         if norm:
             return norm
     if _is_relative_label(line) or _TEXT_PUBLISH_CUE_RE.search(line):
-        rel = relative_ts(line, now=now_ts)
+        rel = relative_ts(
+            line, now=now_ts, tz_offset_minutes=tz_offset_minutes
+        )
         if rel is not None:
             return _format_utc(rel)
     return ""
 
 
-def published_from_text(text: str, now: float | int | datetime | None = None) -> str:
+def published_from_text(
+    text: str,
+    now: float | int | datetime | None = None,
+    *,
+    tz_offset_minutes: int = 480,
+) -> str:
     """Extract a publication date from plain/markdown page text."""
     if not isinstance(text, str) or not text.strip():
         return ""
@@ -497,7 +545,9 @@ def published_from_text(text: str, now: float | int | datetime | None = None) ->
     for ln in lines:
         if len(ln) > 200 or not _TEXT_PUBLISH_CUE_RE.search(ln):
             continue
-        found = _extract_date_from_line(ln, now_ts)
+        found = _extract_date_from_line(
+            ln, now_ts, tz_offset_minutes=tz_offset_minutes
+        )
         if found:
             return found
 
@@ -505,7 +555,9 @@ def published_from_text(text: str, now: float | int | datetime | None = None) ->
     for ln in lines[:25]:
         if len(ln) > 120:
             continue
-        found = _extract_date_from_line(ln, now_ts)
+        found = _extract_date_from_line(
+            ln, now_ts, tz_offset_minutes=tz_offset_minutes
+        )
         if found:
             return found
 
@@ -532,6 +584,27 @@ def _walk_json_ld(obj: Any, primary: list[Any], fallback: list[Any]) -> None:
                 _walk_json_ld(v, primary, fallback)
 
 
+_VOID_HTML_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+_RAW_IGNORED_TAGS = frozenset({"script", "style", "noscript", "svg", "template"})
+
+
 class _PageDateHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -542,19 +615,26 @@ class _PageDateHTMLParser(HTMLParser):
         self.text_chunks: list[str] = []
 
         self._stack: list[tuple[str, bool, bool]] = []
-        self._in_ignored_script = False
+        self._ignored_tag_stack: list[str] = []
         self._in_ld_json = False
         self._ld_buf: list[str] = []
         self._capture_stack: list[dict[str, Any]] = []
 
     def _in_ignore_zone(self) -> bool:
-        return any(ignored for _, ignored, _ in self._stack)
+        return bool(self._ignored_tag_stack) or any(ignored for _, ignored, _ in self._stack)
 
     def _has_publish_context(self) -> bool:
         return any(pub for _, _, pub in self._stack)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag_l = tag.lower()
+        if self._in_ld_json:
+            return
+        if self._ignored_tag_stack:
+            if tag_l in _RAW_IGNORED_TAGS:
+                self._ignored_tag_stack.append(tag_l)
+            return
+
         attr_map = {k.lower(): (v or "").strip() for k, v in attrs if k}
 
         if tag_l == "meta":
@@ -576,11 +656,11 @@ class _PageDateHTMLParser(HTMLParser):
                 self._in_ld_json = True
                 self._ld_buf = []
             else:
-                self._in_ignored_script = True
+                self._ignored_tag_stack.append("script")
             return
 
-        if tag_l in {"style", "noscript", "svg", "template"}:
-            self._in_ignored_script = True
+        if tag_l in _RAW_IGNORED_TAGS:
+            self._ignored_tag_stack.append(tag_l)
             return
 
         meta_str = " ".join(
@@ -601,6 +681,24 @@ class _PageDateHTMLParser(HTMLParser):
         if attr_map.get("itemprop", "").lower() in {"datepublished", "datecreated"}:
             is_pub = True
 
+        direct_val = ""
+        for k in _ATTR_DATE_KEYS:
+            if attr_map.get(k):
+                direct_val = attr_map[k]
+                break
+        if attr_map.get("itemprop", "").lower() in {"datepublished", "datecreated"}:
+            direct_val = direct_val or attr_map.get("content", "")
+        title_val = attr_map.get("title") or ""
+
+        if tag_l in _VOID_HTML_TAGS:
+            ignored_zone = self._in_ignore_zone() or is_ignored
+            pub_ctx = self._has_publish_context() or is_pub
+            if tag_l == "br" and not ignored_zone:
+                self.text_chunks.append("\n")
+            if direct_val and not ignored_zone:
+                self.attr_candidates.append((ignored_zone, pub_ctx, direct_val, title_val, ""))
+            return
+
         self._stack.append((tag_l, is_ignored, is_pub))
 
         ignored_zone = self._in_ignore_zone()
@@ -608,7 +706,6 @@ class _PageDateHTMLParser(HTMLParser):
 
         if tag_l == "time":
             dt_val = attr_map.get("datetime") or attr_map.get("content") or ""
-            title_val = attr_map.get("title") or ""
             self._capture_stack.append(
                 {
                     "kind": "time",
@@ -623,15 +720,6 @@ class _PageDateHTMLParser(HTMLParser):
             return
 
         # Direct attributes on elements
-        direct_val = ""
-        for k in _ATTR_DATE_KEYS:
-            if attr_map.get(k):
-                direct_val = attr_map[k]
-                break
-        if attr_map.get("itemprop", "").lower() in {"datepublished", "datecreated"}:
-            direct_val = direct_val or attr_map.get("content", "")
-
-        title_val = attr_map.get("title") or ""
         if direct_val or (title_val and not ignored_zone):
             self._capture_stack.append(
                 {
@@ -659,15 +747,20 @@ class _PageDateHTMLParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag_l = tag.lower()
-        if tag_l == "script":
-            if self._in_ld_json:
-                self.ld_json_blobs.append("".join(self._ld_buf))
-                self._ld_buf = []
-                self._in_ld_json = False
-            self._in_ignored_script = False
+        if tag_l == "script" and self._in_ld_json:
+            self.ld_json_blobs.append("".join(self._ld_buf))
+            self._ld_buf = []
+            self._in_ld_json = False
             return
-        if tag_l in {"style", "noscript", "svg", "template"}:
-            self._in_ignored_script = False
+        if self._ignored_tag_stack:
+            if tag_l in self._ignored_tag_stack:
+                while self._ignored_tag_stack:
+                    if self._ignored_tag_stack.pop() == tag_l:
+                        break
+            return
+        if tag_l in _VOID_HTML_TAGS:
+            return
+        if not any(t == tag_l for t, _, _ in self._stack):
             return
 
         while self._stack:
@@ -696,7 +789,7 @@ class _PageDateHTMLParser(HTMLParser):
         if self._in_ld_json:
             self._ld_buf.append(data)
             return
-        if self._in_ignored_script:
+        if self._ignored_tag_stack:
             return
         for cap in self._capture_stack:
             cap["buf"].append(data)
@@ -704,7 +797,12 @@ class _PageDateHTMLParser(HTMLParser):
             self.text_chunks.append(data)
 
 
-def published_from_html(html_text: str, now: float | int | datetime | None = None) -> str:
+def published_from_html(
+    html_text: str,
+    now: float | int | datetime | None = None,
+    *,
+    tz_offset_minutes: int = 480,
+) -> str:
     """Extract a validated UTC ISO-8601 publication timestamp from HTML."""
     if not isinstance(html_text, str) or not html_text.strip():
         return ""
@@ -719,7 +817,7 @@ def published_from_html(html_text: str, now: float | int | datetime | None = Non
     # 1. Primary <meta> tags
     for key in _META_PRIMARY_KEYS:
         for val in parser.meta_candidates.get(key, ()):
-            norm = normalize_date(val, now=now_ts)
+            norm = normalize_date(val, now=now_ts, tz_offset_minutes=tz_offset_minutes)
             if norm:
                 return norm
 
@@ -736,22 +834,23 @@ def published_from_html(html_text: str, now: float | int | datetime | None = Non
             continue
         _walk_json_ld(data, ld_primary, ld_fallback)
     for val in ld_primary:
-        norm = normalize_date(val, now=now_ts)
+        norm = normalize_date(val, now=now_ts, tz_offset_minutes=tz_offset_minutes)
         if norm:
             return norm
 
-    # 3. <time> elements (prefer non-ignored, publish-context first)
-    for want_ignored in (False, True):
-        for ignored, _pub, val, inner in parser.time_candidates:
-            if ignored != want_ignored:
-                continue
-            for cand in (val, inner):
-                if cand and not _NEGATIVE_HINT_RE.search(cand):
-                    norm = normalize_date(cand, now=now_ts)
-                    if norm:
-                        return norm
+    # 3. Non-ignored <time> elements
+    for ignored, _pub, val, inner in parser.time_candidates:
+        if ignored:
+            continue
+        for cand in (val, inner):
+            if cand and not _NEGATIVE_HINT_RE.search(cand):
+                norm = normalize_date(
+                    cand, now=now_ts, tz_offset_minutes=tz_offset_minutes
+                )
+                if norm:
+                    return norm
 
-    # 4. Data/title attributes and relative-time labels with publish context
+    # 4. Data/title attributes and relative-time labels with publish context (non-ignored)
     for want_pub in (True, False):
         for ignored, pub, val, title, inner in parser.attr_candidates:
             if ignored or pub != want_pub:
@@ -759,33 +858,53 @@ def published_from_html(html_text: str, now: float | int | datetime | None = Non
             if inner and _NEGATIVE_HINT_RE.search(inner):
                 continue
             if val:
-                norm = normalize_date(val, now=now_ts)
+                norm = normalize_date(
+                    val, now=now_ts, tz_offset_minutes=tz_offset_minutes
+                )
                 if norm:
                     return norm
             if title and (pub or _is_relative_label(inner)):
-                norm = normalize_date(title, now=now_ts)
+                norm = normalize_date(
+                    title, now=now_ts, tz_offset_minutes=tz_offset_minutes
+                )
                 if norm:
                     return norm
-            if inner and (pub or _is_relative_label(inner)) and len(inner) <= 80:
-                norm = normalize_date(inner, now=now_ts)
+            if inner and (pub or _is_relative_label(inner)) and len(inner) <= 200:
+                norm = normalize_date(
+                    inner, now=now_ts, tz_offset_minutes=tz_offset_minutes
+                )
                 if norm:
                     return norm
 
-    # 5. Modified <meta> / JSON-LD fallback
+    # 5. Modified <meta> / JSON-LD fallback (prefer explicit metadata over footer <time>)
     for key in _META_FALLBACK_KEYS:
         for val in parser.meta_candidates.get(key, ()):
-            norm = normalize_date(val, now=now_ts)
+            norm = normalize_date(val, now=now_ts, tz_offset_minutes=tz_offset_minutes)
             if norm:
                 return norm
     for val in ld_fallback:
-        norm = normalize_date(val, now=now_ts)
+        norm = normalize_date(val, now=now_ts, tz_offset_minutes=tz_offset_minutes)
         if norm:
             return norm
 
-    # 6. Extracted page text fallback
+    # 6. Ignored-zone <time> elements (e.g. footer/nav fallback)
+    for ignored, _pub, val, inner in parser.time_candidates:
+        if not ignored:
+            continue
+        for cand in (val, inner):
+            if cand and not _NEGATIVE_HINT_RE.search(cand):
+                norm = normalize_date(
+                    cand, now=now_ts, tz_offset_minutes=tz_offset_minutes
+                )
+                if norm:
+                    return norm
+
+    # 7. Extracted page text fallback
     plain = "".join(parser.text_chunks)
     if plain.strip():
-        return published_from_text(plain, now=now_ts)
+        return published_from_text(
+            plain, now=now_ts, tz_offset_minutes=tz_offset_minutes
+        )
     return ""
 
 
