@@ -264,6 +264,9 @@ async def collect_known_chats(plugin) -> list[dict]:
 
 
 def _effective_host_admins(plugin) -> set[str]:
+    info = getattr(plugin, "admins_info", None)
+    if isinstance(info, dict) and "host_admins" in info:
+        return set(info.get("host_admins") or ())
     if hasattr(plugin, "host_admins"):
         return set(getattr(plugin, "host_admins") or ())
     return set(plugin._host_admins() or ()) if callable(getattr(plugin, "_host_admins", None)) else set()
@@ -323,7 +326,7 @@ async def _commit_settings(plugin, candidate: dict, *, expected_version: int | N
         host_admins = _effective_host_admins(plugin)
         old_eff = host_admins | set(getattr(plugin.settings, "admins", ()) or ())
         new_eff = host_admins | set(candidate.get("admins") or ())
-        if not new_eff:
+        if (old_eff or "admins" in changes) and not new_eff:
             raise ValueError("禁止清空全部管理员（至少保留 1 名有效管理员，防止自锁死）")
         if caller_ident and caller_ident in old_eff and caller_ident not in new_eff:
             raise ValueError("禁止在会话内移除当前操作者自身的管理员权限，防止自锁死")

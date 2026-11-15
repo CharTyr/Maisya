@@ -1296,6 +1296,19 @@ class MaisyaPlugin(MaiBotPlugin):
                         encoded,
                     )
 
+    async def persist_settings(self, raw_settings) -> Settings:
+        """校验并原子持久化插件设置，同步刷新运行时管理员与服务配置。"""
+        settings = Settings.model_validate(raw_settings)
+        dumped = settings.model_dump()
+        await self.on_config_update("self", dumped, 0)
+        if self.data_root:
+            await asyncio.to_thread(
+                atomic_private_write,
+                self.data_root / "settings.json",
+                json.dumps(dumped, ensure_ascii=False).encode("utf-8"),
+            )
+        return settings
+
     def is_verified_admin_identity(self, identity) -> bool:
         return bool(
             identity
