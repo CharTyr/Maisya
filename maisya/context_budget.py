@@ -182,17 +182,31 @@ def estimate_tools_tokens(tools: list[dict[str, Any]] | None) -> int:
     return sum(estimate_tokens(json.dumps(tool, ensure_ascii=False)) + 4 for tool in tools)
 
 
+_FAMILY_WINDOW_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = tuple(
+    (
+        re.compile(
+            r"(?<![a-z0-9])"
+            + re.escape(prefix)
+            + ("" if prefix.endswith("-") else r"(?![a-z0-9])")
+        ),
+        window,
+    )
+    for prefix, window in sorted(
+        MODEL_FAMILY_WINDOWS, key=lambda item: len(item[0]), reverse=True
+    )
+)
+
+
 def _match_family_window(name_or_id: str) -> int | None:
     raw = str(name_or_id or "").strip().lower()
     if not raw:
         return None
-    candidates = [raw]
-    if "/" in raw:
-        candidates.append(raw.rsplit("/", 1)[-1])
-    for candidate in candidates:
-        for prefix, window in MODEL_FAMILY_WINDOWS:
-            if prefix in candidate:
-                return window
+    model_part = raw.rsplit("/", 1)[-1].strip()
+    if not model_part:
+        return None
+    for pattern, window in _FAMILY_WINDOW_PATTERNS:
+        if pattern.search(model_part):
+            return window
     return None
 
 

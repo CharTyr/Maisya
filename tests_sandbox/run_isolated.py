@@ -203,6 +203,18 @@ sys.exit(status)
 """
 
 
+def _bundle_paths(root: Path = ROOT) -> list[Path]:
+    candidates = (
+        list((root / "maisya").glob("*.py"))
+        + [root / "maisya/viz.css"]
+        + list((root / "presets/profiles").rglob("*"))
+        + list((root / "presets/skills").rglob("*"))
+        + list((root / "presets/memory").rglob("*"))
+        + [root / "tests_sandbox/check_runtime.py"]
+    )
+    return [p for p in candidates if p.is_file() and not p.is_symlink()]
+
+
 def main():
     if "--execute" not in sys.argv:
         print(
@@ -214,11 +226,7 @@ def main():
     ssh[ssh.index("-i") + 1] = str(Path(ssh[ssh.index("-i") + 1]).expanduser())
     host = re.search(r"宿主目录：`([^`]+)`", local).group(1)
     payload = io.BytesIO()
-    paths = (
-        list((ROOT / "maisya").glob("*.py"))
-        + list((ROOT / "presets/profiles").rglob("*"))
-        + [ROOT / "tests_sandbox/check_runtime.py"]
-    )
+    paths = _bundle_paths(ROOT)
     with tarfile.open(fileobj=payload, mode="w:gz") as target:
         for path in paths:
             if path.is_file() and not path.is_symlink():

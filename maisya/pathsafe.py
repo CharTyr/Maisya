@@ -11,6 +11,7 @@ import shutil
 import stat
 import sys
 import threading
+import time
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -39,7 +40,11 @@ _THREAD_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _eloop_errnos() -> set[int]:
-    return {40, 62, getattr(errno, "ELOOP", 40)}
+    errnos = {40, 62}
+    eloop = getattr(errno, "ELOOP", None)
+    if isinstance(eloop, int):
+        errnos.add(eloop)
+    return errnos
 
 
 def _open_extra(*, nonblock: bool = False) -> int:
@@ -374,22 +379,38 @@ def acquire_lock_handle(
         info = os.fstat(fd)
         if is_link_like(info) or not stat.S_ISREG(info.st_mode):
             raise ValueError("锁文件必须是普通文件")
-        os.lseek(fd, 0, os.SEEK_SET)
-        lock_mode = msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK
-        try:
-            msvcrt.locking(fd, lock_mode, 1)
-        except PermissionError as error:
+        delay = 0.005
+        max_wait = 30.0
+        waited = 0.0
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                break
+            except PermissionError as error:
+                retryable = True
+                last_error = error
+            except OSError as error:
+                retryable = error.errno in {
+                    errno.EACCES,
+                    errno.EAGAIN,
+                    getattr(errno, "EDEADLOCK", 36),
+                }
+                last_error = error
+            if not retryable:
+                raise last_error
             if nonblocking:
-                raise BlockingIOError(errno.EAGAIN, str(error), str(target)) from error
-            raise
-        except OSError as error:
-            if nonblocking and error.errno in {
-                errno.EACCES,
-                errno.EAGAIN,
-                getattr(errno, "EDEADLOCK", 36),
-            }:
-                raise BlockingIOError(errno.EAGAIN, str(error), str(target)) from error
-            raise
+                raise BlockingIOError(
+                    errno.EAGAIN, str(last_error), str(target)
+                ) from last_error
+            if waited >= max_wait:
+                raise TimeoutError(
+                    f"获取文件锁超时: {target}"
+                ) from last_error
+            sleep_for = min(delay, max_wait - waited)
+            time.sleep(sleep_for)
+            waited += sleep_for
+            delay = min(0.1, delay * 1.5)
     except BaseException:
         if fd >= 0:
             os.close(fd)

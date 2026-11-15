@@ -68,9 +68,18 @@ def _playwright_render_hint(message: str) -> str:
 
 class AgentRuntime(Scout):
     def __init__(
-        self, host, root, store, settings, vault, *, authorized, web_provider="auto"
+        self,
+        host,
+        root,
+        store,
+        settings,
+        vault,
+        *,
+        authorized,
+        web_provider="auto",
+        tz_offset_minutes=None,
     ):
-        super().__init__(host, vault.redact)
+        super().__init__(host, vault.redact, tz_offset_minutes=tz_offset_minutes)
         self.store, self.vault, self.authorized = store, vault, authorized
         self.sandbox = Sandbox(
             settings, store, redact=vault.redact, authorized=authorized
@@ -200,7 +209,7 @@ class AgentRuntime(Scout):
             ):
                 raise PermissionError("角色引用的服务、模板或只读 API 尚未登记")
 
-    async def step(self, profile, history, *, max_steps=None):
+    async def step(self, profile, history, *, max_steps=None, tz_offset_minutes=None):
         profile = await completed_thread(self.resolve_profile, profile)
         await completed_thread(self.available, profile)
         if self.memory:
@@ -240,6 +249,10 @@ class AgentRuntime(Scout):
                 instructions=profile.instructions
                 + "\n已授权的跨插件 API："
                 + json.dumps(api_descriptions, ensure_ascii=False),
+            )
+        if tz_offset_minutes is not None:
+            return await super().step(
+                profile, history, tz_offset_minutes=tz_offset_minutes
             )
         return await super().step(profile, history)
 
@@ -704,7 +717,10 @@ class AgentRuntime(Scout):
                 await completed_thread(work.commit)
                 return result
             if name == "html_render":
-                html_text = arguments.get("html") or ""
+                raw_html = arguments.get("html")
+                if raw_html is not None and not isinstance(raw_html, str):
+                    raise ValueError("html 必须为字符串")
+                html_text = raw_html if isinstance(raw_html, str) and raw_html.strip() else ""
                 if not html_text and arguments.get("html_path"):
                     def _read_html():
                         with regular_open(work.path, arguments["html_path"]) as src:
