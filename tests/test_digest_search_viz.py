@@ -872,3 +872,71 @@ async def test_collect_pool_caches_full_source_text_for_quote_and_viz_without_ec
         },
     )
     assert card_res["count"] == 5
+
+
+def test_score_select_quote_normalizes_cjk_punctuation_and_rejects_translation():
+    work = _MemoryWork()
+    dw = digest.DigestWorkspace(work)
+    chinese_src = (
+        "独立开发团队今天公布《山海行》试玩版更新："
+        "「两版做的是同一件事：先改剧情战，再改比武大会。」"
+        "测试期共有 3200 名玩家通关。"
+    )
+    res = dw.score_select(
+        [
+            {
+                "title": "《山海行》更新战斗与比武大会节奏",
+                "url": "https://indie-zh.example/shanhai-1",
+                "source_text": chinese_src,
+                "quote": '「两版做的是同一件事：先改剧情战，再改比武大会。」',
+                "brief": "独立团队重写了《山海行》剧情战与比武大会难度曲线，测试期已有 3200 名玩家通关新版关卡。",
+                "why": "战斗节奏直接大改，值得试试新版手感。",
+                "topic": "开发日志",
+                "source": "IndieZH",
+                "info": 5,
+                "source_score": 5,
+                "relevance": 5,
+                "timeliness": 5,
+                "chat": 4,
+            },
+            {
+                "title": "中文弯引号规范化也应命中原文",
+                "url": "https://indie-zh.example/shanhai-2",
+                "source_text": chinese_src,
+                "quote": '"两版做的是同一件事：先改剧情战，再改比武大会。"',
+                "brief": "另一条用直双引号引用同一中文原句的测试条目，验证弯引号与直角引号可正常对齐通过。",
+                "why": "核验不同引号形态不会误杀原语言引文。",
+                "topic": "开发日志",
+                "source": "IndieZH2",
+                "info": 5,
+                "source_score": 5,
+                "relevance": 5,
+                "timeliness": 5,
+                "chat": 4,
+            },
+            {
+                "title": "把中文原文翻译成英文 quote 必须拒绝",
+                "url": "https://indie-zh.example/shanhai-3",
+                "source_text": chinese_src,
+                "quote": "The two versions did the same thing: first story battles, then the tournament.",
+                "brief": "模拟模型把中文 source_text 翻译成英文 quote 提交给核验接口的场景，检验严格拒收提示。",
+                "why": "防止跨语言意译绕过逐字对照。",
+                "topic": "防翻译绕过",
+                "source": "IndieZH3",
+                "info": 5,
+                "source_score": 5,
+                "relevance": 5,
+                "timeliness": 5,
+                "chat": 4,
+            },
+        ],
+        max_items=5,
+    )
+    assert len(res["selected"]) == 2
+    assert {item["url"] for item in res["selected"]} == {
+        "https://indie-zh.example/shanhai-1",
+        "https://indie-zh.example/shanhai-2",
+    }
+    assert len(res["rejected"]) == 1
+    assert res["rejected"][0]["url"] == "https://indie-zh.example/shanhai-3"
+    assert "原语言逐字复制" in res["rejected"][0]["reject_reason"]

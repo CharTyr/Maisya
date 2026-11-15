@@ -25,6 +25,25 @@ from . import digest_card, viz_spec
 
 DAYS_TO_SECS = 86400.0
 UTC8_OFFSET = 8 * 3600.0
+_QUOTE_PUNCT_TRANS = str.maketrans(
+    {
+        "“": '"',
+        "”": '"',
+        "「": '"',
+        "」": '"',
+        "『": '"',
+        "』": '"',
+        "‘": "'",
+        "’": "'",
+        "—": "-",
+        "–": "-",
+    }
+)
+
+
+def _norm_quote_match(text: object) -> str:
+    """规范化空白与常见中英文引号/破折号用于原文逐字核验（不跨语言翻译）。"""
+    return re.sub(r"\s+", " ", str(text or "").translate(_QUOTE_PUNCT_TRANS)).strip().lower()
 
 
 def _numeric_score(value: object) -> float | None:
@@ -2634,18 +2653,19 @@ class DigestWorkspace:
             )
             source_text = item.get("source_text")
             quote = str(item.get("quote") or "").strip()
+            reject_quote_msg = "引用片段未能在原文中找到对照依据（quote 必须从 source_text 原语言逐字复制，严禁翻译或改写）"
             if source_text is not None:
-                norm_src = re.sub(r"\s+", " ", str(source_text)).strip().lower()
-                norm_quote = re.sub(r"\s+", " ", quote).strip().lower()
+                norm_src = _norm_quote_match(str(source_text))
+                norm_quote = _norm_quote_match(quote)
                 if not norm_quote or norm_quote not in norm_src:
-                    item["reject_reason"] = "引用片段未能在原文中找到对照依据"
+                    item["reject_reason"] = reject_quote_msg
                     rejected.append(item)
                     continue
             elif quote and pool_source_text:
-                norm_src = re.sub(r"\s+", " ", pool_source_text).strip().lower()
-                norm_quote = re.sub(r"\s+", " ", quote).strip().lower()
-                if norm_quote not in norm_src:
-                    item["reject_reason"] = "引用片段未能在原文中找到对照依据"
+                norm_src = _norm_quote_match(pool_source_text)
+                norm_quote = _norm_quote_match(quote)
+                if not norm_quote or norm_quote not in norm_src:
+                    item["reject_reason"] = reject_quote_msg
                     rejected.append(item)
                     continue
 

@@ -8,7 +8,7 @@ description: 资讯简报标准与验真技能：一站式 collect 采编、发�
 ## 0. 高效四步采集流
 1. 读当前会话与会话手账偏好（`chat_read` / `message_read` / `memory_read`），明确近期兴趣、读者背景、正负反馈与应避开的已推/聊透话题。
 2. 将当前关注主题拆分为 **3~4 个不同子方向**（如：新作发布与实机进展、开发者日志与机制拆解、口碑销量与在线硬数据、垂直媒体专访与工具引擎动态），构造 **8~12 组中英文具体短词**（2~6 个词，避免宽泛主页词），**一次调用** `digest_feed(action="collect", queries=[...], topics=[...], max_items=20)` 完成：冷启动自动试订精选初始源、轮询订阅、多引擎广搜、程序化剔除首页/年月归档/百科、并发抓取原文 `source_text` 并缓存完整正文至工作区池 `digest_pool.json`、提取精确发布时间、`image_url` 与 `has_numbers` 标记，以及独立博客 RSS 顺手试订。无需再手工循环十几次单引擎搜索；若当前活跃订阅不足 6 个，可按需顺手调用一次 `seed` 补全同类一手源。
-3. 目标尽量精选 **3~5 条**高信噪比条目（宁缺毋滥，若池子不足 3 条高分内容不硬凑），按下方采编规范撰写中文 `title` / `brief`（110~180 字，2~4 句）/ `why`（<= 55 字）/ `topic` / `source`、抽取可逐字命中的 `quote` 并评五维分，交给 `digest_feed(action="score_select", max_items=5)`（`collect` 己缓存原文，提交时**无需在参数里重复粘贴长段 `source_text`**，把输出空间留给丰富中文摘要和 `viz` 图解）；优先保留 `collect` 返回的 `image_url`，当 `has_numbers` 为真且原文确有可核实数据对比/里程碑时（尤其无封面配图的条目）积极附带轻量 `viz` 图解。
+3. 目标是在池子素材充足时稳定成卡 **4~5 条**高信噪比条目（宁缺毋滥，仅在池子确实不足时少选）。为避免个别候选因历史去重或核验被过滤导致成卡偏少，请在池子充足时**在单次 `digest_feed(action="score_select", max_items=5)` 调用中一次提交 `5~7` 条高分候选作为筛选余量**；按下方采编规范撰写中文 `title` / `brief`（110~180 字，2~4 句）/ `why`（<= 55 字）/ `topic` / `source`、抽取**保持原文语言逐字复制的 `quote`（中文原文复制中文原句、英文原文复制英文原句，严禁跨语言翻译）**并评五维分（`collect` 已缓存原文，提交时**无需在参数里重复粘贴长段 `source_text`**）；优先保留 `collect` 返回的 `image_url`，当 `has_numbers` 为真且原文确有可核实数据对比/里程碑时（尤其无封面配图的条目）积极附带轻量 `viz` 图解。
 4. 若有入选，执行 `digest_feed(action="render_card_html", group_title="<会话名称或专题>", slot_label="<时段>", max_items=5, output_path="out/digest-card.html")` → `html_render(html_path="out/digest-card.html", output_path="out/digest-card.png", width=600, selector=".card")` → `result_attach(paths=["out/digest-card.png"])`；零条入选时安静收尾。
 
 ## 1. 找源与试订纪律
@@ -23,8 +23,8 @@ description: 资讯简报标准与验真技能：一站式 collect 采编、发�
 - **点睛推荐 `why`（必填，<= 55 字）**：每条必须填写 1 句中文点睛，说明为什么值得当前读者关心或讨论。
 - **话题标签 `topic`（<= 6 字）**：用 2~4 字中文短词标注（如 `系统工程` / `AI工具` / `开源协议`）。
 - **干净来源 `source`（<= 20 字符）**：只填干净的媒体名或域名（如 `Cloudflare Blog`、`simonwillison.net`），严禁填大模型评语或内部打分数字。
-- **原文核验**：先核对 `collect` 抓回的原文或 `web_fetch` 补抓内容，不靠搜索摘要拍脑袋；每个候选都给出可逐字命中原文的 `quote`（`collect` 已缓存 `source_text` 至候选池，`score_select` 会对照缓存池或参数里的 `source_text` 自动验真）。
-- **图解严格防幻觉**：当原文确有两组以上清晰可对比数值、排行或阶段节点（`has_numbers == true`）时，**尤其对于缺少封面配图的条目**，积极附带 `viz`（仅用标准 `viz_spec` 组件：`stat` / `stats` / `compare` / `bars` / `line` / `share` / `timeline` / `table` / `list` / `takeaway`；注意：`bars`/`share`/`stats`/`timeline` 均使用 `items` 数组，其中 `timeline` 每项含 `time`+`title`、`share` 每项含 `label`+非负 `value`），图解中出现的所有数值必须能在 `source_text` 找到依据。`score_select` 校验图解失败时只会丢弃该条图解，不会误杀新闻本体。
+- **原文核验**：先核对 `collect` 抓回的原文或 `web_fetch` 补抓内容，不靠搜索摘要拍脑袋；每个候选的 `quote` **必须保持与该条 `source_text` 同一语言逐字复制**（中文原文复制中文原句、英文原文复制英文原句，**严禁将中文原文翻译成英文或改写词句**；`collect` 已缓存 `source_text` 至候选池，`score_select` 会对照缓存池或参数里的 `source_text` 自动验真）。
+- **图解严格防幻觉**：当原文确有两组以上清晰可对比数值、排行或阶段节点（`has_numbers == true`）时，**尤其对于缺少封面配图的条目**，积极附带 `viz`（仅用标准 `viz_spec` 组件，注意类型键名为 `"type"`：`stat` / `stats` / `compare` / `bars` / `line` / `share` / `timeline` / `table` / `list` / `takeaway`；其中 `bars`/`share`/`stats`/`timeline` 均使用 `items` 数组，数值类 `value` 填有限数字、单位写进 `"unit"` 或 `"display"`，`timeline` 每项含 `time`+`title`，`share` 每项含 `label`+非负 `value`），图解中出现的所有数值必须能在 `source_text` 找到依据。`score_select` 校验图解失败时只会丢弃该条图解，不会误杀新闻本体。
 - **时效与去噪红线**：新闻类超过 7 天直接淘汰；教程/指南类缺明确发布时间或超过 60 天直接淘汰。付费墙、纯转发二手水文、首页或 `/2026/` 索引页、百科词条、未命中高相关兴趣的政务/司法宣传、近 14 天已出现过或近 3 天同话题已达 3 条上限的内容一律过滤。每轮教程/指南类最多保留 1 篇；同件事只保留信息量与一手度最高的一篇。
 
 ## 3. 五维核心分 + 探索视野
