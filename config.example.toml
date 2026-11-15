@@ -1,32 +1,41 @@
+# Maisya 插件最简配置模板（高级预算项保持内置自适应默认值）
+
+# 插件侧管理员列表（与宿主 plugin.permission 合并生效；纯数字自动按 qq 处理，严格保留 user_id 大小写）
+# 示例: admins = ["qq:10001"]
+admins = []
+
+# 高风险操作确认策略: "ask_risky"（默认，关键更改前询问）| "autonomous" | "always_ask"
+permission_mode = "ask_risky"
+
+# 启用 Maisya 的会话白名单（核验后的管理员私聊默认直接可用）
+# 示例: enabled_chats = ["qq:group:100246809", "qq:private:10001"]
 enabled_chats = []
-agent_max_steps = 16
-agent_timeout = 180
-agent_max_active = 8
-thread_idle_seconds = 900
-thread_context_tokens = 262144
-thread_context_chars = 48000
-web_provider = "auto"
+
+# 全局主模型覆盖（留空则跟随 MaiBot 宿主任务槽与档案设置）
+default_model = ""
+
+# 管理台主题: "millennium"（默认千禧机械）| "modern"（现代极简）| "auto"
+ui_style = "millennium"
+
+# 主动节律与免打扰设置
 sleep_window = ""
 proactive_level = "care"
-longing_quiet_hours = 0
-acquaintance_users = []
+heartbeat_interval_minutes = 60
 
 [chat_proactive_levels]
 
 [plugin]
+# 插件总开关（也可在首次安装引导或 WebUI 设置页开启）
 enabled = false
 config_version = "0.1.0"
 
 [sandbox]
+# 可选 Docker 隔离执行层（开启后主要用于非管理员轮次隔离）
 enabled = false
-image = ""
+image = "maisya-sandbox:latest"
 socket = "unix:///var/run/docker.sock"
-runtime = "runsc"
-subnet = "172.30.253.0/24"
-dns = ["1.1.1.1"]
-host_addresses = []
-memory_mib = 512
-work_mib = 256
-timeout = 60
-output_bytes = 2097152
-max_concurrent = 2
+# 留空使用默认容器运行时，也可填 "runc" / "runsc"
+runtime = ""
+network_mode = "none"
+readonly_rootfs = true
+privileged_sandbox_mode = false

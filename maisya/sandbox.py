@@ -10,10 +10,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -25,6 +27,18 @@ from .pathsafe import (
     rmtree_safe,
     safe_chmod,
 )
+from .runner import (
+    ApprovalRequired,
+    ExecutionRequest,
+    ExecutionResult,
+    _clamp_output_bytes,
+    _clamp_timeout,
+    _command_preview,
+    _decode_and_redact,
+    assess_execution_risk,
+)
+from .trust import PERMISSION_MODES, PermissionGrantStore
+from .vault import Vault, VaultError
 from .workspaces import completed_thread
 
 
@@ -62,11 +76,14 @@ MINIMAL_ENV = {
 
 
 class SandboxSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     enabled: bool = False
-    image: str = ""
+    image: str = "maisya-sandbox:latest"
     socket: str = "unix:///var/run/docker.sock"
-    runtime: str = "runsc"
+    runtime: str = ""
+    privileged_sandbox_mode: bool = False
+    network_mode: Literal["none", "bridge", "host", "restricted"] = "none"
+    readonly_rootfs: bool = True
     subnet: str = "172.30.253.0/24"
     dns: list[str] = Field(default_factory=lambda: ["1.1.1.1"])
     host_addresses: list[str] = Field(default_factory=list)
@@ -82,15 +99,26 @@ class SandboxSettings(BaseModel):
             r"unix:///[A-Za-z0-9_./-]+", self.socket
         ) or ".." in self.socket.split("/"):
             raise ValueError("Docker 连接只接受本机 Unix socket")
-        if (
-            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,40}", self.runtime)
-            or self.runtime == "runc"
-        ):
-            raise ValueError("沙箱只接受专用隔离运行时")
-        if self.enabled and not re.fullmatch(
-            r"(?:[A-Za-z0-9][A-Za-z0-9._/:_-]*@)?sha256:[a-f0-9]{64}", self.image
-        ):
-            raise ValueError("启用沙箱需要固定 digest 的镜像")
+        if self.runtime:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,40}", self.runtime):
+                raise ValueError("容器运行时标识无效")
+            if self.privileged_sandbox_mode and self.runtime == "runc":
+                raise ValueError("严格沙箱模式只接受专用隔离运行时")
+        elif self.privileged_sandbox_mode:
+            raise ValueError("严格沙箱模式需显式指定隔离运行时（如 runsc）")
+        if self.enabled:
+            if not self.image or ".." in self.image:
+                raise ValueError("启用容器执行需要指定有效镜像")
+            if self.privileged_sandbox_mode:
+                if not re.fullmatch(
+                    r"(?:[A-Za-z0-9][A-Za-z0-9._/:_-]*@)?sha256:[a-f0-9]{64}",
+                    self.image,
+                ):
+                    raise ValueError("严格沙箱模式需要固定 digest 的镜像")
+            elif not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}", self.image
+            ):
+                raise ValueError("容器镜像名称或标签格式无效")
         subnet = ipaddress.ip_network(self.subnet, strict=True)
         if subnet.version != 4 or subnet.prefixlen != 24 or not subnet.is_private:
             raise ValueError("沙箱子网必须是独立的小型私有 IPv4 网段")
@@ -186,6 +214,7 @@ table bridge {table} {{
 class ProcessResult:
     code: int
     output: str
+    stderr: str = ""
 
 
 async def process(arguments, *, timeout=20, output_bytes=2097152, stdin=None):
@@ -354,28 +383,34 @@ class Sandbox:
     async def probe(self):
         if not self.settings.enabled and not await completed_thread(self._resources):
             return False
-        if (
-            not sys.platform.startswith("linux")
-            or os.geteuid() != 0
-            or any(
-                not shutil.which(name)
-                for name in ("docker", "nft", "mount", "umount", "ip", "findmnt")
-            )
-        ):
-            self.error = "沙箱需要 Linux、本机 Docker、nft 和受限挂载权限"
+        if self.settings.privileged_sandbox_mode:
+            if (
+                not sys.platform.startswith("linux")
+                or os.geteuid() != 0
+                or any(
+                    not shutil.which(name)
+                    for name in ("docker", "nft", "mount", "umount", "ip", "findmnt")
+                )
+            ):
+                self.error = "沙箱需要 Linux、本机 Docker、nft 和受限挂载权限"
+                return False
+        elif not shutil.which("docker"):
+            self.error = "未检测到本机 docker 命令"
             return False
         try:
             await completed_thread(self._lock_instance)
             info = json.loads(
                 (await self.docker("info", "--format", "{{json .}}")).output
             )
-            if (
-                self.settings.runtime not in info.get("Runtimes", {})
-                or info.get("CgroupVersion") != "2"
+            if self.settings.runtime and self.settings.runtime not in info.get(
+                "Runtimes", {}
             ):
-                raise RuntimeError("缺少专用运行时或 cgroup v2")
-            if (await self.runner(["nft", "list", "tables"])).code:
-                raise RuntimeError("无法读取防火墙规则")
+                raise RuntimeError(f"缺少指定容器运行时：{self.settings.runtime}")
+            if self.settings.privileged_sandbox_mode:
+                if info.get("CgroupVersion") != "2":
+                    raise RuntimeError("严格沙箱需要 cgroup v2")
+                if (await self.runner(["nft", "list", "tables"])).code:
+                    raise RuntimeError("无法读取防火墙规则")
             await self._recover_resources()
             if not self.settings.enabled:
                 return False
@@ -830,11 +865,14 @@ class Sandbox:
                     container,
                     "--label",
                     "maisya.instance=" + self.instance,
-                    "--runtime",
-                    self.settings.runtime,
+                    *(
+                        ["--runtime", self.settings.runtime]
+                        if self.settings.runtime
+                        else []
+                    ),
                     "--network",
                     network,
-                    "--read-only",
+                    *(["--read-only"] if self.settings.readonly_rootfs else []),
                     "--user",
                     "10000:10000",
                     "--cap-drop",
@@ -1110,3 +1148,300 @@ class Sandbox:
         if self.instance_lock is not None:
             release_lock_handle(self.instance_lock)
             self.instance_lock = None
+
+
+_DOCKER_BLOCKED_ENV = frozenset(
+    {"PATH", "HOME", "PYTHONPATH", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+)
+
+
+class DockerRunner:
+    """低门槛 Docker 工作区执行器（兼容普通 tag、可选 runtime、只读/网络配置与秘密脱敏）。"""
+
+    name = "docker"
+
+    def __init__(
+        self,
+        settings: SandboxSettings | None = None,
+        *,
+        vault: Vault | None = None,
+        grants: PermissionGrantStore | None = None,
+        cli_runner=None,
+    ):
+        self.settings = settings or SandboxSettings()
+        self.vault = vault
+        self.grants = grants
+        self.cli_runner = cli_runner or process
+
+    def build_create_args(
+        self,
+        request: ExecutionRequest,
+        *,
+        container: str,
+        secret_files: dict[str, Path] | None = None,
+    ) -> list[str]:
+        args = [
+            "create",
+            "--pull",
+            "never",
+            "--name",
+            container,
+        ]
+        if self.settings.runtime:
+            args += ["--runtime", self.settings.runtime]
+        args += ["--network", self.settings.network_mode]
+        if self.settings.readonly_rootfs:
+            args.append("--read-only")
+        args += [
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "128",
+            "--cpus",
+            "1",
+            "--memory",
+            f"{self.settings.memory_mib}m",
+            "--memory-swap",
+            f"{self.settings.memory_mib}m",
+            "--workdir",
+            "/work/project",
+            "--env",
+            "PYTHONNOUSERSITE=1",
+        ]
+        ws_resolved = Path(request.workspace).resolve()
+        args += ["--mount", f"type=bind,src={ws_resolved},dst=/work/project"]
+        for key, value in (request.env or {}).items():
+            key_u = str(key).upper()
+            if (
+                not key_u
+                or key_u in _DOCKER_BLOCKED_ENV
+                or key_u.startswith(("LD_", "DYLD_"))
+            ):
+                continue
+            args += ["--env", f"{key}={value}"]
+        for handle, host_path in (secret_files or {}).items():
+            args += [
+                "--mount",
+                f"type=bind,src={host_path},dst=/run/secrets/{handle},readonly",
+            ]
+        args.append(self.settings.image)
+        if isinstance(request.command, str) or request.shell:
+            args += ["/bin/sh", "-c", _command_preview(request.command)]
+        else:
+            args += [str(part) for part in request.command]
+        return args
+
+    def _evaluate_gate(self, request: ExecutionRequest) -> ApprovalRequired | None:
+        if request.permission_mode not in PERMISSION_MODES:
+            raise ValueError(f"无效的权限模式：{request.permission_mode!r}")
+        if request.permission_mode == "autonomous":
+            return None
+
+        risk_level, category, action_key, reason = assess_execution_risk(request)
+        # Inside container, container paths (/work/project, /etc/os-release) are isolated;
+        # escalate only secrets, destructive ops, explicit risk hints, or host network mode.
+        if (
+            category == "path_escape"
+            and not request.secrets
+            and self.settings.network_mode != "host"
+        ):
+            risk_level = "low"
+            category = "workspace"
+            reason = "容器工作区执行"
+        if self.settings.network_mode == "host" and risk_level == "low":
+            risk_level = "risky"
+            category = "external_write"
+            action_key = request.action_key or "docker:host_network"
+            reason = "容器启用了 host 网络模式，需要管理员确认"
+
+        if request.permission_mode == "ask_risky" and risk_level == "low":
+            return None
+
+        scope = request.scope or "*"
+        if self.grants is not None and self.grants.check_or_consume(
+            scope=scope,
+            action_key=action_key,
+            session_id=request.session_id,
+        ):
+            return None
+
+        return ApprovalRequired(
+            reason=reason
+            if risk_level == "risky"
+            else "当前权限模式（always_ask）要求确认每次容器执行",
+            action_key=action_key,
+            risk_level=risk_level,
+            command=request.command,
+            scope=scope,
+            category=category if risk_level == "risky" else "always_ask",
+            targets=request.targets,
+        )
+
+    async def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        if not self.settings.enabled:
+            return ExecutionResult(
+                status="denied",
+                error="Docker 沙箱未启用",
+                runner_name=self.name,
+            )
+
+        ws = Path(request.workspace)
+        if path_is_link_like(ws) or not ws.exists() or not ws.is_dir():
+            return ExecutionResult(
+                status="denied",
+                error="工作区路径无效或包含符号链接",
+                runner_name=self.name,
+            )
+
+        if not request.is_admin and request.secrets:
+            return ExecutionResult(
+                status="denied",
+                error="非管理员禁止向容器注入保险箱凭据",
+                runner_name=self.name,
+            )
+
+        approval = self._evaluate_gate(request)
+        if approval is not None:
+            return ExecutionResult(
+                status="approval_required",
+                approval_required=approval,
+                error=approval.reason,
+                runner_name=self.name,
+            )
+
+        secret_files: dict[str, Path] = {}
+        secret_values: list[str] = list(request.extra_redactions)
+        secrets_dir: Path | None = None
+        if request.secrets:
+            if self.vault is None:
+                return ExecutionResult(
+                    status="error",
+                    error="未配置凭据保险箱，无法向容器挂载凭据",
+                    runner_name=self.name,
+                )
+            try:
+                secrets_dir = Path(tempfile.mkdtemp(prefix="maisya-dsec-"))
+                safe_chmod(secrets_dir, 0o700)
+                for handle in request.secrets:
+                    secret_val = self.vault.for_execution(handle)
+                    secret_values.append(secret_val)
+                    secret_path = secrets_dir / handle
+                    secret_path.write_text(secret_val, encoding="utf-8")
+                    safe_chmod(secret_path, 0o400)
+                    secret_files[handle] = secret_path
+            except (VaultError, ValueError, OSError) as exc:
+                if secrets_dir is not None:
+                    rmtree_safe(secrets_dir)
+                return ExecutionResult(
+                    status="error",
+                    error=str(exc),
+                    runner_name=self.name,
+                )
+
+        container = "maisya-run-" + uuid.uuid4().hex[:12]
+        timeout = _clamp_timeout(min(request.timeout, float(self.settings.timeout)))
+        output_limit = _clamp_output_bytes(
+            min(request.output_bytes, int(self.settings.output_bytes))
+        )
+        create_args = self.build_create_args(
+            request, container=container, secret_files=secret_files
+        )
+        created = False
+        try:
+            create_res = await self.cli_runner(
+                ["docker", "--host", self.settings.socket, *create_args],
+                timeout=20,
+            )
+            if create_res.code != 0:
+                err_txt, _ = _decode_and_redact(
+                    (create_res.stderr or create_res.output).encode("utf-8", errors="replace"),
+                    limit=output_limit,
+                    vault=self.vault,
+                    secret_values=secret_values,
+                )
+                return ExecutionResult(
+                    status="error",
+                    exit_code=create_res.code,
+                    stderr=err_txt,
+                    error="容器创建失败",
+                    runner_name=self.name,
+                )
+            created = True
+            start_res = await self.cli_runner(
+                ["docker", "--host", self.settings.socket, "start", "--attach", container],
+                timeout=timeout,
+                output_bytes=output_limit,
+            )
+            exit_code = int(start_res.code)
+            try:
+                inspect_res = await self.cli_runner(
+                    [
+                        "docker",
+                        "--host",
+                        self.settings.socket,
+                        "inspect",
+                        "--format",
+                        "{{json .State}}",
+                        container,
+                    ],
+                    timeout=10,
+                )
+                if inspect_res.code == 0 and inspect_res.output.strip():
+                    state = json.loads(inspect_res.output)
+                    if isinstance(state, dict) and "ExitCode" in state:
+                        exit_code = int(state["ExitCode"])
+            except (OSError, ValueError, RuntimeError, TypeError):
+                pass
+            stdout, trunc_out = _decode_and_redact(
+                (start_res.output or "").encode("utf-8", errors="replace"),
+                limit=output_limit,
+                vault=self.vault,
+                secret_values=secret_values,
+            )
+            stderr, trunc_err = _decode_and_redact(
+                (getattr(start_res, "stderr", "") or "").encode("utf-8", errors="replace"),
+                limit=output_limit,
+                vault=self.vault,
+                secret_values=secret_values,
+            )
+            return ExecutionResult(
+                status="ok" if exit_code == 0 else "error",
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                truncated=trunc_out or trunc_err,
+                error="" if exit_code == 0 else f"容器退出码 {exit_code}",
+                runner_name=self.name,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            return ExecutionResult(
+                status="timeout",
+                exit_code=None,
+                error=f"容器执行超时（>{timeout}s）",
+                runner_name=self.name,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            err_msg, _ = _decode_and_redact(
+                str(exc).encode("utf-8", errors="replace"),
+                limit=output_limit,
+                vault=self.vault,
+                secret_values=secret_values,
+            )
+            return ExecutionResult(
+                status="error",
+                error=err_msg,
+                runner_name=self.name,
+            )
+        finally:
+            if created:
+                try:
+                    await self.cli_runner(
+                        ["docker", "--host", self.settings.socket, "rm", "--force", container],
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+            if secrets_dir is not None:
+                rmtree_safe(secrets_dir)
