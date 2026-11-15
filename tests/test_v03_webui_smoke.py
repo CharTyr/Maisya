@@ -290,7 +290,8 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             version: 1,
             ui_style: state.ui_style,
             permission_mode: state.permission_mode,
-            known_chats: state.known_chats,
+            known_chats: state.known_chats.map((cid) => ({{ stream_spec: cid, chat_id: cid, name: cid }})),
+            known_chat_specs: state.known_chats,
             enabled_chats: state.enabled_chats,
             admins_info: {{ host_admins: state.host_admins, plugin_admins: state.plugin_admins }},
             grants: state.grants,
@@ -568,10 +569,13 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         page.locator("#lib-fs-delete").click()
         page.wait_for_timeout(50)
 
-        # 6. 设置页：4 块结构 + 防自锁死报错 + Vault 只存不显 + fields 仅传字段名数组
+        # 6. 设置页：4 块结构 + known_chat_specs/list[dict] 会话不显 [object Object] + 防自锁死报错 + Vault 只存不显
         page.locator('[data-nav="settings"]').click()
         for blk in ("#set-block-chats", "#set-block-auth", "#set-block-vault", "#set-block-runtime"):
             page.locator(blk).wait_for(state="visible")
+        chat_list_txt = page.locator("#set-chat-list").inner_text()
+        assert "qq:group:100246809" in chat_list_txt and "qq:group:200112233" in chat_list_txt
+        assert "object Object" not in chat_list_txt
 
         # 尝试移除最后一位管理员 -> 触发防自锁死错误提示
         page.locator('[data-set-del-admin="qq:private:10001"]').click()

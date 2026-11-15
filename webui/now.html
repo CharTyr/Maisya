@@ -5137,7 +5137,15 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
     const hostAdmins = info.host_admins || adminsInfo.host_admins || [];
     const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || info.settings_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
     const recentDms = info.recent_dms || state.lastSnap?.recent_dms || [];
-    const knownChats = info.known_chats || state.lastSnap?.known_chats || state.lastSnap?.enabled_chats || [];
+    const rawKnownChats = (Array.isArray(info.known_chat_specs) && info.known_chat_specs.length ? info.known_chat_specs : null)
+      || info.known_chats
+      || state.lastSnap?.known_chat_specs
+      || state.lastSnap?.known_chats
+      || state.lastSnap?.enabled_chats
+      || [];
+    const knownChats = rawKnownChats
+      .map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || "")))
+      .filter(Boolean);
     const enabledChats = onb.draftChats ?? (info.enabled_chats || state.lastSnap?.enabled_chats || []);
     const models = (Array.isArray(info.model_catalog) && info.model_catalog.length ? info.model_catalog : null)
       || info.models
@@ -6661,7 +6669,12 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       sState.version = res.version ?? null;
       const set = res.settings || res;
       sState.enabledChats = [...(set.enabled_chats || res.enabled_chats || [])];
-      sState.knownChats = [...(res.known_chats || sState.enabledChats)];
+      const rawKnown = Array.isArray(res.known_chat_specs) && res.known_chat_specs.length
+        ? res.known_chat_specs
+        : (res.known_chats || sState.enabledChats);
+      sState.knownChats = rawKnown
+        .map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || "")))
+        .filter(Boolean);
       const ai = res.admins_info || {};
       sState.hostAdmins = [...(ai.host_admins || [])];
       sState.pluginAdmins = [...(ai.plugin_admins || ai.settings_admins || set.admins || [])];

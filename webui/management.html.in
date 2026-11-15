@@ -1595,7 +1595,12 @@
       sState.version = res.version ?? null;
       const set = res.settings || res;
       sState.enabledChats = [...(set.enabled_chats || res.enabled_chats || [])];
-      sState.knownChats = [...(res.known_chats || sState.enabledChats)];
+      const rawKnown = Array.isArray(res.known_chat_specs) && res.known_chat_specs.length
+        ? res.known_chat_specs
+        : (res.known_chats || sState.enabledChats);
+      sState.knownChats = rawKnown
+        .map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || "")))
+        .filter(Boolean);
       const ai = res.admins_info || {};
       sState.hostAdmins = [...(ai.host_admins || [])];
       sState.pluginAdmins = [...(ai.plugin_admins || ai.settings_admins || set.admins || [])];
