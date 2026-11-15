@@ -23,6 +23,7 @@ from .abilities import (
     TASK_RE,
     TOOLSETS,
     _TOOLSET_LABELS,
+    _serialize_profile_dict,
     _validate_instructions,
 )
 from .config import Settings, canonical_ui_style
@@ -485,7 +486,7 @@ class Management:
             cfg.pop("task", None)
         elif slot is not None:
             cfg["task"] = slot
-        rendered = serialize_profile_toml(cfg)
+        rendered = _serialize_profile_dict(cfg)
         saved = self.plugin.memory.write(
             "profile",
             rendered,
@@ -3808,7 +3809,7 @@ class Management:
                 raise ValueError("周期执行间隔至少 300 秒")
             mode = str(options.get("mode") or ("watch" if options.get("condition") else "")).strip()
             condition = str(options.get("condition") or "").strip()
-            kind = str(options.get("kind") or ("watch" if mode == "watch" else "return")).strip() or "return"
+            kind = str(options.get("kind") or "return").strip() or "return"
             payload = {
                 "platform": explicit_platform or resolved_platform or "qq",
                 "profile": profile_name or str(plugin.settings.heartbeat_profile or "default"),

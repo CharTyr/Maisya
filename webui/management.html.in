@@ -1742,7 +1742,7 @@
       if (themeChoice) {
         const nextT = themeChoice.dataset.themeChoice;
         $$("#set-theme-seg [data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b === themeChoice)));
-        setUiStylePreference(nextT);
+        await setUiStylePreference(nextT);
         return;
       }
     }, { signal: sig });
@@ -1773,6 +1773,19 @@
       if (disposed || sig?.aborted || activePage !== "settings") return;
       const t = ev.detail?.theme || normalizeThemePref(manualUiStyle || savedUiStyle);
       $$("#set-theme-seg [data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === t)));
+    }, { signal: sig });
+
+    window.addEventListener("maisya:ui-style-saved", (ev) => {
+      if (disposed || sig?.aborted || activePage !== "settings") return;
+      const nextStyle = ev?.detail?.uiStyle;
+      if (ev?.detail?.version != null) sState.version = ev.detail.version;
+      if (nextStyle && sState.data) {
+        sState.data.ui_style = nextStyle;
+        if (sState.data.settings) sState.data.settings.ui_style = nextStyle;
+      }
+      if (nextStyle) {
+        $$("#set-theme-seg [data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === nextStyle)));
+      }
     }, { signal: sig });
 
     loadSettings();

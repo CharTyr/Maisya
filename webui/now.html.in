@@ -744,7 +744,7 @@
       savedUiStyle = normalizeThemePref(res.ui_style || pref);
       manualUiStyle = "";
       applyTheme();
-      window.dispatchEvent(new CustomEvent("maisya:ui-style-saved", { detail: { uiStyle: savedUiStyle } }));
+      window.dispatchEvent(new CustomEvent("maisya:ui-style-saved", { detail: { uiStyle: savedUiStyle, version: res.version ?? null } }));
     } catch (err) {
       if (disposed || seq !== uiStyleSeq) return;
       manualUiStyle = prevManual;
