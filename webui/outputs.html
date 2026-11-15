@@ -3707,7 +3707,7 @@ html.dark .out-ico--ws { color: #fde047; }
   color: var(--mil-muted);
   flex: 0 0 auto;
 }
-#ms-mgmt-view .m-model-rank {
+#ms-mgmt-view .m-model-num {
   font-size: 11px;
   font-weight: 800;
   padding: 2px 7px;
@@ -3716,12 +3716,15 @@ html.dark .out-ico--ws { color: #fde047; }
   color: var(--mil-ink-2);
   flex: 0 0 auto;
 }
-#ms-mgmt-view .m-model-row.is-primary .m-model-rank {
+#ms-mgmt-view .m-model-row.is-primary .m-model-num {
   background: var(--mil-on);
   color: var(--mil-on-ink);
 }
-:root[data-ui-style="millennium"] #ms-mgmt-view .m-model-rank {
+:root[data-ui-style="millennium"] #ms-mgmt-view .m-model-num {
   border-radius: 0;
+}
+#ms-mgmt-view .mil-input[aria-invalid="true"] {
+  border-color: var(--mil-danger);
 }
 #ms-mgmt-view .m-model-name {
   flex: 1 1 auto;
@@ -7736,21 +7739,180 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       }));
     }
 
+    function scanTomlFragment(frag, st) {
+      for (let i = 0; i < frag.length; i++) {
+        const ch = frag[i];
+        if (st.mlQuote) {
+          if (frag.startsWith(st.mlQuote, i)) {
+            if (st.mlQuote === '"""') {
+              let bs = 0;
+              for (let k = i - 1; k >= 0 && frag[k] === "\\"; k--) bs++;
+              if (bs % 2 === 1) continue;
+            }
+            st.mlQuote = "";
+            i += 2;
+          } else if (st.mlQuote === '"""' && ch === "\\") {
+            i++;
+          }
+        } else if (st.inD) {
+          if (ch === "\\") i++;
+          else if (ch === "\"") st.inD = false;
+        } else if (st.inS) {
+          if (ch === "'") st.inS = false;
+        } else {
+          if (ch === "#") break;
+          if (frag.startsWith('"""', i)) { st.mlQuote = '"""'; i += 2; }
+          else if (frag.startsWith("'''", i)) { st.mlQuote = "'''"; i += 2; }
+          else if (ch === "\"") st.inD = true;
+          else if (ch === "'") st.inS = true;
+          else if (ch === "[" || ch === "{") st.arrDepth++;
+          else if (ch === "]" || ch === "}") st.arrDepth = Math.max(0, st.arrDepth - 1);
+        }
+      }
+    }
+
+    function scanRootToml(text) {
+      const lines = String(text || "").split(/\r?\n/);
+      let rootEnd = lines.length;
+      const statements = [];
+      let cur = null;
+      for (let idx = 0; idx < lines.length; idx++) {
+        const line = lines[idx];
+        if (cur) {
+          cur.parts.push(line);
+          cur.endLine = idx;
+          cur.state.inD = false;
+          cur.state.inS = false;
+          scanTomlFragment(line, cur.state);
+          if (!cur.state.mlQuote && cur.state.arrDepth === 0) {
+            statements.push(cur);
+            cur = null;
+          }
+          continue;
+        }
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        if (trimmed.startsWith("[")) {
+          rootEnd = idx;
+          break;
+        }
+        const m = trimmed.match(/^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*=\s*([\s\S]*)$/);
+        if (!m) continue;
+        const key = m[1] || m[2] || m[3];
+        const rhs = m[4];
+        const st = { mlQuote: "", inD: false, inS: false, arrDepth: 0 };
+        scanTomlFragment(rhs, st);
+        const stmt = { key, parts: [rhs], startLine: idx, endLine: idx, state: st };
+        if (st.mlQuote || st.arrDepth > 0) cur = stmt;
+        else statements.push(stmt);
+      }
+      if (cur) statements.push(cur);
+      return { lines, rootEnd, statements };
+    }
+
+    function stripTomlComments(raw) {
+      let out = "";
+      let mlQuote = "";
+      let inD = false;
+      let inS = false;
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (mlQuote) {
+          out += ch;
+          if (raw.startsWith(mlQuote, i)) {
+            let bs = 0;
+            if (mlQuote === '"""') for (let k = i - 1; k >= 0 && raw[k] === "\\"; k--) bs++;
+            if (bs % 2 === 0) {
+              out += raw.slice(i + 1, i + 3);
+              mlQuote = "";
+              i += 2;
+            }
+          } else if (mlQuote === '"""' && ch === "\\") {
+            if (i + 1 < raw.length) out += raw[++i];
+          }
+        } else if (inD) {
+          out += ch;
+          if (ch === "\\" && i + 1 < raw.length) out += raw[++i];
+          else if (ch === "\"") inD = false;
+        } else if (inS) {
+          out += ch;
+          if (ch === "'") inS = false;
+        } else {
+          if (ch === "#") {
+            while (i + 1 < raw.length && raw[i + 1] !== "\n") i++;
+            continue;
+          }
+          if (raw.startsWith('"""', i)) { mlQuote = '"""'; out += '"""'; i += 2; }
+          else if (raw.startsWith("'''", i)) { mlQuote = "'''"; out += "'''"; i += 2; }
+          else if (ch === "\"") { inD = true; out += ch; }
+          else if (ch === "'") { inS = true; out += ch; }
+          else out += ch;
+        }
+      }
+      return out.trim();
+    }
+
+    function parseTomlValue(raw) {
+      const v = stripTomlComments(raw);
+      if (!v) return "";
+      if (v === "true" || v === "false") return v === "true";
+      if (v.startsWith('"""') && v.endsWith('"""') && v.length >= 6) {
+        return v.slice(3, -3).replace(/^\r?\n/, "");
+      }
+      if (v.startsWith("'''") && v.endsWith("'''") && v.length >= 6) {
+        return v.slice(3, -3).replace(/^\r?\n/, "");
+      }
+      if (v.startsWith("\"") && v.endsWith("\"")) {
+        try { return JSON.parse(v); } catch { return v.slice(1, -1); }
+      }
+      if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
+        return v.slice(1, -1);
+      }
+      if (v.startsWith("[") && v.endsWith("]")) {
+        const inner = v.slice(1, -1);
+        const items = [];
+        let cur = "";
+        let inD = false, inS = false, depth = 0;
+        for (let i = 0; i < inner.length; i++) {
+          const ch = inner[i];
+          if (inD) {
+            cur += ch;
+            if (ch === "\\" && i + 1 < inner.length) cur += inner[++i];
+            else if (ch === "\"") inD = false;
+          } else if (inS) {
+            cur += ch;
+            if (ch === "'") inS = false;
+          } else {
+            if (ch === "\"") { inD = true; cur += ch; }
+            else if (ch === "'") { inS = true; cur += ch; }
+            else if (ch === "[" || ch === "{") { depth++; cur += ch; }
+            else if (ch === "]" || ch === "}") { depth = Math.max(0, depth - 1); cur += ch; }
+            else if (ch === "," && depth === 0) {
+              const part = cur.trim();
+              if (part) items.push(parseTomlValue(part));
+              cur = "";
+            } else {
+              cur += ch;
+            }
+          }
+        }
+        const tail = cur.trim();
+        if (tail) items.push(parseTomlValue(tail));
+        return items;
+      }
+      if (/^[+-]?(?:\d|_)+(?:\.(?:\d|_)+)?$/.test(v)) {
+        const n = Number(v.replace(/_/g, ""));
+        if (!Number.isNaN(n)) return n;
+      }
+      return v;
+    }
+
     function parseSimpleToml(text) {
       const out = { tools: [], skills: [], allow_chats: [], allow_users: [] };
-      String(text || "").split(/\r?\n/).forEach((line) => {
-        const clean = line.trim();
-        if (!clean || clean.startsWith("#")) return;
-        const eq = clean.indexOf("=");
-        if (eq < 1) return;
-        const k = clean.slice(0, eq).trim();
-        let v = clean.slice(eq + 1).trim();
+      const { statements } = scanRootToml(text);
+      statements.forEach((stmt) => {
         try {
-          if (v.startsWith("[") && v.endsWith("]")) out[k] = JSON.parse(v);
-          else if (v.startsWith("\"") && v.endsWith("\"")) out[k] = JSON.parse(v);
-          else if (v === "true" || v === "false") out[k] = v === "true";
-          else if (!Number.isNaN(Number(v))) out[k] = Number(v);
-          else out[k] = v;
+          out[stmt.key] = parseTomlValue(stmt.parts.join("\n"));
         } catch {
           // 复杂多行 TOML 保留在源码框中，不强行覆盖
         }
@@ -7990,15 +8152,26 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     function writeTomlKey(key, formatted) {
       if (loadingConfig) return;
-      const lines = $("#content").value.split(/\r?\n/);
-      const re = new RegExp(`^\\s*${key}\\s*=`);
-      const idx = lines.findIndex((l) => re.test(l));
-      if (formatted === null) {
-        if (idx >= 0) lines.splice(idx, 1);
-      } else if (idx >= 0) {
-        lines[idx] = `${key} = ${formatted}`;
-      } else {
-        lines.push(`${key} = ${formatted}`);
+      const { lines, rootEnd, statements } = scanRootToml($("#content").value);
+      const matches = statements.filter((s) => s.key === key);
+      if (matches.length) {
+        for (let i = matches.length - 1; i >= 0; i--) {
+          const stmt = matches[i];
+          const span = stmt.endLine - stmt.startLine + 1;
+          if (formatted !== null && i === 0) {
+            lines.splice(stmt.startLine, span, `${key} = ${formatted}`);
+          } else {
+            lines.splice(stmt.startLine, span);
+          }
+        }
+      } else if (formatted !== null) {
+        let insAt = rootEnd;
+        while (insAt > 0 && lines[insAt - 1].trim() === "") insAt--;
+        if (rootEnd < lines.length && lines[insAt]?.trim() !== "") {
+          lines.splice(insAt, 0, `${key} = ${formatted}`, "");
+        } else {
+          lines.splice(insAt, 0, `${key} = ${formatted}`);
+        }
       }
       $("#content").value = lines.filter((l, i, arr) => i < arr.length - 1 || l !== "").join("\n") + "\n";
     }
@@ -11106,17 +11279,103 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       syncWhitelistHidden();
     }
 
+    const TZ_PRESETS = [
+      [480, "UTC+08:00（东八区）"],
+      [540, "UTC+09:00（东九区）"],
+      [0, "UTC+00:00（协调世界时）"],
+      [-300, "UTC-05:00（北美东部）"],
+      [-480, "UTC-08:00（北美西部）"],
+      [60, "UTC+01:00（中欧）"],
+      [330, "UTC+05:30（印度）"],
+      [600, "UTC+10:00（澳东）"],
+    ];
+
+    function formatTzLabel(mins) {
+      if (!Number.isInteger(mins) || mins < -720 || mins > 840) return "无效偏移";
+      const sign = mins >= 0 ? "+" : "-";
+      const abs = Math.abs(mins);
+      const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+      const mm = String(abs % 60).padStart(2, "0");
+      return `UTC${sign}${hh}:${mm}`;
+    }
+
+    function parseSleepWindowStr(raw) {
+      const m = String(raw || "").trim().match(/^(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?$/);
+      if (!m) return null;
+      const sh = Number(m[1]), sm = Number(m[2] ?? 0), eh = Number(m[3]), em = Number(m[4] ?? 0);
+      if (sh < 0 || sh > 24 || eh < 0 || eh > 24 || sm < 0 || sm > 59 || em < 0 || em > 59) return null;
+      if ((sh === 24 && sm !== 0) || (eh === 24 && em !== 0)) return null;
+      return {
+        startH: String(sh).padStart(2, "0"),
+        startM: String(sm).padStart(2, "0"),
+        endH: String(eh).padStart(2, "0"),
+        endM: String(em).padStart(2, "0"),
+      };
+    }
+
+    function validateLongingInput(showUi = true) {
+      const el = $("#set-longing");
+      const errEl = $("#set-longing-err");
+      if (!el) return { ok: true, value: Number(curSettings?.longing_quiet_hours ?? 0), error: "" };
+      const raw = String(el.value ?? "").trim();
+      const num = Number(raw);
+      const valid = raw !== "" && /^[+-]?\d+$/.test(raw) && Number.isInteger(num) && (num === 0 || (num >= 12 && num <= 720));
+      const msg = valid ? "" : "久违问候安静阈值须为 0（关闭）或 12 到 720 小时";
+      if (showUi) {
+        if (valid) el.removeAttribute("aria-invalid");
+        else el.setAttribute("aria-invalid", "true");
+        if (errEl) {
+          errEl.textContent = msg;
+          errEl.hidden = valid;
+        }
+      }
+      return { ok: valid, value: num, error: msg };
+    }
+
+    function validateTzInput(showUi = true) {
+      const el = $("#set-tz-offset");
+      const errEl = $("#set-tz-err");
+      if (!el) return { ok: true, value: Number(curSettings?.tz_offset_minutes ?? 480), error: "" };
+      const raw = String(el.value ?? "").trim();
+      const num = Number(raw);
+      const valid = raw !== "" && /^[+-]?\d+$/.test(raw) && Number.isInteger(num) && num >= -720 && num <= 840;
+      const msg = valid ? "" : "时区偏移须为 -720 到 840 之间的整数分钟";
+      if (showUi) {
+        if (valid) el.removeAttribute("aria-invalid");
+        else el.setAttribute("aria-invalid", "true");
+        if (errEl) {
+          errEl.textContent = msg;
+          errEl.hidden = valid;
+        }
+      }
+      return { ok: valid, value: num, error: msg };
+    }
+
     function syncSleepHidden() {
       const hidden = $("#set-sleep");
       const enabled = $("#sleep-enabled")?.checked;
       const startSel = $("#sleep-start");
+      const startMinSel = $("#sleep-start-min");
       const endSel = $("#sleep-end");
+      const endMinSel = $("#sleep-end-min");
       const wrap = $("#sleep-range-wrap");
       if (wrap) wrap.hidden = !enabled;
+      const endIs24 = endSel?.value === "24";
+      if (endIs24 && endMinSel) endMinSel.value = "00";
       if (startSel) startSel.disabled = !enabled;
+      if (startMinSel) startMinSel.disabled = !enabled;
       if (endSel) endSel.disabled = !enabled;
+      if (endMinSel) endMinSel.disabled = !enabled || endIs24;
       if (hidden) {
-        hidden.value = enabled ? `${startSel?.value || "01"}-${endSel?.value || "08"}` : "";
+        if (!enabled) {
+          hidden.value = "";
+        } else {
+          const sh = startSel?.value || "01";
+          const sm = startMinSel?.value || "00";
+          const eh = endSel?.value || "08";
+          const em = endIs24 ? "00" : (endMinSel?.value || "00");
+          hidden.value = (sm === "00" && em === "00") ? `${sh}-${eh}` : `${sh}:${sm}-${eh}:${em}`;
+        }
       }
     }
 
@@ -11319,14 +11578,25 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       const web = s.web_provider || "auto";
       const uiStyle = s.ui_style || "millennium";
       const isPreset = WEB_PRESETS.includes(web);
-      const sleepMatch = String(s.sleep_window || "").trim().match(/^(\d{1,2})-(\d{1,2})$/);
-      const sleepOn = Boolean(sleepMatch);
-      const sleepStart = sleepMatch ? sleepMatch[1].padStart(2, "0") : "01";
-      const sleepEnd = sleepMatch ? sleepMatch[2].padStart(2, "0") : "08";
-      const hourOpts = (sel) => Array.from({ length: 24 }, (_, h) => {
+      const sleepParsed = parseSleepWindowStr(s.sleep_window);
+      const sleepOn = Boolean(sleepParsed);
+      const sleepStartH = sleepParsed ? sleepParsed.startH : "01";
+      const sleepStartM = sleepParsed ? sleepParsed.startM : "00";
+      const sleepEndH = sleepParsed ? sleepParsed.endH : "08";
+      const sleepEndM = sleepParsed ? sleepParsed.endM : "00";
+      const hourOpts = (sel, maxHour = 23) => Array.from({ length: maxHour + 1 }, (_, h) => {
         const v = String(h).padStart(2, "0");
-        return `<option value="${v}" ${v === sel ? "selected" : ""}>${v}:00</option>`;
+        return `<option value="${v}" ${v === sel ? "selected" : ""}>${v}</option>`;
       }).join("");
+      const minOpts = (sel) => Array.from({ length: 60 }, (_, m) => {
+        const v = String(m).padStart(2, "0");
+        return `<option value="${v}" ${v === sel ? "selected" : ""}>${v}</option>`;
+      }).join("");
+      const tzVal = Number.isInteger(Number(s.tz_offset_minutes)) ? Number(s.tz_offset_minutes) : 480;
+      const hasTzPreset = TZ_PRESETS.some(([off]) => off === tzVal);
+      const tzPresetOpts = TZ_PRESETS.map(([off, label]) =>
+        `<option value="${off}" ${off === tzVal ? "selected" : ""}>${esc(label)}</option>`
+      ).join("") + `<option value="custom" ${hasTzPreset ? "" : "selected"}>自定义偏移…</option>`;
 
       const hbList = knownProfiles.length
         ? knownProfiles
@@ -11347,7 +11617,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       }
       genRows.push(
         row("主动分寸与每日上限", "空闲后是否主动惦记，以及普通闲聊每日最多搭话次数 (0-50)。", `<select id="proactive_level" class="mil-select" style="width:auto;flex:1 1 180px"><option value="quiet" ${s.proactive_level === "quiet" ? "selected" : ""}>安静（只回应触发）</option><option value="care" ${s.proactive_level === "care" ? "selected" : ""}>平衡（适度主动关心）</option><option value="lively" ${s.proactive_level === "lively" ? "selected" : ""}>活跃（空闲时会主动搭话）</option></select><input id="daily_proactive_limit" class="mil-input mono" style="width:76px;flex:0 0 auto" type="number" min="0" max="50" value="${Number(s.daily_proactive_limit ?? 1)}" aria-label="每日主动搭话上限"><span class="ms-inline-unit">次/天</span>`),
-        row("免打扰时段", "开启后在指定整点时段内保持安静，不发主动问候（如凌晨 01:00 至 08:00）。", `<label class="mil-switch"><input id="sleep-enabled" type="checkbox" ${sleepOn ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${sleepOn ? "已开启" : "未限制"}</span></label><div id="sleep-range-wrap" class="mil-row" style="gap:6px;flex-wrap:nowrap" ${sleepOn ? "" : "hidden"}><select id="sleep-start" class="mil-select" aria-label="免打扰开始时间">${hourOpts(sleepStart)}</select><span class="ms-inline-unit">至</span><select id="sleep-end" class="mil-select" aria-label="免打扰结束时间">${hourOpts(sleepEnd)}</select></div><input id="set-sleep" type="hidden" value="${esc(s.sleep_window || "")}">`),
+        row("免打扰时段", "开启后在指定时段内保持安静，不发主动问候（支持分钟精度与全天 00-24，如 23:30 至 07:00）。", `<label class="mil-switch"><input id="sleep-enabled" type="checkbox" ${sleepOn ? "checked" : ""}><span class="mil-switch-track"></span><span class="mil-switch-txt">${sleepOn ? "已开启" : "未限制"}</span></label><div id="sleep-range-wrap" class="mil-row" style="gap:6px;flex-wrap:wrap" ${sleepOn ? "" : "hidden"}><select id="sleep-start" class="mil-select" aria-label="免打扰开始小时">${hourOpts(sleepStartH, 23)}</select><span class="ms-inline-unit">:</span><select id="sleep-start-min" class="mil-select" aria-label="免打扰开始分钟">${minOpts(sleepStartM)}</select><span class="ms-inline-unit">至</span><select id="sleep-end" class="mil-select" aria-label="免打扰结束小时">${hourOpts(sleepEndH, 24)}</select><span class="ms-inline-unit">:</span><select id="sleep-end-min" class="mil-select" aria-label="免打扰结束分钟">${minOpts(sleepEndM)}</select></div><input id="set-sleep" type="hidden" value="${esc(s.sleep_window || "")}">`),
+        row("工作时区", "用于免打扰时段、手账日期分界与每日定时任务的本地时区（默认东八区 UTC+08:00，范围 -720 至 840 分钟）。", `<div class="mil-row" style="gap:8px;flex-wrap:wrap;width:100%"><select id="set-tz-preset" class="mil-select" style="flex:1 1 180px" aria-label="常用时区预设">${tzPresetOpts}</select><input id="set-tz-offset" class="mil-input mono" style="width:92px" type="number" min="-720" max="840" step="15" value="${tzVal}" aria-label="时区偏移分钟"><span class="ms-inline-unit" id="set-tz-badge">${esc(formatTzLabel(tzVal))}</span></div><div id="set-tz-err" class="mil-hint" style="color:var(--mil-danger-ink);width:100%" hidden></div>`),
         row("联网搜索方式", "默认自动探测宿主或插件联网；选高级自定义可填写专有来源标识。", `<select id="web_provider" class="mil-select"><option value="auto" ${web === "auto" ? "selected" : ""}>自动识别（优先随宿主，其次联网插件）</option><option value="host" ${web === "host" ? "selected" : ""}>仅使用宿主自带联网</option><option value="google_search_plugin" ${web === "google_search_plugin" ? "selected" : ""}>使用第三方搜索插件</option><option value="mcp" ${web === "mcp" ? "selected" : ""}>使用已配置的 MCP 搜索工具</option><option value="plugin_api" ${web === "plugin_api" ? "selected" : ""}>调用其他插件接口</option><option value="custom" ${!isPreset ? "selected" : ""}>高级自定义来源…</option></select><div id="web-custom-wrap" style="width:100%" ${isPreset ? "hidden" : ""}><input id="web_provider_custom" class="mil-input mono" value="${isPreset ? "" : esc(web)}" placeholder="如 web:my_search / plugin:..."></div>`),
         row("自我探索心跳", "定期自主巡检手账与感兴趣主题的间隔分钟数，以及默认出动角色。", `<input id="heartbeat_interval_minutes" class="mil-input mono" style="width:76px;flex:0 0 auto" type="number" min="5" max="1440" value="${Number(s.heartbeat_interval_minutes ?? 60)}" aria-label="心跳间隔分钟数"><span class="ms-inline-unit">分钟/次 · 角色</span><select id="heartbeat_profile" class="mil-select" style="width:auto;flex:1 1 160px" aria-label="心跳默认角色">${hbOpts}</select>`),
       );
@@ -11357,7 +11628,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if ($("#mob-sum-runtime")) $("#mob-sum-runtime").textContent = `${Number(s.agent_max_steps ?? 16)} 步 · ${Number(s.agent_timeout ?? 180)}s`;
 
       $("#advanced-runtime-fields").innerHTML = [
-        row("久违问候安静阈值 (小时)", "设为 0 默认关闭；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。", `<input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="0" max="720" value="${Number(s.longing_quiet_hours ?? 0)}">`),
+        row("久违问候安静阈值 (小时)", "设为 0 默认关闭；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。", `<div class="mil-row" style="gap:8px;flex-wrap:wrap;width:100%"><input id="set-longing" class="mil-input mono" style="width:110px" type="number" min="0" max="720" value="${Number(s.longing_quiet_hours ?? 0)}"></div><div id="set-longing-err" class="mil-hint" style="color:var(--mil-danger-ink);width:100%" hidden></div>`),
         row("线程步数 / 超时 / 上下文窗口 (Tokens)", "单次后台推理与自适应上下文 Token 窗口上限（未识别家族名默认 256K）。", `<input id="set-steps" class="mil-input mono" style="width:76px" type="number" min="1" max="64" value="${Number(s.agent_max_steps ?? 16)}" aria-label="最大步数"><input id="set-timeout" class="mil-input mono" style="width:84px" type="number" min="10" max="900" value="${Number(s.agent_timeout ?? 180)}" aria-label="超时秒数"><input id="set-ctx" class="mil-input mono" style="width:104px" type="number" min="16384" max="2000000" step="1024" value="${Number(s.thread_context_tokens ?? 262144)}" aria-label="上下文 Token 窗口上限">`),
       ].join("");
 
@@ -11375,7 +11646,33 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         syncSleepHidden();
       });
       $("#sleep-start")?.addEventListener("change", syncSleepHidden);
+      $("#sleep-start-min")?.addEventListener("change", syncSleepHidden);
       $("#sleep-end")?.addEventListener("change", syncSleepHidden);
+      $("#sleep-end-min")?.addEventListener("change", syncSleepHidden);
+
+      const syncTzFromInput = () => {
+        const res = validateTzInput(true);
+        const badge = $("#set-tz-badge");
+        const preset = $("#set-tz-preset");
+        if (badge) badge.textContent = res.ok ? formatTzLabel(res.value) : "无效偏移";
+        if (preset) {
+          preset.value = (res.ok && TZ_PRESETS.some(([off]) => off === res.value)) ? String(res.value) : "custom";
+        }
+      };
+      $("#set-tz-preset")?.addEventListener("change", () => {
+        const val = $("#set-tz-preset")?.value;
+        if (val && val !== "custom" && $("#set-tz-offset")) {
+          $("#set-tz-offset").value = val;
+          syncTzFromInput();
+        }
+      });
+      $("#set-tz-offset")?.addEventListener("input", syncTzFromInput);
+      $("#set-tz-offset")?.addEventListener("change", syncTzFromInput);
+
+      $("#set-longing")?.addEventListener("input", () => validateLongingInput(true));
+      $("#set-longing")?.addEventListener("change", () => validateLongingInput(true));
+      validateTzInput(true);
+      validateLongingInput(true);
 
       $("#web_provider")?.addEventListener("change", syncWebCustomVis);
       $("#ui_style")?.addEventListener("change", () => {
@@ -11790,6 +12087,16 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (!settingsHydrated || !curSettings) {
         return say("设置尚未加载完成，已阻止空保存，请刷新后再试", true);
       }
+      const longingCheck = validateLongingInput(true);
+      if (!longingCheck.ok) {
+        $("#set-longing")?.focus?.();
+        return say(longingCheck.error, true);
+      }
+      const tzCheck = validateTzInput(true);
+      if (!tzCheck.ok) {
+        $("#set-tz-offset")?.focus?.();
+        return say(tzCheck.error, true);
+      }
       syncSleepHidden();
       syncWhitelistHidden();
       const selWeb = $("#web_provider").value;
@@ -11813,7 +12120,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         heartbeat_interval_minutes: Number($("#heartbeat_interval_minutes").value),
         heartbeat_profile: $("#heartbeat_profile").value.trim() || "scout",
         sleep_window: $("#set-sleep").value.trim(),
-        longing_quiet_hours: Number($("#set-longing")?.value ?? curSettings?.longing_quiet_hours ?? 0),
+        tz_offset_minutes: tzCheck.value,
+        longing_quiet_hours: longingCheck.value,
         agent_max_steps: Number($("#set-steps")?.value ?? curSettings?.agent_max_steps ?? 16),
         agent_timeout: Number($("#set-timeout")?.value ?? curSettings?.agent_timeout ?? 180),
         thread_context_tokens: Number($("#set-ctx")?.value ?? curSettings?.thread_context_tokens ?? 262144),
