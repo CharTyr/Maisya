@@ -19,15 +19,30 @@ from typing import Any
 from urllib.parse import urlparse
 
 try:
-    from PIL import Image, ImageFilter, ImageOps
+    from PIL import Image, ImageFilter, ImageOps, ImageStat
 except ImportError:  # pragma: no cover - runtime graceful fallback
     Image = None  # type: ignore[assignment]
     ImageFilter = None  # type: ignore[assignment]
     ImageOps = None  # type: ignore[assignment]
+    ImageStat = None  # type: ignore[assignment]
 
 
-_SHANGHAI_TZ = timezone(timedelta(hours=8))
 _WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
+
+
+def _resolve_tz(tz_offset_minutes: int | None = 480) -> timezone:
+    """将分钟时区偏移校验并转换为 datetime.timezone，默认 UTC+8（480 分钟）。"""
+    if tz_offset_minutes is None:
+        return timezone(timedelta(minutes=480))
+    if isinstance(tz_offset_minutes, bool):
+        raise ValueError("tz_offset_minutes 必须是整数分钟偏移，不能为布尔值")
+    try:
+        offset = int(tz_offset_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("tz_offset_minutes 必须是整数分钟偏移") from exc
+    if not -720 <= offset <= 840:
+        raise ValueError("tz_offset_minutes 必须在 -720..840 之间")
+    return timezone(timedelta(minutes=offset))
 
 _SCRIPT_TAG_RE = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
 _TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
@@ -269,6 +284,8 @@ def judge_cover(raw_bytes: bytes, url: str = "") -> str:
                 max((cnt for cnt, _ in counts), default=0) / total if total else 0.0
             )
             if dominant_share >= 0.45:
+                if dominant_share <= 0.82 and _has_rich_framed_photo_center(rgb):
+                    return ""
                 return f"纯色或 Logo 图占比过高 ({dominant_share:.2f})"
             if 0.30 <= dominant_share < 0.45:
                 edge_share = _edge_pixel_share(small)
@@ -281,11 +298,40 @@ def judge_cover(raw_bytes: bytes, url: str = "") -> str:
     return ""
 
 
-def _edge_pixel_share(rgb_128: Any) -> float:
-    """计算 128x128 灰度图中高对比度硬边缘像素占比。"""
-    gray = rgb_128.convert("L").tobytes()
-    width = 128
-    height = 128
+def _has_rich_framed_photo_center(rgb: Any) -> bool:
+    """判断带纯色外框的图像中心主体区是否具备真摄影色阶与像素方差。"""
+    if Image is None or ImageStat is None:
+        return False
+    w, h = rgb.size
+    if w < 16 or h < 16:
+        return False
+    center_crop = rgb.crop((w // 4, h // 4, (w * 3) // 4, (h * 3) // 4))
+    nearest = getattr(getattr(Image, "Resampling", Image), "NEAREST", 0)
+    center = center_crop.resize((64, 64), nearest)
+    quant_method = getattr(getattr(Image, "Quantize", Image), "MEDIANCUT", 0)
+    q16 = center.quantize(colors=16, method=quant_method)
+    counts16 = sorted((cnt for cnt, _ in (q16.getcolors(maxcolors=32) or [])), reverse=True)
+    q32 = center.quantize(colors=32, method=quant_method)
+    counts32 = sorted((cnt for cnt, _ in (q32.getcolors(maxcolors=64) or [])), reverse=True)
+    total = 64 * 64
+    inner_dominant = (counts16[0] / total) if counts16 else 1.0
+    top3_share = (sum(counts32[:3]) / total) if counts32 else 1.0
+    rich_buckets = sum(1 for cnt in counts32 if cnt >= total * 0.01)
+    mean_stddev = sum(ImageStat.Stat(center).stddev) / 3.0
+    return (
+        inner_dominant < 0.45
+        and rich_buckets >= 10
+        and top3_share < 0.55
+        and mean_stddev >= 15.0
+    )
+
+
+def _edge_pixel_share(rgb_img: Any) -> float:
+    """计算灰度图中高对比度硬边缘像素占比。"""
+    width, height = rgb_img.size
+    if width < 2 or height < 2:
+        return 0.0
+    gray = rgb_img.convert("L").tobytes()
     edges = 0
     threshold = 42
     for y in range(height - 1):
@@ -951,8 +997,14 @@ def sanitize_html_fragment(fragment: str) -> str:
     return "".join(parser.parts)
 
 
-def match_sky(slot_label: str = "", *, now_ts: float | None = None) -> tuple[str, dict[str, Any]]:
-    """按 slot_label 关键词或 UTC+8 当前小时匹配 5 档天光主题。"""
+def match_sky(
+    slot_label: str = "",
+    *,
+    now_ts: float | None = None,
+    tz_offset_minutes: int = 480,
+) -> tuple[str, dict[str, Any]]:
+    """按 slot_label 关键词或指定时区（默认 UTC+8）当前小时匹配 5 档天光主题。"""
+    tz = _resolve_tz(tz_offset_minutes)
     label = str(slot_label or "").strip()
     if label:
         if "凌晨" in label:
@@ -966,7 +1018,7 @@ def match_sky(slot_label: str = "", *, now_ts: float | None = None) -> tuple[str
         if "晚" in label or "夜" in label:
             return "night", _SKIES["night"]
 
-    dt = datetime.fromtimestamp(now_ts, _SHANGHAI_TZ) if now_ts is not None else datetime.now(_SHANGHAI_TZ)
+    dt = datetime.fromtimestamp(now_ts, tz) if now_ts is not None else datetime.now(tz)
     hour = dt.hour
     if 0 <= hour < 5:
         key = "dawn"
@@ -981,9 +1033,15 @@ def match_sky(slot_label: str = "", *, now_ts: float | None = None) -> tuple[str
     return key, _SKIES[key]
 
 
-def _ago(published_ts: float | None, now_ts: float) -> str:
+def _ago(
+    published_ts: float | None,
+    now_ts: float,
+    *,
+    tz_offset_minutes: int = 480,
+) -> str:
     if published_ts is None:
         return ""
+    tz = _resolve_tz(tz_offset_minutes)
     try:
         diff = max(0.0, float(now_ts) - float(published_ts))
     except (TypeError, ValueError):
@@ -1001,7 +1059,7 @@ def _ago(published_ts: float | None, now_ts: float) -> str:
         return "昨天"
     if days < 30:
         return f"{days}天前"
-    dt = datetime.fromtimestamp(float(published_ts), _SHANGHAI_TZ)
+    dt = datetime.fromtimestamp(float(published_ts), tz)
     return f"{dt.month}月{dt.day}日"
 
 
@@ -1413,6 +1471,7 @@ def _render_item_html(
     is_lead: bool,
     sky: dict[str, Any],
     now_ts: float,
+    tz_offset_minutes: int = 480,
 ) -> str:
     title = escape(str(item.get("title") or "").strip())
     summary = escape(str(item.get("brief") or item.get("summary") or "").strip())
@@ -1476,7 +1535,11 @@ def _render_item_html(
         feed_title=str(item.get("feed_title") or ""),
     )
     kind = str(item.get("kind") or "").strip().lower()
-    ago_str = "" if kind == "guide" else _ago(item.get("published_ts"), now_ts)
+    ago_str = (
+        ""
+        if kind == "guide"
+        else _ago(item.get("published_ts"), now_ts, tz_offset_minutes=tz_offset_minutes)
+    )
     meta_parts = [f'<span class="meta-src">{escape(src_label)}</span>']
     if ago_str:
         meta_parts.append('<span class="meta-dot">·</span>')
@@ -1510,6 +1573,7 @@ def _build_html_once(
     foot_right: str,
     viz_css: str,
     now_ts: float,
+    tz_offset_minutes: int = 480,
 ) -> str:
     stars_html = ""
     if sky.get("stars"):
@@ -1525,7 +1589,13 @@ def _build_html_once(
 
     if items:
         cards_html = "\n".join(
-            _render_item_html(it, is_lead=(idx == 0), sky=sky, now_ts=now_ts)
+            _render_item_html(
+                it,
+                is_lead=(idx == 0),
+                sky=sky,
+                now_ts=now_ts,
+                tz_offset_minutes=tz_offset_minutes,
+            )
             for idx, it in enumerate(items)
         )
     else:
@@ -1577,11 +1647,13 @@ def build_card_html(
     total_candidates: int = 0,
     viz_css: str = "",
     now_ts: float | None = None,
+    tz_offset_minutes: int = 480,
 ) -> str:
     """构建 600px 离线 Apple-Weather 天光风格资讯简报 HTML。"""
-    ts = float(now_ts) if now_ts is not None else datetime.now(_SHANGHAI_TZ).timestamp()
-    dt = datetime.fromtimestamp(ts, _SHANGHAI_TZ)
-    sky_key, sky = match_sky(slot_label, now_ts=ts)
+    tz = _resolve_tz(tz_offset_minutes)
+    ts = float(now_ts) if now_ts is not None else datetime.now(tz).timestamp()
+    dt = datetime.fromtimestamp(ts, tz)
+    sky_key, sky = match_sky(slot_label, now_ts=ts, tz_offset_minutes=tz_offset_minutes)
     slot_word = str(sky["slot_word"])
 
     date_part = f"{dt.month}月{dt.day}日 · 周{_WEEKDAYS[dt.weekday()]}"
@@ -1603,27 +1675,9 @@ def build_card_html(
     )
 
     working = [dict(it) for it in items]
-    html_doc = _build_html_once(
-        working,
-        sky_key=sky_key,
-        sky=sky,
-        eyebrow_text=eyebrow_text,
-        slot_word=slot_word,
-        lede_html=lede_html,
-        foot_right=foot_right,
-        viz_css=viz_css,
-        now_ts=ts,
-    )
 
-    # 遵守 html_render 的 512KB 上限：超限时自动再压缩封面图，极端情况移除非首条封面
-    if len(html_doc.encode("utf-8")) > 490_000:
-        for it in working:
-            cd = str(it.get("cover_data") or "")
-            if is_safe_raster_data_uri(cd):
-                it["cover_data"] = _recompress_data_uri(cd, max_width=760, quality=66)
-            elif cd:
-                it["cover_data"] = ""
-        html_doc = _build_html_once(
+    def _render_current() -> str:
+        return _build_html_once(
             working,
             sky_key=sky_key,
             sky=sky,
@@ -1633,22 +1687,44 @@ def build_card_html(
             foot_right=foot_right,
             viz_css=viz_css,
             now_ts=ts,
+            tz_offset_minutes=tz_offset_minutes,
         )
+
+    html_doc = _render_current()
+
+    # 遵守 html_render 的 512KB 上限：
+    # 1) 初次超 490KB 时统一轻量重压缩封面图；
+    # 2) 仍超 512KB 时先淘汰次要配图（idx > 0），保留首条头图；
+    # 3) 首图仍超 512KB 时对首图逐步降尺寸/降质量重压缩以保全头图，仅无法容纳时才最终移除。
+    if len(html_doc.encode("utf-8")) > 490_000:
+        for it in working:
+            cd = str(it.get("cover_data") or "")
+            if is_safe_raster_data_uri(cd):
+                it["cover_data"] = _recompress_data_uri(cd, max_width=760, quality=66)
+            elif cd:
+                it["cover_data"] = ""
+        html_doc = _render_current()
     if len(html_doc.encode("utf-8")) > 512_000:
-        for idx in range(len(working) - 1, -1, -1):
+        for idx in range(len(working) - 1, 0, -1):
             if working[idx].get("cover_data"):
                 working[idx]["cover_data"] = ""
-                html_doc = _build_html_once(
-                    working,
-                    sky_key=sky_key,
-                    sky=sky,
-                    eyebrow_text=eyebrow_text,
-                    slot_word=slot_word,
-                    lede_html=lede_html,
-                    foot_right=foot_right,
-                    viz_css=viz_css,
-                    now_ts=ts,
-                )
+                html_doc = _render_current()
                 if len(html_doc.encode("utf-8")) <= 512_000:
                     break
+    if len(html_doc.encode("utf-8")) > 512_000 and working:
+        lead_cd = str(working[0].get("cover_data") or "")
+        if is_safe_raster_data_uri(lead_cd):
+            for max_w, qual in ((560, 56), (420, 46), (300, 38), (220, 30)):
+                working[0]["cover_data"] = _recompress_data_uri(
+                    lead_cd, max_width=max_w, quality=qual
+                )
+                html_doc = _render_current()
+                if len(html_doc.encode("utf-8")) <= 512_000:
+                    break
+            if len(html_doc.encode("utf-8")) > 512_000:
+                working[0]["cover_data"] = ""
+                html_doc = _render_current()
+        elif lead_cd:
+            working[0]["cover_data"] = ""
+            html_doc = _render_current()
     return html_doc
