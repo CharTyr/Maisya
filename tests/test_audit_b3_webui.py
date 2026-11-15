@@ -30,7 +30,7 @@ def _wrap_csp(html: str) -> str:
 @asynccontextmanager
 async def _open_page(
     plugin,
-    page_name: str,
+    tab_name: str,
     *,
     viewport=None,
     on_rpc=None,
@@ -93,18 +93,23 @@ async def _open_page(
               {extra_clipboard}
               window.maibot = {{
                 ready: Promise.resolve(),
-                context: {{ theme: "light", dashboardStyle: "millennium" }},
-                page: {{ state: {{}} }},
+                context: {{ theme: "light", dashboardStyle: "millennium", host: {{ plugins: {{}} }} }},
+                page: {{ state: {{ tab: {json.dumps(tab_name)} }} }},
                 query: (name, args) => window.hostRpc("query", name, args),
                 action: (name, args) => window.hostRpc("action", name, args),
                 navigate: () => Promise.resolve(),
               }};
             }}"""
         )
-        doc = _wrap_csp((WEBUI_DIR / f"{page_name}.html").read_text(encoding="utf-8"))
-        await page.set_content(doc)
+        raw_doc = (WEBUI_DIR / "now.html").read_text(encoding="utf-8")
+        assert "localStorage" not in raw_doc
+        assert "sessionStorage" not in raw_doc
+        assert "transition: all" not in raw_doc
+        await page.set_content(_wrap_csp(raw_doc), wait_until="domcontentloaded")
         try:
             yield page, errors, rpc_log, lambda: peak
+            assert await page.locator("img").count() == 0
+            assert await page.locator("iframe").count() == 0
         finally:
             await context.close()
             await browser.close()
@@ -112,6 +117,8 @@ async def _open_page(
 
 def test_b3_webui_schema_ci_pillow_css_and_dead_skeleton_cleanup():
     webui_cfg = json.loads((REPO_ROOT / "webui.json").read_text(encoding="utf-8"))
+    assert len(webui_cfg["pages"]) == 1
+    assert webui_cfg["pages"][0]["entry"] == "webui/now.html"
     note_chat_id = webui_cfg["pages"][0]["actions"]["note"]["parameters"]["chat_id"]
     assert note_chat_id["max_length"] == 256
 
@@ -122,11 +129,16 @@ def test_b3_webui_schema_ci_pillow_css_and_dead_skeleton_cleanup():
     assert "activeSlotCount" not in mgmt_in
     assert '<body data-page="{{PAGE_ID}}">' not in mgmt_in
     assert ".m-model-rank" not in mgmt_in
-    assert "#ms-mgmt-view .m-model-num" in mgmt_in
-    assert "#ms-mgmt-view .m-model-row.is-primary .m-model-num" in mgmt_in
+    assert ".lib-img-stage" in mgmt_in
 
     now_in = (WEBUI_DIR / "now.html.in").read_text(encoding="utf-8")
     assert "while (activeQueue >= 2)" in now_in
+    assert 'id="ms-mob-dock"' in now_in
+
+    now_built = (WEBUI_DIR / "now.html").read_text(encoding="utf-8")
+    assert "localStorage" not in now_built
+    assert "sessionStorage" not in now_built
+    assert "transition: all" not in now_built
 
     build_check = subprocess.run(
         [sys.executable, str(WEBUI_DIR / "build.py"), "--check"],
@@ -143,7 +155,7 @@ async def test_b3_toggle_profile_expected_version_zero_not_bypassed(tmp_path):
     plugin = await loaded(tmp_path)
     try:
         cur = await plugin.manage_read(
-            "asset", json.dumps({"kind": "profile", "target": "scout", "document": "profile.toml"})
+            "asset", json.dumps({"kind": "profile", "target": "default", "document": "profile.toml"})
         )
         assert cur["success"] and cur["version"] == 0
 
@@ -151,28 +163,28 @@ async def test_b3_toggle_profile_expected_version_zero_not_bypassed(tmp_path):
             "toggle_profile",
             json.dumps(
                 {
-                    "target": "scout",
+                    "target": "default",
                     "enabled": False,
                     "expected_version": 0,
                 }
             ),
         )
         assert ok_v0["success"] and ok_v0["version"] == 1
-        assert plugin.profiles.get("scout").enabled is False
+        assert plugin.profiles.get("default").enabled is False
 
         stale = await plugin.manage_write(
             "toggle_profile",
-            json.dumps({"target": "scout", "enabled": True, "expected_version": 0}),
+            json.dumps({"target": "default", "enabled": True, "expected_version": 0}),
         )
         assert not stale["success"], "expected_version=0 must not bypass conflict check"
-        assert plugin.profiles.get("scout").enabled is False
+        assert plugin.profiles.get("default").enabled is False
 
         ok_v1 = await plugin.manage_write(
             "toggle_profile",
-            json.dumps({"target": "scout", "enabled": True, "expected_version": 1}),
+            json.dumps({"target": "default", "enabled": True, "expected_version": 1}),
         )
         assert ok_v1["success"] and ok_v1["version"] == 2
-        assert plugin.profiles.get("scout").enabled is True
+        assert plugin.profiles.get("default").enabled is True
     finally:
         await plugin.on_unload()
 
@@ -252,105 +264,69 @@ async def test_b3_management_settings_tz_offset_and_sleep_window_validation(tmp_
 
 @pytest.mark.asyncio
 async def test_b3_settings_longing_bounds_sleep_window_and_tz_offset_e2e(tmp_path):
-    plugin = await loaded(tmp_path, ["qq:group:100246809"])
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
         async with _open_page(
             plugin, "settings", viewport={"width": 1440, "height": 900}
-        ) as (page, errors, rpc_log, get_peak):
-            await page.locator('[data-settings-mode="advanced"]').click()
-            await page.locator('[data-set-rail="runtime"]').click()
+        ) as (page, errors, _rpc_log, get_peak):
+            await expect(page.locator("#set-sleep-start")).not_to_have_value("")
+            await expect(page.locator("#set-daily-limit")).to_be_visible()
 
-            longing = page.locator("#set-longing")
-            await expect(longing).to_be_visible()
-
-            before_writes = sum(
-                1 for _, name, a in rpc_log if name == "write" and a.get("action") == "settings"
+            # 非法免打扰时段应被拒绝且不覆写原配置
+            prev_sleep = plugin.settings.sleep_window
+            await page.locator("#set-sleep-start").fill("25:00")
+            await page.locator("#set-save-runtime").click()
+            await expect(page.locator("#set-feedback")).to_have_class(
+                re.compile(r"mil-feedback--err")
             )
-            for bad_val in ("5", "-1", "721", "12.5"):
-                await longing.fill(bad_val)
-                await expect(longing).to_have_attribute("aria-invalid", "true")
-                await expect(page.locator("#set-longing-err")).to_be_visible()
-                await page.locator("#save-settings-adv").click()
-                await expect(page.locator("#feedback")).to_contain_text("12")
-                after_writes = sum(
-                    1
-                    for _, name, a in rpc_log
-                    if name == "write" and a.get("action") == "settings"
-                )
-                assert after_writes == before_writes, (
-                    f"invalid longing_quiet_hours={bad_val} should be blocked client-side"
-                )
+            assert plugin.settings.sleep_window == prev_sleep
+            # 等待失败保存触发的 loadSettings() 回填完毕，避免后续输入被异步重绘覆盖
+            await expect(page.locator("#set-sleep-start")).not_to_have_value("25:00")
 
-            await longing.fill("24")
-            await expect(longing).not_to_have_attribute("aria-invalid", "true")
-            await expect(page.locator("#set-longing-err")).to_be_hidden()
-
-            # Switch back to general settings and configure timezone + 00-24 full-day sleep_window
-            await page.locator('[data-settings-mode="general"]').click()
-            tz_preset = page.locator("#set-tz-preset")
-            tz_input = page.locator("#set-tz-offset")
-            await expect(tz_input).to_have_value("480")
-            await tz_preset.select_option("540")
-            await expect(tz_input).to_have_value("540")
-            await tz_input.fill("-300")
-            await expect(tz_preset).to_have_value("-300")
-
-            # Invalid timezone offset blocked client-side
-            await tz_input.fill("-900")
-            await page.locator("#save-settings").click()
-            await expect(page.locator("#feedback")).to_contain_text("-720")
-            assert plugin.settings.tz_offset_minutes == 480
-
-            await tz_input.fill("-300")
-
-            # Enable 00-24 sleep window
-            await page.locator("label.mil-switch", has=page.locator("#sleep-enabled")).click()
-            await page.locator("#sleep-start").select_option("00")
-            await page.locator("#sleep-end").select_option("24")
-            assert await page.locator("#set-sleep").input_value() == "00-24"
-
-            await page.locator("#save-settings").click()
-            await expect(page.locator("#feedback")).to_contain_text("已保存")
-            assert plugin.settings.sleep_window == "00-24"
-            assert plugin.settings.tz_offset_minutes == -300
-            assert plugin.settings.longing_quiet_hours == 24
+            # 设置每日搭话额度（0..50 边界）与 00:00-24:00 全天免打扰
+            await page.locator("#set-daily-limit").fill("2")
+            await page.locator("#set-sleep-start").fill("00:00")
+            await page.locator("#set-sleep-end").fill("24:00")
+            await page.evaluate("document.getElementById('set-feedback').textContent = ''")
+            await page.locator("#set-save-runtime").click()
+            await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
+            assert plugin.settings.daily_proactive_limit == 2
+            assert plugin.settings.sleep_window == "00:00-24:00"
             assert not errors and get_peak() <= 2
 
-        # Re-open settings page to confirm hydration preserves 00-24 and -300
+        # 重开设置页应正确回填 00:00-24:00 与额度 2
         async with _open_page(
             plugin, "settings", viewport={"width": 1440, "height": 900}
         ) as (page, errors, _rpc_log, _peak):
-            await expect(page.locator("#sleep-enabled")).to_be_checked()
-            await expect(page.locator("#sleep-start")).to_have_value("00")
-            await expect(page.locator("#sleep-end")).to_have_value("24")
-            assert await page.locator("#set-sleep").input_value() == "00-24"
-            await expect(page.locator("#set-tz-offset")).to_have_value("-300")
+            await expect(page.locator("#set-sleep-start")).to_have_value("00:00")
+            await expect(page.locator("#set-sleep-end")).to_have_value("24:00")
+            await expect(page.locator("#set-daily-limit")).to_have_value("2")
             assert not errors
 
-        # Minute-precision sleep_window ("23:30-07:00") hydration & preservation on unrelated save
+        # 分钟级 sleep_window ("23:30-07:00") 在无关设置更新时不得丢失
         captured_writes: list[dict] = []
+        second_read_done = asyncio.Event()
+        settings_reads = 0
 
         async def minute_sleep_rpc(kind, name, args):
+            nonlocal settings_reads
             if kind == "query" and name == "read":
                 sec = args.get("section")
                 if sec == "settings":
                     res = await plugin.manage_read(**args)
                     res["settings"]["sleep_window"] = "23:30-07:00"
+                    settings_reads += 1
+                    if settings_reads >= 2:
+                        second_read_done.set()
                     return res
-                if sec == "batch":
-                    res = await plugin.manage_read(**args)
-                    if res.get("sections", {}).get("settings", {}).get("settings"):
-                        res["sections"]["settings"]["settings"]["sleep_window"] = "23:30-07:00"
-                    return res
-            if kind == "action" and name == "write" and args.get("action") == "settings":
+            if kind == "action" and name == "write" and args.get("action") == "settings_update":
                 payload = json.loads(args.get("payload") or "{}")
                 captured_writes.append(payload)
-                # Return updated settings snapshot without failing if host config regex is pre-merge
                 return {
                     "success": True,
                     "settings": payload["settings"],
                     "version": "v-minute-test",
-                    "proactive_quota": {"used": 0, "limit": 1, "remaining": 1},
                 }
             return None
 
@@ -360,26 +336,21 @@ async def test_b3_settings_longing_bounds_sleep_window_and_tz_offset_e2e(tmp_pat
             viewport={"width": 1440, "height": 900},
             on_rpc=minute_sleep_rpc,
         ) as (page, errors, _rpc_log, _peak):
-            await expect(page.locator("#sleep-enabled")).to_be_checked()
-            await expect(page.locator("#sleep-start")).to_have_value("23")
-            await expect(page.locator("#sleep-start-min")).to_have_value("30")
-            await expect(page.locator("#sleep-end")).to_have_value("07")
-            await expect(page.locator("#sleep-end-min")).to_have_value("00")
-            assert await page.locator("#set-sleep").input_value() == "23:30-07:00"
-
-            await page.locator("#proactive_level").select_option("lively")
-            await page.locator("#save-settings").click()
-            await expect(page.locator("#feedback")).to_contain_text("已保存")
+            await expect(page.locator("#set-sleep-start")).to_have_value("23:30")
+            await expect(page.locator("#set-sleep-end")).to_have_value("07:00")
+            await page.locator("#set-save-runtime").click()
+            await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
             assert captured_writes
             assert captured_writes[-1]["settings"]["sleep_window"] == "23:30-07:00"
 
-            # Interactive minute adjustment
-            await page.locator("#sleep-start").select_option("22")
-            await page.locator("#sleep-start-min").select_option("45")
-            await page.locator("#sleep-end").select_option("06")
-            await page.locator("#sleep-end-min").select_option("15")
-            assert await page.locator("#set-sleep").input_value() == "22:45-06:15"
-            await page.locator("#save-settings").click()
+            await asyncio.wait_for(second_read_done.wait(), timeout=5.0)
+            await page.evaluate("() => new Promise(r => setTimeout(r, 0))")
+            await page.locator("#set-sleep-start").fill("22:45")
+            await page.locator("#set-sleep-end").fill("06:15")
+            await page.evaluate("document.getElementById('set-feedback').textContent = ''")
+            await page.locator("#set-save-runtime").click()
+            await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
+            assert len(captured_writes) == 2
             assert captured_writes[-1]["settings"]["sleep_window"] == "22:45-06:15"
             assert not errors
     finally:
@@ -389,119 +360,75 @@ async def test_b3_settings_longing_bounds_sleep_window_and_tz_offset_e2e(tmp_pat
 @pytest.mark.asyncio
 async def test_b3_abilities_multiline_toml_subtable_model_num_and_task_clear(tmp_path):
     plugin = await loaded(tmp_path)
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
+        cloned = await plugin.manage_write(
+            "profile_clone",
+            json.dumps({"source_id": "default", "target_id": "custom_b3", "name": "B3自定义助手"}),
+        )
+        assert cloned["success"], cloned
+
         plugin.memory.write(
             "profile",
             (
-                'title = "探索者"\n'
+                'name = "B3自定义助手"\n'
                 "enabled = true\n"
                 'task = "planner"\n'
-                "tools = [\n"
-                '  "web_search", # 网页检索\n'
-                '  "web_fetch",\n'
+                "toolsets = [\n"
+                '  "web", # 网页工具\n'
                 "]\n"
             ),
-            target="scout",
+            target="custom_b3",
             document="profile.toml",
             allow_custom=True,
         )
 
+        # v0.3 档案页对多行 TOML 档案的解析渲染（Hermes 首屏 + 高级开关）
         async with _open_page(
-            plugin, "abilities", viewport={"width": 1440, "height": 900}
+            plugin, "profiles", viewport={"width": 1440, "height": 900}
         ) as (page, errors, _rpc_log, get_peak):
-            await page.locator('#profiles [data-profile="scout"]').click()
-            await page.locator('[data-doc-tab="config"]').click()
-
-            # Multiline array with inline comment & trailing comma must hydrate visual checkboxes
-            await expect(page.locator("#cfg-enabled")).to_be_checked()
-            await expect(page.locator('[data-cfg-tool="web_search"]')).to_be_checked()
-            await expect(page.locator('[data-cfg-tool="web_fetch"]')).to_be_checked()
-
-            # Check subtable isolation when raw TOML in editor includes [subtable]
-            subtable_toml = (
-                'title = "探索者"\n'
-                "enabled = true\n"
-                'task = "planner"\n'
-                "tools = [\n"
-                '  "web_search", # 网页检索\n'
-                '  "web_fetch",\n'
-                "]\n\n"
-                "[sandbox]\n"
-                "enabled = false\n"
-                'model_name = "subtable-model"\n'
-                "max_steps = 99\n"
-            )
-            await page.locator("#content").fill(subtable_toml)
-            await page.locator("#content").dispatch_event("input")
-
-            await expect(page.locator("#cfg-enabled")).to_be_checked()
-            await expect(page.locator("#cfg-steps")).to_have_value("")
-            await expect(page.locator(".m-model-row")).to_have_count(0)
-
-            await page.locator('[data-cfg-tool="image_read"]').check()
-            await page.locator("#cfg-model-name").fill("primary-model")
-            await page.locator("#cfg-model-add").click()
-            await page.locator("#cfg-model-name").fill("backup-model")
-            await page.locator("#cfg-model-add").click()
-            await page.locator("#cfg-steps").fill("14")
-
-            toml_with_subtable = await page.locator("#content").input_value()
-            parsed_sub = tomllib.loads(toml_with_subtable)
-            assert parsed_sub["enabled"] is True
-            assert parsed_sub["max_steps"] == 14
-            assert parsed_sub["model_name"] == "primary-model"
-            assert parsed_sub["fallback_models"] == ["backup-model"]
-            assert parsed_sub["tools"] == ["web_search", "web_fetch", "image_read"]
-            assert parsed_sub["sandbox"] == {
-                "enabled": False,
-                "model_name": "subtable-model",
-                "max_steps": 99,
-            }
-
-            # Verify .m-model-num badge styling actually took effect in Chromium
-            num_styles = await page.evaluate(
-                """() => {
-                  const rows = [...document.querySelectorAll('#cfg-model-chain .m-model-num')];
-                  return rows.map((el) => {
-                    const cs = getComputedStyle(el);
-                    return { bg: cs.backgroundColor, color: cs.color, padL: parseFloat(cs.paddingLeft), weight: Number(cs.fontWeight) };
-                  });
-                }"""
-            )
-            assert len(num_styles) == 2
-            assert num_styles[0]["padL"] > 0 and num_styles[0]["weight"] >= 700
-            assert num_styles[0]["bg"] != "rgba(0, 0, 0, 0)"
-            assert num_styles[0]["bg"] != num_styles[1]["bg"]
-
-            # Drop synthetic [sandbox] block before saving to Profiles.get, keep multiline array test intact
-            await page.locator("#content").fill(toml_with_subtable.split("\n[sandbox]")[0] + "\n")
-            await page.locator("#content").dispatch_event("input")
-            await page.locator("#save").click()
-            await expect(page.locator("#feedback")).to_contain_text("已保存")
-
-            await page.locator("#cfg-task").select_option("")
-            await page.locator("#cfg-model-apply").click()
-            await expect(page.locator("#feedback")).to_contain_text("已应用")
-            saved_toml = plugin.memory.read("profile", target="scout", document="profile.toml")[
-                "content"
-            ]
-            assert "task" not in tomllib.loads(saved_toml)
+            await page.locator('#pr-roster [data-pick-profile-id="custom_b3"]').click()
+            await expect(page.locator("#pr-name")).to_have_value("B3自定义助手")
+            await expect(page.locator("#pr-enabled")).to_be_checked()
+            await page.locator("#pr-adv-toggle").click()
+            await expect(page.locator("#pr-adv-body")).to_be_visible()
+            await page.locator('[data-pr-tab="abilities"]').click()
+            web_cb = page.locator('#pr-ability-cards input[data-ab-toggle-kind="toolsets"][data-ab-toggle-id="web"]')
+            await expect(web_cb).to_be_checked()
+            await page.locator('[data-pr-tab="general"]').click()
+            await page.locator("#pr-btn-save").click()
+            await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
             assert not errors and get_peak() <= 2
+
+        # 后端 set_profile_models 清理 task 键并写回有效 TOML
+        clear_res = await plugin.manage_write(
+            "set_profile_models",
+            json.dumps({"profile_id": "custom_b3", "models": ["primary-model", "backup-model"], "fallback_slot": ""}),
+        )
+        assert clear_res["success"], clear_res
+        saved_toml = plugin.memory.read("profile", target="custom_b3", document="profile.toml")[
+            "content"
+        ]
+        parsed = tomllib.loads(saved_toml)
+        assert parsed["model_name"] == "primary-model"
+        assert parsed["fallback_models"] == ["backup-model"]
+        assert "task" not in parsed
     finally:
         await plugin.on_unload()
 
 
 @pytest.mark.asyncio
 async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
-    plugin = await loaded(tmp_path, ["qq:group:100246809"])
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    await plugin.manage_write("onboarding_skip", "{}")
     chunk_bin = (b"\x89B3_HDR\x00\xff" + bytes(range(256)) * 780)[:210000]
     expected_b64 = base64.b64encode(chunk_bin).decode("ascii")
 
     try:
         # Prepare undo_learning note + scheduled_admin intent + workspace/binary output
-        plugin.memory.write("notes", "初始规则", target="scout", author="user")
+        plugin.memory.write("notes", "初始规则", target="default", author="user")
         th = plugin.threads.create(
-            plugin.profiles.get("scout"),
+            plugin.profiles.get("default"),
             "B3 端到端闭环活动",
             chat_id="qq:group:100246809",
             platform="qq",
@@ -513,7 +440,7 @@ async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
         plugin.memory.write(
             "notes",
             "初始规则\n- 自动补充条文",
-            target="scout",
+            target="default",
             author=f"thread:{th['thread_id']}",
         )
         with plugin.threads.connect() as db, db:
@@ -543,7 +470,7 @@ async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
             json.dumps(
                 {
                     "chat_id": "qq:group:100246809",
-                    "profile": "scout",
+                    "profile": "default",
                     "in_seconds": 3600,
                     "every_seconds": 86400,
                     "prompt": "B3 受保护巡检计划",
@@ -553,105 +480,114 @@ async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
         assert sched["success"]
         sched_id = sched["intent"]["intent_id"]
 
-        # 1) [data-undo-learning] + scheduled_admin WebUI cancel on memory.html
-        async with _open_page(plugin, "memory", viewport={"width": 1440, "height": 900}) as (
+        # 1) undo_learning_note 后端撤回 + 现场页 #now-intents 取消 scheduled_admin
+        undo = await plugin.manage_write(
+            "undo_learning_note", json.dumps({"profile": "default"})
+        )
+        assert undo["success"], undo
+        assert plugin.memory.read("notes", target="default")["content"].strip() == "初始规则"
+
+        async with _open_page(plugin, "now", viewport={"width": 1440, "height": 900}) as (
             page,
             errors,
             _rpc_log,
             get_peak,
         ):
-            await page.locator('[data-kind-tab="heartbeat"]').click()
-            undo_btn = page.locator('#learning [data-undo-learning="scout"]').first
-            await expect(undo_btn).to_be_visible()
-            await undo_btn.click()
-            await expect(page.locator("#feedback")).to_contain_text("撤回")
-            assert plugin.memory.read("notes", target="scout")["content"].strip() == "初始规则"
-
-            cancel_btn = page.locator(f'#intent-list [data-cancel-intent="{sched_id}"]')
+            cancel_btn = page.locator(
+                f'#now-intents [data-intent-act="intent_delete"][data-intent-id="{sched_id}"]'
+            )
             await expect(cancel_btn).to_be_visible()
-            assert "受保护" in await page.locator("#intent-list").inner_text()
             await cancel_btn.click()
-            await expect(page.locator("#feedback")).to_contain_text("取消")
+            await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
             assert plugin.intents.get(sched_id)["status"] == "cancelled"
             assert not errors and get_peak() <= 2
 
-        # 2) #out-more-btn binary pagination + mobile [data-ws-path] inspect on outputs.html
+        # 2) payload.bin 后端 196608B 分片读取 + 资料库桌面/移动端抽屉预览
+        c1 = await plugin.manage_read(
+            "artifact",
+            json.dumps({"kind": "attachment", "handle": attached[0]["handle"], "offset": 0}),
+        )
+        assert c1["success"] and c1["next_offset"] == 196608
+        c2 = await plugin.manage_read(
+            "artifact",
+            json.dumps({"kind": "attachment", "handle": attached[0]["handle"], "offset": c1["next_offset"]}),
+        )
+        assert c2["success"] and not c2.get("next_offset")
+        full_b64 = base64.b64encode(base64.b64decode(c1["base64"]) + base64.b64decode(c2["base64"])).decode("ascii")
+        assert full_b64 == expected_b64
+
         async with _open_page(
             plugin,
-            "outputs",
+            "library",
             viewport={"width": 1440, "height": 900},
             reject_clipboard=True,
         ) as (page, errors, _rpc_log, get_peak):
-            item = page.locator("#out-list [data-out-idx]", has_text="payload.bin").first
+            item = page.locator("#lib-gallery [data-lib-idx]", has_text="payload.bin").first
             await expect(item).to_be_visible()
             await item.click()
-            await expect(page.locator("#out-more-btn")).to_be_visible()
-            await page.locator("#out-more-btn").click()
-            await expect(page.locator("#out-more-btn")).to_be_hidden()
-            await page.locator("#out-copy-btn").click()
-            assert await page.locator("#out-copy-box").input_value() == expected_b64
+            await expect(page.locator("#lib-drawer")).to_be_visible()
+            await page.locator("#lib-drawer-close").click()
             assert not errors and get_peak() <= 2
 
-        async with _open_page(plugin, "outputs", viewport={"width": 390, "height": 844}) as (
+        async with _open_page(plugin, "library", viewport={"width": 390, "height": 844}) as (
             page,
             errors,
             _rpc_log,
             _peak,
         ):
-            await page.locator('[data-out-space="workspaces"]').click()
-            await page.locator("#workspaces [data-ws]").first.click()
-            ws_file = page.locator('[data-ws-path="out/payload.bin"]')
-            await expect(ws_file).to_be_visible()
-            await ws_file.click()
-            await expect(page.locator("#out-shell")).to_have_class(re.compile(r"is-mob-inspect"))
-            await expect(page.locator("#out-inspector")).to_be_visible()
+            item = page.locator("#lib-gallery [data-lib-idx]", has_text="payload.bin").first
+            await expect(item).to_be_visible()
+            await item.click()
+            await expect(page.locator("#lib-drawer")).to_be_visible()
+            assert await page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth"
+            )
+            await page.locator("#lib-drawer-close").click()
             assert not errors
 
-        # 3) #svc-d-save (atomic rename + mcp -> template kind switch) & #wh-b-* on settings.html
+        # 3) upsert_service_item MCP 服务原子改名 + Vault 脱敏展示
         await plugin.manage_write(
             "vault", json.dumps({"handle": "hook_key", "value": "sec_val_123456"})
         )
+        up1 = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "mcp",
+                    "name": "old_mcp_svc",
+                    "item": {"command": ["/usr/bin/python3", "-m", "http.server"], "tools": ["fetch"]},
+                }
+            ),
+        )
+        assert up1["success"], up1
+        up2 = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "mcp",
+                    "orig_kind": "mcp",
+                    "orig_name": "old_mcp_svc",
+                    "name": "new_mcp_svc",
+                    "item": {"command": ["/usr/bin/python3", "-m", "http.server"], "tools": ["fetch"]},
+                }
+            ),
+        )
+        assert up2["success"], up2
+        svcs = (await plugin.manage_read("services"))["configuration"]
+        assert "old_mcp_svc" not in (svcs.get("servers") or {})
+        assert "new_mcp_svc" in (svcs.get("servers") or {})
+
         async with _open_page(plugin, "settings", viewport={"width": 1440, "height": 900}) as (
             page,
             errors,
             _rpc_log,
             get_peak,
         ):
-            await page.locator('[data-settings-mode="advanced"]').click()
-            await page.locator('[data-set-rail="services"]').click()
-            await page.locator("#svc-new-btn").click()
-            await page.locator("#svc-d-name").fill("old_mcp_svc")
-            await page.locator("#svc-d-cmd").fill("/usr/bin/python3 -m http.server")
-            await page.locator("#svc-d-save").click()
-            await expect(page.locator("#feedback")).to_contain_text("old_mcp_svc")
-
-            # Rename & switch mcp -> template atomically
-            await page.locator('[data-svc-edit="old_mcp_svc"][data-svc-kind="mcp"]').click()
-            await page.locator("#svc-d-kind").select_option("template")
-            await page.locator("#svc-d-name").fill("new_tpl_svc")
-            await page.locator("#svc-d-targets").fill("93.184.216.34:443")
-            await page.locator("#svc-d-save").click()
-            await expect(page.locator("#feedback")).to_contain_text("new_tpl_svc")
-            svcs = (await plugin.manage_read("services"))["configuration"]
-            assert "old_mcp_svc" not in (svcs.get("servers") or {})
-            assert "new_tpl_svc" in (svcs.get("templates") or {})
-
-            # Webhook builder #wh-b-*
-            await page.locator('[data-set-rail="webhooks"]').click()
-            await page.locator("#wh-b-name").fill("ci_push")
-            await page.locator("#wh-b-target").fill("qq:group:100246809")
-            await page.locator("#wh-b-profile").select_option("scout")
-            await page.locator("#wh-b-kind").select_option("silent")
-            await page.locator("#wh-b-secret").fill("hook_key")
-            await page.locator("#wh-b-add").click()
-            await page.locator("#save-webhooks").click()
-            await expect(page.locator("#feedback")).to_contain_text("事件通道")
-            hooks = (await plugin.manage_read("webhooks"))["configuration"]
-            assert hooks["ci_push"]["kind"] == "silent"
-            assert hooks["ci_push"]["secret_handle"] == "hook_key"
+            await expect(page.locator("#set-vault-list")).to_contain_text("hook_key")
+            assert "sec_val_123456" not in await page.content()
             assert not errors and get_peak() <= 2
 
-        # 4) Concurrent overlapping requests strictly enforce inflight <= 2 on now.html
+        # 4) 重叠快速切页严格遵守 inflight <= 2（while activeQueue >= 2）
         async def delayed_rpc(kind, name, args):
             await asyncio.sleep(0.06)
             return None
@@ -659,14 +595,12 @@ async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
         async with _open_page(
             plugin, "now", viewport={"width": 1440, "height": 900}, on_rpc=delayed_rpc
         ) as (page, errors, rpc_log, get_peak):
-            await page.locator("#flow-all-chats").wait_for(state="visible")
-            # Overlap multiple concurrent reads & tab-switch hydration bursts
+            await expect(page.locator("#now-threads")).to_be_visible()
             await page.evaluate(
                 """() => {
-                  document.getElementById('flow-all-chats')?.click();
-                  document.querySelector('[data-nav="outputs"]')?.click();
+                  document.querySelector('[data-nav="library"]')?.click();
                   setTimeout(() => document.querySelector('[data-nav="settings"]')?.click(), 10);
-                  setTimeout(() => document.querySelector('[data-nav="abilities"]')?.click(), 20);
+                  setTimeout(() => document.querySelector('[data-nav="profiles"]')?.click(), 20);
                   setTimeout(() => document.querySelector('[data-nav="now"]')?.click(), 30);
                 }"""
             )

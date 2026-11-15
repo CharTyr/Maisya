@@ -177,43 +177,89 @@ async def test_now_flow_role_filter_clean_top_and_cleanup_ui(tmp_path):
     chat_id = "qq:group:100246809"
     try:
         plugin.settings.enabled_chats = [chat_id]
-        # Enable digest so FLOW 03 shows digest, maker, scout
-        cur = plugin.memory.read("profile", target="digest", document="profile.toml")
-        await plugin.manage_write(
-            "toggle_profile",
+        await plugin.manage_write("onboarding_skip", "{}")
+        cloned = await plugin.manage_write(
+            "profile_clone",
             json.dumps(
-                {"target": "digest", "enabled": True, "expected_version": cur["version"]}
+                {
+                    "source_id": "default",
+                    "target_id": "custom_writer",
+                    "name": "记录小助手",
+                }
             ),
         )
+        assert cloned["success"] is True, cloned
 
-        p_digest = plugin.profiles.get("digest")
+        p_default = plugin.profiles.get("default")
+        p_custom = plugin.profiles.get("custom_writer")
 
         d1 = plugin.threads.create(
-            p_digest, "今日游戏资讯简报 #1", chat_id=chat_id, platform="qq", user_id="u1"
+            p_custom, "今日游戏资讯简报 #1", chat_id=chat_id, platform="qq", user_id="u1"
         )
         rev_d1 = plugin.threads.enqueue(d1["thread_id"], "今日游戏资讯简报 #1", chat_id)
+        with plugin.threads.connect() as db, db:
+            plugin.threads.event(
+                db,
+                d1["thread_id"],
+                "tools",
+                1,
+                {
+                    "calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": {"query": "今日新闻"},
+                            },
+                        }
+                    ],
+                    "results": [
+                        {
+                            "call_id": "call_1",
+                            "value": {"text": "工具步骤正文：已检索完成"},
+                        }
+                    ],
+                },
+            )
         plugin.threads.finish(d1["thread_id"], chat_id, {"text": "简报 1 内容"}, [], rev_d1)
         _mark_delivered(plugin, d1["thread_id"], chat_id)
 
         d2 = plugin.threads.create(
-            p_digest, "今日游戏资讯简报 #2", chat_id=chat_id, platform="qq", user_id="u1"
+            p_default, "今日游戏资讯简报 #2", chat_id=chat_id, platform="qq", user_id="u1"
         )
         rev_d2 = plugin.threads.enqueue(d2["thread_id"], "今日游戏资讯简报 #2", chat_id)
         plugin.threads.finish(d2["thread_id"], chat_id, {"text": "简报 2 内容"}, [], rev_d2)
         _mark_delivered(plugin, d2["thread_id"], chat_id)
 
         j_stop = plugin.threads.create(
-            p_digest, "手动停止的旧尝试", chat_id=chat_id, platform="qq", user_id="u1"
+            p_default, "手动停止的旧尝试", chat_id=chat_id, platform="qq", user_id="u1"
         )
         plugin.threads.stop(j_stop["thread_id"], chat_id)
 
         j_err = plugin.threads.create(
-            p_digest, "出错的旧尝试", chat_id=chat_id, platform="qq", user_id="u1"
+            p_default, "出错的旧尝试", chat_id=chat_id, platform="qq", user_id="u1"
         )
         rev_jerr = plugin.threads.enqueue(j_err["thread_id"], "出错的旧尝试", chat_id)
         plugin.threads.finish(
             j_err["thread_id"], chat_id, {"error": "模型未响应"}, [], rev_jerr
         )
+
+        # 增加一条 watch 盯梢意图验证现场面板渲染
+        watch_res = await plugin.manage_write(
+            "schedule_intent",
+            json.dumps(
+                {
+                    "chat_id": chat_id,
+                    "kind": "return",
+                    "reason": "盯梢新讨论",
+                    "prompt": "关注群里提到版本发布的消息",
+                    "in_seconds": 120,
+                    "mode": "watch",
+                    "condition": "出现版本发布关键词时触发",
+                }
+            ),
+        )
+        assert watch_res["success"] is True, watch_res
 
         requests, peak = 0, 0
 
@@ -222,11 +268,12 @@ async def test_now_flow_role_filter_clean_top_and_cleanup_ui(tmp_path):
             requests += 1
             peak = max(peak, requests)
             try:
+                args = arguments or {}
                 if name == "read":
-                    return await plugin.manage_read(**arguments)
+                    return await plugin.manage_read(**args)
                 if name == "event":
-                    return await plugin.console_event(**arguments)
-                return await plugin.console_query(**arguments)
+                    return await plugin.console_event(**args)
+                return await plugin.console_query(**args)
             finally:
                 requests -= 1
 
@@ -235,18 +282,22 @@ async def test_now_flow_role_filter_clean_top_and_cleanup_ui(tmp_path):
             requests += 1
             peak = max(peak, requests)
             try:
+                args = arguments or {}
                 if name == "write":
-                    return await plugin.manage_write(**arguments)
+                    return await plugin.manage_write(**args)
                 if name == "note":
-                    return await plugin.console_send(**arguments)
-                return await plugin.console_stop(**arguments)
+                    return await plugin.console_send(**args)
+                return await plugin.console_stop(**args)
             finally:
                 requests -= 1
 
         raw_doc = Path("webui/now.html").read_text(encoding="utf-8")
+        assert "localStorage" not in raw_doc
+        assert "sessionStorage" not in raw_doc
+        assert "transition: all" not in raw_doc
         csp_doc = raw_doc.replace(
             "<head>",
-            "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:\">",
+            '<head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; connect-src \'none\'; img-src data: blob:">',
         )
 
         async with async_playwright() as playwright:
@@ -260,59 +311,58 @@ async def test_now_flow_role_filter_clean_top_and_cleanup_ui(tmp_path):
                 await page.evaluate(
                     """window.maibot={
                         ready:Promise.resolve(),
-                        context:{theme:'light'},
+                        context:{theme:'light', host:{plugins:{}}},
                         page:{state:{}},
                         query:(name,args)=>window.queryBackend(name,args),
                         action:(name,args)=>window.actionBackend(name,args)
                     }"""
                 )
-                await page.set_content(csp_doc)
+                await page.set_content(csp_doc, wait_until="domcontentloaded")
 
-                # Initial load: top FLOW 04 hides stopped/errored junk threads (shows only d1 & d2)
-                await expect(page.locator("#fl-threads .fl-node[data-flow-thread]")).to_have_count(2)
-                # Bottom activity list still shows all 4 + visible prune button for 2 junk threads
-                await expect(page.locator("#threads [data-thread]")).to_have_count(4)
-                await expect(page.locator("#prune-junk-threads")).to_be_visible()
-                await expect(page.locator("#prune-junk-threads")).to_contain_text("2")
+                # v0.3 移除旧 01->04 FLOW 与 TREND，保留 Muse 步骤链与 Token 方块图
+                assert await page.locator("#flow-panel").count() == 0
+                assert await page.locator("#fl-threads").count() == 0
+                assert await page.locator("img").count() == 0
+                assert await page.locator("iframe").count() == 0
 
-                # Click maker role in FLOW 03 (which has 0 threads)
-                await page.locator('[data-flow-profile="maker"]').click()
-                await expect(page.locator('[data-flow-profile="maker"]')).to_have_class(re.compile(r"\bon\b"))
-                await expect(page.locator('[data-flow-profile="maker"]')).to_have_attribute("aria-pressed", "true")
-                await expect(page.locator("#flow-filter-hint")).to_be_visible()
-                await expect(page.locator("#flow-filter-hint")).to_contain_text("创作者")
-                await expect(page.locator("#fl-threads [data-wake-profile='maker']")).to_be_visible()
-                await expect(page.locator("#fl-threads [data-config-profile='maker']")).to_be_visible()
-                await expect(page.locator("#threads [data-thread]")).to_have_count(0)
+                # 左侧显示 4 条线程与 watch 盯梢意图
+                await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(4)
+                await expect(page.locator("#now-intents")).to_contain_text("盯梢")
 
-                # Click quick wake button
-                await page.locator('[data-wake-profile="maker"]').click()
-                await expect(page.locator("#launch-panel")).to_have_attribute("open", "")
-                await expect(page.locator("#launch-profile")).to_have_value("maker")
+                # 线程状态筛选与搜索框
+                await page.click('#now-thread-filters [data-th-filter="running"]')
+                await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(0)
+                await page.click('#now-thread-filters [data-th-filter="history"]')
+                await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(4)
+                await page.click('#now-thread-filters [data-th-filter="all"]')
 
-                # Click quick config button -> jumps in-place to 能力 -> 角色管理 with maker selected
-                await page.locator('[data-config-profile="maker"]').click()
-                await expect(page.locator("h1")).to_have_text("能力")
-                await expect(page.locator("#profiles")).to_be_visible()
-                await expect(page.locator('#profiles [data-profile="maker"]')).to_have_attribute("aria-current", "true")
+                await page.fill("#now-thread-search", "custom_writer")
+                await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(1)
+                await page.fill("#now-thread-search", "")
+                await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(4)
 
-                # Switch back to 现场 and reset filters
-                await page.locator('[data-nav="now"]').click()
-                await expect(page.locator("h1")).to_have_text("现场")
-                await page.locator("#flow-all-chats").click()
-                await expect(page.locator("#fl-threads [data-flow-thread]")).to_have_count(2)
-                await expect(page.locator("#threads [data-thread]")).to_have_count(4)
+                # 点击 d1 验证 Muse 垂直步骤链与单步详情切面
+                await page.click(f'#now-threads [data-thread-id="{d1["thread_id"]}"]')
+                await page.wait_for_selector("#now-step-timeline [data-step-id]")
+                await page.locator("#now-step-timeline [data-step-id]").filter(
+                    has_text="web_search"
+                ).first.click()
+                await expect(page.locator("#now-view-step")).to_be_visible()
+                await expect(page.locator("#now-step-output")).to_contain_text("工具步骤正文")
+                await page.click("#now-back-overview")
+                await expect(page.locator("#now-view-overview")).to_be_visible()
 
-                # Click prune junk button
-                await page.locator("#prune-junk-threads").click()
-                await expect(page.locator("#prune-junk-threads")).to_be_hidden()
-                await expect(page.locator("#threads [data-thread]")).to_have_count(2)
-                await expect(page.locator("#feedback")).to_contain_text("已清理 2 条废记录")
-
-                # Click inline delete button on one remaining thread
-                await page.locator(f'[data-del-thread="{d1["thread_id"]}"]').click()
-                await expect(page.locator("#threads [data-thread]")).to_have_count(1)
-                await expect(page.locator("#feedback")).to_contain_text("记录已删除")
+                # 触发清理废记录 + 删除单条后刷新现场页验证计数收敛
+                await page.click(f'#now-threads [data-thread-id="{d2["thread_id"]}"]')
+                pruned = await plugin.manage_write("prune_threads", "{}")
+                assert pruned["success"] is True and pruned["count"] == 2
+                await plugin.manage_write(
+                    "delete_thread", json.dumps({"thread_id": d1["thread_id"]})
+                )
+                await page.click('[data-nav="profiles"]')
+                await expect(page.locator("#pr-roster")).to_be_visible()
+                await page.click('[data-nav="now"]')
+                await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(1)
 
                 assert not errors
                 assert peak <= 2
