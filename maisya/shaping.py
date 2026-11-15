@@ -919,6 +919,8 @@ async def _apply_validated_settings(
 ) -> dict:
     _check_no_lockout(candidate)
     validated = Settings.model_validate(candidate)
+    if not validated.plugin.enabled:
+        raise ValueError(_LOCKOUT_MESSAGE)
     dumped = validated.model_dump()
     await plugin.on_config_update("self", dumped, 0)
     next_ver = int(state.get("current_version", 0)) + 1
@@ -961,6 +963,7 @@ async def patch_settings(
     expected_version: int | None = None,
     author: str = "maisya_shape",
     reason: str = "",
+    dry_run: bool = False,
 ) -> dict:
     if patch is not None:
         patch = _unwrap_item_wrappers(patch)
@@ -1131,6 +1134,17 @@ async def patch_settings(
                     levels[spec] = new_val
             candidate["chat_proactive_levels"] = levels
 
+        if dry_run:
+            _check_no_lockout(candidate)
+            validated = Settings.model_validate(candidate)
+            if not validated.plugin.enabled:
+                raise ValueError(_LOCKOUT_MESSAGE)
+            return {
+                "kind": "settings",
+                "version": int(state["current_version"]),
+                "settings": validated.model_dump(),
+            }
+
         return await _apply_validated_settings(
             plugin,
             candidate,
@@ -1256,6 +1270,7 @@ async def patch_profile(
     current_platform: str = "",
     expected_version: int | None = None,
     author: str = "maisya_shape",
+    dry_run: bool = False,
 ) -> dict:
     target = str(target or "").strip()
     if not target:
@@ -1440,6 +1455,28 @@ async def patch_profile(
                 ]
             cfg["allow_chats"] = cur_chats
 
+        new_md_ver = md_doc["version"]
+        md_content = md_doc["content"]
+        updated_md: str | None = None
+        if new_instructions is not None:
+            updated_md = str(new_instructions)
+        elif append_instructions and append_instructions not in md_content:
+            base = md_content.rstrip()
+            updated_md = f"{base}\n\n{append_instructions}\n" if base else f"{append_instructions}\n"
+
+        if dry_run:
+            if cfg != orig_cfg or not toml_doc["content"].strip():
+                rendered_check = serialize_profile_toml(cfg)
+                tomllib.loads(rendered_check)
+            if updated_md is not None and updated_md != md_content:
+                plugin.memory._guard("profile", updated_md, "", "PROFILE.md", allow_custom=True)
+            return {
+                "kind": "profile",
+                "target": target,
+                "version": toml_doc["version"],
+                "instructions_version": new_md_ver,
+            }
+
         new_toml_ver = toml_doc["version"]
         if cfg != orig_cfg or not toml_doc["content"].strip():
             rendered = serialize_profile_toml(cfg)
@@ -1467,14 +1504,6 @@ async def patch_profile(
                 )
                 raise
 
-        new_md_ver = md_doc["version"]
-        md_content = md_doc["content"]
-        updated_md: str | None = None
-        if new_instructions is not None:
-            updated_md = str(new_instructions)
-        elif append_instructions and append_instructions not in md_content:
-            base = md_content.rstrip()
-            updated_md = f"{base}\n\n{append_instructions}\n" if base else f"{append_instructions}\n"
         if updated_md is not None and updated_md != md_content:
             md_res = plugin.memory.write(
                 "profile",
@@ -1765,6 +1794,53 @@ async def handle_services_or_webhooks(
     )
 
 
+def _normalize_recipe_import_mode(raw_mode: object) -> str:
+    cleaned = str(raw_mode or "").strip()
+    if not cleaned or cleaned == "create":
+        return "copy"
+    return cleaned
+
+
+def _resolve_recipe_target_hint(source: dict, mode: str) -> str:
+    if mode == "copy":
+        raw = (
+            source.get("suggested_copy_id")
+            or source.get("suggested_target")
+            or source.get("suggested_id")
+        )
+    else:
+        raw = (
+            source.get("suggested_target")
+            or source.get("suggested_copy_id")
+            or source.get("suggested_id")
+        )
+    return str(raw or "").strip()
+
+
+def _build_recipe_import_payload(
+    preview_token: str,
+    *,
+    target: str,
+    mode: str,
+    opts: dict,
+) -> dict:
+    payload: dict = {
+        "preview_token": preview_token,
+        "target": target,
+        "mode": mode,
+    }
+    for key in (
+        "install_skills",
+        "overwrite_skills",
+        "mount_routines",
+        "routine_chat_id",
+        "routine_platform",
+    ):
+        if key in opts and opts[key] is not None:
+            payload[key] = copy.deepcopy(opts[key])
+    return payload
+
+
 async def handle_recipe(
     plugin,
     *,
@@ -1777,19 +1853,22 @@ async def handle_recipe(
     if action == "read":
         return await completed_thread(build_recipe_draft, plugin, target or "scout")
     opts = dict(patch or {})
+    mode = _normalize_recipe_import_mode(opts.get("mode"))
     tok = str(preview_token or opts.get("preview_token") or "").strip()
     if tok:
+        tok_target = (
+            str(target or opts.get("target") or "").strip()
+            or _resolve_recipe_target_hint(opts, mode)
+        )
+        payload = _build_recipe_import_payload(
+            tok,
+            target=tok_target,
+            mode=mode,
+            opts=opts,
+        )
         return await plugin.management.write(
             "recipe_import",
-            json.dumps(
-                {
-                    "preview_token": tok,
-                    "target": target or str(opts.get("target") or "").strip(),
-                    "mode": str(opts.get("mode") or "create"),
-                    "on_conflict": str(opts.get("on_conflict") or "keep"),
-                },
-                ensure_ascii=False,
-            ),
+            json.dumps(payload, ensure_ascii=False),
         )
     source_url = str(url or opts.get("url") or "").strip()
     if not source_url:
@@ -1800,18 +1879,20 @@ async def handle_recipe(
     )
     if action == "create" or opts.get("apply") is True:
         ptok = str(preview.get("preview_token") or preview.get("token") or "").strip()
-        if ptok and preview.get("can_import", True):
+        if ptok:
+            resolved_target = (
+                str(target or opts.get("target") or "").strip()
+                or _resolve_recipe_target_hint(preview, mode)
+            )
+            payload = _build_recipe_import_payload(
+                ptok,
+                target=resolved_target,
+                mode=mode,
+                opts=opts,
+            )
             imported = await plugin.management.write(
                 "recipe_import",
-                json.dumps(
-                    {
-                        "preview_token": ptok,
-                        "target": target or str(preview.get("suggested_id") or "").strip(),
-                        "mode": str(opts.get("mode") or "create"),
-                        "on_conflict": str(opts.get("on_conflict") or "keep"),
-                    },
-                    ensure_ascii=False,
-                ),
+                json.dumps(payload, ensure_ascii=False),
             )
             return {**preview, "imported": imported}
     return preview
@@ -2194,7 +2275,9 @@ async def build_overview(
     known_chats = await collect_known_chats(plugin)
     assets = await completed_thread(plugin.management._assets)
     host_models = await plugin.management._collect_host_models(force=False, probe_host=True)
-    profiles = [profile_summary(plugin, item["id"]) for item in assets.get("profiles") or ()]
+    profiles = await completed_thread(
+        lambda: [profile_summary(plugin, item["id"]) for item in assets.get("profiles") or ()]
+    )
     pending = (
         await completed_thread(plugin.intents.list_all, status="pending", limit=50)
         if getattr(plugin, "intents", None) is not None
@@ -2352,9 +2435,6 @@ _SETUP_CHAT_FIELDS = frozenset(
         "auto_seed_sources",
         "run_now",
         "chat_proactive_level",
-        "enable_profiles",
-        "profiles",
-        "profile",
     }
 )
 
@@ -2515,6 +2595,7 @@ async def _apply_setup_settings(
     effective_platform: str,
     stream_spec: str,
     author: str,
+    dry_run: bool = False,
 ) -> dict | None:
     enable_chat, enable_chat_specs = await _parse_setup_enable_chat(
         plugin,
@@ -2574,6 +2655,7 @@ async def _apply_setup_settings(
         current_platform=effective_platform,
         author=author,
         reason="一段话完成配置",
+        dry_run=dry_run,
     )
     applied_settings = res.get("settings") or {}
     return {
@@ -2592,6 +2674,16 @@ async def _apply_setup_settings(
     }
 
 
+def _validate_setup_schedules_shape(opts: dict) -> None:
+    raw_schedules = opts.get("schedules")
+    if raw_schedules is not None:
+        if not isinstance(raw_schedules, (list, tuple)):
+            raise ValueError("schedules 必须是计划列表")
+        for item in raw_schedules:
+            if not isinstance(item, dict):
+                raise ValueError("schedules 中的每一项都必须是对象")
+
+
 def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
     if "digest" in profile_patches:
         return profile_patches["digest"].get("enabled") is not False
@@ -2605,6 +2697,7 @@ def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
         opts.get(key) for key in (*_DIGEST_SOURCE_OP_KEYS, "topics")
     ) or auto_seed_flag:
         return True
+    _validate_setup_schedules_shape(opts)
     for item in opts.get("schedules") or ():
         if isinstance(item, dict) and str(item.get("profile") or "").strip() == "digest":
             return True
@@ -2622,14 +2715,7 @@ def _digest_is_involved(opts: dict, profile_patches: dict[str, dict]) -> bool:
     return False
 
 
-async def _apply_setup_profiles(
-    plugin,
-    opts: dict,
-    *,
-    effective_chat_id: str,
-    effective_platform: str,
-    author: str,
-) -> dict[str, dict]:
+async def _prepare_setup_profile_patches(plugin, opts: dict) -> dict[str, dict]:
     profile_patches: dict[str, dict] = {}
     raw_enable = opts.get("enable_profiles")
     if isinstance(raw_enable, str) and raw_enable.strip():
@@ -2712,10 +2798,53 @@ async def _apply_setup_profiles(
             ):
                 digest_patch["max_steps"] = 20
 
+    return profile_patches
+
+
+async def _apply_setup_profiles(
+    plugin,
+    opts: dict,
+    *,
+    effective_chat_id: str,
+    effective_platform: str,
+    author: str,
+    dry_run: bool = False,
+    rollback_snaps: list | None = None,
+    prepared_patches: dict[str, dict] | None = None,
+) -> dict[str, dict]:
+    profile_patches = (
+        prepared_patches
+        if prepared_patches is not None
+        else await _prepare_setup_profile_patches(plugin, opts)
+    )
     applied: dict[str, dict] = {}
     for pid, p_patch in profile_patches.items():
         if not p_patch:
             continue
+        if dry_run:
+            await patch_profile(
+                plugin,
+                pid,
+                p_patch,
+                current_chat_id=effective_chat_id,
+                current_platform=effective_platform,
+                author=author,
+                dry_run=True,
+            )
+            applied[pid] = dict(p_patch)
+            continue
+        if rollback_snaps is not None:
+            toml_snap = await completed_thread(
+                lambda target_id=pid: plugin.memory.read(
+                    "profile", target=target_id, document="profile.toml", allow_custom=True
+                )
+            )
+            md_snap = await completed_thread(
+                lambda target_id=pid: plugin.memory.read(
+                    "profile", target=target_id, document="PROFILE.md", allow_custom=True
+                )
+            )
+            rollback_snaps.append((pid, toml_snap, md_snap))
         res = await patch_profile(
             plugin,
             pid,
@@ -2748,6 +2877,7 @@ async def _apply_setup_memory(
     *,
     effective_chat_id: str,
     author: str,
+    dry_run: bool = False,
 ) -> dict | None:
     replace_raw = opts.get("replace_memory")
     replace_flag = False
@@ -2771,6 +2901,12 @@ async def _apply_setup_memory(
     if not replace_flag and not joined:
         return None
     mem_patch = {"content": joined} if replace_flag else {"append": joined}
+    _assert_no_secret(plugin, mem_patch, "文本写入内容")
+    if dry_run:
+        await completed_thread(
+            lambda: plugin.memory._guard("memory", joined, effective_chat_id, "", allow_custom=True)
+        )
+        return {"chat_id": effective_chat_id, "mode": "replace" if replace_flag else "append"}
     res = await patch_memory_doc(
         plugin,
         kind="memory",
@@ -2804,6 +2940,8 @@ async def _apply_setup_digest_sources(
     effective_platform: str,
     digest_involved: bool,
     warnings: list[str],
+    dry_run: bool = False,
+    sources_snapshot: dict | None = None,
 ) -> dict | None:
     rss_raw = _collect_digest_source_items(opts, _DIGEST_ADD_KEYS)
     discover_raw = _collect_digest_source_items(opts, _DIGEST_DISCOVER_KEYS)
@@ -2822,6 +2960,10 @@ async def _apply_setup_digest_sources(
     raw_broad = opts.get("broad")
     broad_flag = _coerce_bool(raw_broad, "broad") if raw_broad is not None else None
 
+    for item in rss_raw:
+        if isinstance(item, dict) and item.get("auto") is not None:
+            _coerce_bool(item.get("auto"), "rss_urls[].auto")
+
     ws_name = normalize_profile_workspace("digest", str(opts.get("workspace") or "digest"))
     has_explicit_ops = bool(rss_raw or discover_raw or unsub_raw)
     should_seed_check = digest_involved and auto_seed is not False
@@ -2829,6 +2971,9 @@ async def _apply_setup_digest_sources(
         should_seed_check and (topics_raw or auto_seed is True or digest_involved)
     ):
         return None
+    if dry_run:
+        await completed_thread(plugin.profiles.get, "digest")
+        return {"workspace": ws_name}
 
     binding = await completed_thread(
         _find_digest_workspace_binding,
@@ -2839,6 +2984,9 @@ async def _apply_setup_digest_sources(
     )
 
     async def _configure_sources(dw: DigestWorkspace) -> dict:
+        if sources_snapshot is not None:
+            sources_snapshot["workspace"] = ws_name
+            sources_snapshot["orig_sources"] = copy.deepcopy(dw._load_sources())
         added_count = 0
         discovered_count = 0
         unsubscribed_count = 0
@@ -3033,6 +3181,9 @@ async def _apply_setup_schedules(
     effective_chat_id: str,
     effective_platform: str,
     default_profile: str,
+    dry_run: bool = False,
+    planned_profiles: dict[str, dict] | None = None,
+    schedule_tracker: dict | None = None,
 ) -> tuple[list[dict], list[str]]:
     raw_schedules = opts.get("schedules")
     raw_daily = opts.get("daily_at")
@@ -3052,9 +3203,9 @@ async def _apply_setup_schedules(
 
     requests: list[dict] = []
     if raw_daily is not None:
-        slots = [raw_daily] if isinstance(raw_daily, str) else list(raw_daily)
         if not isinstance(raw_daily, (str, list, tuple)):
             raise ValueError("daily_at 必须是 HH:MM 字符串或列表")
+        slots = [raw_daily] if isinstance(raw_daily, str) else list(raw_daily)
         requests.append(
             {
                 "daily_at": slots,
@@ -3066,11 +3217,8 @@ async def _apply_setup_schedules(
             }
         )
     if raw_schedules is not None:
-        if not isinstance(raw_schedules, (list, tuple)):
-            raise ValueError("schedules 必须是计划列表")
+        _validate_setup_schedules_shape(opts)
         for item in raw_schedules:
-            if not isinstance(item, dict):
-                raise ValueError("schedules 中的每一项都必须是对象")
             item_daily = item.get("daily_at")
             if isinstance(item_daily, str):
                 item_slots = [item_daily]
@@ -3105,7 +3253,11 @@ async def _apply_setup_schedules(
         pid = req["profile"] or default_profile or "digest"
         if pid not in profiles_checked:
             ability = await completed_thread(plugin.profiles.get, pid)
-            plugin.runtime.available(ability)
+            if planned_profiles is not None and pid in planned_profiles and "enabled" in planned_profiles[pid]:
+                if not planned_profiles[pid]["enabled"]:
+                    raise PermissionError("角色已停用")
+            else:
+                plugin.runtime.available(ability)
             profiles_checked[pid] = ability
         ws = normalize_profile_workspace(
             pid, req["workspace"] or ("digest" if pid == "digest" else "")
@@ -3134,6 +3286,9 @@ async def _apply_setup_schedules(
                 }
             )
 
+    if dry_run:
+        return normalized_items, []
+
     cancelled_ids: list[str] = []
     if replace_sched and normalized_items:
         alias_ids = {effective_chat_id}
@@ -3150,6 +3305,8 @@ async def _apply_setup_schedules(
                 for cid in cancelled:
                     if cid not in cancelled_ids:
                         cancelled_ids.append(cid)
+                        if schedule_tracker is not None:
+                            schedule_tracker["cancelled"].append(cid)
 
     created_schedules: list[dict] = []
     for item in normalized_items:
@@ -3176,6 +3333,8 @@ async def _apply_setup_schedules(
                 bypass_limits=True,
             )
         )
+        if schedule_tracker is not None:
+            schedule_tracker["created"].append((row["intent_id"], row["target"]))
         created_schedules.append(
             {
                 "intent_id": row["intent_id"],
@@ -3196,10 +3355,15 @@ async def _apply_setup_trial(
     *,
     effective_chat_id: str,
     effective_platform: str,
+    stream_spec: str = "",
     current_chat_id: str,
     current_platform: str,
     source_msg_id: str,
     default_profile: str,
+    dry_run: bool = False,
+    planned_profiles: dict[str, dict] | None = None,
+    planned_enabled_chats: set[str] | None = None,
+    trial_tracker: dict | None = None,
 ) -> dict | None:
     raw_run_now = opts.get("run_now")
     run_now = _coerce_bool(raw_run_now, "run_now") if raw_run_now is not None else False
@@ -3226,7 +3390,15 @@ async def _apply_setup_trial(
             else f"立即为当前会话试跑一次 {trial_profile} 工作流。"
         )
     ability = await completed_thread(plugin.profiles.get, trial_profile)
-    plugin.runtime.available(ability)
+    if (
+        planned_profiles is not None
+        and trial_profile in planned_profiles
+        and "enabled" in planned_profiles[trial_profile]
+    ):
+        if not planned_profiles[trial_profile]["enabled"]:
+            raise PermissionError("角色已停用")
+    else:
+        plugin.runtime.available(ability)
 
     cross_chat = bool(current_chat_id and effective_chat_id != current_chat_id)
     if deliver_to == "none":
@@ -3236,15 +3408,25 @@ async def _apply_setup_trial(
     else:
         delivery_mode = "target"
 
-    if (
-        cross_chat
-        and delivery_mode == "target"
-        and hasattr(plugin, "enabled_for")
-        and not plugin.enabled_for(effective_chat_id, effective_platform)
-    ):
-        raise PermissionError(
-            "目标会话未加入 enabled_chats，无法向其投递试跑结果；请开启 enable_chat 或传 deliver_to='current'"
-        )
+    if cross_chat and delivery_mode == "target":
+        if planned_enabled_chats is not None:
+            will_be_enabled = stream_spec in planned_enabled_chats or (
+                hasattr(plugin, "enabled_for")
+                and plugin.enabled_for(effective_chat_id, effective_platform)
+                and effective_chat_id in planned_enabled_chats
+                or stream_spec in planned_enabled_chats
+            )
+            if not will_be_enabled and hasattr(plugin, "chat_aliases_for"):
+                aliases = plugin.chat_aliases_for(effective_chat_id, effective_platform)
+                will_be_enabled = bool(aliases & planned_enabled_chats)
+        elif hasattr(plugin, "enabled_for"):
+            will_be_enabled = plugin.enabled_for(effective_chat_id, effective_platform)
+        else:
+            will_be_enabled = True
+        if not will_be_enabled:
+            raise PermissionError(
+                "目标会话未加入 enabled_chats，无法向其投递试跑结果；请开启 enable_chat 或传 deliver_to='current'"
+            )
 
     wait_seconds = 0
     if opts.get("wait_seconds") is not None:
@@ -3252,6 +3434,12 @@ async def _apply_setup_trial(
             max(0, _coerce_int(opts["wait_seconds"], "wait_seconds")),
             5,
         )
+    if dry_run:
+        return {
+            "profile": trial_profile,
+            "workspace": trial_ws,
+            "deliver_to": delivery_mode,
+        }
     route = (
         await plugin.bridge.route(current_chat_id, source_msg_id, wait_seconds)
         if delivery_mode == "current" and current_chat_id and hasattr(plugin, "bridge")
@@ -3277,6 +3465,8 @@ async def _apply_setup_trial(
             workspace=trial_ws,
             grant=grant,
         )
+        if trial_tracker is not None:
+            trial_tracker["thread_id"] = started["thread_id"]
         if (
             route
             and started.get("state") in {"idle", "waiting"}
@@ -3297,6 +3487,9 @@ async def _apply_setup_trial(
             is_admin_caller=True,
         )
         delivery_intent_id = str(delivery.get("intent_id") or "")
+        if trial_tracker is not None and delivery_intent_id:
+            trial_tracker["delivery_intent_id"] = delivery_intent_id
+            trial_tracker["delivery_target"] = "chat:" + effective_chat_id
     return {
         "thread_id": started["thread_id"],
         "state": started.get("state", ""),
@@ -3366,7 +3559,9 @@ async def handle_setup(
     warnings: list[str] = []
     applied: dict = {}
 
-    settings_res = await _apply_setup_settings(
+    # Phase 1: pre-validate every setup step before persisting anything
+    _validate_setup_schedules_shape(opts)
+    planned_settings = await _apply_setup_settings(
         plugin,
         opts,
         has_explicit_target=bool(raw_tc),
@@ -3374,77 +3569,314 @@ async def handle_setup(
         effective_platform=effective_platform,
         stream_spec=stream_spec,
         author=author,
+        dry_run=True,
     )
-    if settings_res is not None:
-        applied["settings"] = settings_res
-
-    profiles_res = await _apply_setup_profiles(
+    planned_profile_patches = await _prepare_setup_profile_patches(plugin, opts)
+    planned_profiles = await _apply_setup_profiles(
         plugin,
         opts,
         effective_chat_id=effective_chat_id,
         effective_platform=effective_platform,
         author=author,
+        dry_run=True,
+        prepared_patches=planned_profile_patches,
     )
-    if profiles_res:
-        applied["profiles"] = profiles_res
-
-    memory_res = await _apply_setup_memory(
+    await _apply_setup_memory(
         plugin,
         opts,
         effective_chat_id=effective_chat_id,
         author=author,
+        dry_run=True,
     )
-    if memory_res is not None:
-        applied["memory"] = memory_res
 
     default_profile = str(opts.get("profile") or "").strip()
     if not default_profile:
-        default_profile = next(iter(profiles_res), "digest")
+        default_profile = next(iter(planned_profiles), "digest")
     digest_explicitly_disabled = (
-        "digest" in profiles_res and profiles_res["digest"].get("enabled") is False
+        "digest" in planned_profiles and planned_profiles["digest"].get("enabled") is False
     )
     digest_involved = not digest_explicitly_disabled and (
-        "digest" in profiles_res
+        "digest" in planned_profiles
         or default_profile == "digest"
         or any(
             isinstance(item, dict) and str(item.get("profile") or "").strip() == "digest"
             for item in (opts.get("schedules") or ())
         )
     )
-
-    sources_res = await _apply_setup_digest_sources(
+    await _apply_setup_digest_sources(
         plugin,
         opts,
         effective_chat_id=effective_chat_id,
         effective_platform=effective_platform,
         digest_involved=digest_involved,
         warnings=warnings,
+        dry_run=True,
     )
-    if sources_res is not None:
-        applied["digest_sources"] = sources_res
-
-    schedules, cancelled_schedules = await _apply_setup_schedules(
+    await _apply_setup_schedules(
         plugin,
         opts,
         effective_chat_id=effective_chat_id,
         effective_platform=effective_platform,
         default_profile=default_profile,
+        dry_run=True,
+        planned_profiles=planned_profiles,
     )
-    if schedules or cancelled_schedules:
-        applied["schedules"] = {"count": len(schedules), "cancelled": len(cancelled_schedules)}
-
-    trial_info = await _apply_setup_trial(
+    planned_enabled_chats = (
+        set(planned_settings["enabled_chats"])
+        if planned_settings is not None
+        else set(getattr(plugin.settings, "enabled_chats", ()) or ())
+    )
+    await _apply_setup_trial(
         plugin,
         opts,
         effective_chat_id=effective_chat_id,
         effective_platform=effective_platform,
+        stream_spec=stream_spec,
         current_chat_id=current_chat_id,
         current_platform=current_platform,
         source_msg_id=source_msg_id,
         default_profile=default_profile,
+        dry_run=True,
+        planned_profiles=planned_profiles,
+        planned_enabled_chats=planned_enabled_chats,
     )
-    if trial_info is not None:
-        applied["trial_run"] = trial_info
+
+    # Phase 2: apply with per-step snapshots and full reverse rollback on any exception
+    rollbacks: list = []
+    try:
+        if planned_settings is not None:
+            orig_settings_state = await completed_thread(_load_or_sync_settings_history, plugin)
+            settings_path = plugin.data_root / "settings.json"
+            orig_settings_bytes = await completed_thread(
+                lambda: settings_path.read_bytes() if settings_path.is_file() else None
+            )
+
+            async def _rb_settings() -> None:
+                async with _shaping_lock(plugin):
+                    orig_live = copy.deepcopy(orig_settings_state["entries"][-1]["settings"])
+                    await plugin.on_config_update("self", orig_live, 0)
+
+                    def _restore_files() -> None:
+                        if orig_settings_bytes is not None:
+                            atomic_private_write(settings_path, orig_settings_bytes)
+                        else:
+                            settings_path.unlink(missing_ok=True)
+                        atomic_private_write(
+                            _history_path(plugin),
+                            json.dumps(orig_settings_state, ensure_ascii=False).encode(),
+                        )
+
+                    await completed_thread(_restore_files)
+
+            rollbacks.append(_rb_settings)
+            settings_res = await _apply_setup_settings(
+                plugin,
+                opts,
+                has_explicit_target=bool(raw_tc),
+                effective_chat_id=effective_chat_id,
+                effective_platform=effective_platform,
+                stream_spec=stream_spec,
+                author=author,
+            )
+            if settings_res is not None:
+                applied["settings"] = settings_res
+
+        touched_profile_snaps: list[tuple[str, dict, dict]] = []
+
+        async def _rb_profiles() -> None:
+            def _restore_profiles() -> None:
+                for pid, toml_snap, md_snap in reversed(touched_profile_snaps):
+                    cur_toml = plugin.memory.read(
+                        "profile", target=pid, document="profile.toml", allow_custom=True
+                    )
+                    if cur_toml["content"] != toml_snap["content"]:
+                        plugin.memory.write(
+                            "profile",
+                            toml_snap["content"],
+                            expected_version=cur_toml["version"],
+                            target=pid,
+                            document="profile.toml",
+                            author="rollback",
+                            allow_custom=True,
+                        )
+                    cur_md = plugin.memory.read(
+                        "profile", target=pid, document="PROFILE.md", allow_custom=True
+                    )
+                    if cur_md["content"] != md_snap["content"]:
+                        plugin.memory.write(
+                            "profile",
+                            md_snap["content"],
+                            expected_version=cur_md["version"],
+                            target=pid,
+                            document="PROFILE.md",
+                            author="rollback",
+                            allow_custom=True,
+                        )
+                    plugin.profiles.get(pid)
+
+            if touched_profile_snaps:
+                await completed_thread(_restore_profiles)
+
+        rollbacks.append(_rb_profiles)
+        profiles_res = await _apply_setup_profiles(
+            plugin,
+            opts,
+            effective_chat_id=effective_chat_id,
+            effective_platform=effective_platform,
+            author=author,
+            rollback_snaps=touched_profile_snaps,
+            prepared_patches=planned_profile_patches,
+        )
+        if profiles_res:
+            applied["profiles"] = profiles_res
+
+        orig_mem_doc = await completed_thread(
+            lambda: plugin.memory.read("memory", chat_id=effective_chat_id, allow_custom=True)
+        )
+        memory_res = await _apply_setup_memory(
+            plugin,
+            opts,
+            effective_chat_id=effective_chat_id,
+            author=author,
+        )
+        if memory_res is not None:
+            applied["memory"] = memory_res
+
+            async def _rb_memory() -> None:
+                def _restore_mem() -> None:
+                    cur_mem = plugin.memory.read(
+                        "memory", chat_id=effective_chat_id, allow_custom=True
+                    )
+                    if cur_mem["content"] != orig_mem_doc["content"]:
+                        plugin.memory.write(
+                            "memory",
+                            orig_mem_doc["content"],
+                            expected_version=cur_mem["version"],
+                            chat_id=effective_chat_id,
+                            author="rollback",
+                            allow_custom=True,
+                        )
+
+                await completed_thread(_restore_mem)
+
+            rollbacks.append(_rb_memory)
+
+        sources_snapshot: dict = {}
+
+        async def _rb_digest_sources() -> None:
+            if "orig_sources" not in sources_snapshot:
+                return
+            ws_name = sources_snapshot["workspace"]
+            binding = await completed_thread(
+                _find_digest_workspace_binding,
+                plugin,
+                effective_chat_id,
+                effective_platform,
+                ws_name,
+            )
+
+            async def _restore_sources(dw: DigestWorkspace) -> None:
+                dw._save_sources(sources_snapshot["orig_sources"])
+
+            await _run_in_digest_workspace(
+                plugin,
+                effective_chat_id,
+                effective_platform,
+                ws_name,
+                binding,
+                _restore_sources,
+            )
+
+        rollbacks.append(_rb_digest_sources)
+        sources_res = await _apply_setup_digest_sources(
+            plugin,
+            opts,
+            effective_chat_id=effective_chat_id,
+            effective_platform=effective_platform,
+            digest_involved=digest_involved,
+            warnings=warnings,
+            sources_snapshot=sources_snapshot,
+        )
+        if sources_res is not None:
+            applied["digest_sources"] = sources_res
+
+        sched_tracker: dict[str, list] = {"cancelled": [], "created": []}
+
+        async def _rb_schedules() -> None:
+            if plugin.intents is None:
+                return
+
+            def _restore_schedules() -> None:
+                for intent_id, target in reversed(sched_tracker["created"]):
+                    try:
+                        plugin.intents.cancel(intent_id, target)
+                    except ValueError:
+                        pass
+                if sched_tracker["cancelled"]:
+                    with plugin.intents.store.connect() as db, db:
+                        for cid in reversed(sched_tracker["cancelled"]):
+                            db.execute(
+                                "UPDATE intents SET status='pending', handled=NULL WHERE intent_id=? AND status='cancelled'",
+                                (cid,),
+                            )
+
+            if sched_tracker["created"] or sched_tracker["cancelled"]:
+                await completed_thread(_restore_schedules)
+
+        rollbacks.append(_rb_schedules)
+        schedules, cancelled_schedules = await _apply_setup_schedules(
+            plugin,
+            opts,
+            effective_chat_id=effective_chat_id,
+            effective_platform=effective_platform,
+            default_profile=default_profile,
+            schedule_tracker=sched_tracker,
+        )
+        if schedules or cancelled_schedules:
+            applied["schedules"] = {"count": len(schedules), "cancelled": len(cancelled_schedules)}
+
+        trial_tracker: dict = {}
+
+        async def _rb_trial() -> None:
+            deliv_id = trial_tracker.get("delivery_intent_id")
+            if deliv_id and plugin.intents is not None:
+                try:
+                    await completed_thread(
+                        plugin.intents.cancel,
+                        deliv_id,
+                        trial_tracker.get("delivery_target", "chat:" + effective_chat_id),
+                    )
+                except ValueError:
+                    pass
+            tid = trial_tracker.get("thread_id")
+            if tid and plugin.engine is not None:
+                try:
+                    await plugin.engine.stop(tid, chat_id=effective_chat_id)
+                except (ValueError, PermissionError, KeyError, sqlite3.Error):
+                    pass
+
+        rollbacks.append(_rb_trial)
+        trial_info = await _apply_setup_trial(
+            plugin,
+            opts,
+            effective_chat_id=effective_chat_id,
+            effective_platform=effective_platform,
+            stream_spec=stream_spec,
+            current_chat_id=current_chat_id,
+            current_platform=current_platform,
+            source_msg_id=source_msg_id,
+            default_profile=default_profile,
+            trial_tracker=trial_tracker,
+        )
+        if trial_info is not None:
+            applied["trial_run"] = trial_info
+    except BaseException:
+        for rb in reversed(rollbacks):
+            try:
+                await rb()
+            except Exception:
+                pass
+        raise
 
     trial_thread_id = trial_info["thread_id"] if trial_info else ""
     delivery_intent_id = trial_info.get("delivery_intent_id", "") if trial_info else ""

@@ -28,6 +28,15 @@ from .scout import call_capability
 from .workspaces import completed_thread
 
 
+def _is_native_absolute_program_path(raw: str) -> bool:
+    """校验程序路径匹配当前宿主操作系统的绝对路径风格（POSIX 拒绝 Windows 盘符）。"""
+    if not is_absolute_program_path(raw):
+        return False
+    if os.name == "nt":
+        return not raw.startswith("/")
+    return raw.startswith("/")
+
+
 def _unwrap_api_result(raw, key):
     if isinstance(raw, dict):
         if raw.get("success") is False:
@@ -181,9 +190,11 @@ def validate_endpoint_targets(targets):
             raise ValueError("受限网络目标主机或端口无效")
         try:
             ip_obj = ipaddress.IPv4Address(host)
-            candidates = [str(ip_obj)] if ip_obj.is_global else []
+            candidates = (
+                [str(ip_obj)] if ip_obj.is_global and not ip_obj.is_multicast else []
+            )
             if not candidates:
-                raise ValueError("受限网络目标禁止内网或保留地址")
+                raise ValueError("受限网络目标禁止内网、组播或保留地址")
         except ipaddress.AddressValueError:
             if len(host) > 253 or any(ch.isspace() for ch in host):
                 raise ValueError("受限网络目标域名无效")
@@ -196,7 +207,8 @@ def validate_endpoint_targets(targets):
             candidates = []
             for entry in resolved:
                 ip_text = entry[4][0]
-                if not ipaddress.IPv4Address(ip_text).is_global:
+                resolved_ip = ipaddress.IPv4Address(ip_text)
+                if not resolved_ip.is_global or resolved_ip.is_multicast:
                     raise ValueError("目标域名解析包含非公网地址，已拒绝")
                 if ip_text not in candidates:
                     candidates.append(ip_text)
@@ -225,11 +237,13 @@ def validate(schema, arguments):
 
 
 class StdioSession:
-    def __init__(self, child, home, cgroup=None):
+    def __init__(self, child, home, cgroup=None, uid=None, on_close=None):
         self.child, self.home, self.counter = child, home, 0
         self.lock = asyncio.Lock()
         self.tools = {}
         self.cgroup = cgroup
+        self.uid = uid
+        self._on_close = on_close
 
     async def notify(self, message):
         self.child.stdin.write(
@@ -278,33 +292,43 @@ class StdioSession:
             raise RuntimeError("MCP 通知数量超限")
 
     async def close(self):
-        if self.cgroup and self.cgroup.exists():
-            await completed_thread(
-                (self.cgroup / "cgroup.kill").write_text, "1", encoding="utf-8"
-            )
-        if self.child.returncode is None:
-            use_killpg = os.name != "nt" and hasattr(os, "killpg")
-            try:
-                if use_killpg:
-                    os.killpg(self.child.pid, signal.SIGTERM)
-                else:
-                    self.child.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(self.child.wait(), 2)
-            except TimeoutError:
+        try:
+            if self.cgroup and self.cgroup.exists():
+                try:
+                    await completed_thread(
+                        (self.cgroup / "cgroup.kill").write_text, "1", encoding="utf-8"
+                    )
+                except OSError:
+                    pass
+            if self.child.returncode is None:
+                use_killpg = os.name != "nt" and hasattr(os, "killpg")
                 try:
                     if use_killpg:
-                        os.killpg(self.child.pid, signal.SIGKILL)
+                        os.killpg(self.child.pid, signal.SIGTERM)
                     else:
-                        self.child.kill()
+                        self.child.terminate()
                 except ProcessLookupError:
                     pass
-                await self.child.wait()
-        await completed_thread(rmtree_safe, self.home)
-        if self.cgroup and self.cgroup.exists():
-            await completed_thread(self.cgroup.rmdir)
+                try:
+                    await asyncio.wait_for(self.child.wait(), 2)
+                except TimeoutError:
+                    try:
+                        if use_killpg:
+                            os.killpg(self.child.pid, signal.SIGKILL)
+                        else:
+                            self.child.kill()
+                    except ProcessLookupError:
+                        pass
+                    await self.child.wait()
+            await completed_thread(rmtree_safe, self.home, ignore_errors=True)
+            if self.cgroup and self.cgroup.exists():
+                try:
+                    await completed_thread(self.cgroup.rmdir)
+                except OSError:
+                    pass
+        finally:
+            if self._on_close is not None and self.uid is not None:
+                self._on_close(self.uid)
 
 
 class Services:
@@ -312,6 +336,7 @@ class Services:
         self.path, self.vault = Path(path), vault
         self.sessions = {}
         self.locks = {}
+        self.active_uids = set()
         self.digest = ""
         self.configuration = {"servers": {}, "templates": {}}
         self.closed = False
@@ -482,16 +507,56 @@ class Services:
 
         raise ValueError("未知跨插件 API 动作")
 
+    def _allocate_uid(self) -> int:
+        is_root_linux = sys.platform.startswith("linux") and os.geteuid() == 0
+        cgroup_base = Path("/sys/fs/cgroup") / self.cgroup_name if is_root_linux else None
+        for _ in range(128):
+            cand = 2000000 + int.from_bytes(os.urandom(3), "big") % 1000000
+            if cand in self.active_uids:
+                continue
+            if cgroup_base is not None and (cgroup_base / str(cand)).exists():
+                continue
+            self.active_uids.add(cand)
+            return cand
+        raise RuntimeError("无法分配可用的沙箱 UID")
+
+    def _session_lock_busy(
+        self, session_key, caller_service: str, caller_thread_id: str
+    ) -> bool:
+        s_service, _, _, s_thread_id = session_key
+        if (s_service, s_thread_id) == (caller_service, caller_thread_id):
+            return False
+        lock = self.locks.get((s_service, s_thread_id))
+        return bool(
+            lock is not None and (lock.locked() or getattr(lock, "_waiters", None))
+        )
+
+    async def _close_session_key_safe(self, session_key) -> bool:
+        session = self.sessions.pop(session_key, None)
+        if session is None:
+            return False
+        try:
+            await session.close()
+        except Exception:
+            pass
+        return True
+
+    async def _evict_session_key(
+        self, session_key, caller_service: str, caller_thread_id: str
+    ) -> bool:
+        if self._session_lock_busy(session_key, caller_service, caller_thread_id):
+            return False
+        s_service, _, _, s_thread_id = session_key
+        if (s_service, s_thread_id) == (caller_service, caller_thread_id):
+            return await self._close_session_key_safe(session_key)
+        cand_lock = self.locks.setdefault((s_service, s_thread_id), asyncio.Lock())
+        async with cand_lock:
+            return await self._close_session_key_safe(session_key)
+
     async def _session(self, service, context, config):
         key = service, self.digest, context["chat_id"], context["thread_id"]
         if key in self.sessions:
             return self.sessions[key]
-        for old_key in list(self.sessions):
-            if old_key[1] != self.digest:
-                await self.sessions.pop(old_key).close()
-        if len(self.sessions) >= 16:
-            oldest = next(iter(self.sessions))
-            await self.sessions.pop(oldest).close()
         command = config.get("command")
         if (
             not isinstance(command, list)
@@ -500,9 +565,20 @@ class Services:
             or not all(
                 isinstance(value, str) and "\x00" not in value for value in command
             )
-            or not is_absolute_program_path(command[0])
+            or not _is_native_absolute_program_path(command[0])
         ):
             raise ValueError("MCP 需要管理员登记的绝对程序路径与固定参数")
+        for old_key in list(self.sessions):
+            if old_key[1] != self.digest:
+                await self._evict_session_key(old_key, service, context["thread_id"])
+        while len(self.sessions) >= 16:
+            evicted = False
+            for cand_key in list(self.sessions):
+                if await self._evict_session_key(cand_key, service, context["thread_id"]):
+                    evicted = True
+                    break
+            if not evicted:
+                raise RuntimeError("当前活动 MCP 会话已达上限且均在使用中")
         credentials = config.get("credentials", {})
         if not isinstance(credentials, dict) or any(
             not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", name) for name in credentials
@@ -533,9 +609,9 @@ class Services:
                 self.vault.for_execution, handle
             )
         home = Path(tempfile.mkdtemp(prefix="maisya-mcp-"))
+        uid = self._allocate_uid()
         try:
             safe_chmod(home, 0o700)
-            uid = 2000000 + int.from_bytes(os.urandom(3), "big") % 1000000
             if sys.platform.startswith("linux") and os.geteuid() == 0:
                 os.chown(home, uid, uid)
             environment = minimal_subprocess_env(home=home)
@@ -571,6 +647,7 @@ class Services:
                     limit=12 * 1024**2,
                 )
         except BaseException:
+            self.active_uids.discard(uid)
             await completed_thread(rmtree_safe, home, ignore_errors=True)
             raise
         cgroup = (
@@ -578,7 +655,9 @@ class Services:
             if sys.platform.startswith("linux") and os.geteuid() == 0
             else None
         )
-        session = StdioSession(child, home, cgroup)
+        session = StdioSession(
+            child, home, cgroup, uid=uid, on_close=self.active_uids.discard
+        )
         try:
             response = await session.request(
                 "initialize",
@@ -618,12 +697,19 @@ class Services:
         if base.exists():
             return
         base.mkdir()
-        (base / "memory.max").write_text(str(512 * 1024**2), encoding="utf-8")
-        (base / "pids.max").write_text("128", encoding="utf-8")
-        (base / "cpu.max").write_text("100000 100000", encoding="utf-8")
-        (base / "cgroup.subtree_control").write_text(
-            "+memory +pids +cpu", encoding="utf-8"
-        )
+        try:
+            (base / "memory.max").write_text(str(512 * 1024**2), encoding="utf-8")
+            (base / "pids.max").write_text("128", encoding="utf-8")
+            (base / "cpu.max").write_text("100000 100000", encoding="utf-8")
+            (base / "cgroup.subtree_control").write_text(
+                "+memory +pids +cpu", encoding="utf-8"
+            )
+        except BaseException:
+            try:
+                base.rmdir()
+            except OSError:
+                pass
+            raise
 
     async def call(self, profile, arguments, context, runtime):
         if self.closed:
@@ -832,7 +918,7 @@ class Services:
             not isinstance(program, list)
             or not program
             or not all(isinstance(value, str) and "\x00" not in value for value in program)
-            or not is_absolute_program_path(program[0])
+            or not _is_native_absolute_program_path(program[0])
         ):
             raise ValueError("凭据模板程序必须是有效的绝对路径")
         if set(profile.secrets) != set(config.get("secrets", [])):
@@ -867,20 +953,22 @@ class Services:
     async def close_thread(self, thread_id):
         for key in list(self.sessions):
             if key[3] == thread_id:
-                await self.sessions.pop(key).close()
+                await self._close_session_key_safe(key)
 
     async def close(self):
         self.closed = True
-        for session in list(self.sessions.values()):
-            await session.close()
-        self.sessions.clear()
+        await self.close_sessions()
         cgroup = Path("/sys/fs/cgroup") / self.cgroup_name
         if sys.platform.startswith("linux") and cgroup.exists():
-            await completed_thread(cgroup.rmdir)
+            try:
+                await completed_thread(cgroup.rmdir)
+            except OSError:
+                pass
 
     async def close_sessions(self):
         for key in list(self.sessions):
-            await self.sessions.pop(key).close()
+            await self._close_session_key_safe(key)
+        self.sessions.clear()
 
     @staticmethod
     def apply_web_mapping(arguments, binding):

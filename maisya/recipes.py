@@ -24,7 +24,8 @@ from pathlib import Path
 
 from .abilities import ALLOWED_TASKS, FISH_SEED_RE, HOST_TOOLS, READONLY_TOOLS, SANDBOX_TOOLS
 from .memory import SKILL_ID_RE, MemoryLayers, _is_archive_junk, _normalize_archive_path, parse_skill_meta
-from .vault import atomic_private_write, private_directory
+from .pathsafe import path_is_link_like
+from .vault import VaultError, atomic_private_write, private_directory, relative_symlink_parts
 
 RECIPE_SCHEMA_VERSION = 1
 MAX_RECIPE_ARCHIVE_BYTES = 8 * 1024 * 1024
@@ -180,9 +181,26 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_factory, req)
 
 
+_NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+_NAT64_LOCAL_USE = ipaddress.IPv6Network("64:ff9b:1::/48")
+
+
 def _is_forbidden_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
-        ip_obj = ip_obj.ipv4_mapped
+    if isinstance(ip_obj, ipaddress.IPv6Address):
+        if ip_obj.ipv4_mapped is not None and _is_forbidden_ip(ip_obj.ipv4_mapped):
+            return True
+        if ip_obj.sixtofour is not None and _is_forbidden_ip(ip_obj.sixtofour):
+            return True
+        if ip_obj.teredo is not None:
+            server_ip, client_ip = ip_obj.teredo
+            if _is_forbidden_ip(server_ip) or _is_forbidden_ip(client_ip):
+                return True
+        if ip_obj in _NAT64_LOCAL_USE:
+            return True
+        if ip_obj in _NAT64_WELL_KNOWN:
+            embedded_v4 = ipaddress.IPv4Address(int(ip_obj) & 0xFFFFFFFF)
+            if _is_forbidden_ip(embedded_v4):
+                return True
     if (
         ip_obj.is_private
         or ip_obj.is_loopback
@@ -316,6 +334,7 @@ def _http_get_safe(
     current, host, pinned_ip, _port = _resolve_public_endpoint(start_url)
     for _hop in range(6):
         hop_opener = opener or urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
             _NoRedirectHandler(),
             _PinnedHTTPHandler(pinned_ip),
             _PinnedHTTPSHandler(pinned_ip, server_hostname=host),
@@ -802,11 +821,21 @@ def _assemble_recipe_bundle(plugin, profile_id: str, options: dict | None = None
     bundled_skills = []
     if include_skills:
         for skill_id in profile.skills:
-            skill_dir = plugin.data_root / "abilities/skills" / skill_id
-            if not (skill_dir / "SKILL.md").is_file():
+            data_skill_dir = plugin.data_root / "abilities/skills" / skill_id
+            if path_is_link_like(data_skill_dir):
+                raise ValueError("技能路径不能经过符号链接")
+            if (data_skill_dir / "SKILL.md").is_file() or path_is_link_like(data_skill_dir / "SKILL.md"):
+                managed_root = plugin.data_root
+                skill_dir = data_skill_dir
+            else:
+                managed_root = directory
                 skill_dir = directory / "preset/skills" / skill_id
             source_md = skill_dir / "SKILL.md"
-            if any(parent.is_symlink() for parent in source_md.parents):
+            try:
+                layers = relative_symlink_parts(source_md, managed_root)
+            except VaultError:
+                raise ValueError("技能路径不能经过符号链接") from None
+            if any(path_is_link_like(layer) for layer in layers):
                 raise ValueError("技能路径不能经过符号链接")
             md_bytes = MemoryLayers._bytes(source_md)
             if not md_bytes:

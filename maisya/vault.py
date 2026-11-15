@@ -1,16 +1,18 @@
 """只进不出的凭据保险箱与出站脱敏。"""
 
 import base64
+import errno
 import json
 import os
 import re
+import secrets
 import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from .pathsafe import create_exclusive, path_is_link_like, safe_chmod
+from .pathsafe import create_exclusive, path_is_link_like, replace_atomic, safe_chmod
 
 
 class VaultError(RuntimeError):
@@ -49,12 +51,38 @@ def redact_values(value, secrets):
     return value
 
 
-def private_directory(path: Path) -> Path:
-    if any(path_is_link_like(parent) for parent in (path, *path.parents)):
+def relative_symlink_parts(path: Path, stop_at: Path) -> tuple[Path, ...]:
+    """返回 stop_at 之下的逐层路径，避免受宿主机祖先目录软链影响。"""
+    target = Path(path)
+    anchor = Path(stop_at)
+    try:
+        rel = target.relative_to(anchor)
+    except ValueError:
+        lex_target = Path(os.path.abspath(os.fspath(target)))
+        lex_anchor = Path(os.path.abspath(os.fspath(anchor)))
+        try:
+            rel = lex_target.relative_to(lex_anchor)
+            anchor = lex_anchor
+        except ValueError:
+            raise VaultError("保险箱路径不能经过符号链接") from None
+    layers: list[Path] = []
+    cur = anchor
+    for part in rel.parts:
+        cur = cur / part
+        layers.append(cur)
+    return tuple(layers)
+
+
+def private_directory(path: Path, *, stop_at: Path | None = None) -> Path:
+    target = Path(path)
+    if stop_at is not None:
+        if any(path_is_link_like(layer) for layer in relative_symlink_parts(target, stop_at)):
+            raise VaultError("保险箱路径不能经过符号链接")
+    elif path_is_link_like(target):
         raise VaultError("保险箱路径不能经过符号链接")
-    path.mkdir(parents=True, mode=0o700, exist_ok=True)
-    safe_chmod(path, 0o700)
-    return path
+    target.mkdir(parents=True, mode=0o700, exist_ok=True)
+    safe_chmod(target, 0o700)
+    return target
 
 
 def atomic_private_write(path: Path, content: bytes) -> None:
@@ -82,11 +110,33 @@ class Vault:
         if not key_path.exists():
             if list(path.glob("*.enc")):
                 raise VaultError("保险箱密钥缺失，已停止读取")
-            descriptor = create_exclusive(key_path, 0o600)
-            with os.fdopen(descriptor, "wb") as output:
-                output.write(Fernet.generate_key())
-                output.flush()
-                os.fsync(output.fileno())
+            key_bytes = Fernet.generate_key()
+            temp_path = path / f".master.{secrets.token_hex(8)}.tmp"
+            descriptor = create_exclusive(temp_path, 0o600)
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    descriptor = -1
+                    output.write(key_bytes)
+                    output.flush()
+                    os.fsync(output.fileno())
+                try:
+                    os.link(temp_path, key_path)
+                except FileExistsError:
+                    pass
+                except OSError as error:
+                    if error.errno not in {errno.EPERM, errno.ENOTSUP, errno.EXDEV, errno.EOPNOTSUPP}:
+                        raise
+                    if not key_path.exists():
+                        replace_atomic(path, "master.key", key_bytes, mode=0o600)
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+        if path_is_link_like(key_path):
+            raise VaultError("保险箱密钥不能是符号链接")
         safe_chmod(key_path, 0o600)
         try:
             self._cipher = Fernet(key_path.read_bytes())
@@ -100,7 +150,7 @@ class Vault:
                 ):
                     raise ValueError
                 self.protect(record["value"])
-        except (InvalidToken, ValueError, KeyError, TypeError):
+        except (InvalidToken, ValueError, KeyError, TypeError, OSError):
             raise VaultError("保险箱内容校验失败，已停止读取") from None
 
     @staticmethod
@@ -136,7 +186,7 @@ class Vault:
                 raise ValueError("凭据结构无效")
             self.protect(record["value"])
             return record["value"]
-        except (InvalidToken, ValueError, KeyError):
+        except (InvalidToken, ValueError, KeyError, TypeError, OSError):
             raise VaultError("凭据读取失败") from None
 
     def protect(self, value: str) -> None:

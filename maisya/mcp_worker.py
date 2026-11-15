@@ -23,7 +23,7 @@ def main():
         if os.geteuid() == 0:
             base = Path("/sys/fs/cgroup") / group_name
             leaf = base / str(uid)
-            leaf.mkdir()
+            leaf.mkdir(exist_ok=True)
             (leaf / "memory.max").write_text(
                 str(memory_mib * 1024**2), encoding="utf-8"
             )
@@ -32,11 +32,9 @@ def main():
             os.setgroups([])
             os.setgid(uid)
             os.setuid(uid)
-        else:
-            resource.setrlimit(
-                resource.RLIMIT_AS, (memory_mib * 1024**2, memory_mib * 1024**2)
-            )
-        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+            # Only apply per-UID RLIMIT_NPROC after switching to the isolated worker UID;
+            # non-root shares UID with the host and RLIMIT_AS breaks V8/Go virtual mappings.
+            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
     os.execvpe(command[0], command, os.environ)
 
 
