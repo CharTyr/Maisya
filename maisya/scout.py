@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from .abilities import Profile
+from .context_budget import is_context_overflow_error
 
 
 def definition(name, description, properties, required=()):
@@ -288,6 +289,8 @@ TOOL_DEFINITIONS = {
                 "maxItems": 16,
             },
             "broad": {"type": "boolean"},
+            "query": {"type": "string", "minLength": 0, "maxLength": 512},
+            "total_candidates": {"type": "integer", "minimum": 0, "maximum": 1_000_000},
             "candidates": {
                 "type": "array",
                 "items": {"type": "object"},
@@ -690,6 +693,8 @@ class Scout:
                     self._model_cooldown.pop(model, None)
                 return redacted
             except (RuntimeError, ValueError, OSError, TimeoutError) as exc:
+                if is_context_overflow_error(exc):
+                    raise
                 last_error = exc
                 if model and _is_model_unavailable_error(exc):
                     self._mark_model_cooldown(model, time.monotonic())
