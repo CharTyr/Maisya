@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import inspect
 import json
 import re
 import time
@@ -194,15 +195,29 @@ class Incoming:
                     + json.dumps(redacted_event, ensure_ascii=False)
                     + "</external_event>"
                 )
+                self.plugin.engine._validate_input(prompt, 0)
+                intent_reason = reason_text.strip()[:500] or f"处理外部事件 {channel}"
+                if binding["kind"] == "proactive":
+                    quota_fn = self.plugin.intents.proactive_quota_available
+                    params = inspect.signature(quota_fn).parameters
+                    if "target" in params:
+                        quota_ok = await completed_thread(quota_fn, intent_target)
+                    else:
+                        quota_ok = await completed_thread(quota_fn)
+                    if not quota_ok:
+                        raise ValueError("普通惦记已达到每日上限")
+                run_chat = "self" if target_chat == "self" else target_chat
                 started = await self.plugin.engine.start(
                     ability,
                     prompt,
-                    chat_id="self" if target_chat == "self" else target_chat,
+                    chat_id=run_chat,
                     platform="self" if target_chat == "self" else (platform or "webhook"),
                     user_id="",
                     owner="self" if target_chat == "self" else "chat",
                     wait_seconds=0,
                     workspace=binding.get("workspace", ""),
+                    background=True,
+                    defer_if_full=True,
                 )
                 payload_data = {
                     "event": redacted_event,
@@ -213,18 +228,27 @@ class Incoming:
                         else {"already_started": True}
                     ),
                 }
-                intent = await completed_thread(
-                    self.plugin.intents.schedule,
-                    kind=binding["kind"],
-                    source="webhook",
-                    target=intent_target,
-                    due_at=self.plugin.intents.clock(),
-                    reason=reason_text,
-                    thread_id=started["thread_id"],
-                    payload=payload_data,
-                    event_key=key,
-                    event_digest=digest,
-                )
+                try:
+                    intent = await completed_thread(
+                        self.plugin.intents.schedule,
+                        kind=binding["kind"],
+                        source="webhook",
+                        target=intent_target,
+                        due_at=self.plugin.intents.clock(),
+                        reason=intent_reason,
+                        thread_id=started["thread_id"],
+                        payload=payload_data,
+                        event_key=key,
+                        event_digest=digest,
+                    )
+                except Exception:
+                    try:
+                        await self.plugin.engine.stop(
+                            started["thread_id"], chat_id=run_chat
+                        )
+                    except Exception:
+                        pass
+                    raise
                 return {
                     "success": True,
                     "intent_id": intent["intent_id"],

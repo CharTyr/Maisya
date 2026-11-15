@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import html
+import inspect
 import json
 import re
 import sqlite3
@@ -457,9 +458,19 @@ class ThreadStore:
     def recover(self):
         with self.connect() as db, db:
             db.execute(
-                'UPDATE agent_threads SET state="idle", result=? WHERE state="active"',
+                'UPDATE agent_threads SET state="idle", '
+                'result=CASE WHEN processed_revision < revision AND result != "{}" THEN result ELSE ? END '
+                'WHERE state="active"',
                 (encode({"error": "宿主重载中断了运行；可以给原线程 send 继续。"}),),
             )
+
+    def activate(self, thread_id):
+        with self.connect() as db, db:
+            cursor = db.execute(
+                'UPDATE agent_threads SET state="active", updated=? WHERE thread_id=? AND state!="closed"',
+                (time.time(), thread_id),
+            )
+            return cursor.rowcount > 0
 
     @staticmethod
     def _truncate_tool_block(block, *, target_chars: int, archive_seq: int):
@@ -625,13 +636,101 @@ class ThreadStore:
                     retained.extend(truncated_last)
                 elif index in selected:
                     retained.extend(block)
-            summary = encode(
-                {
-                    "archive_event": archive_seq,
-                    "read_tool": "thread_read",
-                    "note": "完整历史保存在本线程。需要更早的事实、决定、理由或出处时，按关键词回读；这是导航索引，不是事实摘要。",
-                }
-            )
+            prior_events: list[int] = []
+            prior_runs: list[dict] = []
+            if isinstance(row.get("summary"), str) and row["summary"].strip():
+                try:
+                    prev_summary = json.loads(row["summary"])
+                except ValueError:
+                    prev_summary = None
+                if isinstance(prev_summary, dict):
+                    raw_events = prev_summary.get("archive_events")
+                    if isinstance(raw_events, list):
+                        for item in raw_events:
+                            if isinstance(item, int) and not isinstance(item, bool):
+                                prior_events.append(item)
+                    elif isinstance(
+                        prev_summary.get("archive_event"), int
+                    ) and not isinstance(prev_summary.get("archive_event"), bool):
+                        prior_events.append(prev_summary["archive_event"])
+                    raw_runs = prev_summary.get("archived_runs")
+                    if isinstance(raw_runs, list):
+                        prior_runs = [
+                            item for item in raw_runs if isinstance(item, dict)
+                        ]
+            goals: list[str] = []
+            tools: list[str] = []
+            highlights: list[str] = []
+            for index, block in enumerate(blocks):
+                if index in selected or (
+                    index == last_idx and truncated_last is not None
+                ):
+                    continue
+                for msg in block:
+                    role = msg.get("role")
+                    if role == "user":
+                        raw_text = str(msg.get("content") or "")
+                        if raw_text.startswith(
+                            (
+                                "<thread_inputs>",
+                                "<thread_history>",
+                                "<memory_context>",
+                                "<activity_interrupted>",
+                            )
+                        ):
+                            continue
+                        snippet = _clean_input_title(raw_text)
+                        if snippet and snippet not in goals and len(goals) < 3:
+                            goals.append(snippet)
+                    elif role == "assistant":
+                        for call in msg.get("tool_calls") or []:
+                            if not isinstance(call, dict):
+                                continue
+                            fn = call.get("function") or {}
+                            if not isinstance(fn, dict):
+                                fn = {}
+                            tool_name = str(
+                                fn.get("name") or call.get("func_name") or ""
+                            ).strip()[:64]
+                            if (
+                                tool_name
+                                and tool_name not in tools
+                                and len(tools) < 8
+                            ):
+                                tools.append(tool_name)
+                        asst_text = re.sub(
+                            r"\s+", " ", str(msg.get("content") or "")
+                        ).strip()
+                        if asst_text:
+                            highlights.append(asst_text[:100])
+            highlights = highlights[-2:]
+            run_entry = {
+                "archive_event": archive_seq,
+                "revision": row["processed_revision"],
+                "goals": goals,
+                "tools": tools,
+                "highlights": highlights,
+            }
+            archive_events = [x for x in prior_events if x != archive_seq] + [
+                archive_seq
+            ]
+            archive_events = archive_events[-20:]
+            archived_runs = [
+                r for r in prior_runs if r.get("archive_event") != archive_seq
+            ] + [run_entry]
+            summary_obj = {
+                "archive_event": archive_seq,
+                "archive_events": archive_events,
+                "read_tool": "thread_read",
+                "note": "完整历史保存在本线程。需要更早的事实、决定、理由或出处时，按关键词回读；这是导航索引，不是事实摘要。",
+                "archived_runs": archived_runs,
+            }
+            while (
+                len(encode(summary_obj)) > 2400
+                and len(summary_obj["archived_runs"]) > 0
+            ):
+                summary_obj["archived_runs"].pop(0)
+            summary = encode(summary_obj)
             db.execute(
                 'UPDATE agent_threads SET summary=?, history=? WHERE thread_id=? AND state!="closed"',
                 (summary, encode(retained), thread_id),
@@ -899,12 +998,33 @@ class ThreadEngine:
         self.intents = intents
         self.serendipity = serendipity
         self.tasks = {}
+        self.background_tasks: set[str] = set()
         self.chats = {}
         self.locks = {}
         self.waiters = {}
         self._starting = 0
+        self._starting_bg = 0
         self._submission_lock = asyncio.Lock()
         self.closing = False
+
+    def _background_limit(self) -> int:
+        if self.max_active >= 4:
+            return self.max_active - 2
+        if self.max_active == 3:
+            return 2
+        return self.max_active
+
+    def _has_capacity(self, *, background: bool) -> bool:
+        total = len(self.tasks) + self._starting
+        if total >= self.max_active:
+            return False
+        if background:
+            return (
+                len(self.background_tasks) + self._starting_bg
+                < self._background_limit()
+                and total < self.max_active
+            )
+        return total < self.max_active
 
     async def recover(self):
         await asyncio.to_thread(self.store.recover)
@@ -924,11 +1044,28 @@ class ThreadEngine:
         grant=None,
         references=None,
         from_threads=None,
+        background: bool = False,
+        defer_if_full: bool = False,
     ):
-        if self.closing or len(self.tasks) + self._starting >= self.max_active:
-            raise ValueError("当前 Agent 线程已满，请稍后再试")
         self._validate_input(message, wait_seconds)
-        self._starting += 1
+        if self.closing:
+            raise ValueError("当前 Agent 线程已满，请稍后再试")
+        if not defer_if_full and not self._has_capacity(background=background):
+            raise ValueError("当前 Agent 线程已满，请稍后再试")
+        reserve = self._has_capacity(background=background)
+        if reserve:
+            self._starting += 1
+            if background:
+                self._starting_bg += 1
+        released = [not reserve]
+
+        def _release():
+            if not released[0]:
+                released[0] = True
+                self._starting -= 1
+                if background:
+                    self._starting_bg -= 1
+
         try:
             row = await asyncio.to_thread(
                 self.store.create,
@@ -952,9 +1089,12 @@ class ThreadEngine:
                     "references": references or [],
                     "from_threads": from_threads or [],
                 },
+                background=background,
+                defer_if_full=defer_if_full,
+                _release_reservation=_release,
             )
         finally:
-            self._starting -= 1
+            _release()
         waiters = self.waiters.get(row["thread_id"], [])
         if wait_seconds and waiters:
             try:
@@ -984,6 +1124,9 @@ class ThreadEngine:
         return_route=None,
         input_context=None,
         steer=False,
+        background: bool = False,
+        defer_if_full: bool = False,
+        _release_reservation=None,
     ):
         self._validate_input(message, wait_seconds)
         if type(steer) is not bool:
@@ -995,9 +1138,16 @@ class ThreadEngine:
             self._submission_lock,
             self.locks.setdefault(thread_id, asyncio.Lock()),
         ):
+            if _release_reservation is not None:
+                _release_reservation()
             row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
-            if thread_id not in self.tasks and len(self.tasks) >= self.max_active:
-                raise ValueError("当前 Agent 线程已满，请稍后再试")
+            deferred = False
+            if thread_id not in self.tasks and not self._has_capacity(
+                background=background
+            ):
+                if not defer_if_full:
+                    raise ValueError("当前 Agent 线程已满，请稍后再试")
+                deferred = True
             if row["revision"] - row["processed_revision"] >= 32:
                 raise ValueError("该线程正在消化已有补充，请稍后再发")
             if (
@@ -1015,12 +1165,20 @@ class ThreadEngine:
                 return_route,
                 input_context,
             )
+            if deferred:
+                return public(
+                    await asyncio.to_thread(self.store.get, thread_id, chat_id)
+                )
             future = asyncio.get_running_loop().create_future()
             self.waiters.setdefault(thread_id, []).append((revision, future))
             if steer and row["state"] == "active" and thread_id in self.tasks:
                 self.tasks[thread_id].cancel()
+            if not background and thread_id in self.tasks:
+                self.background_tasks.discard(thread_id)
             if thread_id not in self.tasks:
                 self.chats[thread_id] = chat_id
+                if background:
+                    self.background_tasks.add(thread_id)
                 self.tasks[thread_id] = asyncio.create_task(
                     self._drive(thread_id, chat_id)
                 )
@@ -1030,6 +1188,45 @@ class ThreadEngine:
             except TimeoutError:
                 pass
         return public(await asyncio.to_thread(self.store.get, thread_id, chat_id))
+
+    async def kick_queued(
+        self, thread_id: str, chat_id: str, *, background: bool = True
+    ) -> bool:
+        async with (
+            self._submission_lock,
+            self.locks.setdefault(thread_id, asyncio.Lock()),
+        ):
+            if self.closing or thread_id in self.tasks:
+                return False
+            try:
+                row = await asyncio.to_thread(
+                    self.store.get,
+                    thread_id,
+                    chat_id,
+                    allow_self=True,
+                    allow_any_chat=True,
+                )
+            except (ValueError, PermissionError):
+                return False
+            if (
+                row["state"] == "closed"
+                or row["processed_revision"] >= row["revision"]
+            ):
+                return False
+            if not self._has_capacity(background=background):
+                return False
+            run_chat = row["chat_id"] if row["owner"] != "self" else "self"
+            if row["state"] != "active":
+                activated = await asyncio.to_thread(self.store.activate, thread_id)
+                if not activated:
+                    return False
+            self.chats[thread_id] = run_chat
+            if background:
+                self.background_tasks.add(thread_id)
+            self.tasks[thread_id] = asyncio.create_task(
+                self._drive(thread_id, run_chat)
+            )
+            return True
 
     def _resolve(self, thread_id, row):
         remaining = []
@@ -1042,7 +1239,10 @@ class ThreadEngine:
         self.waiters[thread_id] = remaining
 
     async def _drive(self, thread_id, chat_id):
-        row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
+        row = await asyncio.to_thread(
+            self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
+        )
+        store_chat = row["chat_id"]
         profile = Profile(**row["profile_snapshot"])
         history, processed = row["history"], row["processed_revision"]
         context_index = row["summary"]
@@ -1109,11 +1309,13 @@ class ThreadEngine:
                         context_index = await asyncio.to_thread(
                             self.store.compact,
                             thread_id,
-                            chat_id,
+                            store_chat,
                             max_chars=self.context_chars,
                         )
                         history = (
-                            await asyncio.to_thread(self.store.get, thread_id, chat_id)
+                            await asyncio.to_thread(
+                                self.store.get, thread_id, store_chat
+                            )
                         )["history"]
                     request_history = history
                     if context_index:
@@ -1179,7 +1381,7 @@ class ThreadEngine:
                         redirecting = False
                         question = None
                         current = await asyncio.to_thread(
-                            self.store.get, thread_id, chat_id
+                            self.store.get, thread_id, store_chat
                         )
                         current["revision"] = processed
                         metadata = await asyncio.to_thread(
@@ -1208,7 +1410,7 @@ class ThreadEngine:
                                     result = await asyncio.to_thread(
                                         self.store.read_history,
                                         thread_id,
-                                        chat_id,
+                                        store_chat,
                                         **arguments,
                                         max_chars=min(
                                             6000, max(200, self.context_chars // 3)
@@ -1230,12 +1432,23 @@ class ThreadEngine:
                                             arguments.get("share_reason")
                                             or arguments["next_step"]
                                         ).strip()
-                                        result = await asyncio.to_thread(
-                                            self.serendipity,
-                                            thread_id=thread_id,
-                                            due_at=due_at,
-                                            reason=share_reason,
-                                        )
+                                        if inspect.iscoroutinefunction(
+                                            self.serendipity
+                                        ) or inspect.iscoroutinefunction(
+                                            getattr(self.serendipity, "__call__", None)
+                                        ):
+                                            result = await self.serendipity(
+                                                thread_id=thread_id,
+                                                due_at=due_at,
+                                                reason=share_reason,
+                                            )
+                                        else:
+                                            result = await asyncio.to_thread(
+                                                self.serendipity,
+                                                thread_id=thread_id,
+                                                due_at=due_at,
+                                                reason=share_reason,
+                                            )
                                     else:
                                         target = (
                                             "chat:" + current["chat_id"]
@@ -1310,7 +1523,7 @@ class ThreadEngine:
                         if question and await asyncio.to_thread(
                             self.store.finish,
                             thread_id,
-                            chat_id,
+                            store_chat,
                             {"question": self.redact(question)},
                             history,
                             processed,
@@ -1327,14 +1540,14 @@ class ThreadEngine:
                     if await asyncio.to_thread(
                         self.store.finish,
                         thread_id,
-                        chat_id,
+                        store_chat,
                         result,
                         history,
                         processed,
                     ):
                         if hasattr(self.runtime, "finished"):
                             finished = await completed_thread(
-                                self.store.get, thread_id, chat_id
+                                self.store.get, thread_id, store_chat
                             )
                             await self.runtime.finished(finished)
                         return
@@ -1348,7 +1561,7 @@ class ThreadEngine:
                     )
                 raise RuntimeError("线程达到本轮探索步数上限")
         except asyncio.CancelledError:
-            row = await completed_thread(self.store.get, thread_id, chat_id)
+            row = await completed_thread(self.store.get, thread_id, store_chat)
             if not self.closing and row["state"] == "active":
                 history.append(
                     {
@@ -1381,11 +1594,11 @@ class ThreadEngine:
                 )
             )
             error_text = reason + "。可给原线程补充消息后继续。"
-            row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
+            row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
             await asyncio.to_thread(
                 self.store.finish,
                 thread_id,
-                chat_id,
+                store_chat,
                 {"error": error_text},
                 history,
                 processed,
@@ -1394,10 +1607,14 @@ class ThreadEngine:
             if hasattr(self.runtime, "end"):
                 await self.runtime.end(thread_id)
             async with self.locks.setdefault(thread_id, asyncio.Lock()):
+                was_background = thread_id in self.background_tasks
                 self.tasks.pop(thread_id, None)
-                row = await asyncio.to_thread(self.store.get, thread_id, chat_id)
+                self.background_tasks.discard(thread_id)
+                row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
                 self._resolve(thread_id, row)
                 if not self.closing and row["state"] == "active":
+                    if was_background:
+                        self.background_tasks.add(thread_id)
                     self.tasks[thread_id] = asyncio.create_task(
                         self._drive(thread_id, chat_id)
                     )
@@ -1448,6 +1665,7 @@ class ThreadEngine:
             await asyncio.gather(task, return_exceptions=True)
             if self.tasks.get(thread_id) is task:
                 self.tasks.pop(thread_id, None)
+                self.background_tasks.discard(thread_id)
         if hasattr(self.runtime, "stopped"):
             try:
                 await self.runtime.stopped(thread_id)
@@ -1471,6 +1689,7 @@ class ThreadEngine:
             task.cancel()
         await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
         self.tasks.clear()
+        self.background_tasks.clear()
         for waiters in self.waiters.values():
             for _, future in waiters:
                 if not future.done():

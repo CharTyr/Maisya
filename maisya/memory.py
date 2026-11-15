@@ -1337,20 +1337,91 @@ class MemoryLayers:
         )
         return self.write(kind, old["content"], **options, author="rollback")
 
+    @staticmethod
+    def _split_journal_entries(text: str) -> list[str]:
+        body = str(text or "").strip()
+        if not body:
+            return []
+        lines = body.splitlines()
+        if any(line.lstrip().startswith("- ") for line in lines):
+            entries: list[str] = []
+            for raw_line in lines:
+                stripped = raw_line.strip()
+                if not stripped:
+                    continue
+                if raw_line.lstrip().startswith("- "):
+                    entries.append("- " + raw_line.lstrip()[2:].strip())
+                elif entries:
+                    entries[-1] = entries[-1] + "\n" + raw_line.rstrip()
+                else:
+                    entries.append("- " + stripped)
+            return entries
+        return [line.strip() for line in lines if line.strip()]
+
     def _recent_journal(self, content):
         blocks = re.findall(
             r"^## (\d{4}-\d{2}-\d{2})\n(.*?)(?=^## |\Z)",
             content,
             re.MULTILINE | re.DOTALL,
         )
-        kept = []
+        now = self.clock()
+        by_day: dict[str, list[str]] = {}
+        day_blocks_count: dict[str, int] = {}
+        raw_day_body: dict[str, str] = {}
+        raw_day_entry_count: dict[str, int] = {}
         for day, text in blocks:
-            when = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
-            if self.clock() - 7 * 86400 < when <= self.clock():
-                kept.append("## " + day + "\n" + text.strip())
-        while len("\n\n".join(kept)) > self.LIMITS["journal"] and len(kept) > 1:
-            kept.pop(0)
-        return "\n\n".join(kept)[: self.LIMITS["journal"]]
+            try:
+                when = (
+                    datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
+                )
+            except ValueError:
+                continue
+            if now - 7 * 86400 < when <= now:
+                cleaned_body = text.strip()
+                if not cleaned_body:
+                    continue
+                day_blocks_count[day] = day_blocks_count.get(day, 0) + 1
+                raw_day_body.setdefault(day, cleaned_body)
+                entries = self._split_journal_entries(cleaned_body)
+                if not entries:
+                    continue
+                raw_day_entry_count.setdefault(day, len(entries))
+                by_day.setdefault(day, []).extend(entries)
+
+        days: list[tuple[str, list[str]]] = []
+        for day in sorted(by_day):
+            entries = by_day[day]
+            if day_blocks_count[day] > 1:
+                entries = [
+                    entry if entry.startswith("- ") else f"- {entry}"
+                    for entry in entries
+                ]
+            days.append((day, entries))
+
+        def _render(items: list[tuple[str, list[str]]]) -> str:
+            rendered_blocks = []
+            for day, entries in items:
+                if not entries:
+                    continue
+                if (
+                    day_blocks_count[day] == 1
+                    and len(entries) == raw_day_entry_count[day]
+                    and not any(entry.startswith("- ") for entry in entries)
+                ):
+                    rendered_blocks.append(f"## {day}\n{raw_day_body[day]}")
+                else:
+                    rendered_blocks.append(f"## {day}\n" + "\n".join(entries))
+            return "\n\n".join(rendered_blocks)
+
+        limit = self.LIMITS["journal"]
+        while len(_render(days)) > limit and days:
+            if len(days[0][1]) > 1:
+                days[0][1].pop(0)
+            elif len(days) > 1:
+                days.pop(0)
+            else:
+                break
+        return _render(days)[:limit]
 
     def context(self, chat_id):
         memory = self.read("memory", chat_id=chat_id)["content"] if chat_id else ""
@@ -1517,10 +1588,14 @@ class MemoryLayers:
             ).fetchone():
                 return
             old, _asset, _path = self._sync(db, "journal", "", "", "")
-        text = row["result"]["text"][:500]
+        text = " ".join(str(row["result"]["text"][:500]).split())
+        if not text:
+            return
         self._guard("journal", text, "")
         day = datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
-        content = self._recent_journal(old["content"] + "\n\n## " + day + "\n" + text)
+        entry = text if text.startswith("- ") else f"- {text}"
+        seed = (old["content"] + "\n\n## " + day + "\n" + entry).strip()
+        content = self._recent_journal(seed)
         self._write(
             "journal", content, expected_version=old["version"], author="self_activity"
         )
