@@ -3,8 +3,11 @@
 import asyncio
 import html
 import json
+import sqlite3
 import time
 import uuid
+
+from .trust import parse_stream_spec
 
 
 def _grant_admin_direct(raw_grant) -> bool:
@@ -368,6 +371,39 @@ class Bridge:
             ):
                 continue
             item["result"] = json.loads(item["payload"])
+            chat_type = ""
+            try:
+                route_row = db.execute(
+                    "SELECT chat_type FROM session_routes WHERE session_id=?",
+                    (item["return_chat_id"],),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                route_row = None
+            if route_row and route_row["chat_type"] in {"group", "private"}:
+                chat_type = str(route_row["chat_type"])
+            else:
+                parsed_spec = parse_stream_spec(item["return_chat_id"])
+                if parsed_spec is not None and parsed_spec[1] in {"group", "private"}:
+                    chat_type = parsed_spec[1]
+            item["chat_type"] = chat_type
+            messages_since_trigger = 0
+            src_id = str(item.get("source_msg_id") or "").strip()
+            if src_id:
+                try:
+                    src_row = db.execute(
+                        "SELECT received FROM trusted_sources WHERE session_id=? AND message_id=? LIMIT 1",
+                        (item["return_chat_id"], src_id),
+                    ).fetchone()
+                    if src_row and src_row["received"] is not None:
+                        cnt_row = db.execute(
+                            "SELECT COUNT(*) AS count FROM trusted_sources "
+                            "WHERE session_id=? AND relayed=0 AND received>? AND message_id!=?",
+                            (item["return_chat_id"], src_row["received"], src_id),
+                        ).fetchone()
+                        messages_since_trigger = int(cnt_row["count"]) if cnt_row else 0
+                except sqlite3.OperationalError:
+                    messages_since_trigger = 0
+            item["messages_since_trigger"] = messages_since_trigger
             items.append(item)
         return items
 
@@ -376,18 +412,21 @@ class Bridge:
         material = []
         text_limit = min(2400, max(200, 10000 // max(1, len(rows))))
         for row in rows:
-            material.append(
-                {
-                    "thread_id": row["thread_id"],
-                    "revision": row["revision"],
-                    "profile": row["profile"],
-                    "source_msg_id": row["source_msg_id"],
-                    "result": {
-                        key: str(value)[:text_limit]
-                        for key, value in row["result"].items()
-                    },
-                }
-            )
+            entry = {
+                "thread_id": row["thread_id"],
+                "revision": row["revision"],
+                "profile": row["profile"],
+                "source_msg_id": row["source_msg_id"],
+                "result": {
+                    key: str(value)[:text_limit]
+                    for key, value in row["result"].items()
+                },
+            }
+            if row.get("chat_type") in {"group", "private"}:
+                entry["chat_type"] = row["chat_type"]
+            if int(row.get("messages_since_trigger") or 0) > 0:
+                entry["messages_since_trigger"] = int(row["messages_since_trigger"])
+            material.append(entry)
         return material
 
     async def inline(self, thread_id, chat_id):
