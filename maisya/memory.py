@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
-from .abilities import _ensure_managed_dir, _has_relative_link
+from .abilities import _ensure_managed_dir, _has_relative_link, is_autonomous_snapshot
 from .pathsafe import (
     check_part,
     ensure_dirs,
@@ -33,6 +33,10 @@ _SKILL_ARCHIVE_MAX_UNPACKED = 16 * 1024 * 1024
 _SKILL_FILE_MAX_BYTES = 2 * 1024 * 1024
 _SKILL_MAX_ENTRIES = 512
 _SKILL_MAX_FILES = 64
+_JOURNAL_BLOCK_RE = (
+    r"^##[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*(?:\n|\Z)"
+    r"(.*?)(?=^##[ \t]+\d{4}-\d{2}-\d{2}[ \t]*(?:\n|\Z)|\Z)"
+)
 _SKILL_MAX_BUNDLE = 20
 _SECRET_RE = re.compile(
     r"-----BEGIN .*PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
@@ -429,9 +433,9 @@ class MemoryLayers:
                 ).fetchone()
         return bool(row and str(row["content"] or ""))
 
-    def _resolve_memory_chat_id(self, chat_id: str, *, db=None) -> str:
+    def _memory_alias_ids(self, chat_id: str) -> list[str]:
         if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
-            return chat_id
+            return []
         candidates = [chat_id]
         if callable(self.chat_aliases):
             try:
@@ -441,6 +445,12 @@ class MemoryLayers:
             for alias in aliases:
                 if isinstance(alias, str) and alias and len(alias) <= 256:
                     candidates.append(alias)
+        return candidates
+
+    def _resolve_memory_chat_id(self, chat_id: str, *, db=None) -> str:
+        candidates = self._memory_alias_ids(chat_id)
+        if not candidates:
+            return chat_id
         existing = [cid for cid in candidates if self._has_memory_data(cid, db=db)]
         if not existing:
             return chat_id
@@ -478,7 +488,9 @@ class MemoryLayers:
 
         return max(existing, key=_mtime_key)
 
-    def _locate(self, kind, target="", chat_id="", document="", *, db=None):
+    def _locate(
+        self, kind, target="", chat_id="", document="", *, db=None, resolve_alias=True
+    ):
         if kind in {"profile", "notes", "skill"}:
             if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
                 raise ValueError("角色或技能编号无效")
@@ -500,7 +512,8 @@ class MemoryLayers:
         elif kind == "memory":
             if not isinstance(chat_id, str) or not chat_id or len(chat_id) > 256:
                 raise ValueError("会话记忆需要原会话")
-            chat_id = self._resolve_memory_chat_id(chat_id, db=db)
+            if resolve_alias:
+                chat_id = self._resolve_memory_chat_id(chat_id, db=db)
             target = hashlib.sha256(chat_id.encode()).hexdigest()[:32]
             directory, document = self.root / "memory/chats" / target, "MEMORY.md"
         elif kind in {"journal", "heartbeat"}:
@@ -624,11 +637,21 @@ class MemoryLayers:
         db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
         db.execute("INSERT INTO memory_search VALUES (?,?)", (asset, content))
 
-    def _sync(self, db, kind, target, chat_id, document, *, allow_custom=False):
-        if kind == "memory" and isinstance(chat_id, str) and chat_id:
+    def _sync(
+        self,
+        db,
+        kind,
+        target,
+        chat_id,
+        document,
+        *,
+        allow_custom=False,
+        resolve_alias=True,
+    ):
+        if kind == "memory" and isinstance(chat_id, str) and chat_id and resolve_alias:
             chat_id = self._resolve_memory_chat_id(chat_id, db=db)
         asset, path, document, target = self._locate(
-            kind, target, chat_id, document, db=db
+            kind, target, chat_id, document, db=db, resolve_alias=resolve_alias
         )
         max_bytes = _SKILL_FILE_MAX_BYTES if kind == "skill" else 131072
         content = self._bytes(path, max_bytes=max_bytes).decode("utf-8")
@@ -670,6 +693,48 @@ class MemoryLayers:
             path,
         )
 
+    @staticmethod
+    def _merge_memory_contents(contents: list[str], limit: int) -> str:
+        seen_lines: set[str] = set()
+        merged_lines: list[str] = []
+        for raw in contents:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            block_added = False
+            for line in text.splitlines():
+                norm = line.strip()
+                if not norm:
+                    if merged_lines and merged_lines[-1] != "":
+                        merged_lines.append("")
+                    continue
+                if norm in seen_lines:
+                    continue
+                seen_lines.add(norm)
+                merged_lines.append(line.rstrip())
+                block_added = True
+            if block_added and merged_lines and merged_lines[-1] != "":
+                merged_lines.append("")
+        merged = "\n".join(merged_lines).strip()
+        if len(merged) > limit:
+            merged = merged[:limit].rstrip()
+        return merged
+
+    def _alias_recency_key(self, db, cid: str, asset: str) -> tuple[float, int]:
+        row = db.execute(
+            "SELECT updated FROM memory_versions WHERE asset=? ORDER BY version DESC LIMIT 1",
+            (asset,),
+        ).fetchone()
+        updated = float(row["updated"]) if row and row["updated"] is not None else -1.0
+        _, path = self._memory_path_for(cid)
+        mtime_ns = -1
+        if path.is_file() and not path_is_link_like(path):
+            try:
+                mtime_ns = path.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = -1
+        return (updated, mtime_ns)
+
     def read(
         self,
         kind,
@@ -693,6 +758,43 @@ class MemoryLayers:
                 if not old:
                     raise ValueError("历史版本不存在")
                 current.update(dict(old))
+                return current
+            if kind == "memory" and isinstance(chat_id, str) and chat_id:
+                existing = [
+                    cid
+                    for cid in self._memory_alias_ids(chat_id)
+                    if self._has_memory_data(cid, db=db)
+                ]
+                if len(existing) > 1:
+                    other_entries: list[tuple[tuple[float, int], str]] = []
+                    for cid in existing:
+                        other_target, _ = self._memory_path_for(cid)
+                        other_asset = f"memory:{other_target}:MEMORY.md"
+                        if other_asset == asset:
+                            continue
+                        other_doc, synced_asset, _ = self._sync(
+                            db,
+                            "memory",
+                            "",
+                            cid,
+                            "",
+                            allow_custom=allow_custom,
+                            resolve_alias=False,
+                        )
+                        if other_doc.get("content"):
+                            other_entries.append(
+                                (
+                                    self._alias_recency_key(db, cid, synced_asset),
+                                    other_doc["content"],
+                                )
+                            )
+                    if other_entries:
+                        other_entries.sort(key=lambda item: item[0], reverse=True)
+                        merged = self._merge_memory_contents(
+                            [current["content"], *(text for _, text in other_entries)],
+                            self.LIMITS["memory"],
+                        )
+                        current = {**current, "content": merged}
             return current
 
     def preset_skills(self) -> set[str]:
@@ -1415,6 +1517,38 @@ class MemoryLayers:
                 )
             ]
 
+    def _reanchor_expired_journal(
+        self, content: str, *, tz_offset_minutes: int | None = None
+    ) -> str:
+        if not str(content or "").strip():
+            return content
+        tz = self._journal_tz(tz_offset_minutes)
+        now = self.clock()
+        today = datetime.fromtimestamp(now, tz).date().isoformat()
+        normalized = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
+        blocks = re.findall(
+            _JOURNAL_BLOCK_RE,
+            normalized,
+            re.MULTILINE | re.DOTALL,
+        )
+        expired_entries: list[str] = []
+        for day, text in blocks:
+            try:
+                when = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=tz).timestamp()
+            except ValueError:
+                continue
+            if when <= now - 7 * 86400:
+                for entry in self._split_journal_entries(text.strip()):
+                    if entry:
+                        body = entry[2:].strip() if entry.startswith("- ") else entry
+                        expired_entries.append(f"- [回溯 {day}] {body}")
+        recent = self._recent_journal(content, tz_offset_minutes=tz_offset_minutes)
+        if not expired_entries:
+            return recent or content
+        reanchored = f"## {today}\n" + "\n".join(expired_entries)
+        combined = f"{recent}\n\n{reanchored}".strip() if recent else reanchored
+        return self._recent_journal(combined, tz_offset_minutes=tz_offset_minutes)
+
     def rollback(self, kind, version, **options):
         if type(version) is not int or version < 0:
             raise ValueError("历史版本无效")
@@ -1427,7 +1561,11 @@ class MemoryLayers:
                 if key not in {"expected_version", "allow_custom"}
             },
         )
-        return self.write(kind, old["content"], **options, author="rollback")
+        content = old["content"]
+        if kind == "journal":
+            content = self._reanchor_expired_journal(content)
+        write_options = {"allow_custom": True, **options}
+        return self.write(kind, content, **write_options, author="rollback")
 
     @staticmethod
     def _split_journal_entries(text: str) -> list[str]:
@@ -1454,7 +1592,7 @@ class MemoryLayers:
         tz = self._journal_tz(tz_offset_minutes)
         normalized = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
         blocks = re.findall(
-            r"^##[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*(?:\n|\Z)(.*?)(?=^##[ \t]+\d{4}-\d{2}-\d{2}[ \t]*(?:\n|\Z)|\Z)",
+            _JOURNAL_BLOCK_RE,
             normalized,
             re.MULTILINE | re.DOTALL,
         )
@@ -1602,10 +1740,18 @@ class MemoryLayers:
                 {str(cid) for cid in raw_candidates if isinstance(cid, str) and cid}
             )
             for cid in alias_ids:
-                if cid != chat_id:
-                    resolved = self._resolve_memory_chat_id(cid)
-                    if resolved == cid and self._has_memory_data(cid):
-                        self.read("memory", chat_id=cid, allow_custom=True)
+                if self._has_memory_data(cid):
+                    with self._lock(), self.store.connect() as sync_db, sync_db:
+                        sync_db.execute("BEGIN IMMEDIATE")
+                        self._sync(
+                            sync_db,
+                            "memory",
+                            "",
+                            cid,
+                            "",
+                            allow_custom=True,
+                            resolve_alias=False,
+                        )
         with self.store.connect() as db:
             if all_chats:
                 rows = db.execute(
@@ -1669,8 +1815,8 @@ class MemoryLayers:
 
     def _experience(self, row):
         if (
-            row["owner"] != "self"
-            or row["profile_snapshot"]["access"] != "everyone"
+            row.get("owner") != "self"
+            or not is_autonomous_snapshot(row.get("profile_snapshot"))
             or not row.get("result", {}).get("text")
         ):
             return

@@ -31,6 +31,34 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def _parse_payload_strict(raw) -> tuple[dict, bool]:
+    if isinstance(raw, dict):
+        return raw, True
+    if raw is None or raw == "":
+        return {}, True
+    try:
+        loaded = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}, False
+    if not isinstance(loaded, dict):
+        return {}, False
+    return loaded, True
+
+
+def _parse_payload(raw) -> dict:
+    return _parse_payload_strict(raw)[0]
+
+
+def is_profileless_daily(source: str, payload: dict | None) -> bool:
+    if not isinstance(payload, dict) or not payload.get("daily_at"):
+        return False
+    return (
+        str(source or "") != "workflow"
+        and not str(payload.get("profile") or "").strip()
+        and not bool(payload.get("scheduled_admin"))
+    )
+
+
 def next_daily_due(
     now_ts: float, hhmm: str, tz_offset_minutes: int = 480
 ) -> tuple[float, str]:
@@ -62,8 +90,16 @@ class Intents:
                 "CREATE TABLE IF NOT EXISTS intents ("
                 "intent_id TEXT PRIMARY KEY, kind TEXT, source TEXT, target TEXT, "
                 "due_at REAL, reason TEXT, thread_id TEXT, payload TEXT, "
-                "status TEXT, wake_status TEXT, created REAL, handled REAL)"
+                "status TEXT, wake_status TEXT, created REAL, handled REAL, "
+                "bypass_limits INTEGER NOT NULL DEFAULT 0)"
             )
+            intent_cols = {
+                row[1] for row in db.execute("PRAGMA table_info(intents)").fetchall()
+            }
+            if "bypass_limits" not in intent_cols:
+                db.execute(
+                    "ALTER TABLE intents ADD COLUMN bypass_limits INTEGER NOT NULL DEFAULT 0"
+                )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS intent_due ON intents(status, kind, due_at)"
             )
@@ -96,7 +132,7 @@ class Intents:
 
     def _intent(self, row):
         result = dict(row)
-        result["payload"] = json.loads(result["payload"])
+        result["payload"] = _parse_payload(result.get("payload"))
         return result
 
     def get(self, intent_id):
@@ -146,11 +182,8 @@ class Intents:
                 (target,),
             ).fetchall()
             for row in rows:
-                try:
-                    payload = json.loads(row["payload"] or "{}")
-                except (TypeError, ValueError):
-                    continue
-                if not isinstance(payload, dict):
+                payload = _parse_payload(row["payload"])
+                if not payload:
                     continue
                 if not (payload.get("every_seconds") or payload.get("daily_at")):
                     continue
@@ -202,17 +235,20 @@ class Intents:
                     if old["digest"] != event_digest:
                         raise ValueError("同一事件编号已绑定另一份内容")
                     return self.get(old["intent_id"])
-            if kind == "proactive" and not bypass_limits:
+            payload_dict = payload if isinstance(payload, dict) else {}
+            effective_bypass = bool(bypass_limits) and not is_profileless_daily(
+                source, payload_dict
+            )
+            if kind == "proactive" and not effective_bypass:
                 limit = int(self.daily_proactive_limit)
-                start, end = self._day_bounds(now)
-                arena = self._target_arena(
-                    db, target, payload if isinstance(payload, dict) else None
-                )
+                start, end = self._day_bounds(due_at)
+                arena = self._target_arena(db, target, payload_dict or None)
                 counts = self._proactive_counts(db, start, end)
                 if limit <= 0 or counts[arena] >= limit:
                     raise ValueError("普通惦记已达到每日上限")
             db.execute(
-                "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL)",
+                "INSERT INTO intents (intent_id, kind, source, target, due_at, reason, thread_id, payload, status, wake_status, created, handled, bypass_limits) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL, ?)",
                 (
                     intent_id,
                     kind,
@@ -223,6 +259,7 @@ class Intents:
                     thread_id,
                     encode(payload or {}),
                     now,
+                    1 if effective_bypass else 0,
                 ),
             )
             if event_key:
@@ -252,10 +289,15 @@ class Intents:
                 "ORDER BY due_at LIMIT 64",
                 (now,),
             ).fetchall()
-            claimed, proactive_claimed = [], False
+            claimed, corrupt_ids, proactive_claimed = [], [], False
             for row in rows:
-                chat_id = row["target"].split(":", 1)[1]
-                platform = json.loads(row["payload"]).get("platform", "")
+                payload, valid_payload = _parse_payload_strict(row["payload"])
+                if not valid_payload:
+                    corrupt_ids.append(row["intent_id"])
+                    continue
+                target = str(row["target"] or "")
+                chat_id = target.split(":", 1)[1] if ":" in target else target
+                platform = str(payload.get("platform") or "")
                 if row["kind"] == "proactive":
                     if proactive_claimed or not enabled(chat_id, platform):
                         continue
@@ -263,6 +305,13 @@ class Intents:
                 claimed.append(row["intent_id"])
                 if len(claimed) >= limit:
                     break
+            if corrupt_ids:
+                db.execute(
+                    "UPDATE intents SET status='failed', wake_status='corrupt_payload', handled=? WHERE intent_id IN ("
+                    + ",".join("?" for _ in corrupt_ids)
+                    + ")",
+                    (now, *corrupt_ids),
+                )
             if claimed:
                 db.execute(
                     "UPDATE intents SET status='claimed' WHERE intent_id IN ("
@@ -306,15 +355,69 @@ class Intents:
         with self.store.connect() as db, db:
             db.execute("UPDATE intents SET status='pending' WHERE status='claimed'")
 
-    def note_received(self, chat_id, *, engaged: bool = True):
+    def _social_aliases(self, db, chat_id: str, extra=()) -> list[str]:
+        seeds: list[str] = []
+        for item in (chat_id, *(extra or ())):
+            text = str(item or "").strip()
+            if text.startswith("chat:"):
+                text = text[5:].strip()
+            if text and text not in seeds:
+                seeds.append(text)
+        seen: list[str] = []
+        queue = list(seeds)
+        while queue:
+            cur = queue.pop(0)
+            if cur in seen:
+                continue
+            seen.append(cur)
+            parsed = parse_stream_spec(cur)
+            if parsed is not None:
+                plat, ctype, raw_id = parsed
+                canon = format_stream_spec(plat, ctype, raw_id)
+                if canon and canon not in seen and canon not in queue:
+                    queue.append(canon)
+                try:
+                    col = "group_id" if ctype == "group" else "user_id"
+                    rows = db.execute(
+                        f"SELECT session_id FROM session_routes WHERE LOWER(platform)=? AND chat_type=? AND {col}=?",
+                        (plat, ctype, raw_id),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = ()
+                for r in rows:
+                    sid = str(r["session_id"] or "").strip()
+                    if sid and sid not in seen and sid not in queue:
+                        queue.append(sid)
+                continue
+            try:
+                route = db.execute(
+                    "SELECT platform, chat_type, group_id, user_id FROM session_routes WHERE session_id=?",
+                    (cur,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                route = None
+            if route:
+                spec = format_stream_spec(
+                    route["platform"],
+                    route["chat_type"],
+                    group_id=route["group_id"],
+                    user_id=route["user_id"],
+                )
+                if spec and spec not in seen and spec not in queue:
+                    queue.append(spec)
+        return seen
+
+    def note_received(self, chat_id, *, engaged: bool = True, aliases=()):
         if not engaged:
             return
         with self.store.connect() as db, db:
-            db.execute(
-                "INSERT INTO social_state (chat_id, locked) VALUES (?, 0) "
-                "ON CONFLICT(chat_id) DO UPDATE SET locked=0",
-                (chat_id,),
-            )
+            alias_ids = self._social_aliases(db, chat_id, aliases)
+            for alias in alias_ids:
+                db.execute(
+                    "INSERT INTO social_state (chat_id, locked) VALUES (?, 0) "
+                    "ON CONFLICT(chat_id) DO UPDATE SET locked=0",
+                    (alias,),
+                )
 
     def in_sleep_window(self, sleep_window="", *, now=None):
         now = self.clock() if now is None else now
@@ -332,16 +435,22 @@ class Intents:
             and (start <= hour < end if start < end else hour >= start or hour < end)
         )
 
-    def social_gate(self, target, *, sleep_window="", now=None):
+    def social_gate(self, target, *, sleep_window="", now=None, aliases=()):
         if not CHAT_TARGET.fullmatch(target):
             return False, "invalid_target"
         chat_id = target.split(":", 1)[1]
         if self.in_sleep_window(sleep_window, now=now):
             return False, "sleep_window"
         with self.store.connect() as db:
-            state = db.execute(
-                "SELECT locked FROM social_state WHERE chat_id=?", (chat_id,)
-            ).fetchone()
+            alias_ids = self._social_aliases(db, chat_id, aliases)
+            if alias_ids:
+                placeholders = ",".join("?" for _ in alias_ids)
+                state = db.execute(
+                    f"SELECT MAX(locked) AS locked FROM social_state WHERE chat_id IN ({placeholders})",
+                    alias_ids,
+                ).fetchone()
+            else:
+                state = None
         if state and state["locked"]:
             return False, "unreplied_lock"
         return True, ""
@@ -399,68 +508,88 @@ class Intents:
             return str(payload["chat_type"])
         return "group"
 
-    def _proactive_counts(self, db, start: float, end: float) -> dict[str, int]:
+    def _proactive_counts(
+        self, db, start: float, end: float, *, exclude_intent_id: str = ""
+    ) -> dict[str, int]:
         rows = db.execute(
-            "SELECT target, payload FROM intents WHERE kind='proactive' "
+            "SELECT intent_id, target, payload FROM intents WHERE kind='proactive' "
             "AND source IN ('afterglow','serendipity','longing','later') "
-            "AND created>=? AND created<? AND status NOT IN ('cancelled','failed')",
+            "AND due_at>=? AND due_at<? AND status NOT IN ('cancelled','failed')",
             (start, end),
         ).fetchall()
         counts = {"group": 0, "private": 0}
         for row in rows:
-            raw_payload = row["payload"]
-            try:
-                parsed_payload = json.loads(raw_payload) if raw_payload else None
-            except (TypeError, ValueError):
-                parsed_payload = None
+            if exclude_intent_id and row["intent_id"] == exclude_intent_id:
+                continue
+            parsed_payload = _parse_payload(row["payload"])
             arena = self._target_arena(
                 db,
                 row["target"],
-                parsed_payload if isinstance(parsed_payload, dict) else None,
+                parsed_payload or None,
             )
             counts[arena] = counts.get(arena, 0) + 1
         return counts
 
-    def proactive_quota_available(self, target: str = "", *, now=None) -> bool:
+    def proactive_quota_available(
+        self,
+        target: str = "",
+        *,
+        now=None,
+        exclude_intent_id: str = "",
+        payload: dict | None = None,
+    ) -> bool:
         limit = int(self.daily_proactive_limit)
         if limit <= 0:
             return False
         now = self.clock() if now is None else now
         start, end = self._day_bounds(now)
         with self.store.connect() as db:
-            counts = self._proactive_counts(db, start, end)
+            counts = self._proactive_counts(
+                db, start, end, exclude_intent_id=exclude_intent_id
+            )
             if target:
-                arena = self._target_arena(db, target)
+                arena = self._target_arena(
+                    db, target, payload if isinstance(payload, dict) else None
+                )
                 return counts[arena] < limit
             return counts["group"] < limit or counts["private"] < limit
 
-    def longing_ready(self, chat_id, *, now=None, cooldown=7 * 86400) -> bool:
+    def longing_ready(
+        self, chat_id, *, now=None, cooldown=7 * 86400, aliases=()
+    ) -> bool:
         now = self.clock() if now is None else now
         with self.store.connect() as db:
-            state = db.execute(
-                "SELECT locked, last_proactive FROM social_state WHERE chat_id=?",
-                (chat_id,),
-            ).fetchone()
-            if state and (
-                state["locked"]
-                or (state["last_proactive"] and now - state["last_proactive"] < cooldown)
-            ):
-                return False
-            active_proactive = db.execute(
-                "SELECT 1 FROM intents WHERE target=? AND kind='proactive' "
-                "AND status IN ('pending','claimed') LIMIT 1",
-                ("chat:" + chat_id,),
-            ).fetchone()
-            if active_proactive is not None:
-                return False
-            recent_longing = db.execute(
-                "SELECT 1 FROM intents WHERE target=? AND source='longing' "
-                "AND status!='cancelled' "
-                "AND ((handled IS NOT NULL AND ? - handled < ?) OR ? - created < ?) "
-                "LIMIT 1",
-                ("chat:" + chat_id, now, cooldown, now, cooldown),
-            ).fetchone()
-        return recent_longing is None
+            alias_ids = self._social_aliases(db, chat_id, aliases)
+            if alias_ids:
+                a_ph = ",".join("?" for _ in alias_ids)
+                states = db.execute(
+                    f"SELECT locked, last_proactive FROM social_state WHERE chat_id IN ({a_ph})",
+                    alias_ids,
+                ).fetchall()
+                for state in states:
+                    if state["locked"] or (
+                        state["last_proactive"]
+                        and now - state["last_proactive"] < cooldown
+                    ):
+                        return False
+                targets = ["chat:" + a for a in alias_ids]
+                t_ph = ",".join("?" for _ in targets)
+                active_proactive = db.execute(
+                    f"SELECT 1 FROM intents WHERE target IN ({t_ph}) AND kind='proactive' "
+                    "AND status IN ('pending','claimed') LIMIT 1",
+                    targets,
+                ).fetchone()
+                if active_proactive is not None:
+                    return False
+                recent_longing = db.execute(
+                    f"SELECT 1 FROM intents WHERE target IN ({t_ph}) AND source='longing' "
+                    "AND status!='cancelled' "
+                    "AND ((handled IS NOT NULL AND ? - handled < ?) OR ? - created < ?) "
+                    "LIMIT 1",
+                    (*targets, now, cooldown, now, cooldown),
+                ).fetchone()
+                return recent_longing is None
+        return True
 
     def acquaintance_allowed(
         self, chat_id, *, admins=(), acquaintances=(), payload=None
@@ -507,15 +636,18 @@ class Intents:
         ).strip()
         return bool(plat and uid and f"{plat}:{uid}" in trusted)
 
-    def mark_proactive(self, target):
-        chat_id = target.split(":", 1)[1]
+    def mark_proactive(self, target, *, aliases=()):
+        chat_id = target.split(":", 1)[1] if ":" in str(target or "") else str(target or "")
+        now = self.clock()
         with self.store.connect() as db, db:
-            db.execute(
-                "INSERT INTO social_state (chat_id, locked, last_proactive) "
-                "VALUES (?, 1, ?) ON CONFLICT(chat_id) DO UPDATE SET "
-                "locked=1, last_proactive=excluded.last_proactive",
-                (chat_id, self.clock()),
-            )
+            alias_ids = self._social_aliases(db, chat_id, aliases)
+            for alias in alias_ids:
+                db.execute(
+                    "INSERT INTO social_state (chat_id, locked, last_proactive) "
+                    "VALUES (?, 1, ?) ON CONFLICT(chat_id) DO UPDATE SET "
+                    "locked=1, last_proactive=excluded.last_proactive",
+                    (alias, now),
+                )
 
     @staticmethod
     def _day_bounds(now):

@@ -95,6 +95,46 @@ DEFAULT_INSTRUCTIONS = (
 )
 
 
+def _matches_autonomous_scope(
+    *,
+    access,
+    secrets,
+    template,
+    sandbox_targets,
+    bound,
+    allow_users,
+    allow_chats,
+) -> bool:
+    return (
+        access == "everyone"
+        and not secrets
+        and not template
+        and not sandbox_targets
+        and bool(bound)
+        and not allow_users
+        and not allow_chats
+    )
+
+
+def is_autonomous_snapshot(profile, *, check_enabled: bool = False) -> bool:
+    """判定能力档案对象或快照字典是否满足全员可自主调度边界。"""
+    if isinstance(profile, Profile):
+        return (not check_enabled or profile.enabled) and profile.autonomous_config
+    if not isinstance(profile, dict):
+        return False
+    if check_enabled and not profile.get("enabled", True):
+        return False
+    return _matches_autonomous_scope(
+        access=profile.get("access", "everyone"),
+        secrets=profile.get("secrets"),
+        template=profile.get("template"),
+        sandbox_targets=profile.get("sandbox_targets"),
+        bound=profile.get("bound", True),
+        allow_users=profile.get("allow_users"),
+        allow_chats=profile.get("allow_chats"),
+    )
+
+
 @dataclass(frozen=True)
 class Profile:
     id: str = "scout"
@@ -147,14 +187,14 @@ class Profile:
 
     @property
     def autonomous_config(self):
-        return (
-            self.access == "everyone"
-            and not self.secrets
-            and not self.template
-            and not self.sandbox_targets
-            and self.bound
-            and not self.allow_users
-            and not self.allow_chats
+        return _matches_autonomous_scope(
+            access=self.access,
+            secrets=self.secrets,
+            template=self.template,
+            sandbox_targets=self.sandbox_targets,
+            bound=self.bound,
+            allow_users=self.allow_users,
+            allow_chats=self.allow_chats,
         )
 
     @property
