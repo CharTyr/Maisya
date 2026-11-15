@@ -570,29 +570,57 @@ async def test_unseen_stream_spec_preconfiguration_and_runtime_match(tmp_path):
         await plugin.on_unload()
 
 
+def _install_offline_public_rss(monkeypatch, *, install_fetch: bool = False):
+    """仅用离线 DNS 与受校验的假传输层替代外网，保留真实 SSRF 公网 IP 校验。"""
+    import socket
+    import maisya.digest as digest_mod
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        host_str = str(host or "").strip().lower()
+        if host_str in {"broken.invalid"} or host_str.endswith(".invalid"):
+            raise socket.gaierror(8, "nodename nor servname provided")
+        if host_str in {"localhost", "127.0.0.1", "::1"}:
+            return real_getaddrinfo(host, port, family, type, proto, flags)
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("93.184.216.34", int(port) if port else 0),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    if install_fetch:
+
+        def fake_fetch(url, timeout, max_bytes):
+            digest_mod._validate_public_url_with_ips(url)
+            return {
+                "body": (
+                    b'<?xml version="1.0" encoding="utf-8"?>'
+                    b"<rss version='2.0'><channel><title>Tech Feed</title>"
+                    b"<item><title>Quantum Preview</title><link>https://news.example.com/q1</link>"
+                    b"<description>Quantum report summary</description></item>"
+                    b"</channel></rss>"
+                ),
+                "content_type": "application/rss+xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
+
+        monkeypatch.setattr(digest_mod, "_sync_fetch_public_bytes", fake_fetch)
+
+
 @pytest.mark.asyncio
 async def test_private_chat_unenabled_admin_full_control(tmp_path, monkeypatch):
     """未加白名单的管理员私聊也能跨任意消息流全量配置、RSS 源预设、预览试跑、召回、分享推群与个人提醒。"""
     import maisya.digest as digest_mod
 
-    monkeypatch.setattr(digest_mod, "_validate_public_url", lambda url: None)
-    monkeypatch.setattr(
-        digest_mod,
-        "_sync_fetch_public_bytes",
-        lambda url, timeout, max_bytes: {
-            "body": (
-                b'<?xml version="1.0" encoding="utf-8"?>'
-                b"<rss version='2.0'><channel><title>Tech Feed</title>"
-                b"<item><title>Quantum Preview</title><link>https://news.example.com/q1</link>"
-                b"<description>Quantum report summary</description></item>"
-                b"</channel></rss>"
-            ),
-            "content_type": "application/rss+xml",
-            "status": 200,
-            "url": url,
-            "error": "",
-        },
-    )
+    _install_offline_public_rss(monkeypatch, install_fetch=True)
 
     plugin = await _boot_plugin(
         tmp_path, permissions=("qq:Alice",), enabled_chats=("chat",)
@@ -685,6 +713,12 @@ async def test_private_chat_unenabled_admin_full_control(tmp_path, monkeypatch):
         assert rss_res["success"] is True, rss_res
         assert len(rss_res["feeds"]) == 1
         assert rss_res["feeds"][0]["url"] == "https://news.example.com/rss.xml"
+        with pytest.raises(ValueError):
+            digest_mod._validate_public_url("http://127.0.0.1/rss.xml")
+        with pytest.raises(ValueError):
+            digest_mod._validate_public_url("https://localhost/feed.xml")
+        with pytest.raises(ValueError):
+            digest_mod._validate_public_url_with_ips("http://169.254.169.254/latest/meta-data/")
 
         ov = await plugin.shape_tool(
             action="read",
@@ -1089,9 +1123,8 @@ async def test_reused_workspace_thread_admin_direct_preview_wake_and_isolation(
 ):
     """复用已有 digest 工作区线程时，admin_direct grant 须按 revision 更新，支持后台唤醒并允许在未启用私聊 share 预览图而不泄漏。"""
     import asyncio
-    import maisya.digest as digest_mod
 
-    monkeypatch.setattr(digest_mod, "_validate_public_url", lambda url: None)
+    _install_offline_public_rss(monkeypatch, install_fetch=False)
 
     clock = [1794500000.0]
     plugin = await _boot_plugin(
@@ -1378,9 +1411,8 @@ async def test_replyer_ops_and_delivery_steering_away_from_mai_replier(
     tmp_path, monkeypatch
 ):
     """Scheme A：配置/排班 ops 回执与 bridge 交付事实避开 mai_replier，普通闲聊不被改写模型。"""
-    import maisya.digest as digest_mod
 
-    monkeypatch.setattr(digest_mod, "_validate_public_url", lambda url: None)
+    _install_offline_public_rss(monkeypatch, install_fetch=False)
     _write_host_model_config(
         tmp_path,
         "\n".join(
@@ -1460,7 +1492,7 @@ async def test_replyer_ops_and_delivery_steering_away_from_mai_replier(
             action="setup",
             kind="setup",
             target_chat="qq:group:100246809",
-            patch={"sleep_window": "00:00-07:30"},
+            patch={"sleep_window": "00:00-07:00"},
             source_msg_id="m-ops-setup",
             chat_id="priv_admin_md5",
             platform="qq",

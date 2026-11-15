@@ -69,7 +69,7 @@ _SLEEP_WINDOW_RE = re.compile(
 
 
 def normalize_sleep_window(raw: object) -> str:
-    """将常见睡眠安静时段写法（如 1:00-8:00 / 23:30-7:00 / off）规范为 HH-HH 或空字符串。"""
+    """将常见睡眠安静时段写法（如 1:00-8:00 / 23:30-7:00 / 00-24 / off）规范为标准写法或空字符串。"""
     if raw is None:
         return ""
     if not isinstance(raw, str):
@@ -79,18 +79,24 @@ def normalize_sleep_window(raw: object) -> str:
         return ""
     match = _SLEEP_WINDOW_RE.fullmatch(text)
     if match is None:
-        raise ValueError("sleep_window 格式应为 HH-HH 或 H:MM-H:MM（如 01-08），关闭请传 off")
+        raise ValueError("sleep_window 格式应为 HH-HH、HH-24 或 HH:MM-HH:MM（如 01-08、23:30-07:00），关闭请传 off")
     start_h = int(match.group(1))
     start_m = int(match.group(2) or 0)
     end_h = int(match.group(3))
     end_m = int(match.group(4) or 0)
-    if start_h == 24 and start_m == 0:
+    if not (0 <= start_m <= 59 and 0 <= end_m <= 59):
+        raise ValueError("sleep_window 分钟范围应在 00 到 59 之间")
+    if start_h > 24 or end_h > 24 or (start_h == 24 and start_m != 0) or (end_h == 24 and end_m != 0):
+        raise ValueError("sleep_window 小时范围应在 0 到 24 之间（24 点仅支持整点 24 或 24:00）")
+    if (start_h, start_m) == (end_h, end_m):
+        raise ValueError("sleep_window 开始时间与结束时间不能相同")
+    if start_h == 24:
         start_h = 0
-    if end_h == 24 and end_m == 0:
-        end_h = 0
-    if not (0 <= start_h <= 23 and 0 <= end_h <= 23 and 0 <= start_m <= 59 and 0 <= end_m <= 59):
-        raise ValueError("sleep_window 小时范围应在 0 到 23 之间")
-    return f"{start_h:02d}-{end_h:02d}"
+    if (start_h, start_m) == (end_h, end_m):
+        raise ValueError("sleep_window 开始时间与结束时间不能相同")
+    if start_m == 0 and end_m == 0:
+        return f"{start_h:02d}-{end_h:02d}"
+    return f"{start_h:02d}:{start_m:02d}-{end_h:02d}:{end_m:02d}"
 
 
 def normalize_profile_workspace(profile_id: str, workspace: str) -> str:
