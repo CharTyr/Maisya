@@ -151,12 +151,32 @@ TOOL_DEFINITIONS = {
             "full_page": {"type": "boolean"},
         },
     ),
+    "exec_command": definition(
+        "exec_command",
+        "在当前线程工作区（宿主机工作区或隔离容器）执行命令；涉及高风险或破坏性动作时会暂停等待管理员确认。",
+        {
+            "command": STRING,
+            "timeout": {"type": "integer", "minimum": 1, "maximum": 180},
+            "risk_hint": {"type": "string", "minLength": 0, "maxLength": 64},
+            "targets": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 256},
+                "maxItems": 16,
+            },
+        },
+        ["command"],
+    ),
     "sandbox_exec": definition(
         "sandbox_exec",
         "在隔离容器中执行命令，工作目录 /work/project；可访问受控公网，命令结束即清理进程。",
         {
             "command": STRING,
             "timeout": {"type": "integer", "minimum": 1, "maximum": 180},
+            "targets": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 256},
+                "maxItems": 16,
+            },
         },
         ["command"],
     ),
@@ -188,12 +208,6 @@ TOOL_DEFINITIONS = {
             "arguments": {"type": "object"},
         },
         ["action"],
-    ),
-    "credential_call": definition(
-        "credential_call",
-        "使用本档案管理员授权的固定凭据模板；不接受任意本机脚本。",
-        {"arguments": {"type": "object"}},
-        ["arguments"],
     ),
     "render_report": definition(
         "render_report",
@@ -699,12 +713,15 @@ class Scout:
         max_tokens = profile.max_tokens if profile.max_tokens is not None else 4096
         tools = [
             TOOL_DEFINITIONS[name]
-            for name in (
-                *profile.tools,
-                "thread_read",
-                "ask_user",
-                "thread_later",
+            for name in dict.fromkeys(
+                (
+                    *profile.tools,
+                    "thread_read",
+                    "ask_user",
+                    "thread_later",
+                )
             )
+            if name in TOOL_DEFINITIONS
         ]
 
         async def _invoke_once(model_name: str, extra_kwargs: dict) -> dict:

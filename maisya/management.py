@@ -5,8 +5,10 @@ import base64
 import copy
 import hashlib
 import json
+import mimetypes
 import os
 import re
+import shutil
 import sqlite3
 import time
 import tomllib
@@ -15,27 +17,26 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
-from .abilities import FISH_SEED_RE, TASK_RE
-from .config import Settings
-from .memory import PRESETS_DIR, MemoryLayers, parse_skill_meta
-from .pathsafe import is_absolute_program_path
-from .shaping import collect_known_chats, resolve_chat_target, resolve_stream_spec
-from .recipes import (
-    build_recipe_draft,
-    build_recipe_preview,
-    export_recipe_archive,
-    fetch_public_recipe_bytes,
-    import_recipe_archive,
-    serialize_profile_toml,
+from .abilities import (
+    FISH_SEED_RE,
+    PROFILE_ID_RE,
+    TASK_RE,
+    TOOLSETS,
+    _TOOLSET_LABELS,
+    _validate_instructions,
 )
+from .config import Settings, canonical_ui_style
+from .console import snapshot
+from .memory import PRESETS_DIR, SKILL_ID_RE, MemoryLayers, parse_skill_meta
+from .pathsafe import is_absolute_program_path, path_is_link_like
+from .shaping import collect_known_chats, resolve_chat_target, resolve_stream_spec
 from .scout import call_capability
 from .share import links_in
 from .services import (
     validate_api_entry,
-    validate_endpoint_targets,
     validate_web_bindings,
 )
-from .trust import format_stream_spec, parse_stream_spec
+from .trust import format_stream_spec, merge_admins, parse_stream_spec, validate_admin_update
 from .vault import atomic_private_write
 from .workspaces import completed_thread, regular_open
 
@@ -153,7 +154,6 @@ class Management:
     def __init__(self, plugin):
         self.plugin = plugin
         self.transfers = {}
-        self.recipe_previews = {}
         self.lock = asyncio.Lock()
         self.tasks = set()
         self.closed = False
@@ -177,7 +177,6 @@ class Management:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.transfers.clear()
-        self.recipe_previews.clear()
 
     @staticmethod
     def arguments(payload):
@@ -193,6 +192,54 @@ class Management:
             json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()
 
+    @staticmethod
+    def _serialize_profile(profile) -> dict:
+        allowed_keys = {
+            "id",
+            "title",
+            "name",
+            "description",
+            "icon_shape",
+            "theme_color",
+            "clone_from",
+            "environment",
+            "execution_mode",
+            "permission_mode",
+            "session_mode",
+            "access",
+            "model",
+            "task",
+            "model_name",
+            "fallback_models",
+            "tools",
+            "toolsets",
+            "web_provider",
+            "network",
+            "max_steps",
+            "max_tokens",
+            "context_tokens",
+            "temperature",
+            "bound",
+            "enabled",
+            "skills",
+            "mcp",
+            "apis",
+            "secrets",
+            "shared_secrets",
+            "sandbox_targets",
+            "allow_users",
+            "allow_chats",
+            "fish_seed",
+        }
+        data = {
+            key: (list(value) if isinstance(value, tuple) else value)
+            for key, value in asdict(profile).items()
+            if key in allowed_keys
+        }
+        data["model_list"] = list(profile.model_list)
+        data["resolved_tools"] = list(profile.resolved_tools)
+        return data
+
     def _assets(self):
         plugin = self.plugin
         profiles = []
@@ -200,34 +247,7 @@ class Management:
             if path.is_dir() and not path.is_symlink():
                 try:
                     profile = plugin.profiles.get(path.name)
-                    profiles.append(
-                        {
-                            key: value
-                            for key, value in asdict(profile).items()
-                            if key
-                            in {
-                                "id",
-                                "title",
-                                "environment",
-                                "access",
-                                "model",
-                                "task",
-                                "model_name",
-                                "fallback_models",
-                                "tools",
-                                "web_provider",
-                                "max_steps",
-                                "context_tokens",
-                                "bound",
-                                "enabled",
-                                "skills",
-                                "allow_users",
-                                "allow_chats",
-                                "fish_seed",
-                            }
-                        }
-                        | {"model_list": list(profile.model_list)}
-                    )
+                    profiles.append(self._serialize_profile(profile))
                 except (ValueError, OSError) as error:
                     profiles.append(
                         {"id": path.name, "title": path.name, "error": str(error)}
@@ -288,11 +308,24 @@ class Management:
                     "updated": updated,
                 }
             )
+        toolsets_meta = [
+            {
+                "id": ts_id,
+                "label": _TOOLSET_LABELS.get(ts_id, ts_id),
+                "tools": list(members),
+            }
+            for ts_id, members in TOOLSETS.items()
+        ]
+        handles = plugin.vault.handles()
         return {
             "profiles": profiles[:100],
+            "toolsets": toolsets_meta,
             "skills": skill_ids,
             "skill_items": skill_items,
-            "handles": plugin.vault.handles(),
+            "preset_skills": sorted(preset_set),
+            "handles": handles,
+            "vault_handles": handles,
+            "vault_meta": plugin.vault.list_meta(),
         }
 
     def _set_profile_skill_binding(
@@ -480,12 +513,10 @@ class Management:
         kind = str(raw_kind or "").strip().lower()
         if kind == "mcp":
             return "mcp", "servers"
-        if kind == "template":
-            return "template", "templates"
-        raise ValueError("服务类型仅支持 mcp 或 template")
+        raise ValueError("服务类型仅支持 mcp")
 
     def _upsert_service_item_sync(self, options: dict) -> dict:
-        kind, bucket = self._service_bucket(options.get("kind"))
+        kind, bucket = self._service_bucket(options.get("kind") or "mcp")
         raw_item = options.get("item")
         if not isinstance(raw_item, dict):
             raise ValueError("服务项必须为结构化配置对象")
@@ -509,7 +540,7 @@ class Management:
         )
         next_config = copy.deepcopy(current)
         next_config.setdefault("servers", {})
-        next_config.setdefault("templates", {})
+        next_config.pop("templates", None)
         if orig_name:
             _, orig_bucket = (
                 self._service_bucket(orig_kind) if orig_kind else (kind, bucket)
@@ -529,7 +560,7 @@ class Management:
         }
 
     def _delete_service_item_sync(self, options: dict) -> dict:
-        kind, bucket = self._service_bucket(options.get("kind"))
+        kind, bucket = self._service_bucket(options.get("kind") or "mcp")
         name = str(options.get("name") or options.get("id") or "").strip()
         if not name:
             raise ValueError("请指定要删除的服务名称")
@@ -540,6 +571,7 @@ class Management:
             message="服务登记已变化，请刷新后重试",
         )
         next_config = copy.deepcopy(current)
+        next_config.pop("templates", None)
         entries = next_config.setdefault(bucket, {})
         if name not in entries:
             raise ValueError("指定的服务项不存在")
@@ -550,42 +582,6 @@ class Management:
         return {
             "kind": kind,
             "name": name,
-            "deleted": True,
-            "configuration": next_config,
-            "version": self._version(next_config),
-        }
-
-    def _delete_webhook_item_sync(self, options: dict) -> dict:
-        current = self.plugin.incoming.load()
-        self._require_expected_version(
-            options,
-            self._version(current),
-            message="事件通道已变化，请刷新后重试",
-        )
-        target_name = str(options.get("name") or options.get("id") or "").strip()
-        if target_name:
-            if target_name not in current:
-                raise ValueError("指定的事件通道不存在")
-        elif "index" in options and options["index"] is not None:
-            idx = options["index"]
-            keys = list(current.keys())
-            if type(idx) is not int or not (0 <= idx < len(keys)):
-                raise ValueError("事件通道序号无效")
-            target_name = keys[idx]
-        else:
-            raise ValueError("请指定要删除的事件通道名称或序号")
-
-        next_config = {
-            k: copy.deepcopy(v) for k, v in current.items() if k != target_name
-        }
-        self.plugin.incoming.validate(next_config, strict_enabled=True)
-        content = json.dumps(next_config, ensure_ascii=False).encode()
-        if self.plugin.vault.contains_secret(content) or len(content) > 48000:
-            raise ValueError("事件通道只保存凭据句柄")
-        atomic_private_write(self.plugin.incoming.path, content)
-        return {
-            "name": target_name,
-            "id": target_name,
             "deleted": True,
             "configuration": next_config,
             "version": self._version(next_config),
@@ -885,13 +881,63 @@ class Management:
             "silent": "静默探索",
         }.get(kind, "待处理计划")
 
+    def _admins_info(self) -> dict:
+        info = getattr(self.plugin, "admins_info", None)
+        if isinstance(info, dict):
+            host_admins = list(info.get("host_admins") or [])
+            settings_admins = list(info.get("settings_admins") or self.plugin.settings.admins)
+        else:
+            host_admins = []
+            settings_admins = list(self.plugin.settings.admins)
+        effective_admins = sorted(merge_admins(host_admins, settings_admins))
+        return {
+            "host_admins": sorted(host_admins),
+            "settings_admins": list(settings_admins),
+            "plugin_admins": list(settings_admins),
+            "effective_admins": effective_admins,
+        }
+
+    def _docker_status(self) -> dict:
+        runtime = getattr(self.plugin, "runtime", None)
+        sb_cfg = getattr(self.plugin.settings, "sandbox", None)
+        enabled = bool(getattr(sb_cfg, "enabled", False))
+        image = str(getattr(sb_cfg, "image", "maisya-sandbox:latest") or "maisya-sandbox:latest")
+        net_mode = str(getattr(sb_cfg, "network_mode", "none") or "none")
+        available = bool(runtime.docker_available()) if runtime is not None else False
+        err = ""
+        if runtime is not None and getattr(runtime, "sandbox", None) is not None:
+            err = str(getattr(runtime.sandbox, "error", "") or "")
+        return {
+            "enabled": enabled,
+            "available": available,
+            "ready": available,
+            "image": image,
+            "network_mode": net_mode,
+            "error": err,
+        }
+
     def _settings(self):
         settings = self.plugin.settings.model_dump()
+        settings["ui_style"] = canonical_ui_style(settings.get("ui_style"))
+        admins_info = self._admins_info()
+        grants_store = getattr(self.plugin, "grants", None) or getattr(
+            getattr(self.plugin, "runtime", None), "grants", None
+        )
+        grants_list = grants_store.list_grants() if grants_store is not None else []
+        handles = self.plugin.vault.handles()
+        vault_meta = self.plugin.vault.list_meta()
         return {
             "settings": settings,
             "version": self._version(settings),
-            "admins": sorted(self.plugin.admins),
-            "handles": self.plugin.vault.handles(),
+            "admins": admins_info["effective_admins"],
+            "admins_info": admins_info,
+            "permission_mode": settings.get("permission_mode", "ask_risky"),
+            "ui_style": settings["ui_style"],
+            "handles": handles,
+            "vault_handles": handles,
+            "vault_meta": vault_meta,
+            "grants": grants_list,
+            "docker": self._docker_status(),
             "proactive_quota": self._proactive_quota(),
         }
 
@@ -1195,47 +1241,530 @@ class Management:
             "total": len(transfer["data"]),
         }
 
-    def _transfer_recipe(self, options):
-        self.transfers = {
-            key: value
-            for key, value in self.transfers.items()
-            if value["expires"] > time.time()
-        }
-        token = options.get("token", "")
-        meta = None
-        if not token:
-            if options.get("include_profile") is False:
-                raise ValueError("能力配方导出必须包含角色档案正文（PROFILE.md）")
-            if len(self.transfers) >= 4:
-                raise ValueError("传输较多，请稍后再试")
-            token = uuid.uuid4().hex
-            data, meta = export_recipe_archive(
-                self.plugin,
-                str(options.get("target") or "").strip(),
-                options,
-            )
-            self.transfers[token] = {
-                "data": data,
-                "meta": meta,
-                "expires": time.time() + 300,
-                "direction": "download_recipe",
+    def _connectors_info(self) -> dict:
+        config = self.plugin.runtime.services.load()
+        servers = config.get("servers") if isinstance(config.get("servers"), dict) else {}
+        apis = config.get("apis") if isinstance(config.get("apis"), dict) else {}
+        mcp_items = [
+            {
+                "id": name,
+                "name": name,
+                "description": str(spec.get("description") or ""),
+                "readonly": bool(spec.get("readonly", True)),
+                "access": str(spec.get("access") or "admins"),
+                "tools": list(spec.get("tools") or []),
+                "credentials": sorted((spec.get("credentials") or {}).values())
+                if isinstance(spec.get("credentials"), dict)
+                else [],
             }
-        transfer = self.transfers.get(token)
-        if not transfer or transfer["direction"] != "download_recipe":
-            raise ValueError("导出已过期，请重新导出")
-        offset = options.get("offset", 0)
-        if type(offset) is not int or not 0 <= offset <= len(transfer["data"]):
-            raise ValueError("传输位置无效")
-        data = transfer["data"][offset : offset + 24576]
-        out = {
-            "token": token,
-            "data": base64.b64encode(data).decode(),
-            "offset": offset + len(data),
-            "total": len(transfer["data"]),
+            for name, spec in sorted(servers.items())
+            if isinstance(spec, dict)
+        ]
+        api_items = [
+            {
+                "id": name,
+                "name": name,
+                "api": str(spec.get("api") or name),
+                "description": str(spec.get("description") or ""),
+                "readonly": bool(spec.get("readonly", True)),
+                "access": str(spec.get("access") or "admins"),
+            }
+            for name, spec in sorted(apis.items())
+            if isinstance(spec, dict)
+        ]
+        web_items = [
+            {"id": "auto", "label": "自动择优（宿主 / 内置）"},
+            {"id": "host", "label": "宿主联网能力"},
+            {"id": "google_search_plugin", "label": "Google 搜索插件"},
+        ]
+        return {
+            "mcp": mcp_items,
+            "plugin_apis": api_items,
+            "web_providers": web_items,
+            "web_provider": str(self.plugin.settings.web_provider or "auto"),
+            "docker": self._docker_status(),
         }
-        if meta is not None:
-            out["meta"] = meta
-        return out
+
+    def _profile_detail_sync(self, profile_id: str) -> dict:
+        pid = str(profile_id or "").strip()
+        if not pid:
+            raise ValueError("请指定档案标识 profile_id")
+        prof = self.plugin.profiles.get(pid)
+        md_res = self.plugin.memory.read("profile", target=prof.id, document="PROFILE.md")
+        md_text = str(md_res.get("content") or "")
+        notes_text = ""
+        try:
+            notes_res = self.plugin.memory.read("notes", target=prof.id)
+            notes_text = str(notes_res.get("content") or "")
+        except (ValueError, KeyError, OSError):
+            notes_text = ""
+        history = self.plugin.memory.history("profile", target=prof.id, document="PROFILE.md")
+        assets = self._assets()
+        return {
+            "profile": self._serialize_profile(prof),
+            "profile_md": md_text,
+            "profile_md_lines": len(md_text.splitlines()),
+            "profile_md_version": md_res.get("version"),
+            "notes": notes_text,
+            "history": history,
+            "toolsets": assets["toolsets"],
+            "skills": assets["skill_items"],
+            "connectors": self._connectors_info(),
+            "vault_handles": assets["vault_handles"],
+        }
+
+    def _library_sync(self, options: dict) -> dict:
+        out = self._outputs(
+            {
+                "chat_id": str(options.get("chat_id") or ""),
+                "kind": str(options.get("kind") or "all")
+                if options.get("kind") in {None, "", "all", "attachment", "workspace_out", "conclusion"}
+                else "all",
+                "query": str(options.get("query") or ""),
+            }
+        )
+        media_filter = str(options.get("media_kind") or "").strip().lower()
+        profile_filter = str(options.get("profile") or "").strip()
+        raw_limit = options.get("limit", 100)
+        limit = max(1, min(int(raw_limit) if isinstance(raw_limit, int) else 100, 200))
+        filtered = []
+        for item in out.get("items", []):
+            mk = str(item.get("media_kind") or "").lower()
+            if media_filter and media_filter != "all":
+                if media_filter == "html":
+                    if mk not in {"html", "page"}:
+                        continue
+                elif media_filter == "doc":
+                    if mk not in {"doc", "markdown", "text", "pdf", "conclusion"}:
+                        continue
+                elif mk != media_filter:
+                    continue
+            if profile_filter and str(item.get("profile") or "") != profile_filter:
+                continue
+            enriched = {
+                **item,
+                "size_bytes": int(item.get("bytes") or item.get("size_bytes") or 0),
+                "filename": str(item.get("name") or item.get("path") or ""),
+                "deliverable": bool(item.get("kind") == "attachment"),
+            }
+            filtered.append(enriched)
+            if len(filtered) >= limit:
+                break
+        return {
+            **out,
+            "items": filtered,
+            "total": len(filtered),
+            "filters": {
+                "chat_id": str(options.get("chat_id") or ""),
+                "media_kind": media_filter or "all",
+                "kind": str(options.get("kind") or "all"),
+                "profile": profile_filter,
+                "query": str(options.get("query") or ""),
+            },
+        }
+
+    @staticmethod
+    def _clean_virtual_path(raw_path: object) -> list[str]:
+        text = str(raw_path or "").strip().replace("\\", "/")
+        if not text:
+            return []
+        if text.startswith("/") or "\x00" in text:
+            raise ValueError("路径格式无效，仅允许插件受管虚拟相对路径")
+        parts = [p for p in text.split("/") if p and p != "."]
+        if any(p == ".." for p in parts):
+            raise ValueError("路径不允许包含 .. 逃逸")
+        if parts and ":" in parts[0] and len(parts) == 2 and parts[1] == "MEMORY.md":
+            # Support convenience alias `<stream_spec>/MEMORY.md` -> `sessions/<stream_spec>/MEMORY.md`
+            parts = ["sessions", parts[0], "MEMORY.md"]
+        return parts
+
+    def _safe_fs_resolve(self, root: Path, rel_parts: list[str]) -> Path:
+        root_resolved = root.resolve()
+        if path_is_link_like(root):
+            raise ValueError("受管根目录不能是符号链接")
+        cur = root
+        for part in rel_parts:
+            if not part or part in {".", ".."} or "\x00" in part:
+                raise ValueError("路径包含非法片段")
+            cur = cur / part
+            if path_is_link_like(cur):
+                raise ValueError("不允许经过或读取符号链接路径")
+        resolved = cur.resolve()
+        if not resolved.is_relative_to(root_resolved):
+            raise ValueError("路径超出受管目录范围")
+        return cur
+
+    def _known_session_dirs(self) -> list[tuple[str, str]]:
+        plugin = self.plugin
+        chats: set[str] = set(plugin.settings.enabled_chats)
+        with plugin.threads.connect() as db:
+            for r in db.execute('SELECT DISTINCT chat_id FROM agent_threads WHERE owner="chat"'):
+                if r[0]:
+                    chats.add(str(r[0]))
+            for r in db.execute('SELECT DISTINCT chat_id FROM memory_versions WHERE kind="memory"'):
+                if r[0]:
+                    chats.add(str(r[0]))
+        seen: dict[str, str] = {}
+        for raw_cid in sorted(chats):
+            canon = plugin.canonical_stream_spec(raw_cid) or raw_cid
+            if canon and canon != "self":
+                seen.setdefault(canon, raw_cid)
+        return sorted(seen.items())
+
+    def _fs_list_sync(self, options: dict) -> dict:
+        plugin = self.plugin
+        parts = self._clean_virtual_path(options.get("path", ""))
+        vpath = "/".join(parts)
+        entries: list[dict] = []
+        if not parts:
+            for fname, kind in (("JOURNAL.md", "journal"), ("HEARTBEAT.md", "heartbeat")):
+                fp = plugin.memory._locate(kind)[1]
+                st = fp.stat() if fp.is_file() and not path_is_link_like(fp) else None
+                entries.append(
+                    {
+                        "name": fname,
+                        "path": fname,
+                        "kind": "file",
+                        "size": int(st.st_size) if st else 0,
+                        "updated": float(st.st_mtime) if st else 0.0,
+                        "writable": True,
+                        "deletable": False,
+                    }
+                )
+            chat_id = str(options.get("chat_id") or "").strip()
+            if chat_id:
+                resolved_cid = self._resolve_memory_chat_id(chat_id)
+                mfp = plugin.memory._locate("memory", chat_id=resolved_cid)[1]
+                mst = mfp.stat() if mfp.is_file() and not path_is_link_like(mfp) else None
+                entries.append(
+                    {
+                        "name": "MEMORY.md",
+                        "path": "MEMORY.md",
+                        "kind": "file",
+                        "size": int(mst.st_size) if mst else 0,
+                        "updated": float(mst.st_mtime) if mst else 0.0,
+                        "writable": True,
+                        "deletable": False,
+                    }
+                )
+            for dname in ("sessions", "profiles", "skills", "workspaces"):
+                entries.append(
+                    {
+                        "name": dname,
+                        "path": dname,
+                        "kind": "dir",
+                        "size": 0,
+                        "updated": 0.0,
+                        "writable": dname in {"profiles", "skills", "sessions"},
+                        "deletable": False,
+                    }
+                )
+            return {"path": "", "entries": entries}
+
+        top = parts[0]
+        if top == "sessions":
+            if len(parts) == 1:
+                for canon, raw_cid in self._known_session_dirs():
+                    entries.append(
+                        {
+                            "name": canon,
+                            "path": f"sessions/{canon}",
+                            "kind": "dir",
+                            "size": 0,
+                            "updated": 0.0,
+                            "writable": True,
+                            "deletable": False,
+                        }
+                    )
+                return {"path": vpath, "entries": entries}
+            if len(parts) == 2:
+                resolved_cid = self._resolve_memory_chat_id(parts[1])
+                mfp = plugin.memory._locate("memory", chat_id=resolved_cid)[1]
+                mst = mfp.stat() if mfp.is_file() and not path_is_link_like(mfp) else None
+                entries.append(
+                    {
+                        "name": "MEMORY.md",
+                        "path": f"sessions/{parts[1]}/MEMORY.md",
+                        "kind": "file",
+                        "size": int(mst.st_size) if mst else 0,
+                        "updated": float(mst.st_mtime) if mst else 0.0,
+                        "writable": True,
+                        "deletable": False,
+                    }
+                )
+                return {"path": vpath, "entries": entries}
+            raise ValueError("目录不存在")
+
+        root_map = {
+            "profiles": plugin.profiles.path,
+            "skills": plugin.data_root / "abilities/skills",
+            "workspaces": plugin.runtime.files.root,
+        }
+        if top not in root_map:
+            raise ValueError("不支持列举的系统目录")
+        base_root = root_map[top]
+        target_dir = self._safe_fs_resolve(base_root, parts[1:])
+        if not target_dir.is_dir():
+            raise ValueError("目标目录不存在")
+        preset_skills = plugin.memory.preset_skills()
+        for child in sorted(target_dir.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if child.name.startswith(".") or path_is_link_like(child):
+                continue
+            rel = f"{vpath}/{child.name}"
+            is_dir = child.is_dir()
+            st = child.stat()
+            deletable = False
+            if not is_dir:
+                if top == "profiles" and len(parts) >= 2 and parts[1] != "default" and child.name not in {"PROFILE.md", "profile.toml"}:
+                    deletable = True
+                elif top == "skills" and len(parts) >= 2 and parts[1] not in preset_skills and child.name != "SKILL.md":
+                    deletable = True
+            entries.append(
+                {
+                    "name": child.name,
+                    "path": rel,
+                    "kind": "dir" if is_dir else "file",
+                    "size": 0 if is_dir else int(st.st_size),
+                    "updated": float(st.st_mtime),
+                    "writable": top in {"profiles", "skills"} and not is_dir,
+                    "deletable": deletable,
+                }
+            )
+        return {"path": vpath, "entries": entries}
+
+    def _fs_read_sync(self, options: dict) -> dict:
+        plugin = self.plugin
+        parts = self._clean_virtual_path(options.get("path", ""))
+        if not parts:
+            raise ValueError("请指定要读取的文件路径 path")
+        vpath = "/".join(parts)
+        if parts == ["JOURNAL.md"] or parts == ["memory", "self", "JOURNAL.md"]:
+            res = plugin.memory.read("journal")
+            return {
+                "path": vpath,
+                "content": str(res.get("content") or ""),
+                "size": len(str(res.get("content") or "").encode("utf-8")),
+                "updated": float(res.get("updated") or 0.0),
+                "version": res.get("version"),
+                "expected_version": res.get("version"),
+                "writable": True,
+                "truncated": False,
+            }
+        if parts == ["HEARTBEAT.md"] or parts == ["memory", "self", "HEARTBEAT.md"]:
+            res = plugin.memory.read("heartbeat")
+            return {
+                "path": vpath,
+                "content": str(res.get("content") or ""),
+                "size": len(str(res.get("content") or "").encode("utf-8")),
+                "updated": float(res.get("updated") or 0.0),
+                "version": res.get("version"),
+                "expected_version": res.get("version"),
+                "writable": True,
+                "truncated": False,
+            }
+        if parts == ["MEMORY.md"]:
+            raw_cid = str(options.get("chat_id") or "").strip()
+            if not raw_cid and plugin.settings.enabled_chats:
+                raw_cid = str(plugin.settings.enabled_chats[0])
+            if not raw_cid:
+                raise ValueError("读取 MEMORY.md 请指定 chat_id 或使用 sessions/<chat>/MEMORY.md")
+            cid = self._resolve_memory_chat_id(raw_cid)
+            res = plugin.memory.read("memory", chat_id=cid)
+            return {
+                "path": vpath,
+                "chat_id": cid,
+                "content": str(res.get("content") or ""),
+                "size": len(str(res.get("content") or "").encode("utf-8")),
+                "updated": float(res.get("updated") or 0.0),
+                "version": res.get("version"),
+                "expected_version": res.get("version"),
+                "writable": True,
+                "truncated": False,
+            }
+        if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "MEMORY.md":
+            cid = self._resolve_memory_chat_id(parts[1])
+            res = plugin.memory.read("memory", chat_id=cid)
+            return {
+                "path": vpath,
+                "chat_id": cid,
+                "content": str(res.get("content") or ""),
+                "size": len(str(res.get("content") or "").encode("utf-8")),
+                "updated": float(res.get("updated") or 0.0),
+                "version": res.get("version"),
+                "expected_version": res.get("version"),
+                "writable": True,
+                "truncated": False,
+            }
+        if len(parts) == 3 and parts[0] == "profiles" and parts[2] in {"PROFILE.md", "profile.toml", "NOTES.md"}:
+            if parts[2] == "NOTES.md":
+                res = plugin.memory.read("notes", target=parts[1])
+            else:
+                res = plugin.memory.read("profile", target=parts[1], document=parts[2])
+            return {
+                "path": vpath,
+                "content": str(res.get("content") or ""),
+                "size": len(str(res.get("content") or "").encode("utf-8")),
+                "updated": float(res.get("updated") or 0.0),
+                "version": res.get("version"),
+                "expected_version": res.get("version"),
+                "writable": True,
+                "truncated": False,
+            }
+        if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md":
+            res = plugin.memory.read("skill", target=parts[1])
+            return {
+                "path": vpath,
+                "content": str(res.get("content") or ""),
+                "size": len(str(res.get("content") or "").encode("utf-8")),
+                "updated": float(res.get("updated") or 0.0),
+                "version": res.get("version"),
+                "expected_version": res.get("version"),
+                "writable": True,
+                "truncated": False,
+            }
+
+        root_map = {
+            "profiles": plugin.profiles.path,
+            "skills": plugin.data_root / "abilities/skills",
+            "workspaces": plugin.runtime.files.root,
+        }
+        top = parts[0]
+        if top not in root_map or len(parts) < 2:
+            raise ValueError("不支持读取该系统路径")
+        fpath = self._safe_fs_resolve(root_map[top], parts[1:])
+        if not fpath.is_file():
+            raise ValueError("文件不存在")
+        raw = fpath.read_bytes()
+        truncated = len(raw) > 65536
+        text = plugin.vault.redact(raw[:65536].decode("utf-8", errors="replace"))
+        st = fpath.stat()
+        ver = hashlib.sha256(raw).hexdigest()[:16]
+        return {
+            "path": vpath,
+            "content": text,
+            "size": int(st.st_size),
+            "updated": float(st.st_mtime),
+            "version": ver,
+            "expected_version": ver,
+            "writable": top in {"profiles", "skills"} and not truncated,
+            "truncated": truncated,
+        }
+
+    def _fs_write_sync(self, options: dict) -> dict:
+        plugin = self.plugin
+        parts = self._clean_virtual_path(options.get("path", ""))
+        content = options.get("content")
+        if not parts or not isinstance(content, str):
+            raise ValueError("写入系统文件需要 path 与文本 content")
+        vpath = "/".join(parts)
+        raw_bytes = content.encode("utf-8")
+        if len(raw_bytes) > 65536 or plugin.vault.contains_secret(raw_bytes):
+            raise ValueError("文件内容过大或包含已知敏感凭据，禁止明文写入")
+        expected = options.get("expected_version")
+
+        def _write_memory(kind, **kw):
+            cur = plugin.memory.read(kind, **kw)
+            exp = expected if isinstance(expected, int) else cur["version"]
+            saved = plugin.memory.write(
+                kind, content, expected_version=exp, allow_custom=True, **kw
+            )
+            return {
+                "path": vpath,
+                "size": len(raw_bytes),
+                "version": saved["version"],
+                "updated": float(time.time()),
+            }
+
+        if parts == ["JOURNAL.md"] or parts == ["memory", "self", "JOURNAL.md"]:
+            return _write_memory("journal")
+        if parts == ["HEARTBEAT.md"] or parts == ["memory", "self", "HEARTBEAT.md"]:
+            return _write_memory("heartbeat")
+        if parts == ["MEMORY.md"]:
+            raw_cid = str(options.get("chat_id") or "").strip()
+            if not raw_cid and plugin.settings.enabled_chats:
+                raw_cid = str(plugin.settings.enabled_chats[0])
+            if not raw_cid:
+                raise ValueError("写入 MEMORY.md 请指定 chat_id 或使用 sessions/<chat>/MEMORY.md")
+            cid = self._resolve_memory_chat_id(raw_cid)
+            return _write_memory("memory", chat_id=cid)
+        if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "MEMORY.md":
+            cid = self._resolve_memory_chat_id(parts[1])
+            return _write_memory("memory", chat_id=cid)
+        if len(parts) == 3 and parts[0] == "profiles" and parts[2] in {"PROFILE.md", "profile.toml", "NOTES.md"}:
+            if parts[2] == "PROFILE.md":
+                _validate_instructions(content)
+            if parts[2] == "NOTES.md":
+                return _write_memory("notes", target=parts[1])
+            return _write_memory("profile", target=parts[1], document=parts[2])
+        if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md":
+            return _write_memory("skill", target=parts[1])
+
+        root_map = {
+            "profiles": plugin.profiles.path,
+            "skills": plugin.data_root / "abilities/skills",
+        }
+        top = parts[0]
+        if top not in root_map or len(parts) < 3:
+            raise ValueError("该系统路径为只读或不允许直接覆盖写入")
+        if top == "profiles" and not PROFILE_ID_RE.fullmatch(parts[1]):
+            raise ValueError("档案编号无效")
+        if top == "skills" and not SKILL_ID_RE.fullmatch(parts[1]):
+            raise ValueError("技能编号无效")
+        fpath = self._safe_fs_resolve(root_map[top], parts[1:])
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        atomic_private_write(fpath, raw_bytes)
+        ver = hashlib.sha256(raw_bytes).hexdigest()[:16]
+        return {
+            "path": vpath,
+            "size": len(raw_bytes),
+            "version": ver,
+            "updated": float(time.time()),
+        }
+
+    def _fs_delete_sync(self, options: dict) -> dict:
+        plugin = self.plugin
+        parts = self._clean_virtual_path(options.get("path", ""))
+        if len(parts) < 2:
+            raise ValueError("系统核心记忆目录或顶层文件不可删除")
+        vpath = "/".join(parts)
+        top = parts[0]
+        if top == "profiles":
+            pid = parts[1]
+            if pid == "default":
+                raise ValueError("内置默认档案不可删除")
+            if len(parts) == 2:
+                plugin.profiles.delete(pid)
+                plugin.memory.purge_profile(pid)
+                return {"deleted": True, "path": vpath}
+            if parts[2] in {"PROFILE.md", "profile.toml"}:
+                raise ValueError("不可单独删除档案核心文件")
+            target = self._safe_fs_resolve(plugin.profiles.path, parts[1:])
+            if not target.exists():
+                raise ValueError("目标文件不存在")
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            return {"deleted": True, "path": vpath}
+        if top == "skills":
+            sid = parts[1]
+            preset_skills = plugin.memory.preset_skills()
+            if sid in preset_skills and (len(parts) == 2 or parts[2] == "SKILL.md"):
+                raise ValueError("预设技能核心文件不可删除")
+            if len(parts) == 2:
+                plugin.memory.delete_skill(sid)
+                return {"deleted": True, "path": vpath}
+            if parts[2] == "SKILL.md":
+                raise ValueError("不可单独删除 SKILL.md")
+            target = self._safe_fs_resolve(plugin.data_root / "abilities/skills", parts[1:])
+            if not target.exists():
+                raise ValueError("目标文件不存在")
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            return {"deleted": True, "path": vpath}
+        raise ValueError("仅支持删除非预设技能附属文件或自定义档案文件")
 
     async def _collect_host_models(
         self, *, force: bool = False, probe_host: bool = False
@@ -1471,18 +2000,69 @@ class Management:
 
     _BATCHABLE_SECTIONS = frozenset(
         {
+            "now_detail",
             "abilities",
+            "profiles",
+            "profile_detail",
+            "skills",
+            "connectors",
+            "library",
+            "fs_list",
+            "fs_read",
             "asset",
             "settings",
             "services",
-            "webhooks",
             "memory",
             "outputs",
             "intents",
             "discovery",
             "health",
+            "vault_list",
+            "grants",
+            "onboarding",
+            "models",
         }
     )
+
+    async def _read_profiles_payload(self) -> dict:
+        result = await completed_thread(self._assets)
+        result["known_chats"] = await completed_thread(self._known_chats_sync)
+        host_models = await self._collect_host_models()
+        result["available_models"] = host_models["names"]
+        result["model_catalog"] = host_models["models"]
+        result["model_tasks"] = host_models["tasks"]
+        result["default_model"] = str(self.plugin.settings.default_model or "")
+        result["connectors"] = await completed_thread(self._connectors_info)
+        result["docker"] = await completed_thread(self._docker_status)
+        result["admins_info"] = await completed_thread(self._admins_info)
+        result["permission_mode"] = str(self.plugin.settings.permission_mode or "ask_risky")
+        return result
+
+    async def _onboarding_view_payload(self) -> dict:
+        if hasattr(self.plugin, "onboarding_view"):
+            return await self.plugin.onboarding_view(is_admin_view=True)
+        mgr = getattr(self.plugin, "onboarding", None)
+        if mgr is None:
+            return {"show": False, "usable": True}
+        host_models = await self._collect_host_models()
+        admins_info = await completed_thread(self._admins_info)
+        services_cfg = await completed_thread(self.plugin.runtime.services.load)
+        docker = await completed_thread(self._docker_status)
+        with self.plugin.threads.connect() as db:
+            row = db.execute("SELECT COUNT(*) AS n FROM agent_threads").fetchone()
+            thread_count = int(row["n"] if row else 0)
+        return await completed_thread(
+            mgr.view,
+            settings=self.plugin.settings,
+            host_model_catalog=host_models["models"],
+            host_admins=admins_info["host_admins"],
+            mcp_servers=services_cfg.get("servers") or {},
+            docker_status=docker,
+            existing_threads_count=thread_count,
+            is_admin_view=True,
+            default_profile_ready=(self.plugin.profiles.path / "default" / "profile.toml").is_file(),
+            profiles_path=self.plugin.profiles.path,
+        )
 
     async def _discovery(self, options=None):
         ctx = getattr(self.plugin, "ctx", None)
@@ -1553,13 +2133,93 @@ class Management:
             return await self._read(section, payload)
 
     async def _read_section(self, section: str, options: dict) -> dict:
-        if section == "abilities":
-            result = await completed_thread(self._assets)
-            result["known_chats"] = await completed_thread(self._known_chats_sync)
+        if section == "now_detail":
+            tid = str(options.get("thread_id") or "").strip()
+            cid = str(options.get("chat_id") or "").strip()
+            cursor = int(options.get("cursor") or 0)
+            filter_chat = (
+                await completed_thread(self.plugin.resolve_known_session_id, cid)
+                if cid and cid != "self"
+                else cid
+            )
+            snap = await completed_thread(
+                snapshot,
+                self.plugin.threads,
+                thread_id=tid,
+                chat_id=filter_chat,
+                cursor=cursor,
+                context_limit=self.plugin.settings.thread_context_chars,
+                context_tokens=self.plugin.settings.thread_context_tokens,
+                model_catalog=self.plugin.get_model_catalog(),
+                redact=self.plugin.vault.redact,
+                memory=self.plugin.memory,
+                workspace_root=self.plugin.data_root / "workspaces",
+            )
+            sel = snap.get("selected") if isinstance(snap, dict) else None
+            chat_ids = list(
+                dict.fromkeys(
+                    [
+                        cid,
+                        *(t.get("chat_id") for t in snap.get("threads", []) if t.get("chat_id")),
+                        sel.get("chat_id") if isinstance(sel, dict) else "",
+                    ]
+                )
+            )
+            chat_sources = await self.plugin._resolve_chat_sources([c for c in chat_ids if c])
+            result = {
+                **snap,
+                "chat_sources": chat_sources,
+                "thread_id": tid or (sel.get("thread_id") if isinstance(sel, dict) else ""),
+                "thread": sel,
+                "steps": sel.get("steps", []) if isinstance(sel, dict) else [],
+                "pending_approval": sel.get("pending_approval") if isinstance(sel, dict) else None,
+                "artifacts": sel.get("artifacts", []) if isinstance(sel, dict) else [],
+                "context": sel.get("context") if isinstance(sel, dict) else None,
+            }
+        elif section in {"abilities", "profiles"}:
+            result = await self._read_profiles_payload()
+        elif section == "profile_detail":
+            pid = str(
+                options.get("profile_id")
+                or options.get("id")
+                or options.get("target")
+                or ""
+            ).strip()
+            result = await completed_thread(self._profile_detail_sync, pid)
             host_models = await self._collect_host_models()
+            result["models"] = host_models["names"]
             result["available_models"] = host_models["names"]
             result["model_catalog"] = host_models["models"]
             result["model_tasks"] = host_models["tasks"]
+        elif section == "skills":
+            assets = await completed_thread(self._assets)
+            result = {
+                "skills": assets["skill_items"],
+                "skill_map": assets["skills"],
+                "preset_skills": assets["preset_skills"],
+                "profiles": [p["id"] for p in assets["profiles"]],
+            }
+        elif section == "connectors":
+            result = await completed_thread(self._connectors_info)
+        elif section == "library":
+            result = await completed_thread(self._library_sync, options)
+            source_ids = list(
+                dict.fromkeys(
+                    [
+                        *result.get("chats", []),
+                        *(
+                            i.get("chat_id")
+                            for i in [*result.get("items", []), *result.get("recent", [])]
+                            if i.get("chat_id")
+                        ),
+                    ]
+                )
+            )
+            result["chat_sources"] = await self.plugin._resolve_chat_sources(source_ids)
+        elif section == "fs_list":
+            result = await completed_thread(self._fs_list_sync, options)
+        elif section == "fs_read":
+            result = await completed_thread(self._fs_read_sync, options)
         elif section == "asset":
             allowed = {
                 key: value
@@ -1583,12 +2243,15 @@ class Management:
             assets = await completed_thread(self._assets)
             result["profiles"] = [p["id"] for p in assets["profiles"]]
             result["profile_cards"] = assets["profiles"]
+            host_models = await self._collect_host_models()
+            result["available_models"] = host_models["names"]
+            result["model_catalog"] = host_models["models"]
+            result["model_tasks"] = host_models["tasks"]
         elif section == "services":
             config = await completed_thread(self.plugin.runtime.services.load)
+            if isinstance(config, dict):
+                config.pop("templates", None)
             await completed_thread(self._validate_services, config)
-            result = {"configuration": config, "version": self._version(config)}
-        elif section == "webhooks":
-            config = await completed_thread(self.plugin.incoming.load)
             result = {"configuration": config, "version": self._version(config)}
         elif section == "memory":
             result = await completed_thread(self._memory, options)
@@ -1618,12 +2281,15 @@ class Management:
         elif section == "discovery":
             result = await self._discovery(options)
         elif section == "health":
-            sandbox = self.plugin.runtime.sandbox
+            docker = await completed_thread(self._docker_status)
+            sb = getattr(self.plugin.runtime, "sandbox", None)
+            containers = getattr(sb, "containers", None) if sb is not None else None
             result = {
-                "enabled": sandbox.settings.enabled,
-                "ready": sandbox.ready,
-                "error": sandbox.error,
-                "running": len(sandbox.containers),
+                "enabled": docker["enabled"],
+                "ready": docker["ready"],
+                "available": docker["available"],
+                "error": docker["error"],
+                "running": len(containers) if isinstance(containers, (dict, list, set, tuple)) else 0,
                 "quarantined": len(self.plugin.runtime.files.quarantines),
                 "bytes": await completed_thread(self.plugin.runtime.files.usage),
                 "limit": self.plugin.runtime.files.total_bytes,
@@ -1640,41 +2306,37 @@ class Management:
         elif section == "skill_package":
             async with self.lock:
                 result = await completed_thread(self._transfer_skill, options)
-        elif section == "recipe_draft":
-            result = await completed_thread(
-                build_recipe_draft,
-                self.plugin,
-                str(options.get("target") or "").strip(),
-                options,
-            )
-            if options.get("include_profile") is False and isinstance(result, dict):
-                blocker = "未勾选角色档案正文（PROFILE.md），无法构成完整能力配方；请保留该必选项后再导出。"
-                findings = list(result.get("findings") or [])
-                if not any(
-                    isinstance(f, dict) and f.get("path") == "PROFILE.md" and f.get("severity") == "blocker"
-                    for f in findings
-                ):
-                    findings.insert(
-                        0,
-                        {
-                            "severity": "blocker",
-                            "path": "PROFILE.md",
-                            "message": blocker,
-                        },
-                    )
-                result["findings"] = findings
-                result["can_export"] = False
-                blockers = list(result.get("blockers") or [])
-                if blocker not in blockers:
-                    blockers.append(blocker)
-                result["blockers"] = blockers
-                result["ready"] = False
-        elif section == "recipe_package":
-            async with self.lock:
-                result = await completed_thread(self._transfer_recipe, options)
         elif section == "package":
             async with self.lock:
                 result = await completed_thread(self._transfer, options)
+        elif section == "vault_list":
+            handles = await completed_thread(self.plugin.vault.handles)
+            items = await completed_thread(self.plugin.vault.list_meta)
+            result = {"items": items, "handles": handles}
+        elif section == "grants":
+            scope = str(options.get("scope") or "").strip()
+            grants_store = getattr(self.plugin, "grants", None) or getattr(
+                getattr(self.plugin, "runtime", None), "grants", None
+            )
+            items = (
+                await completed_thread(grants_store.list_grants, scope=scope or None)
+                if grants_store is not None
+                else []
+            )
+            result = {"items": items}
+        elif section == "onboarding":
+            view = await self._onboarding_view_payload()
+            result = {**view, "onboarding": view}
+        elif section == "models":
+            force_refresh = bool(options.get("force"))
+            host_models = await self._collect_host_models(
+                force=force_refresh, probe_host=True
+            )
+            result = {
+                "models": host_models["models"],
+                "available_models": host_models["names"],
+                "tasks": host_models["tasks"],
+            }
         else:
             raise ValueError("未知管理查询")
         return result
@@ -1713,7 +2375,7 @@ class Management:
             result = await self._read_section(section, options)
         return {
             "success": True,
-            "ui_style": self.plugin.settings.ui_style,
+            "ui_style": canonical_ui_style(self.plugin.settings.ui_style),
             **self.plugin.vault.redact(result),
         }
 
@@ -2211,6 +2873,269 @@ class Management:
         )
         return settings
 
+    _PROFILE_EDITABLE_KEYS = frozenset(
+        {
+            "name",
+            "title",
+            "description",
+            "icon_shape",
+            "theme_color",
+            "clone_from",
+            "model_name",
+            "model",
+            "fallback_models",
+            "task",
+            "toolsets",
+            "tools",
+            "skills",
+            "mcp_servers",
+            "mcp",
+            "connectors",
+            "apis",
+            "secret_handles",
+            "secrets",
+            "shared_secrets",
+            "share_credentials",
+            "execution_mode",
+            "permission_mode",
+            "session_mode",
+            "enabled_chats",
+            "allow_chats",
+            "allow_users",
+            "access",
+            "instructions",
+            "enabled",
+            "network",
+            "web_provider",
+            "max_tokens",
+            "context_tokens",
+            "temperature",
+            "max_steps",
+            "fish_seed",
+            "template",
+            "sandbox_targets",
+        }
+    )
+
+    @classmethod
+    def _extract_profile_fields(cls, options: dict) -> dict:
+        nested = options.get("profile") if isinstance(options.get("profile"), dict) else {}
+        merged = {**nested, **options}
+        if "profile_md" in merged and "instructions" not in merged:
+            merged["instructions"] = merged["profile_md"]
+        fields = {}
+        for key in cls._PROFILE_EDITABLE_KEYS:
+            if key in merged and merged[key] is not None:
+                fields[key] = merged[key]
+        return fields
+
+    async def _apply_settings_patch(
+        self, raw_settings: dict, *, expected_version: object = None
+    ) -> dict:
+        if expected_version is not None and expected_version != self._settings()["version"]:
+            raise ValueError("设置已变化，请刷新后再保存")
+        if not isinstance(raw_settings, dict):
+            raise ValueError("settings 必须是对象")
+        base_dump = self.plugin.settings.model_dump()
+        merged = {**base_dump, **raw_settings}
+        if isinstance(raw_settings.get("sandbox"), dict):
+            merged["sandbox"] = {
+                **dict(base_dump.get("sandbox") or {}),
+                **raw_settings["sandbox"],
+            }
+        if "admins" in raw_settings:
+            host_admins = list(self._admins_info().get("host_admins") or [])
+            merged["admins"] = validate_admin_update(
+                raw_settings["admins"], actor="", host_admins=host_admins
+            )
+        if isinstance(raw_settings.get("enabled_chats"), list):
+            normalized_chats = []
+            for item in raw_settings["enabled_chats"]:
+                token = str(item or "").strip()
+                if not token:
+                    continue
+                try:
+                    token = (
+                        await resolve_stream_spec(
+                            self.plugin, token, allow_unknown_ascii=True
+                        )
+                        or token
+                    )
+                except ValueError:
+                    pass
+                if token not in normalized_chats:
+                    normalized_chats.append(token)
+            merged["enabled_chats"] = normalized_chats
+        if isinstance(raw_settings.get("chat_proactive_levels"), dict):
+            normalized_levels = {}
+            for k, v in raw_settings["chat_proactive_levels"].items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                try:
+                    key = (
+                        await resolve_stream_spec(
+                            self.plugin, key, allow_unknown_ascii=True
+                        )
+                        or key
+                    )
+                except ValueError:
+                    pass
+                normalized_levels[key] = v
+            merged["chat_proactive_levels"] = normalized_levels
+        if "tz_offset_minutes" in raw_settings:
+            if raw_settings.get("tz_offset_minutes") is None:
+                merged["tz_offset_minutes"] = self.plugin.settings.tz_offset_minutes
+            else:
+                merged["tz_offset_minutes"] = _validate_tz_offset_minutes_setting(
+                    raw_settings["tz_offset_minutes"]
+                )
+        if "sleep_window" in raw_settings:
+            if raw_settings.get("sleep_window") is None:
+                merged["sleep_window"] = self.plugin.settings.sleep_window
+            else:
+                merged["sleep_window"] = _normalize_sleep_window_setting(
+                    raw_settings["sleep_window"]
+                )
+        if "ui_style" in raw_settings and raw_settings["ui_style"] is not None:
+            merged["ui_style"] = canonical_ui_style(raw_settings["ui_style"])
+        await self._persist_settings(merged)
+        return self._settings()
+
+    async def _write_thread_approve(self, options: dict) -> dict:
+        tid = str(options.get("thread_id") or "").strip()
+        if not tid:
+            raise ValueError("thread_approve 需要提供 thread_id")
+        decision = str(options.get("decision") or options.get("grant_tier") or "once").strip().lower()
+        request_id = str(options.get("request_id") or "").strip()
+        action_key = str(options.get("action_key") or "").strip()
+        note = str(options.get("note") or "").strip()
+        resolved = await completed_thread(
+            self.plugin.runtime.resolve_pending_approval,
+            tid,
+            decision=decision,
+            request_id=request_id,
+            action_key=action_key,
+            actor="console:admin",
+            note=note,
+        )
+        row = await completed_thread(
+            self.plugin.threads.get,
+            tid,
+            "",
+            allow_self=True,
+            allow_any_chat=True,
+        )
+        engine = getattr(self.plugin, "engine", None)
+        resumed = False
+        if engine is not None:
+            summary = resolved.get("summary") or resolved.get("action_key") or ""
+            if decision == "deny":
+                resume_msg = (
+                    f"管理员通过控制台拒绝了该操作：{summary}。"
+                    "请不要再执行该操作，改用安全方式继续或说明限制。"
+                )
+            else:
+                resume_msg = (
+                    f"管理员已通过控制台批准操作（{decision}）：{summary}。"
+                    "请继续执行并完成任务。"
+                )
+            if note:
+                resume_msg += f" 管理员附注：{note}"
+            await engine.send(
+                tid,
+                resume_msg,
+                chat_id=row["chat_id"],
+                wait_seconds=0,
+                background=True,
+            )
+            resumed = True
+        return {**resolved, "resumed": resumed}
+
+    async def _write_onboarding(self, action: str, options: dict) -> dict:
+        mgr = getattr(self.plugin, "onboarding", None)
+        if mgr is None:
+            raise RuntimeError("首次引导管理器未初始化")
+        base_view = await self._onboarding_view_payload()
+        run_id = str(options.get("run_id") or "").strip()
+        raw_seq = options.get("sequence")
+        sequence = int(raw_seq) if raw_seq is not None else None
+        ticket_ok = (not run_id or run_id == str(base_view.get("run_id") or "")) and (
+            sequence is None or sequence >= int(base_view.get("sequence") or 0)
+        )
+        view_kwargs = {
+            "settings": self.plugin.settings,
+            "host_model_catalog": (await self._collect_host_models())["models"],
+            "host_admins": self._admins_info()["host_admins"],
+            "mcp_servers": (await completed_thread(self.plugin.runtime.services.load)).get("servers") or {},
+            "docker_status": await completed_thread(self._docker_status),
+            "existing_threads_count": len(self.plugin.threads.list_threads(limit=50)),
+            "is_admin_view": True,
+            "default_profile_ready": (self.plugin.profiles.path / "default" / "profile.toml").is_file(),
+            "profiles_path": self.plugin.profiles.path,
+        }
+        if action == "onboarding_advance":
+            data = options.get("data")
+            if ticket_ok and isinstance(data, dict):
+                patch_keys = {
+                    k: data[k]
+                    for k in (
+                        "admins",
+                        "enabled_chats",
+                        "default_model",
+                        "permission_mode",
+                        "sandbox",
+                        "ui_style",
+                        "sleep_window",
+                    )
+                    if k in data and data[k] is not None
+                }
+                if patch_keys:
+                    await self._apply_settings_patch(patch_keys)
+                    view_kwargs["settings"] = self.plugin.settings
+                    view_kwargs["docker_status"] = await completed_thread(self._docker_status)
+            step = options.get("step")
+            return await completed_thread(
+                mgr.advance,
+                str(step).strip() if step else None,
+                run_id=run_id,
+                sequence=sequence,
+                data=data if isinstance(data, dict) else None,
+                **view_kwargs,
+            )
+        if action == "onboarding_skip":
+            return await completed_thread(
+                mgr.skip, run_id=run_id, sequence=sequence, **view_kwargs
+            )
+        if action == "onboarding_complete":
+            return await completed_thread(
+                mgr.complete, run_id=run_id, sequence=sequence, **view_kwargs
+            )
+        if action == "onboarding_reset":
+            return await completed_thread(mgr.reset, **view_kwargs)
+        if action == "onboarding_reopen":
+            step = options.get("step")
+            return await completed_thread(
+                mgr.reopen, str(step).strip() if step else None, **view_kwargs
+            )
+        if action == "onboarding_verify_model":
+            model_name = str(
+                options.get("model_name") or self.plugin.settings.default_model or ""
+            ).strip()
+            probe_fn = getattr(self.plugin, "probe_model", None)
+            cb = (
+                (lambda: probe_fn(model_name=model_name))
+                if callable(probe_fn)
+                else None
+            )
+            return await mgr.verify_model(
+                probe_fn=cb,
+                model_name=model_name,
+                timeout_seconds=10.0,
+                **view_kwargs,
+            )
+        raise ValueError("未知引导操作")
+
     async def write(self, action, payload):
         async with self.request(), self.lock:
             return await self._write(action, payload)
@@ -2241,25 +3166,159 @@ class Management:
                 allow_custom=True,
                 **allowed,
             )
-        elif action == "clone":
+        elif action == "thread_stop":
+            tid = str(options.get("thread_id") or "").strip()
+            if not tid:
+                raise ValueError("thread_stop 需要提供 thread_id")
+            row = await completed_thread(
+                plugin.threads.get, tid, "", allow_self=True, allow_any_chat=True
+            )
+            if getattr(plugin, "engine", None) is not None:
+                await plugin.engine.stop(tid, chat_id=row["chat_id"])
+            else:
+                await completed_thread(plugin.threads.stop, tid, row["chat_id"])
+            updated_row = await completed_thread(
+                plugin.threads.get, tid, "", allow_self=True, allow_any_chat=True
+            )
+            result = {"thread_id": tid, "state": updated_row["state"]}
+        elif action == "thread_reopen":
+            tid = str(options.get("thread_id") or "").strip()
+            if not tid:
+                raise ValueError("thread_reopen 需要提供 thread_id")
+            reopened = await completed_thread(
+                plugin.threads.reopen, tid, allow_self=True, allow_any_chat=True
+            )
+            prompt = str(options.get("prompt") or options.get("message") or "").strip()
+            if prompt and getattr(plugin, "engine", None) is not None:
+                await plugin.engine.send(
+                    tid,
+                    prompt,
+                    chat_id=reopened["chat_id"],
+                    wait_seconds=0,
+                    background=True,
+                )
+                reopened = await completed_thread(
+                    plugin.threads.get, tid, "", allow_self=True, allow_any_chat=True
+                )
+            result = {"thread_id": tid, "state": reopened["state"]}
+        elif action == "thread_approve":
+            result = await self._write_thread_approve(options)
+        elif action == "profile_create":
+            pid = str(
+                options.get("profile_id")
+                or options.get("id")
+                or options.get("target")
+                or ""
+            ).strip()
+            fields = self._extract_profile_fields(options)
+
+            def _create_prof():
+                prof = plugin.profiles.create(pid, **fields)
+                plugin.memory.seed_profile(prof.id)
+                return prof
+
+            profile = await completed_thread(_create_prof)
+            result = {"id": profile.id, "profile": self._serialize_profile(profile)}
+        elif action == "profile_update":
+            pid = str(
+                options.get("profile_id")
+                or options.get("id")
+                or options.get("target")
+                or ""
+            ).strip()
+            if not pid:
+                raise ValueError("profile_update 需要提供 profile_id")
+            fields = self._extract_profile_fields(options)
+            raw_expected = options.get("expected_version")
+            if raw_expected is not None and type(raw_expected) is int and "instructions" in fields:
+                cur_md = await completed_thread(
+                    plugin.memory.read, "profile", target=pid, document="PROFILE.md"
+                )
+                if cur_md.get("version") != raw_expected:
+                    raise ValueError("角色正文已被其他编辑更新，请刷新后再保存")
+            profile = await completed_thread(
+                lambda: plugin.profiles.update(pid, **fields)
+            )
+            result = {"id": profile.id, "profile": self._serialize_profile(profile)}
+        elif action in {"profile_clone", "clone"}:
+            source_id = str(
+                options.get("source_id") or options.get("base") or "default"
+            ).strip()
+            target_id = str(
+                options.get("target_id") or options.get("target") or ""
+            ).strip()
+            clone_title = options.get("title") or options.get("name")
+
             def _clone_and_seed():
                 prof = plugin.profiles.clone(
-                    options.get("base", "scout"), options["target"]
+                    source_id,
+                    target_id,
+                    name=str(clone_title).strip() if clone_title else None,
                 )
                 plugin.memory.seed_profile(prof.id)
                 return prof
 
             profile = await completed_thread(_clone_and_seed)
-            result = {"id": profile.id}
-        elif action == "delete_profile":
-            target = str(options.get("target") or "").strip()
+            result = {"id": profile.id, "profile": self._serialize_profile(profile)}
+        elif action in {"profile_delete", "delete_profile"}:
+            target = str(
+                options.get("profile_id") or options.get("target") or ""
+            ).strip()
 
             def _delete_and_purge():
                 plugin.profiles.delete(target)
                 plugin.memory.purge_profile(target)
 
             await completed_thread(_delete_and_purge)
-            result = {"id": target}
+            result = {"id": target, "deleted": True}
+        elif action == "profile_export_zip":
+            pid = str(
+                options.get("profile_id") or options.get("target") or ""
+            ).strip()
+            raw_zip = await completed_thread(plugin.profiles.export_profile_zip, pid)
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", pid).strip("._") or "profile"
+            result = {
+                "profile_id": pid,
+                "filename": f"{safe_name}.zip",
+                "base64": base64.b64encode(raw_zip).decode("ascii"),
+                "mime": "application/zip",
+                "bytes": len(raw_zip),
+            }
+        elif action == "profile_import_zip":
+            b64_data = str(options.get("base64") or options.get("data") or "").strip()
+            if not b64_data:
+                raise ValueError("profile_import_zip 需要提供 base64 压缩包内容")
+            raw_zip = base64.b64decode(b64_data, validate=True)
+            if len(raw_zip) > 8 * 1024**2:
+                raise ValueError("角色压缩包超过 8 MiB 上限")
+            pid = str(
+                options.get("profile_id") or options.get("target") or ""
+            ).strip()
+            if not pid:
+                fname = str(options.get("filename") or "").strip()
+                stem = Path(fname).stem if fname else ""
+                pid = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem).strip("_-").lower() or (
+                    f"imp_{uuid.uuid4().hex[:6]}"
+                )
+            overwrite = bool(options.get("overwrite", False))
+
+            def _import_zip():
+                prof = plugin.profiles.import_profile_zip(
+                    raw_zip, pid, overwrite=overwrite
+                )
+                plugin.memory.seed_profile(prof.id)
+                return prof
+
+            profile = await completed_thread(_import_zip)
+            result = {
+                "id": profile.id,
+                "profile": self._serialize_profile(profile),
+                "done": True,
+            }
+        elif action == "fs_write":
+            result = await completed_thread(self._fs_write_sync, options)
+        elif action == "fs_delete":
+            result = await completed_thread(self._fs_delete_sync, options)
         elif action == "create_skill":
             target = str(options.get("target") or "").strip()
             created = await completed_thread(
@@ -2307,72 +3366,71 @@ class Management:
 
             unbound = await completed_thread(_unbind_and_delete)
             result = {"target": target, "unbound": unbound}
-        elif action == "vault":
-            if options.get("delete") is True:
+        elif action in {"vault_set", "vault"}:
+            if action == "vault" and options.get("delete") is True:
                 await completed_thread(plugin.vault.delete, options["handle"])
             else:
                 await completed_thread(
-                    plugin.vault.set, options["handle"], options["value"]
+                    lambda: plugin.vault.set(
+                        options["handle"],
+                        options["value"],
+                        label=options.get("label"),
+                        domain=options.get("domain"),
+                        fields=options.get("fields"),
+                        kind=options.get("kind"),
+                        note=options.get("note"),
+                    )
                 )
-            result = {"handles": await completed_thread(plugin.vault.handles)}
-        elif action == "settings":
-            if options.get("expected_version") != self._settings()["version"]:
-                raise ValueError("设置已变化，请刷新后再保存")
-            raw_settings = dict(options["settings"]) if isinstance(options.get("settings"), dict) else options["settings"]
-            if isinstance(raw_settings, dict):
-                if isinstance(raw_settings.get("enabled_chats"), list):
-                    normalized_chats = []
-                    for item in raw_settings["enabled_chats"]:
-                        token = str(item or "").strip()
-                        if not token:
-                            continue
-                        try:
-                            token = (
-                                await resolve_stream_spec(
-                                    plugin, token, allow_unknown_ascii=True
-                                )
-                                or token
-                            )
-                        except ValueError:
-                            pass
-                        if token not in normalized_chats:
-                            normalized_chats.append(token)
-                    raw_settings["enabled_chats"] = normalized_chats
-                if isinstance(raw_settings.get("chat_proactive_levels"), dict):
-                    normalized_levels = {}
-                    for k, v in raw_settings["chat_proactive_levels"].items():
-                        key = str(k or "").strip()
-                        if not key:
-                            continue
-                        try:
-                            key = (
-                                await resolve_stream_spec(
-                                    plugin, key, allow_unknown_ascii=True
-                                )
-                                or key
-                            )
-                        except ValueError:
-                            pass
-                        normalized_levels[key] = v
-                    raw_settings["chat_proactive_levels"] = normalized_levels
-                if raw_settings.get("tz_offset_minutes") is None:
-                    raw_settings["tz_offset_minutes"] = plugin.settings.tz_offset_minutes
-                else:
-                    raw_settings["tz_offset_minutes"] = _validate_tz_offset_minutes_setting(
-                        raw_settings["tz_offset_minutes"]
-                    )
-                if raw_settings.get("sleep_window") is None:
-                    raw_settings["sleep_window"] = plugin.settings.sleep_window
-                else:
-                    raw_settings["sleep_window"] = _normalize_sleep_window_setting(
-                        raw_settings["sleep_window"]
-                    )
-            await self._persist_settings(raw_settings)
-            result = self._settings()
+            result = {
+                "handles": await completed_thread(plugin.vault.handles),
+                "items": await completed_thread(plugin.vault.list_meta),
+            }
+        elif action == "vault_delete":
+            await completed_thread(plugin.vault.delete, options["handle"])
+            result = {
+                "handles": await completed_thread(plugin.vault.handles),
+                "items": await completed_thread(plugin.vault.list_meta),
+            }
+        elif action == "grant_revoke":
+            grants_store = getattr(plugin, "grants", None) or getattr(
+                getattr(plugin, "runtime", None), "grants", None
+            )
+            if grants_store is None:
+                raise RuntimeError("权限授权存储尚未就绪")
+            grant_key = str(options.get("grant_key") or "").strip()
+            scope = str(options.get("scope") or "").strip()
+            action_key = str(options.get("action_key") or "").strip()
+            if grant_key:
+                await completed_thread(grants_store.revoke, grant_key)
+            elif scope and action_key:
+                await completed_thread(
+                    grants_store.revoke,
+                    f"always|{scope}||{action_key}",
+                )
+            elif scope:
+                await completed_thread(grants_store.revoke_scope, scope)
+            else:
+                raise ValueError("grant_revoke 需要提供 grant_key 或 scope")
+            result = {"items": await completed_thread(grants_store.list_grants)}
+        elif action in {"settings_update", "settings"}:
+            raw_settings = (
+                dict(options["settings"])
+                if isinstance(options.get("settings"), dict)
+                else {
+                    k: v
+                    for k, v in options.items()
+                    if k not in {"action", "expected_version"}
+                }
+            )
+            result = await self._apply_settings_patch(
+                raw_settings,
+                expected_version=options.get("expected_version"),
+            )
         elif action == "ui_style":
-            style = str(options.get("ui_style") or "").strip()
-            if style not in {"millennium", "maiwork", "auto"}:
-                raise ValueError("界面风格仅支持 millennium、maiwork 或 auto")
+            raw_style = str(options.get("ui_style") or "").strip()
+            if raw_style not in {"millennium", "modern", "maiwork", "auto"}:
+                raise ValueError("界面风格仅支持 millennium、modern（maiwork）或 auto")
+            style = canonical_ui_style(raw_style)
             raw_settings = plugin.settings.model_dump()
             raw_settings["ui_style"] = style
             settings = await self._persist_settings(raw_settings)
@@ -2382,6 +3440,8 @@ class Management:
             }
         elif action == "services":
             current = await completed_thread(plugin.runtime.services.load)
+            if isinstance(current, dict):
+                current.pop("templates", None)
             if options.get("expected_version") != self._version(current):
                 raise ValueError("服务登记已变化，请刷新后重试")
             content = json.dumps(options["configuration"], ensure_ascii=False)
@@ -2391,25 +3451,49 @@ class Management:
             )
             await plugin.runtime.services.close_sessions()
             result = {"version": self._version(options["configuration"])}
-        elif action == "webhooks":
-            current = await completed_thread(plugin.incoming.load)
-            if options.get("expected_version") != self._version(current):
-                raise ValueError("事件通道已变化，请刷新后重试")
-            config = options["configuration"]
-            await completed_thread(
-                plugin.incoming.validate, config, strict_enabled=True
-            )
-            content = json.dumps(config, ensure_ascii=False).encode()
-            if plugin.vault.contains_secret(content) or len(content) > 48000:
-                raise ValueError("事件通道只保存凭据句柄")
-            await completed_thread(atomic_private_write, plugin.incoming.path, content)
-            result = {"version": self._version(config)}
-        elif action == "cancel_intent":
+        elif action == "intent_pause":
             row = await completed_thread(plugin.intents.get, options["intent_id"])
             await completed_thread(
-                plugin.intents.cancel, row["intent_id"], row["target"]
+                plugin.intents.pause, row["intent_id"], row["target"], is_admin=True
             )
-            result = {"intent_id": row["intent_id"]}
+            result = {"intent_id": row["intent_id"], "status": "paused"}
+        elif action == "intent_resume":
+            row = await completed_thread(plugin.intents.get, options["intent_id"])
+            await completed_thread(
+                plugin.intents.resume, row["intent_id"], row["target"], is_admin=True
+            )
+            result = {"intent_id": row["intent_id"], "status": "pending"}
+        elif action == "intent_run_now":
+            iid = str(options.get("intent_id") or "").strip()
+            row = await completed_thread(plugin.intents.get, iid)
+            if row["status"] == "paused":
+                await completed_thread(
+                    plugin.intents.resume, iid, row["target"], is_admin=True
+                )
+
+            def _mark_due_now():
+                now_ts = plugin.intents.clock() - 1.0
+                with plugin.intents.store.connect() as db, db:
+                    db.execute(
+                        "UPDATE intents SET due_at=?, status='pending' WHERE intent_id=?",
+                        (now_ts, iid),
+                    )
+                return plugin.intents.get(iid)
+
+            fresh = await completed_thread(_mark_due_now)
+            if getattr(plugin, "pulse", None) is not None:
+                await plugin.pulse._dispatch(fresh)
+            try:
+                latest = await completed_thread(plugin.intents.get, iid)
+            except (ValueError, KeyError):
+                latest = fresh
+            result = {"intent_id": iid, "intent": latest}
+        elif action in {"intent_delete", "cancel_intent"}:
+            row = await completed_thread(plugin.intents.get, options["intent_id"])
+            await completed_thread(
+                plugin.intents.cancel, row["intent_id"], row["target"], is_admin=True
+            )
+            result = {"intent_id": row["intent_id"], "status": "cancelled"}
         elif action == "schedule_intent":
             raw_chat_id = str(options.get("chat_id") or "").strip()
             if not raw_chat_id:
@@ -2440,10 +3524,12 @@ class Management:
             every_seconds = int(options.get("every_seconds", 0) or 0)
             if every_seconds and every_seconds < 300:
                 raise ValueError("周期执行间隔至少 300 秒")
-            kind = str(options.get("kind") or "return").strip() or "return"
+            mode = str(options.get("mode") or ("watch" if options.get("condition") else "")).strip()
+            condition = str(options.get("condition") or "").strip()
+            kind = str(options.get("kind") or ("watch" if mode == "watch" else "return")).strip() or "return"
             payload = {
                 "platform": explicit_platform or resolved_platform or "qq",
-                "profile": profile_name or str(plugin.settings.heartbeat_profile or "scout"),
+                "profile": profile_name or str(plugin.settings.heartbeat_profile or "default"),
                 "workspace": str(options.get("workspace") or "").strip(),
                 "prompt": prompt or reason,
                 "every_seconds": every_seconds,
@@ -2453,12 +3539,14 @@ class Management:
             row = await completed_thread(
                 plugin.intents.schedule,
                 kind=kind,
-                source="workflow",
+                source="watch" if mode == "watch" else "workflow",
                 target=f"chat:{chat_id}",
                 due_at=due_at,
                 reason=reason,
                 payload=payload,
                 bypass_limits=True,
+                mode=mode,
+                condition=condition,
             )
             result = {"intent": row}
         elif action == "toggle_profile":
@@ -2512,18 +3600,21 @@ class Management:
         elif action == "delete_service_item":
             result = await completed_thread(self._delete_service_item_sync, options)
             await plugin.runtime.services.close_sessions()
-        elif action == "delete_webhook_item":
-            result = await completed_thread(self._delete_webhook_item_sync, options)
         elif action == "undo_learning_note":
             result = await completed_thread(self._undo_learning_note, options)
         elif action == "import_skill":
             result = await completed_thread(self._upload_skill, options)
-        elif action == "recipe_preview":
-            result = await self._preview_recipe(options)
-        elif action == "recipe_import":
-            result = await completed_thread(self._import_recipe, options)
         elif action == "import":
             result = await completed_thread(self._upload, options)
+        elif action in {
+            "onboarding_advance",
+            "onboarding_skip",
+            "onboarding_complete",
+            "onboarding_reset",
+            "onboarding_reopen",
+            "onboarding_verify_model",
+        }:
+            result = await self._write_onboarding(action, options)
         elif action == "delete_thread":
             tid = str(options.get("thread_id") or "").strip()
             ws_root = (
@@ -2581,13 +3672,11 @@ class Management:
             self.plugin.vault.contains_secret(raw)
             or len(raw) > 48000
             or not isinstance(config, dict)
-            or set(config) - {"servers", "templates", "inputs", "apis", "web"}
+            or set(config) - {"servers", "inputs", "apis", "web"}
         ):
             raise ValueError("服务登记只接受结构化配置和凭据句柄")
-        if not isinstance(config.get("servers", {}), dict) or not isinstance(
-            config.get("templates", {}), dict
-        ):
-            raise TypeError("服务登记需要 servers 和 templates 对象")
+        if not isinstance(config.get("servers", {}), dict):
+            raise TypeError("服务登记需要 servers 对象")
         apis = config.get("apis", {})
         if not isinstance(apis, dict) or len(apis) > 32:
             raise ValueError("跨插件 API 登记数量或格式无效")
@@ -2628,31 +3717,6 @@ class Management:
             ):
                 raise ValueError("MCP 程序使用绝对路径与固定参数")
             for handle in server.get("credentials", {}).values():
-                self.plugin.vault._validate_handle(handle)
-        for template in config.get("templates", {}).values():
-            if not isinstance(template, dict) or set(template) - {
-                "argv",
-                "schema",
-                "secrets",
-                "targets",
-                "description",
-                "access",
-            }:
-                raise ValueError("固定模板含未知配置项")
-            raw_targets = template.get("targets", [])
-            if not isinstance(raw_targets, list):
-                raise ValueError("固定模板 targets 必须为列表")
-            normalized_targets = []
-            for entry in raw_targets:
-                if isinstance(entry, str):
-                    normalized_targets.append(entry)
-                elif isinstance(entry, dict) and "address" in entry and "port" in entry:
-                    normalized_targets.append(f"{entry['address']}:{entry['port']}")
-                else:
-                    raise ValueError("固定模板 targets 仅支持 host:port 字符串或 {address, port}")
-            if normalized_targets:
-                validate_endpoint_targets(normalized_targets)
-            for handle in template.get("secrets", []):
                 self.plugin.vault._validate_handle(handle)
         validate_web_bindings(config)
 
@@ -2735,119 +3799,3 @@ class Management:
             )
             return {**imported, "done": True}
         return {"token": token, "offset": len(transfer["data"])}
-
-    def _stage_recipe_preview(self, clean_zip: bytes) -> str:
-        now = time.time()
-        self.recipe_previews = {
-            k: v for k, v in self.recipe_previews.items() if v["expires"] > now
-        }
-        while len(self.recipe_previews) >= 6:
-            oldest = min(self.recipe_previews, key=lambda k: self.recipe_previews[k]["expires"])
-            self.recipe_previews.pop(oldest, None)
-        ptoken = "rpv_" + uuid.uuid4().hex
-        self.recipe_previews[ptoken] = {
-            "data": clean_zip,
-            "expires": now + 600,
-        }
-        return ptoken
-
-    async def _preview_recipe(self, options):
-        target_hint = str(options.get("target") or "").strip()
-        url = str(options.get("url") or "").strip()
-        if url:
-            raw_bytes, fname, sub_hint = await completed_thread(
-                fetch_public_recipe_bytes, url
-            )
-            disc = await self._discovery()
-            clean_zip, preview = await completed_thread(
-                build_recipe_preview,
-                self.plugin,
-                raw_bytes,
-                filename=fname,
-                subpath_hint=sub_hint,
-                target_hint=target_hint,
-                discovery=disc,
-                source_url=url,
-            )
-            ptoken = self._stage_recipe_preview(clean_zip)
-            return {"done": True, "preview_token": ptoken, **preview}
-
-        self.transfers = {
-            key: value
-            for key, value in self.transfers.items()
-            if value["expires"] > time.time()
-        }
-        token = options.get("token", "")
-        if not token:
-            if len(self.transfers) >= 4:
-                raise ValueError("传输较多，请稍后再试")
-            token = uuid.uuid4().hex
-            self.transfers[token] = {
-                "data": bytearray(),
-                "target": target_hint,
-                "filename": str(options.get("filename") or "").strip(),
-                "expires": time.time() + 300,
-                "direction": "upload_recipe",
-            }
-        transfer = self.transfers.get(token)
-        if (
-            not transfer
-            or transfer["direction"] != "upload_recipe"
-            or options.get("offset", 0) != len(transfer["data"])
-        ):
-            raise ValueError("导入位置无效或传输过期")
-        data = base64.b64decode(options["data"], validate=True)
-        if len(data) > 24576 or len(transfer["data"]) + len(data) > 8 * 1024**2:
-            self.transfers.pop(token, None)
-            raise ValueError("配方包过大")
-        transfer["data"].extend(data)
-        if options.get("done"):
-            self.transfers.pop(token, None)
-            disc = await self._discovery()
-            clean_zip, preview = await completed_thread(
-                build_recipe_preview,
-                self.plugin,
-                bytes(transfer["data"]),
-                filename=transfer["filename"],
-                target_hint=transfer["target"],
-                discovery=disc,
-            )
-            ptoken = self._stage_recipe_preview(clean_zip)
-            return {"done": True, "preview_token": ptoken, **preview}
-        return {"token": token, "offset": len(transfer["data"])}
-
-    def _import_recipe(self, options):
-        now = time.time()
-        self.recipe_previews = {
-            k: v for k, v in self.recipe_previews.items() if v["expires"] > now
-        }
-        ptoken = str(options.get("preview_token") or "").strip()
-        if ptoken:
-            staged = self.recipe_previews.get(ptoken)
-            if not staged:
-                raise ValueError("配方预览已过期，请重新点击「预览与对齐检查」")
-            raw_bytes = staged["data"]
-        elif options.get("data"):
-            raw_bytes = base64.b64decode(str(options["data"]), validate=True)
-        else:
-            raise ValueError("请先执行配方预览或提供有效的配方包数据")
-        res = import_recipe_archive(
-            self.plugin,
-            raw_bytes,
-            target=str(options.get("target") or "").strip(),
-            mode=str(options.get("mode") or "copy").strip(),
-            install_skills=options.get("install_skills", True) is not False,
-            overwrite_skills=(
-                options.get("overwrite_skills")
-                if isinstance(options.get("overwrite_skills"), bool)
-                else None
-            ),
-            mount_routines=options.get("mount_routines")
-            if isinstance(options.get("mount_routines"), list)
-            else [],
-            routine_chat_id=str(options.get("routine_chat_id") or "").strip(),
-            routine_platform=str(options.get("routine_platform") or "qq").strip() or "qq",
-        )
-        if ptoken:
-            self.recipe_previews.pop(ptoken, None)
-        return {"done": True, **res}

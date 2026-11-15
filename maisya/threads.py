@@ -3019,6 +3019,7 @@ class ThreadEngine:
                         tool_results = []
                         redirecting = False
                         question = None
+                        approval_pending = None
                         current = await asyncio.to_thread(
                             self.store.get, thread_id, store_chat
                         )
@@ -3038,7 +3039,12 @@ class ThreadEngine:
                             if not alive:
                                 return
                             try:
-                                if redirecting or changed:
+                                if approval_pending is not None:
+                                    result = {
+                                        "skipped": True,
+                                        "reason": "前置高风险操作正在等待管理员确认，本工具暂未执行。",
+                                    }
+                                elif redirecting or changed:
                                     redirecting = True
                                     result = {
                                         "skipped": True,
@@ -3138,6 +3144,12 @@ class ThreadEngine:
                                             "_step_index": step_index,
                                         },
                                     )
+                                    if (
+                                        isinstance(result, dict)
+                                        and result.get("status") == "approval_required"
+                                        and result.get("pending_approval")
+                                    ):
+                                        approval_pending = dict(result)
                             except (ValueError, RuntimeError, PermissionError, OSError) as error:
                                 result = {
                                     "error": _safe_tool_error_message(error, self.redact)
@@ -3179,6 +3191,25 @@ class ThreadEngine:
                             history,
                             processed,
                             waiting=True,
+                        ):
+                            return
+                        if approval_pending is not None and await asyncio.to_thread(
+                            self.store.finish,
+                            thread_id,
+                            store_chat,
+                            self.redact(
+                                {
+                                    "pending_approval": approval_pending,
+                                    "text": str(
+                                        approval_pending.get("summary")
+                                        or approval_pending.get("reason")
+                                        or "高风险操作等待管理员确认"
+                                    ),
+                                }
+                            ),
+                            history,
+                            processed,
+                            state="waiting",
                         ):
                             return
                         continue
