@@ -40,7 +40,10 @@ class Settings(PluginConfigBase):
         pattern=WEB_PROVIDER_PATTERN,
     )
     ui_style: str = Field(default="millennium", pattern=r"^(maiwork|millennium|auto)$")
-    sleep_window: str = Field(default="", pattern=r"^$|^\d{1,2}-\d{1,2}$")
+    sleep_window: str = Field(
+        default="",
+        pattern=r"^$|^\d{1,2}(?::\d{2})?-\d{1,2}(?::\d{2})?$",
+    )
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     daily_proactive_limit: int = Field(default=1, ge=0, le=50)
     heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
@@ -53,6 +56,28 @@ class Settings(PluginConfigBase):
     longing_quiet_hours: int = Field(default=0, ge=0, le=720)
     tz_offset_minutes: int = Field(default=480, ge=-720, le=840)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+
+    @field_validator("sleep_window")
+    @classmethod
+    def _validate_sleep_window(cls, value: str) -> str:
+        if not value:
+            return ""
+        start_raw, end_raw = value.split("-", 1)
+        for endpoint in (start_raw, end_raw):
+            if ":" in endpoint:
+                hour_str, minute_str = endpoint.split(":", 1)
+                hour = int(hour_str)
+                minute = int(minute_str)
+            else:
+                hour = int(endpoint)
+                minute = 0
+            if not (0 <= hour <= 24) or not (0 <= minute <= 59):
+                raise ValueError(
+                    "sleep_window 小时需在 0..24 之间、分钟需在 0..59 之间"
+                )
+            if hour == 24 and minute != 0:
+                raise ValueError("sleep_window 为 24 时分钟只能为 00")
+        return value
 
     @field_validator("tz_offset_minutes", mode="before")
     @classmethod

@@ -2,6 +2,7 @@
 
 import asyncio
 import html
+import inspect
 import json
 import sqlite3
 import threading
@@ -325,8 +326,14 @@ class MaisyaPlugin(MaiBotPlugin):
             ThreadStore, self.data_root / "maisya.db"
         )
         self.threads.chat_aliases = self.chat_aliases_for
+        tz_offset = int(getattr(self.settings, "tz_offset_minutes", 480))
         self.memory = await asyncio.to_thread(
-            MemoryLayers, self.data_root, self.threads, self.profiles, self.vault
+            MemoryLayers,
+            self.data_root,
+            self.threads,
+            self.profiles,
+            self.vault,
+            **self._tz_init_kwargs(MemoryLayers, tz_offset),
         )
         self.memory.chat_aliases = self.chat_aliases_for
         self.bridge = await asyncio.to_thread(
@@ -336,6 +343,7 @@ class MaisyaPlugin(MaiBotPlugin):
             Intents,
             self.threads,
             daily_proactive_limit=getattr(self.settings, "daily_proactive_limit", 1),
+            **self._tz_init_kwargs(Intents, tz_offset),
         )
         self.runtime = AgentRuntime(
             self.ctx,
@@ -345,6 +353,7 @@ class MaisyaPlugin(MaiBotPlugin):
             self.vault,
             authorized=self._activity_authorized,
             web_provider=lambda: self.settings.web_provider,
+            **self._tz_init_kwargs(AgentRuntime, tz_offset),
         )
         self.runtime.memory = self.memory
         self.runtime.permitted = self._activity_permitted
@@ -396,7 +405,9 @@ class MaisyaPlugin(MaiBotPlugin):
             heartbeat_profile=getattr(self.settings, "heartbeat_profile", "scout"),
             chat_aliases=self.chat_aliases_for,
             resolve_session=self.resolve_known_session_id,
+            **self._tz_init_kwargs(Pulse, tz_offset),
         )
+        self._sync_tz_offset(tz_offset)
         self.engine.serendipity = self.pulse.propose_serendipity
         self.pulse.start()
         self.sharing = Share(
@@ -831,6 +842,7 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             self.set_plugin_config(config_data)
             self.settings = settings
+            self._sync_tz_offset(settings.tz_offset_minutes)
             if not self.settings.plugin.enabled:
                 self._clear_bootstrap_caches()
                 self._turn_ops_receipts.clear()
@@ -1004,10 +1016,37 @@ class MaisyaPlugin(MaiBotPlugin):
         else:
             _apply()
 
+    @staticmethod
+    def _tz_init_kwargs(target, tz_offset: int) -> dict[str, int]:
+        try:
+            params = inspect.signature(target).parameters.values()
+        except (TypeError, ValueError):
+            return {}
+        for param in params:
+            if (
+                param.name == "tz_offset_minutes"
+                or param.kind is inspect.Parameter.VAR_KEYWORD
+            ):
+                return {"tz_offset_minutes": int(tz_offset)}
+        return {}
+
+    def _sync_tz_offset(self, tz_offset: int) -> None:
+        offset = int(tz_offset)
+        for attr in ("memory", "intents", "runtime", "pulse"):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                obj.tz_offset_minutes = offset
+        engine = getattr(self, "engine", None)
+        if engine is not None and hasattr(engine, "tz_offset_minutes"):
+            engine.tz_offset_minutes = offset
+
     def _platform_for(self, session_id: str) -> str:
         plat = self.messages.platform_for(session_id) if self.messages else ""
         if plat:
             return plat
+        parsed = parse_stream_spec(session_id)
+        if parsed is not None:
+            return parsed[0]
         lock = getattr(self, "_bootstrap_lock", None)
         if lock is not None:
             with lock:
@@ -1022,6 +1061,77 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             if self._message_now() - entry[0] <= limit:
                 return entry[1]
+        return ""
+
+    def _resolve_target_platform(
+        self,
+        chat_id: str,
+        *,
+        platform: str = "",
+        full_row: dict | None = None,
+        prow: dict | None = None,
+    ) -> str:
+        direct = str(platform or "").strip().lower()
+        if direct:
+            return direct
+        cid = str(chat_id or "").strip()
+        if cid:
+            detected = str(self._platform_for(cid) or "").strip().lower()
+            if detected:
+                return detected
+            spec = self.canonical_stream_spec(cid)
+            parsed = parse_stream_spec(spec)
+            if parsed is not None and parsed[0]:
+                return parsed[0]
+        aliases = {cid} if cid else set()
+        if cid:
+            aliases.update(self.chat_aliases_for(cid))
+        for alias in sorted(tok for tok in aliases if tok):
+            parsed = parse_stream_spec(alias)
+            if parsed is not None and parsed[0]:
+                return parsed[0]
+            if self.messages:
+                aplat = str(self.messages.platform_for(alias) or "").strip().lower()
+                if aplat:
+                    return aplat
+        row_chat = (
+            str(full_row.get("chat_id") or "").strip()
+            if isinstance(full_row, dict)
+            else ""
+        )
+        grant = full_row.get("grant") if isinstance(full_row, dict) else None
+        if not isinstance(grant, dict) and isinstance(prow, dict):
+            raw_grant = prow.get("raw_grant")
+            if isinstance(raw_grant, dict):
+                grant = raw_grant
+            elif isinstance(raw_grant, str) and raw_grant.strip():
+                try:
+                    loaded = json.loads(raw_grant)
+                except (TypeError, ValueError):
+                    loaded = None
+                if isinstance(loaded, dict):
+                    grant = loaded
+        if isinstance(grant, dict):
+            src_plat = str(grant.get("source_platform") or "").strip().lower()
+            src_chat = str(grant.get("source_chat_id") or "").strip()
+            if src_plat and (
+                (src_chat and src_chat in aliases)
+                or (not src_chat and (not cid or not row_chat or row_chat in aliases))
+            ):
+                return src_plat
+        latest_boot: tuple[float, str] | None = None
+        for (msg_sid, msg_plat, _), (ts, msg) in self._bootstrap_snapshot():
+            if msg_sid not in aliases:
+                continue
+            cand = str(msg_plat or getattr(msg, "platform", "") or "").strip().lower()
+            if cand and (latest_boot is None or float(ts or 0.0) >= latest_boot[0]):
+                latest_boot = (float(ts or 0.0), cand)
+        if latest_boot is not None:
+            return latest_boot[1]
+        if isinstance(full_row, dict) and (not cid or row_chat in aliases):
+            row_plat = str(full_row.get("platform") or "").strip().lower()
+            if row_plat:
+                return row_plat
         return ""
 
     def _is_verified_admin_private_chat(
@@ -3096,8 +3206,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "integer",
                     "minimum": -720,
                     "maximum": 840,
-                    "default": 480,
-                    "description": "计算 daily_at 使用的时区偏移分钟数（默认 480 即 UTC+8）。",
+                    "description": "计算 daily_at 使用的时区偏移分钟数（不传则跟随全局配置 tz_offset_minutes）。",
                 },
                 "replace": {
                     "type": "boolean",
@@ -3140,7 +3249,7 @@ class MaisyaPlugin(MaiBotPlugin):
         in_seconds=0,
         every_seconds=0,
         daily_at=None,
-        tz_offset_minutes=480,
+        tz_offset_minutes=None,
         replace=False,
         kind="later",
         source="later",
@@ -3348,6 +3457,12 @@ class MaisyaPlugin(MaiBotPlugin):
                     ability = await asyncio.to_thread(self.profiles.get, profile)
                     if not ability.autonomous:
                         raise PermissionError("定期运行受限角色需要真实管理员消息授权")
+                if tz_offset_minutes is None:
+                    tz_offset_minutes = int(
+                        getattr(self.settings, "tz_offset_minutes", 480)
+                        if self.settings is not None
+                        else 480
+                    )
                 if type(tz_offset_minutes) is not int:
                     raise ValueError("tz_offset_minutes 必须是整数")
                 now_ts = self.intents.clock()
@@ -3955,14 +4070,18 @@ class MaisyaPlugin(MaiBotPlugin):
                             allow_any_chat=True,
                         )
                         if full_row is not None:
+                            target_platform = self._resolve_target_platform(
+                                chat_id,
+                                platform=platform,
+                                full_row=full_row,
+                                prow=prow,
+                            )
                             await self.sharing.send(
                                 full_row,
                                 target_chat_id=(
                                     chat_id if chat_id != full_row["chat_id"] else None
                                 ),
-                                target_platform=(
-                                    platform or full_row.get("platform") or "qq"
-                                ),
+                                target_platform=target_platform,
                                 is_admin=True,
                                 allow_admin_destination=True,
                             )

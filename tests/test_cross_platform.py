@@ -840,7 +840,9 @@ async def test_share_napcat_group_file_fallback_cases(tmp_path):
         "跨平台群文件测试内容".encode("utf-8")
     ).decode("ascii")
 
-    # 1) Opaque session resolved via Share.routes + params form succeeds on first api.call
+    # 1) Opaque session resolved via Share.routes + params form succeeds through real PluginContext unboxing
+    from maibot_sdk.context import PluginContext
+
     plugin, thread_id, handle = await _prepare_file_share_thread(
         tmp_path / "case_params",
         chat_id="opaque-qq-group-session",
@@ -849,19 +851,27 @@ async def test_share_napcat_group_file_fallback_cases(tmp_path):
     try:
         api_calls = []
 
-        async def cap_params_ok(name, **arguments):
+        async def rpc_params_ok(method, plugin_id, payload, **kwargs):
+            assert method == "cap.call"
+            name = payload["capability"]
+            arguments = payload["args"]
             if name == "maisaka.reply.generate":
                 return {"success": True, "text": "报告放在这里。"}
             if name == "send.hybrid":
                 if any(seg.get("type") == "file" for seg in arguments.get("segments", [])):
-                    return {"success": False, "sent": False, "error": "send file failed"}
+                    return {"success": False, "sent": False, "message_id": None}
                 return {"success": True, "sent": True, "message_id": "msg-text-1"}
             if name == "api.call":
                 api_calls.append(arguments)
-                return {"success": True, "retcode": 0}
+                return {"success": True, "result": None}
             return {"success": True}
 
-        plugin.ctx.call_capability = cap_params_ok
+        sdk_ctx = PluginContext(
+            "chartyr.maisya",
+            rpc_call=rpc_params_ok,
+            paths=plugin.ctx.paths,
+        )
+        plugin.ctx.call_capability = sdk_ctx.call_capability
         res = await plugin.agent_tool(
             action="share",
             thread_id=thread_id,
@@ -983,5 +993,117 @@ async def test_share_napcat_group_file_fallback_cases(tmp_path):
         assert len(api_calls) == 1
         assert res["status"] == "failed" and res["sent"] is False
         assert "hybrid file rejected" in res["error"]
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_result", "expected_status", "expected_sent", "expect_calls"),
+    [
+        (None, "sent", True, 1),
+        ("napcat-file-9001", "sent", True, 1),
+        (9002, "sent", True, 1),
+        ({"retcode": 100, "msg": "upload denied"}, "failed", False, 1),
+    ],
+)
+async def test_share_napcat_group_file_real_sdk_unboxing(
+    tmp_path, raw_result, expected_status, expected_sent, expect_calls
+):
+    from maibot_sdk.context import PluginContext
+
+    plugin, thread_id, handle = await _prepare_file_share_thread(tmp_path / "sdk_unbox")
+    try:
+        api_calls = []
+
+        async def rpc_host(method, plugin_id, payload, **kwargs):
+            assert method == "cap.call"
+            cap = payload["capability"]
+            arguments = payload["args"]
+            if cap == "maisaka.reply.generate":
+                return {"success": True, "text": "文件在这里。"}
+            if cap == "send.hybrid":
+                if any(seg.get("type") == "file" for seg in arguments.get("segments", [])):
+                    return {"success": False, "sent": False, "message_id": None}
+                return {"success": True, "sent": True, "message_id": "msg-sdk-main"}
+            if cap == "api.call":
+                api_calls.append(arguments)
+                return {"success": True, "result": raw_result}
+            return {"success": True}
+
+        sdk_ctx = PluginContext(
+            "chartyr.maisya",
+            rpc_call=rpc_host,
+            paths=plugin.ctx.paths,
+        )
+        plugin.ctx.call_capability = sdk_ctx.call_capability
+        res = await asyncio.wait_for(
+            plugin.agent_tool(
+                action="share",
+                thread_id=thread_id,
+                chat_id="qq:group:987654321",
+                platform="qq",
+                attachment_handles=[handle],
+            ),
+            timeout=3.0,
+        )
+        assert len(api_calls) == expect_calls
+        assert res["status"] == expected_status
+        assert res["sent"] is expected_sent
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_share_napcat_group_file_real_sdk_unboxing_shape_fallback(tmp_path):
+    from maibot_sdk.context import PluginContext
+
+    plugin, thread_id, handle = await _prepare_file_share_thread(tmp_path / "sdk_retry")
+    try:
+        api_calls = []
+
+        async def rpc_host(method, plugin_id, payload, **kwargs):
+            assert method == "cap.call"
+            cap = payload["capability"]
+            arguments = payload["args"]
+            if cap == "maisaka.reply.generate":
+                return {"success": True, "text": "文件在这里。"}
+            if cap == "send.hybrid":
+                if any(seg.get("type") == "file" for seg in arguments.get("segments", [])):
+                    return {"success": False, "sent": False, "message_id": None}
+                return {"success": True, "sent": True, "message_id": "msg-sdk-retry"}
+            if cap == "api.call":
+                api_calls.append(arguments)
+                if len(api_calls) == 1:
+                    return {
+                        "success": True,
+                        "result": {
+                            "retcode": 100,
+                            "message": "unexpected keyword argument 'params'",
+                        },
+                    }
+                return {"success": True, "result": "uploaded-file-id"}
+            return {"success": True}
+
+        sdk_ctx = PluginContext(
+            "chartyr.maisya",
+            rpc_call=rpc_host,
+            paths=plugin.ctx.paths,
+        )
+        plugin.ctx.call_capability = sdk_ctx.call_capability
+        res = await asyncio.wait_for(
+            plugin.agent_tool(
+                action="share",
+                thread_id=thread_id,
+                chat_id="qq:group:987654321",
+                platform="qq",
+                attachment_handles=[handle],
+            ),
+            timeout=3.0,
+        )
+        assert len(api_calls) == 2
+        assert "params" in api_calls[0]["args"]
+        assert "params" not in api_calls[1]["args"]
+        assert res["status"] == "sent" and res["sent"] is True
     finally:
         await plugin.on_unload()
