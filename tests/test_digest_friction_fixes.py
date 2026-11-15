@@ -183,37 +183,52 @@ async def test_setup_accepts_enable_chat_list_and_concurrent_bounded_rss_nonbloc
         peak_active = 0
         sleep_started_at: list[float] = []
         sleep_finished_at: list[float] = []
+        seeded_probed_urls: list[str] = []
 
-        async def _fake_add_feed(self, url, *, title="", auto=False, origin="admin"):
+        import maisya.digest as digest_mod
+
+        def _local_rss_bytes(title: str) -> bytes:
+            return (
+                '<?xml version="1.0" encoding="utf-8"?>'
+                f'<rss version="2.0"><channel><title>{title}</title>'
+                f"<item><title>{title} Item</title><link>https://item.example/{abs(hash(title)) % 9999}</link>"
+                "<pubDate>Thu, 15 Nov 2026 08:00:00 GMT</pubDate>"
+                "<description>Local test RSS body for setup verification.</description>"
+                "</item></channel></rss>"
+            ).encode("utf-8")
+
+        async def _fake_fetch_public_bytes(
+            url: str, *, timeout: float = 7.5, max_bytes: int = 2_097_152
+        ) -> dict:
             nonlocal active_calls, peak_active
-            active_calls += 1
-            peak_active = max(peak_active, active_calls)
-            try:
-                sleep_started_at.append(time.monotonic())
-                await asyncio.sleep(0.12)
-                sleep_finished_at.append(time.monotonic())
-                if "timeout" in url:
-                    raise TimeoutError("feed stalled")
-                data = self._load_sources()
-                data["feeds"].append(
-                    {
-                        "id": f"f_{len(data['feeds']) + 1}",
+            if "example.com" in url:
+                active_calls += 1
+                peak_active = max(peak_active, active_calls)
+                try:
+                    sleep_started_at.append(time.monotonic())
+                    await asyncio.sleep(0.12)
+                    sleep_finished_at.append(time.monotonic())
+                    return {
+                        "body": _local_rss_bytes(url),
+                        "content_type": "application/rss+xml",
+                        "status": 200,
                         "url": url,
-                        "title": title or url,
-                        "status": "active",
+                        "error": "",
                     }
-                )
-                self._save_sources(data)
-                self.work.commit()
-                return {"ok": True, "url": url}
-            finally:
-                active_calls -= 1
+                finally:
+                    active_calls -= 1
+            seeded_probed_urls.append(url)
+            if "huggingface.co" in url:
+                raise TimeoutError("single starter feed timed out")
+            return {
+                "body": _local_rss_bytes(url),
+                "content_type": "application/rss+xml",
+                "status": 200,
+                "url": url,
+                "error": "",
+            }
 
-        async def _slow_seed(self, *args, **kwargs):
-            raise TimeoutError("seed timeout")
-
-        monkeypatch.setattr(DigestWorkspace, "add_feed", _fake_add_feed)
-        monkeypatch.setattr(DigestWorkspace, "seed_starter_feeds", _slow_seed)
+        monkeypatch.setattr(digest_mod, "fetch_public_bytes", _fake_fetch_public_bytes)
 
         captured_waits: list[int] = []
         orig_start = plg.engine.start
@@ -227,23 +242,26 @@ async def test_setup_accepts_enable_chat_list_and_concurrent_bounded_rss_nonbloc
 
         feed_urls = [f"https://feed-{idx}.example.com/rss.xml" for idx in range(8)]
         t0 = time.monotonic()
-        setup_res = await plg.shape_tool(
-            action="setup",
-            kind="setup",
-            target_chat="10001",
-            source_msg_id="m-setup-1",
-            patch={
-                "enable_chat": ["qq:group:10001"],
-                "add_chats": ["qq:group:10003"],
-                "enable_chats": ["qq:group:10004"],
-                "rss_urls": feed_urls,
-                "topics": ["AI"],
-                "run_now": True,
-                "deliver_to": "current",
-                "wait_seconds": 20,
-            },
-            chat_id="priv_admin_md5",
-            platform="qq",
+        setup_res = await asyncio.wait_for(
+            plg.shape_tool(
+                action="setup",
+                kind="setup",
+                target_chat="10001",
+                source_msg_id="m-setup-1",
+                patch={
+                    "enable_chat": ["qq:group:10001"],
+                    "add_chats": ["qq:group:10003"],
+                    "enable_chats": ["qq:group:10004"],
+                    "rss_urls": feed_urls,
+                    "topics": ["AI"],
+                    "run_now": True,
+                    "deliver_to": "current",
+                    "wait_seconds": 20,
+                },
+                chat_id="priv_admin_md5",
+                platform="qq",
+            ),
+            timeout=3.0,
         )
         elapsed = time.monotonic() - t0
         assert setup_res["success"] is True, setup_res
@@ -251,10 +269,12 @@ async def test_setup_accepts_enable_chat_list_and_concurrent_bounded_rss_nonbloc
         assert 2 <= peak_active <= 6
         assert (max(sleep_finished_at) - min(sleep_started_at)) < 0.75
         assert setup_res["applied"]["digest_sources"]["added_count"] == 8
+        assert setup_res["applied"]["digest_sources"]["seeded_count"] >= 1
+        assert seeded_probed_urls, "Real DigestWorkspace.seed_starter_feeds must execute and probe matching feeds"
+        assert all("gcores.com" not in u and "rust-lang.org" not in u for u in seeded_probed_urls)
         assert "qq:group:10001" in plg.settings.enabled_chats
         assert "qq:group:10003" in plg.settings.enabled_chats
         assert "qq:group:10004" in plg.settings.enabled_chats
-        assert any("冷启动" in w for w in setup_res.get("warnings", []))
         assert captured_waits and captured_waits[0] <= 5
 
         str_res = await plg.shape_tool(

@@ -1775,14 +1775,52 @@ _WORKSPACE_THREAD_LOCKS: dict[str, threading.RLock] = {}
 _WORKSPACE_THREAD_LOCKS_GUARD = threading.Lock()
 
 
+def _normalize_tz_offset_minutes(value: Any, *, default: int = 480) -> int:
+    """校验并返回整数分钟时区偏移（-720..840），未传或 None 时回退 default。"""
+    if value is None:
+        return int(default)
+    if isinstance(value, bool):
+        raise ValueError("tz_offset_minutes 必须是整数分钟偏移，不能为布尔值")
+    try:
+        offset = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("tz_offset_minutes 必须是整数分钟偏移") from exc
+    if not -720 <= offset <= 840:
+        raise ValueError("tz_offset_minutes 必须在 -720..840 之间")
+    return offset
+
+
 class DigestWorkspace:
     """Manages RSS source trial/graduation/unsubscribe and digest history inside a workspace."""
 
-    def __init__(self, work, *, fetcher=None, clock=None):
+    _normalize_tz_offset = staticmethod(_normalize_tz_offset_minutes)
+
+    def __init__(
+        self,
+        work,
+        *,
+        fetcher=None,
+        clock=None,
+        tz_offset_minutes: int | None = None,
+    ):
         self.work = work
         self.fetcher = fetcher or fetch_public_bytes
         self.clock = clock or time.time
+        raw_tz = (
+            getattr(work, "tz_offset_minutes", None)
+            if tz_offset_minutes is None
+            else tz_offset_minutes
+        )
+        self.tz_offset_minutes = _normalize_tz_offset_minutes(raw_tz)
         self._sources_lock = asyncio.Lock()
+
+    def _tz_offset(self, override: int | None = None) -> int:
+        raw = (
+            override
+            if override is not None
+            else getattr(self, "tz_offset_minutes", getattr(self.work, "tz_offset_minutes", 480))
+        )
+        return _normalize_tz_offset_minutes(raw)
 
     def _thread_sources_lock(self) -> threading.RLock:
         root = (
@@ -2493,6 +2531,7 @@ class DigestWorkspace:
         else:
             hint_text = str(topics_or_text or "")
         hint_lower = hint_text.lower()
+        has_explicit_topic = bool(re.sub(r"[\s,，、;；/|]+", "", hint_lower))
         hint_tokens = [
             tok
             for tok in re.split(r"[\s,，、;；/|]+", hint_lower)
@@ -2556,6 +2595,8 @@ class DigestWorkspace:
                     key=lambda row: (-row[1], row[2]),
                 )
             ]
+        elif has_explicit_topic:
+            ranked = []
         else:
             ranked = [
                 entry
@@ -2579,6 +2620,17 @@ class DigestWorkspace:
 
         added: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
+        if has_explicit_topic and not has_positive:
+            return {
+                "added": added,
+                "skipped": skipped,
+                "count": 0,
+                "total_feeds": len(sources.get("feeds", [])),
+                "matched": False,
+                "unmatched": True,
+                "query": hint_text.strip(),
+                "reason": f"未在预置起始源中找到与主题「{hint_text.strip()}」匹配的源",
+            }
         if cap == 0:
             return {
                 "added": added,
@@ -2917,7 +2969,11 @@ class DigestWorkspace:
                     or ""
                 ).strip()
                 if not pub and cand.get("source_text"):
-                    pub = published_from_text(cand["source_text"])
+                    pub = published_from_text(
+                        cand["source_text"],
+                        now=now,
+                        tz_offset_minutes=self._tz_offset(),
+                    )
                 if pub:
                     cand["published"] = pub
                     cand["published_at"] = pub
@@ -2965,7 +3021,11 @@ class DigestWorkspace:
             if not cand.get("published"):
                 fallback_pub = str(cand.get("published_at") or "").strip()
                 if not fallback_pub and src_txt:
-                    fallback_pub = published_from_text(src_txt)
+                    fallback_pub = published_from_text(
+                        src_txt,
+                        now=now,
+                        tz_offset_minutes=self._tz_offset(),
+                    )
                 if fallback_pub:
                     cand["published"] = fallback_pub
             cand["has_numbers"] = _has_distinct_numbers(src_txt)
@@ -3556,9 +3616,11 @@ class DigestWorkspace:
         group_title: str = "",
         output_path: str = "out/digest-card.html",
         total_candidates: int = 0,
+        tz_offset_minutes: int | None = None,
     ) -> dict[str, Any]:
         if not output_path.startswith("out/") or not output_path.endswith(".html"):
             raise ValueError("简报卡 HTML 必须写入 out/*.html")
+        resolved_tz = self._tz_offset(tz_offset_minutes)
 
         picked: list[dict[str, Any]] = []
         total_viz_h = 0
@@ -3604,6 +3666,7 @@ class DigestWorkspace:
             total_candidates=resolved_total,
             viz_css=viz_css,
             now_ts=self.clock(),
+            tz_offset_minutes=resolved_tz,
         )
         doc = re.sub(r"<script\b[^>]*>.*?</script>", "", doc, flags=re.I | re.S)
         res = self.work.write(output_path, doc)
@@ -3619,6 +3682,13 @@ async def run_digest_tool(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     dw = DigestWorkspace(work)
+    tz_val = arguments.get("tz_offset_minutes")
+    if tz_val is None and isinstance(context, dict):
+        tz_val = context.get("tz_offset_minutes")
+    if tz_val is None:
+        tz_val = getattr(work, "tz_offset_minutes", None)
+    if tz_val is not None:
+        dw.tz_offset_minutes = _normalize_tz_offset_minutes(tz_val)
     action = arguments["action"]
     if action == "status":
         return await asyncio.to_thread(dw.status)

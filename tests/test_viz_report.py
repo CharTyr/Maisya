@@ -45,44 +45,6 @@ class _FakeSandbox:
     ready = False
 
 
-def _ensure_render_report_registered(monkeypatch):
-    """Temporary fallback when running in isolated wt before admin-ux merges scout/abilities."""
-    if "render_report" not in scout.TOOL_DEFINITIONS:
-        defs = dict(scout.TOOL_DEFINITIONS)
-        defs["render_report"] = scout.definition(
-            "render_report",
-            "渲染结构化 Intelligent UI 调研报告或卡片 HTML 到 out/*.html",
-            {
-                "path": {"type": "string", "minLength": 0, "maxLength": 256},
-                "title": {"type": "string", "minLength": 0, "maxLength": 200},
-                "subtitle": {"type": "string", "minLength": 0, "maxLength": 300},
-                "blocks": {
-                    "type": "array",
-                    "items": {"type": "object"},
-                    "minItems": 1,
-                    "maxItems": 64,
-                },
-                "theme": {"type": "string", "enum": ["light", "dark"]},
-                "layout": {"type": "string", "enum": ["page", "card"]},
-                "source_text": {"type": "string", "minLength": 0, "maxLength": 32768},
-            },
-            ["blocks"],
-        )
-        monkeypatch.setattr(scout, "TOOL_DEFINITIONS", defs)
-    if "render_report" not in abilities.WORKSPACE_TOOLS:
-        monkeypatch.setattr(
-            abilities, "WORKSPACE_TOOLS", abilities.WORKSPACE_TOOLS | {"render_report"}
-        )
-    if "render_report" not in abilities.SANDBOX_TOOLS:
-        monkeypatch.setattr(
-            abilities, "SANDBOX_TOOLS", abilities.SANDBOX_TOOLS | {"render_report"}
-        )
-    if "render_report" not in abilities.HOST_TOOLS:
-        monkeypatch.setattr(
-            abilities, "HOST_TOOLS", abilities.HOST_TOOLS | {"render_report"}
-        )
-
-
 def _all_16_blocks() -> list[dict]:
     return [
         {"type": "heading", "level": 2, "text": "核心结论概览"},
@@ -542,7 +504,22 @@ def test_render_report_artifact_page_card_paths_and_images(tmp_path):
 
 
 def test_agent_runtime_calls_render_report_and_digest_feed_forward(tmp_path, monkeypatch):
-    _ensure_render_report_registered(monkeypatch)
+    # Verify render_report is genuinely registered without monkeypatching scout/abilities
+    assert "render_report" in scout.TOOL_DEFINITIONS
+    assert "render_report" in abilities.WORKSPACE_TOOLS
+    assert "render_report" in abilities.SANDBOX_TOOLS
+    assert "render_report" in abilities.HOST_TOOLS
+    scout.validate_arguments(
+        "render_report",
+        {
+            "path": "summary.html",
+            "title": "运行时调用验证",
+            "blocks": [{"type": "stat", "label": "通过率", "value": "100%"}],
+            "source_text": "通过率 100%",
+        },
+    )
+    with pytest.raises(ValueError):
+        scout.validate_arguments("render_report", {"path": "bad.html"})
     store = ThreadStore(tmp_path / "threads.db")
     maker_profile = Profile(
         id="maker",
@@ -629,8 +606,7 @@ def test_agent_runtime_calls_render_report_and_digest_feed_forward(tmp_path, mon
     assert any(path == "summary.html" for path, _data in outputs)
 
 
-def test_presets_and_skill_no_forbidden_pronoun_and_maker_config(tmp_path, monkeypatch):
-    _ensure_render_report_registered(monkeypatch)
+def test_presets_and_skill_no_forbidden_pronoun_and_maker_config(tmp_path):
     presets_root = ROOT / "presets"
     skill_path = presets_root / "skills" / "research-report" / "SKILL.md"
     profile_toml = presets_root / "profiles" / "maker" / "profile.toml"
