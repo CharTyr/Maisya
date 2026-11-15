@@ -318,19 +318,19 @@ async def settings_history(plugin) -> dict:
 
 async def _commit_settings(plugin, candidate: dict, *, expected_version: int | None, author: str, changes: list[str], caller_ident: str = "") -> dict:
     _assert_no_secret(plugin, candidate, "settings")
-    if isinstance(candidate.get("plugin"), dict) and candidate["plugin"].get("enabled") is False:
+    validated = Settings(**candidate).model_dump()
+    if not bool((validated.get("plugin") or {}).get("enabled")):
         raise ValueError(_LOCKOUT_MESSAGE)
-    if getattr(plugin.settings, "enabled_chats", None) and not candidate.get("enabled_chats"):
+    if getattr(plugin.settings, "enabled_chats", None) and not validated.get("enabled_chats"):
         raise ValueError("禁止移除全部已启用会话（至少保留 1 个有效会话以防管理锁死）")
     if "admins" in Settings.model_fields:
         host_admins = _effective_host_admins(plugin)
         old_eff = host_admins | set(getattr(plugin.settings, "admins", ()) or ())
-        new_eff = host_admins | set(candidate.get("admins") or ())
+        new_eff = host_admins | set(validated.get("admins") or ())
         if (old_eff or "admins" in changes) and not new_eff:
             raise ValueError("禁止清空全部管理员（至少保留 1 名有效管理员，防止自锁死）")
         if caller_ident and caller_ident in old_eff and caller_ident not in new_eff:
             raise ValueError("禁止在会话内移除当前操作者自身的管理员权限，防止自锁死")
-    validated = Settings(**candidate).model_dump()
     async with _shaping_lock(plugin):
         hist = await completed_thread(_load_settings_history, plugin)
         prev = hist["versions"][-1]
