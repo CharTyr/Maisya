@@ -25,6 +25,7 @@ from .context_budget import (
     build_static_handoff,
     estimate_messages_tokens,
     estimate_tokens,
+    estimate_tools_tokens,
     extract_exact_anchors,
     extract_verbatim_user_messages,
     format_thread_history_prompt,
@@ -33,7 +34,7 @@ from .context_budget import (
     resolve_context_budget,
 )
 from .pathsafe import rmtree_safe, safe_chmod
-from .scout import validate_arguments
+from .scout import TOOL_DEFINITIONS, validate_arguments
 from .workspaces import completed_thread, file_lock
 
 
@@ -1447,11 +1448,12 @@ class ThreadStore:
             text = record["payload"]
             start = (
                 offset
-                if event_seq
+                if event_seq or offset > 0
                 else max(0, text.lower().find(query.lower()) - 160)
                 if query
                 else 0
             )
+            start = min(len(text), start)
             end = min(len(text), start + chunk_size)
             result.append(
                 {
@@ -1736,20 +1738,20 @@ class ThreadEngine:
 
     def _cleanup_waiter(self, thread_id: str, target_future) -> None:
         items = self.waiters.get(thread_id)
-        if not items:
-            return
-        remaining = [
-            (rev, fut)
-            for rev, fut in items
-            if fut is not target_future and not fut.done()
-        ]
-        if remaining:
-            self.waiters[thread_id] = remaining
-        else:
+        if items:
+            remaining = [
+                (rev, fut)
+                for rev, fut in items
+                if fut is not target_future and not fut.done()
+            ]
+            if remaining:
+                self.waiters[thread_id] = remaining
+                return
             self.waiters.pop(thread_id, None)
+        self._prune_idle_state_locked(thread_id)
 
     def _prune_idle_state_locked(self, thread_id: str) -> None:
-        """在持有 _submission_lock 时清理已完全空闲线程的残余内存字典条目。"""
+        """清理已完全空闲线程的残余内存字典条目（无运行、延迟或等待任务时生效）。"""
         if thread_id in self.tasks:
             return
         if any(tid == thread_id for tid, _, _ in self._deferred_queue):
@@ -2170,6 +2172,60 @@ class ThreadEngine:
             ]
         return req
 
+    @staticmethod
+    def _effective_tool_schemas(profile: Profile) -> list[dict]:
+        names: list[str] = []
+        for name in (
+            *(getattr(profile, "tools", ()) or ()),
+            "thread_read",
+            "ask_user",
+            "thread_later",
+        ):
+            if isinstance(name, str) and name and name not in names:
+                names.append(name)
+        schemas: list[dict] = []
+        for name in names:
+            schema = TOOL_DEFINITIONS.get(name)
+            if schema is not None:
+                schemas.append(schema)
+            else:
+                schemas.append({"type": "function", "function": {"name": name}})
+        return schemas
+
+    @staticmethod
+    def _estimate_prompt_overhead_tokens(
+        profile: Profile,
+        context_index: str,
+        *,
+        memory_context="",
+        methods_text="",
+    ) -> int:
+        instructions = getattr(profile, "instructions", "") or ""
+        if methods_text:
+            methods_str = (
+                methods_text
+                if isinstance(methods_text, str)
+                else encode(methods_text)
+            )
+            instructions += "\n<methods>" + methods_str + "</methods>"
+        tokens = (
+            estimate_tokens(instructions)
+            + estimate_tokens(context_index or "")
+            + estimate_tools_tokens(ThreadEngine._effective_tool_schemas(profile))
+        )
+        if memory_context:
+            tokens += estimate_messages_tokens(
+                [
+                    {
+                        "role": "user",
+                        "content": "<memory_context>"
+                        + html.escape(encode(memory_context))
+                        + "</memory_context>",
+                    }
+                ]
+            )
+        return tokens
+
     async def _drive(self, thread_id, chat_id):
         current_task = asyncio.current_task()
         row = None
@@ -2249,6 +2305,8 @@ class ThreadEngine:
                                     }
                                 )
                     budget = None
+                    memory_context = ""
+                    methods_text = ""
                     if self._legacy_char_budget is not None:
                         if len(encode(history)) > self._legacy_char_budget:
                             await asyncio.to_thread(
@@ -2270,16 +2328,63 @@ class ThreadEngine:
                                     self.store.get, thread_id, store_chat
                                 )
                             )["history"]
+                        alive, changed = await self._boundary(
+                            thread_id, processed, deadline
+                        )
+                        if not alive:
+                            return
+                        if changed:
+                            continue
+                        if hasattr(self.runtime, "before"):
+                            metadata = await asyncio.to_thread(
+                                self.store.input_context, thread_id, processed
+                            )
+                            memory_context = await completed_thread(
+                                self.runtime.before,
+                                {
+                                    **row,
+                                    "revision": processed,
+                                    "grant": metadata.get("grant", row["grant"]),
+                                },
+                            )
                     else:
+                        alive, changed = await self._boundary(
+                            thread_id, processed, deadline
+                        )
+                        if not alive:
+                            return
+                        if changed:
+                            continue
+                        if hasattr(self.runtime, "before"):
+                            metadata = await asyncio.to_thread(
+                                self.store.input_context, thread_id, processed
+                            )
+                            memory_context = (
+                                await completed_thread(
+                                    self.runtime.before,
+                                    {
+                                        **row,
+                                        "revision": processed,
+                                        "grant": metadata.get("grant", row["grant"]),
+                                    },
+                                )
+                            ) or ""
+                        memory_obj = getattr(self.runtime, "memory", None)
+                        methods_fn = getattr(memory_obj, "methods", None)
+                        if callable(methods_fn):
+                            methods_text = (
+                                await completed_thread(methods_fn, profile)
+                            ) or ""
                         budget = resolve_context_budget(
                             profile,
                             default_context_tokens=self.context_tokens,
                             model_catalog=self._current_model_catalog(),
                         )
-                        overhead_tokens = (
-                            estimate_tokens(getattr(profile, "instructions", "") or "")
-                            + estimate_tokens(context_index or "")
-                            + len(getattr(profile, "tools", ()) or ()) * 120
+                        overhead_tokens = self._estimate_prompt_overhead_tokens(
+                            profile,
+                            context_index,
+                            memory_context=memory_context,
+                            methods_text=methods_text,
                         )
                         prompt_tokens = overhead_tokens + estimate_messages_tokens(
                             history
@@ -2319,26 +2424,13 @@ class ThreadEngine:
                                 overhead_tokens=overhead_tokens,
                                 force=False,
                             )
-                    alive, changed = await self._boundary(
-                        thread_id, processed, deadline
-                    )
-                    if not alive:
-                        return
-                    if changed:
-                        continue
-                    memory_context = ""
-                    if hasattr(self.runtime, "before"):
-                        metadata = await asyncio.to_thread(
-                            self.store.input_context, thread_id, processed
+                        alive, changed = await self._boundary(
+                            thread_id, processed, deadline
                         )
-                        memory_context = await completed_thread(
-                            self.runtime.before,
-                            {
-                                **row,
-                                "revision": processed,
-                                "grant": metadata.get("grant", row["grant"]),
-                            },
-                        )
+                        if not alive:
+                            return
+                        if changed:
+                            continue
                     request_history = self._assemble_request_history(
                         history,
                         context_index=context_index,
@@ -2367,10 +2459,11 @@ class ThreadEngine:
                                     default_context_tokens=self.context_tokens,
                                     model_catalog=self._current_model_catalog(),
                                 )
-                            retry_overhead = (
-                                estimate_tokens(getattr(profile, "instructions", "") or "")
-                                + estimate_tokens(context_index or "")
-                                + len(getattr(profile, "tools", ()) or ()) * 120
+                            retry_overhead = self._estimate_prompt_overhead_tokens(
+                                profile,
+                                context_index,
+                                memory_context=memory_context,
+                                methods_text=methods_text,
                             )
                             context_index, history = await self._run_tier2_compact(
                                 thread_id,
@@ -2688,59 +2781,63 @@ class ThreadEngine:
                             pass
                 finally:
                     async with self._submission_lock:
-                        thread_lock = self.locks.setdefault(thread_id, asyncio.Lock())
-                        async with thread_lock:
-                            self._finishing.discard(thread_id)
-                            was_background = thread_id in self.background_tasks
-                            is_current = self.tasks.get(thread_id) is current_task
-                            latest = None
-                            try:
-                                latest = await asyncio.to_thread(
-                                    self.store.get,
-                                    thread_id,
-                                    store_chat,
-                                    allow_self=(chat_id == "self"),
-                                )
-                            except Exception:
+                        try:
+                            thread_lock = self.locks.setdefault(
+                                thread_id, asyncio.Lock()
+                            )
+                            async with thread_lock:
+                                self._finishing.discard(thread_id)
+                                was_background = thread_id in self.background_tasks
+                                is_current = self.tasks.get(thread_id) is current_task
                                 latest = None
-                            if latest is not None:
-                                self._resolve(thread_id, latest)
-                            else:
-                                for _rev, fut in self.waiters.pop(thread_id, []):
-                                    if not fut.done():
-                                        fut.set_result(
-                                            {
-                                                "thread_id": thread_id,
-                                                "state": "closed",
-                                                "result": {},
-                                            }
-                                        )
-                            if (
-                                latest is not None
-                                and not self.closing
-                                and latest["state"] == "active"
-                                and (is_current or thread_id not in self.tasks)
-                            ):
-                                self._drop_deferred(thread_id)
-                                self.chats[thread_id] = chat_id
-                                if was_background:
-                                    self.background_tasks.add(thread_id)
+                                try:
+                                    latest = await asyncio.to_thread(
+                                        self.store.get,
+                                        thread_id,
+                                        store_chat,
+                                        allow_self=(chat_id == "self"),
+                                    )
+                                except Exception:
+                                    latest = None
+                                if latest is not None:
+                                    self._resolve(thread_id, latest)
+                                else:
+                                    for _rev, fut in self.waiters.pop(thread_id, []):
+                                        if not fut.done():
+                                            fut.set_result(
+                                                {
+                                                    "thread_id": thread_id,
+                                                    "state": "closed",
+                                                    "result": {},
+                                                }
+                                            )
+                                if (
+                                    latest is not None
+                                    and not self.closing
+                                    and latest["state"] == "active"
+                                    and (is_current or thread_id not in self.tasks)
+                                ):
+                                    self._drop_deferred(thread_id)
+                                    self.chats[thread_id] = chat_id
+                                    if was_background:
+                                        self.background_tasks.add(thread_id)
+                                    else:
+                                        self.background_tasks.discard(thread_id)
+                                    self.tasks[thread_id] = asyncio.create_task(
+                                        self._drive(thread_id, chat_id)
+                                    )
+                                elif is_current:
+                                    await self._drain_deferred_locked(
+                                        free_total=1,
+                                        free_bg=(1 if was_background else 0),
+                                    )
+                                    self.tasks.pop(thread_id, None)
+                                    self.background_tasks.discard(thread_id)
                                 else:
                                     self.background_tasks.discard(thread_id)
-                                self.tasks[thread_id] = asyncio.create_task(
-                                    self._drive(thread_id, chat_id)
-                                )
-                            elif is_current:
-                                await self._drain_deferred_locked(
-                                    free_total=1,
-                                    free_bg=(1 if was_background else 0),
-                                )
-                                self.tasks.pop(thread_id, None)
-                                self.background_tasks.discard(thread_id)
-                            else:
-                                self.background_tasks.discard(thread_id)
-                                await self._drain_deferred_locked()
-                        self._prune_idle_state_locked(thread_id)
+                                    await self._drain_deferred_locked()
+                        finally:
+                            self._prune_idle_state_locked(thread_id)
 
             _, cancelled_in_finally = await _await_uninterruptible_coro(_finalize())
             if cancelled_in_finally and not had_error:
@@ -2784,29 +2881,34 @@ class ThreadEngine:
     async def stop(self, thread_id, *, chat_id):
         async with self._submission_lock:
             self._drop_deferred(thread_id)
-            async with self.locks.setdefault(thread_id, asyncio.Lock()):
-                row = await asyncio.to_thread(self.store.stop, thread_id, chat_id)
-                task = self.tasks.get(thread_id)
-                if task:
-                    task.cancel()
-                self._resolve(thread_id, row)
-            if not task:
-                await self._drain_deferred_locked()
+            task = None
+            try:
+                async with self.locks.setdefault(thread_id, asyncio.Lock()):
+                    row = await asyncio.to_thread(self.store.stop, thread_id, chat_id)
+                    task = self.tasks.get(thread_id)
+                    if task:
+                        task.cancel()
+                    self._resolve(thread_id, row)
+                if not task:
+                    await self._drain_deferred_locked()
+            finally:
                 self._prune_idle_state_locked(thread_id)
         if task:
             await asyncio.gather(task, return_exceptions=True)
             async with self._submission_lock:
-                if self.tasks.get(thread_id) is task:
-                    was_background = thread_id in self.background_tasks
-                    await self._drain_deferred_locked(
-                        free_total=1,
-                        free_bg=(1 if was_background else 0),
-                    )
-                    self.tasks.pop(thread_id, None)
-                    self.background_tasks.discard(thread_id)
-                else:
-                    await self._drain_deferred_locked()
-                self._prune_idle_state_locked(thread_id)
+                try:
+                    if self.tasks.get(thread_id) is task:
+                        was_background = thread_id in self.background_tasks
+                        await self._drain_deferred_locked(
+                            free_total=1,
+                            free_bg=(1 if was_background else 0),
+                        )
+                        self.tasks.pop(thread_id, None)
+                        self.background_tasks.discard(thread_id)
+                    else:
+                        await self._drain_deferred_locked()
+                finally:
+                    self._prune_idle_state_locked(thread_id)
         if hasattr(self.runtime, "stopped"):
             try:
                 await self.runtime.stopped(thread_id)
@@ -2824,11 +2926,16 @@ class ThreadEngine:
         while self.tasks:
             pending = [t for t in self.tasks.values() if not t.done()]
             if not pending:
-                for tid in [k for k, v in list(self.tasks.items()) if v.done()]:
-                    self.tasks.pop(tid, None)
-                    self.background_tasks.discard(tid)
+                async with self._submission_lock:
+                    for tid in [k for k, v in list(self.tasks.items()) if v.done()]:
+                        self.tasks.pop(tid, None)
+                        self.background_tasks.discard(tid)
+                        self._prune_idle_state_locked(tid)
                 continue
             await asyncio.gather(*pending, return_exceptions=True)
+        async with self._submission_lock:
+            for tid in list(set(self.chats) | set(self.locks)):
+                self._prune_idle_state_locked(tid)
 
     async def close(self):
         self.closing = True

@@ -265,8 +265,10 @@ def render_report_artifact(work: Any, arguments: dict[str, Any]) -> dict[str, An
         spec["subtitle"] = subtitle.strip()
     elif subtitle is not None and not isinstance(subtitle, str):
         raise ValueError("subtitle 必须为字符串")
-    elif isinstance(caption, str) and caption.strip():
+    if isinstance(caption, str) and caption.strip():
         spec["caption"] = caption.strip()
+    elif caption is not None and not isinstance(caption, str):
+        raise ValueError("caption 必须为字符串")
 
     validate(spec, profile="report")
 

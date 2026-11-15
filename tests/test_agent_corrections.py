@@ -355,8 +355,20 @@ async def test_stop_does_not_execute_tools_if_model_ignores_cancellation(tmp_pat
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["model", "tool"])
 async def test_expired_run_cannot_start_more_calls_after_cancellation_is_swallowed(
-    tmp_path, stage
+    tmp_path, stage, monkeypatch
 ):
+    entered = asyncio.Event()
+    expired = asyncio.Event()
+    captured_timeouts = []
+    orig_timeout = asyncio.timeout
+
+    def tracked_timeout(delay):
+        cm = orig_timeout(delay)
+        captured_timeouts.append(cm)
+        return cm
+
+    monkeypatch.setattr(asyncio, "timeout", tracked_timeout)
+
     class Stubborn(Runtime):
         def __init__(self):
             super().__init__()
@@ -366,6 +378,7 @@ async def test_expired_run_cannot_start_more_calls_after_cancellation_is_swallow
         async def step(self, profile, history):
             self.steps += 1
             if stage == "model":
+                entered.set()
                 try:
                     await asyncio.Event().wait()
                 except asyncio.CancelledError:
@@ -387,14 +400,31 @@ async def test_expired_run_cannot_start_more_calls_after_cancellation_is_swallow
 
         async def call(self, name, arguments, context):
             self.executed.append(arguments["query"])
+            if stage == "tool" and arguments["query"] == "first":
+                entered.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 return {"text": "Late result"}
 
     runtime = Stubborn()
-    _store, engine = build(tmp_path, runtime, timeout=0.02)
-    result = await start(engine)
+    _store, engine = build(tmp_path, runtime, timeout=5.0)
+    orig_boundary = engine._boundary
+
+    async def gated_boundary(thread_id, processed, deadline):
+        effective_deadline = 0.0 if expired.is_set() else deadline
+        return await orig_boundary(thread_id, processed, effective_deadline)
+
+    monkeypatch.setattr(engine, "_boundary", gated_boundary)
+
+    run_task = asyncio.create_task(start(engine))
+    await asyncio.wait_for(entered.wait(), timeout=3.0)
+    expired.set()
+    loop = asyncio.get_running_loop()
+    for cm in captured_timeouts:
+        cm.reschedule(loop.time())
+
+    result = await asyncio.wait_for(run_task, timeout=3.0)
     assert result["state"] == "idle"
     assert "超过运行时限" in result["result"]["error"]
     assert runtime.steps == 1

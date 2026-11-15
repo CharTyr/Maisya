@@ -1,6 +1,7 @@
 """固定运行时、受控出站与单次容器执行边界。"""
 
 import asyncio
+import errno
 import hashlib
 import ipaddress
 import json
@@ -725,10 +726,29 @@ class Sandbox:
         return normalized
 
     def _own(self, work):
+        def _ensure_owner(target: Path, *, follow_symlinks: bool) -> None:
+            info = os.lstat(target)
+            if info.st_uid == 10000 and info.st_gid == 10000:
+                return
+            try:
+                os.chown(target, 10000, 10000, follow_symlinks=follow_symlinks)
+            except PermissionError as error:
+                raise PermissionError(
+                    "无法将沙箱工作区权限调整为 10000:10000（当前宿主进程缺少 chown 权限）"
+                ) from error
+            except OSError as error:
+                if error.errno == errno.EROFS:
+                    return
+                if error.errno == errno.EPERM:
+                    raise PermissionError(
+                        "无法将沙箱工作区权限调整为 10000:10000（当前宿主进程缺少 chown 权限）"
+                    ) from error
+                raise
+
         for directory, _children, files in os.walk(work.path):
-            os.chown(directory, 10000, 10000)
+            _ensure_owner(Path(directory), follow_symlinks=False)
             for name in files:
-                os.chown(Path(directory) / name, 10000, 10000, follow_symlinks=False)
+                _ensure_owner(Path(directory) / name, follow_symlinks=False)
 
     async def execute(
         self,
