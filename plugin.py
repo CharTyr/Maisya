@@ -350,6 +350,7 @@ class MaisyaPlugin(MaiBotPlugin):
             intents=self.intents,
         )
         await self.engine.recover()
+        await asyncio.to_thread(self.intents.requeue)
         self.pulse = Pulse(
             self.bridge,
             self.ctx,

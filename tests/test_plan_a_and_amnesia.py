@@ -969,3 +969,41 @@ async def test_share_auto_includes_declared_result_attachments_when_handles_omit
         assert "file" not in seg_types, sent_calls[0]["segments"]
     finally:
         await plg.on_unload()
+
+
+def test_on_load_requeues_orphaned_claimed_intents_after_runner_reload(tmp_path):
+    """claimed 态但尚未建线程的 intent 在插件重载 on_load() 时必须自动回退为 pending。"""
+    import asyncio
+    import time
+
+    async def _run():
+        boot_dir = tmp_path / "requeue_boot"
+        plg1 = await _boot_plugin(boot_dir, enabled_chats=["qq:group:10001"])
+        try:
+            await plg1.pulse.close()
+            scheduled = plg1.intents.schedule(
+                kind="return",
+                source="workflow",
+                target="chat:priv_admin_md5",
+                due_at=time.time() + 3600,
+                reason="digest private preview reload recovery test",
+                payload={"platform": "qq"},
+                bypass_limits=True,
+            )
+            intent_id = scheduled["intent_id"]
+            with plg1.threads.connect() as db, db:
+                db.execute(
+                    "UPDATE intents SET status='claimed' WHERE intent_id=?",
+                    (intent_id,),
+                )
+            assert plg1.intents.get(intent_id)["status"] == "claimed"
+        finally:
+            await plg1.on_unload()
+
+        plg2 = await _boot_plugin(boot_dir, enabled_chats=["qq:group:10001"])
+        try:
+            assert plg2.intents.get(intent_id)["status"] == "pending"
+        finally:
+            await plg2.on_unload()
+
+    asyncio.run(_run())
