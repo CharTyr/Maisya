@@ -89,7 +89,7 @@ for line in sys.stdin:
         json.dumps(config), encoding="utf-8"
     )
     h.runtime.services = Services(h.data_root / "abilities/services.json", h.vault)
-    profile_file = h.profiles.path / "scout/profile.toml"
+    profile_file = h.profiles.path / "default/profile.toml"
     profile_text = "\n".join(
         line
         for line in profile_file.read_text(encoding="utf-8").splitlines()
@@ -99,7 +99,7 @@ for line in sys.stdin:
         profile_text + '\ntools = ["mcp_call"]\nmcp = ["drawing"]\n',
         encoding="utf-8",
     )
-    profile = h.profiles.get("scout")
+    profile = h.profiles.get("default")
     row = h.store.create(profile, "draw", chat_id="chat", platform="qq", user_id="")
     arguments = {"service": "drawing", "tool": "draw", "arguments": {"prompt": "山"}}
     try:
@@ -175,11 +175,15 @@ for line in sys.stdin:
         "inputs": {"qq": {"service": "files", "tool": "read_file"}},
     }
     h.runtime.services.path.write_text(json.dumps(configuration), encoding="utf-8")
-    profile_file = h.profiles.path / "maker/profile.toml"
+    profile_file = h.profiles.path / "default/profile.toml"
+    profile_text = "\n".join(
+        line
+        for line in profile_file.read_text(encoding="utf-8").splitlines()
+        if not line.startswith(("tools =", "mcp ="))
+    )
     profile_file.write_text(
-        profile_file.read_text(encoding="utf-8")
-        .replace('"result_attach"', '"result_attach", "mcp_call"')
-        .replace("mcp = []", 'mcp = ["files"]'),
+        profile_text
+        + '\ntools = ["workspace_file", "result_attach", "mcp_call"]\nmcp = ["files"]\n',
         encoding="utf-8",
     )
     prompts = []
@@ -204,7 +208,7 @@ for line in sys.stdin:
 
     h.ctx.call_capability = capability
     try:
-        profile = h.profiles.get("maker")
+        profile = h.profiles.get("default")
         result = await h.engine.start(
             profile,
             "read file",
