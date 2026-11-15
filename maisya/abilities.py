@@ -10,7 +10,42 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .vault import atomic_private_write, private_directory
+from .pathsafe import ensure_dirs, path_is_link_like, safe_chmod
+from .vault import atomic_private_write
+
+
+def _has_relative_link(base_root: Path, target: Path) -> bool:
+    """仅校验受管根目录之内到目标的相对路径是否含符号链接或重解析点。"""
+    try:
+        rel = target.relative_to(base_root)
+    except ValueError:
+        return path_is_link_like(target)
+    current = base_root
+    for part in rel.parts:
+        current = current / part
+        if path_is_link_like(current):
+            return True
+    return False
+
+
+def _ensure_managed_dir(base_root: Path, target: Path, *, mode: int = 0o700) -> Path:
+    """确保受管目录存在，且仅校验受管根目录之内的相对路径不含符号链接或重解析点。"""
+    if path_is_link_like(base_root):
+        if not base_root.is_dir():
+            raise ValueError("受管目录不能包含符号链接")
+    else:
+        base_root.mkdir(parents=True, mode=mode, exist_ok=True)
+        safe_chmod(base_root, mode)
+    anchor = base_root.resolve() if path_is_link_like(base_root) else base_root
+    if target == base_root:
+        ensure_dirs(anchor, (), create=True, mode=mode)
+        return target
+    rel_parts = target.relative_to(base_root).parts
+    current = anchor
+    for part in rel_parts:
+        current = ensure_dirs(current, (part,), create=True, mode=mode)
+        safe_chmod(current, mode)
+    return target
 
 READONLY_TOOLS = frozenset(
     {
@@ -218,18 +253,18 @@ def _upgrade_existing_profile_toml(profile_id: str, destination: Path) -> None:
 
 class Profiles:
     def __init__(self, path: Path, *, contains_secret=lambda content: False):
-        self.path = private_directory(path)
+        self.path = _ensure_managed_dir(path, path)
         self.contains_secret = contains_secret
         for profile_id in ("scout", "maker", "digest"):
-            target = private_directory(path / profile_id)
+            target = _ensure_managed_dir(self.path, self.path / profile_id)
             presets = (
                 Path(__file__).resolve().parents[1] / "presets/profiles" / profile_id
             )
             toml_path = target / "profile.toml"
-            had_existing_toml = toml_path.exists() or toml_path.is_symlink()
+            had_existing_toml = toml_path.exists() or path_is_link_like(toml_path)
             for name in ("PROFILE.md", "profile.toml"):
                 destination = target / name
-                if destination.exists() or destination.is_symlink():
+                if destination.exists() or path_is_link_like(destination):
                     continue
                 with destination.open("x", encoding="utf-8") as output:
                     output.write((presets / name).read_text(encoding="utf-8"))
@@ -240,11 +275,11 @@ class Profiles:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id):
             raise ValueError("角色编号无效")
         directory = self.path / profile_id
-        if directory.is_symlink():
+        if _has_relative_link(self.path, directory):
             raise ValueError("角色不能是符号链接")
         for name in ("profile.toml", "PROFILE.md"):
             path = directory / name
-            if path.is_symlink() or path.stat().st_size > 65536:
+            if path_is_link_like(path) or path.stat().st_size > 65536:
                 raise ValueError("角色文件无效或过大")
         config = tomllib.loads((directory / "profile.toml").read_text(encoding="utf-8"))
         if set(config) - {
@@ -453,7 +488,7 @@ class Profiles:
         if profile_id in {"scout", "maker", "digest"}:
             raise ValueError("预设角色不可删除")
         directory = self.path / profile_id
-        if directory.is_symlink() or not directory.exists():
+        if _has_relative_link(self.path, directory) or not directory.exists():
             raise ValueError("角色不存在")
         shutil.rmtree(directory)
         return {"deleted": True, "profile": profile_id}
@@ -463,10 +498,11 @@ class Profiles:
         if (
             not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", target_id)
             or (self.path / target_id).exists()
+            or path_is_link_like(self.path / target_id)
         ):
             raise ValueError("新角色编号无效或已存在")
         package = self.export(source_id)
-        return self.import_package(package, target_id)
+        return self._unpack_package(package, target_id, preserve_local_scope=True)
 
     def export(self, profile_id):
         profile = self.get(profile_id)
@@ -482,7 +518,7 @@ class Profiles:
                     and relative.parts[2] in profile.skills
                 ):
                     continue
-                if path.is_symlink():
+                if _has_relative_link(directory, path):
                     raise ValueError("档案包不接受符号链接")
                 if (
                     not path.is_file()
@@ -500,20 +536,24 @@ class Profiles:
                 if self.contains_secret(content):
                     raise ValueError("档案资产含已知凭据，禁止导出")
                 archive.writestr(relative.as_posix(), content)
-            from .memory import PRESETS_DIR, MemoryLayers
+            from .memory import PRESETS_DIR, MemoryLayers, _SKILL_FILE_MAX_BYTES
 
             for skill in profile.skills:
-                skill_dir = self.path.parent / "skills" / skill
-                if not (skill_dir / "SKILL.md").exists():
-                    skill_dir = directory / "preset/skills" / skill
-                if not (skill_dir / "SKILL.md").exists():
-                    preset_skill = PRESETS_DIR / "skills" / skill
-                    if (preset_skill / "SKILL.md").exists():
-                        skill_dir = preset_skill
+                candidates = [
+                    (self.path.parent, self.path.parent / "skills" / skill),
+                    (directory, directory / "preset/skills" / skill),
+                    (PRESETS_DIR, PRESETS_DIR / "skills" / skill),
+                ]
+                base_root, skill_dir = candidates[0]
+                for cand_root, cand_dir in candidates:
+                    skill_file = cand_dir / "SKILL.md"
+                    if skill_file.exists() or path_is_link_like(skill_file):
+                        base_root, skill_dir = cand_root, cand_dir
+                        break
                 source = skill_dir / "SKILL.md"
-                if any(parent.is_symlink() for parent in source.parents):
+                if _has_relative_link(base_root, source):
                     raise ValueError("技能路径不能经过链接")
-                content = MemoryLayers._bytes(source)
+                content = MemoryLayers._bytes(source, max_bytes=_SKILL_FILE_MAX_BYTES)
                 if not content or self.contains_secret(content):
                     raise ValueError("技能缺失或含凭据，不能导出")
                 used += len(content)
@@ -524,12 +564,14 @@ class Profiles:
                 for extra_path in sorted(skill_dir.rglob("*")):
                     if extra_path == source or extra_path.is_dir():
                         continue
-                    if extra_path.is_symlink():
+                    if _has_relative_link(skill_dir, extra_path):
                         raise ValueError("技能路径不能经过链接")
                     rel_extra = extra_path.relative_to(skill_dir)
                     if any(part.startswith(".") for part in rel_extra.parts):
                         continue
-                    extra_bytes = MemoryLayers._bytes(extra_path)
+                    extra_bytes = MemoryLayers._bytes(
+                        extra_path, max_bytes=_SKILL_FILE_MAX_BYTES
+                    )
                     if self.contains_secret(extra_bytes):
                         raise ValueError("技能附属文件含凭据，不能导出")
                     used += len(extra_bytes)
@@ -544,6 +586,11 @@ class Profiles:
         return buffer.getvalue()
 
     def import_package(self, content, profile_id):
+        return self._unpack_package(content, profile_id, preserve_local_scope=False)
+
+    def _unpack_package(
+        self, content, profile_id, *, preserve_local_scope: bool = False
+    ):
         if (
             not isinstance(content, bytes)
             or len(content) > 8 * 1024**2
@@ -551,7 +598,7 @@ class Profiles:
         ):
             raise ValueError("档案包或编号无效")
         target = self.path / profile_id
-        if target.exists() or target.is_symlink():
+        if target.exists() or path_is_link_like(target):
             raise ValueError("档案已存在")
         stage = Path(tempfile.mkdtemp(prefix="import-", dir=self.path))
         try:
@@ -588,32 +635,46 @@ class Profiles:
                         and relative.parts[0] != "preset"
                     ):
                         raise ValueError("档案包含未允许的文件")
+                    ensure_dirs(
+                        stage, relative.parent.parts, create=True, mode=0o700
+                    )
                     destination = stage / relative
-                    private_directory(destination.parent)
                     with destination.open("xb") as output:
-                        content = archive.read(item)
-                        if self.contains_secret(content):
+                        file_bytes = archive.read(item)
+                        if self.contains_secret(file_bytes):
                             raise ValueError("档案资产含已知凭据，禁止导入")
-                        output.write(content)
-            config = tomllib.loads((stage / "profile.toml").read_text(encoding="utf-8"))
-            if (
-                config.get("mcp")
-                or config.get("apis")
-                or config.get("secrets")
-                or config.get("template")
-                or config.get("sandbox_targets")
-                or config.get("access") == "listed"
-            ):
-                lines = [
-                    line
-                    for line in (stage / "profile.toml")
-                    .read_text(encoding="utf-8")
-                    .splitlines()
-                    if not re.match(r"\s*bound\s*=", line)
-                ]
-                (stage / "profile.toml").write_text(
-                    "bound = false\n" + "\n".join(lines) + "\n", encoding="utf-8"
+                        output.write(file_bytes)
+            toml_path = stage / "profile.toml"
+            if not toml_path.is_file() or not (stage / "PROFILE.md").is_file():
+                raise ValueError("档案包缺少必要角色文件")
+            if not preserve_local_scope:
+                config = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+                had_allow_keys = "allow_chats" in config or "allow_users" in config
+                had_allow_scope = bool(
+                    config.get("allow_chats") or config.get("allow_users")
                 )
+                had_listed = config.get("access") == "listed"
+                needs_unbind = bool(
+                    config.get("mcp")
+                    or config.get("apis")
+                    or config.get("secrets")
+                    or config.get("template")
+                    or config.get("sandbox_targets")
+                    or had_listed
+                    or had_allow_scope
+                )
+                if had_allow_keys or had_listed or needs_unbind:
+                    config.pop("allow_chats", None)
+                    config.pop("allow_users", None)
+                    if had_listed:
+                        config["access"] = "admins"
+                    if needs_unbind:
+                        config["bound"] = False
+                    try:
+                        serialized = _serialize_profile_dict(config)
+                    except TypeError as exc:
+                        raise ValueError("角色配置格式无效") from exc
+                    toml_path.write_text(serialized, encoding="utf-8")
             stage.rename(target)
             try:
                 return self.get(profile_id)

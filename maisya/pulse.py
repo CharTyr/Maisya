@@ -97,8 +97,18 @@ class Pulse:
         self._heartbeat_cached_size = None
         self._heartbeat_cached_parts = ("", "")
         self._heartbeat_interval_used = heartbeat_interval
+        self._queued_heartbeat_tid = ""
         self._longing_next_bg_at = 0.0
         self._longing_last_clock = 0.0
+        self._tick_lock = None
+        self._tick_lock_loop = None
+
+    def _get_tick_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._tick_lock is None or self._tick_lock_loop is not loop:
+            self._tick_lock = asyncio.Lock()
+            self._tick_lock_loop = loop
+        return self._tick_lock
 
     def invalidate_caches(self):
         """清空心跳文件与节律冷却缓存，便于配置更新或测试时钟调整后立即重读。"""
@@ -126,6 +136,39 @@ class Pulse:
         if inspect.isawaitable(result):
             return await result
         return result
+
+    async def _thread_state_after_dispatch(
+        self,
+        tid: str,
+        chat_id: str,
+        started: dict | None = None,
+    ) -> tuple[bool, bool, dict | None]:
+        in_tasks = bool(
+            tid
+            and self.engine is not None
+            and getattr(self.engine, "tasks", None)
+            and self.engine.tasks.get(tid)
+        )
+        thread = None
+        store = getattr(self.bridge, "store", None) if self.bridge is not None else None
+        if tid and store is not None and hasattr(store, "get"):
+            try:
+                thread = await asyncio.to_thread(
+                    store.get, tid, chat_id, allow_self=chat_id == "self"
+                )
+            except (ValueError, PermissionError, sqlite3.Error):
+                thread = None
+        if in_tasks:
+            return True, False, thread
+        if thread is not None:
+            is_queued = (
+                int(thread.get("processed_revision") or 0)
+                < int(thread.get("revision") or 0)
+                or thread.get("state") == "active"
+            )
+            return False, is_queued, thread
+        is_queued = isinstance(started, dict) and started.get("state") == "active"
+        return False, is_queued, None
 
     def _proactive_quota_available(self, target: str = "") -> bool:
         if self.intents is None:
@@ -251,22 +294,28 @@ class Pulse:
     async def tick(self, *, background_tick: bool = False):
         if self.closing:
             return
-        await self._returns()
-        if self.intents is not None:
-            run_longing = True
-            if background_tick:
-                now = self.intents.clock()
-                if now < self._longing_last_clock:
-                    self._longing_next_bg_at = 0.0
-                self._longing_last_clock = now
-                if now < self._longing_next_bg_at:
-                    run_longing = False
-                else:
-                    self._longing_next_bg_at = now + 30.0
-            if run_longing:
-                await self._longing()
-            await self._intents()
-        await self._heartbeat()
+        lock = self._get_tick_lock()
+        if background_tick and lock.locked():
+            return
+        async with lock:
+            if self.closing:
+                return
+            await self._returns()
+            if self.intents is not None:
+                run_longing = True
+                if background_tick:
+                    now = self.intents.clock()
+                    if now < self._longing_last_clock:
+                        self._longing_next_bg_at = 0.0
+                    self._longing_last_clock = now
+                    if now < self._longing_next_bg_at:
+                        run_longing = False
+                    else:
+                        self._longing_next_bg_at = now + 30.0
+                if run_longing:
+                    await self._longing()
+                await self._intents()
+            await self._heartbeat()
 
     async def _returns(self):
         params = inspect.signature(self.bridge.claim_ready).parameters
@@ -370,6 +419,7 @@ class Pulse:
         next_payload = dict(payload)
         next_payload.pop("wait_thread", None)
         next_payload.pop("already_started", None)
+        next_payload.pop("return_routed_queued", None)
         now = self.intents.clock()
         if not str(payload.get("workspace") or "").strip():
             result_text = (
@@ -458,6 +508,40 @@ class Pulse:
                 self.intents.finish, row["intent_id"], "deferred", "sleep_window"
             )
             return
+        if bool(row["payload"].get("return_routed_queued")) and row.get("thread_id"):
+            tid = str(row["thread_id"])
+            raw_thread_chat = str(row["payload"].get("thread_chat_id") or "").strip()
+            thread_chat_id = (
+                (await self._ensure_runtime_chat_id(raw_thread_chat))
+                if raw_thread_chat
+                else chat_id
+            ) or chat_id
+            in_tasks, is_queued, thread = await self._thread_state_after_dispatch(
+                tid, thread_chat_id
+            )
+            if is_queued:
+                kicked = await self._engine_call(
+                    "kick_queued", tid, thread_chat_id, background=True
+                )
+                if kicked is False:
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred", delay=2
+                    )
+                    return
+                if getattr(self.engine, "kick_queued", None) is not None:
+                    in_tasks, is_queued, thread = (
+                        await self._thread_state_after_dispatch(tid, thread_chat_id)
+                    )
+                    if not in_tasks and is_queued:
+                        await asyncio.to_thread(
+                            self.intents.finish, row["intent_id"], "deferred", delay=2
+                        )
+                        return
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "done", "return_routed"
+            )
+            await self._reschedule_recurring(row, thread=thread)
+            return
         if (
             row["payload"].get("profile")
             and not row.get("thread_id")
@@ -520,16 +604,35 @@ class Pulse:
                     )
                 finally:
                     await self.bridge.submitted(route)
+                started_tid = str((started or {}).get("thread_id") or "")
+                _, is_queued, thread = await self._thread_state_after_dispatch(
+                    started_tid, thread_chat_id, started
+                )
+                if started_tid and is_queued:
+                    updated_payload = {
+                        **row["payload"],
+                        "return_routed_queued": True,
+                    }
+                    await asyncio.to_thread(
+                        self.intents.update_thread,
+                        row["intent_id"],
+                        started_tid,
+                        updated_payload,
+                    )
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred", delay=2
+                    )
+                    return
                 await asyncio.to_thread(
                     self.intents.update_thread,
                     row["intent_id"],
-                    started["thread_id"],
+                    started_tid,
                     row["payload"],
                 )
                 await asyncio.to_thread(
                     self.intents.finish, row["intent_id"], "done", "return_routed"
                 )
-                await self._reschedule_recurring(row)
+                await self._reschedule_recurring(row, thread=thread)
                 return
             started = await self._engine_call(
                 "start",
@@ -764,11 +867,12 @@ class Pulse:
                 row["payload"].get("prompt") or row["reason"],
                 row["payload"],
             )
-            await self._engine_call(
+            thread_chat = "self" if target_chat == "self" else target_chat
+            started = await self._engine_call(
                 "start",
                 ability,
                 prompt,
-                chat_id="self" if target_chat == "self" else target_chat,
+                chat_id=thread_chat,
                 platform="self" if target_chat == "self" else (platform or "qq"),
                 user_id="",
                 owner="self" if target_chat == "self" else "chat",
@@ -780,8 +884,24 @@ class Pulse:
                 background=True,
                 defer_if_full=True,
             )
+            started_tid = str((started or {}).get("thread_id") or "")
+            _, is_queued, started_thread = await self._thread_state_after_dispatch(
+                started_tid, thread_chat, started
+            )
+            if started_tid and is_queued:
+                updated_payload = {**row["payload"], "already_started": True}
+                await asyncio.to_thread(
+                    self.intents.update_thread,
+                    row["intent_id"],
+                    started_tid,
+                    updated_payload,
+                )
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "deferred", delay=15
+                )
+                return
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
-            await self._reschedule_recurring(row)
+            await self._reschedule_recurring(row, thread=started_thread)
             return
         thread_id = row["thread_id"]
         if not thread_id:
@@ -857,7 +977,7 @@ class Pulse:
                     )
                     + "</external_event>"
                 )
-            await self._engine_call(
+            sent = await self._engine_call(
                 "send",
                 thread_id,
                 prompt,
@@ -874,8 +994,23 @@ class Pulse:
         except (ValueError, PermissionError, RuntimeError, sqlite3.Error):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
+        _, is_queued, updated_thread = await self._thread_state_after_dispatch(
+            thread_id, chat_id, sent
+        )
+        if is_queued:
+            updated_payload = {**row["payload"], "already_started": True}
+            await asyncio.to_thread(
+                self.intents.update_thread,
+                row["intent_id"],
+                thread_id,
+                updated_payload,
+            )
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "deferred", delay=15
+            )
+            return
         await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
-        await self._reschedule_recurring(row, thread=thread)
+        await self._reschedule_recurring(row, thread=updated_thread or thread)
 
     def _proactive_gate(self, row):
         chat_id = row["target"].split(":", 1)[1]
@@ -1249,6 +1384,53 @@ class Pulse:
         self._heartbeat_next_at = float(now) + self.heartbeat_interval
         return True
 
+    def _find_queued_heartbeat_tid(self) -> str:
+        if self._queued_heartbeat_tid:
+            return self._queued_heartbeat_tid
+        store = getattr(self.bridge, "store", None) if self.bridge is not None else None
+        if store is None or not hasattr(store, "connect"):
+            return ""
+        try:
+            with store.connect() as db:
+                row = db.execute(
+                    "SELECT t.thread_id FROM agent_threads t "
+                    "LEFT JOIN thread_context tc ON tc.thread_id = t.thread_id "
+                    "LEFT JOIN agent_workspaces w ON w.workspace_id = tc.workspace_id "
+                    "WHERE t.owner='self' AND t.chat_id='self' "
+                    "AND (t.processed_revision < t.revision OR t.state='active') "
+                    "AND w.name='heartbeat' "
+                    "ORDER BY t.updated DESC LIMIT 1"
+                ).fetchone()
+                return str(row["thread_id"]) if row else ""
+        except sqlite3.Error:
+            return ""
+
+    async def _handle_queued_heartbeat(self, tid: str) -> bool:
+        if not tid:
+            return False
+        in_tasks, is_queued, _ = await self._thread_state_after_dispatch(tid, "self")
+        if in_tasks:
+            self._queued_heartbeat_tid = tid
+            return True
+        if is_queued:
+            kicked = await self._engine_call(
+                "kick_queued", tid, "self", background=True
+            )
+            if kicked is False:
+                self._queued_heartbeat_tid = tid
+                return True
+            if getattr(self.engine, "kick_queued", None) is not None:
+                in_tasks2, is_queued2, _ = await self._thread_state_after_dispatch(
+                    tid, "self"
+                )
+                if not in_tasks2 and is_queued2:
+                    self._queued_heartbeat_tid = tid
+                    return True
+            self._queued_heartbeat_tid = ""
+            return True
+        self._queued_heartbeat_tid = ""
+        return False
+
     async def _heartbeat(self):
         if (
             self.closing
@@ -1270,6 +1452,10 @@ class Pulse:
         ):
             return
         try:
+            if self._queued_heartbeat_tid and await self._handle_queued_heartbeat(
+                self._queued_heartbeat_tid
+            ):
+                return
             now = self.intents.clock()
             if self.heartbeat_interval != self._heartbeat_interval_used:
                 self._heartbeat_next_at = 0.0
@@ -1321,17 +1507,20 @@ class Pulse:
                 )
             if not plan:
                 return
+            queued_tid = await asyncio.to_thread(self._find_queued_heartbeat_tid)
+            if queued_tid and await self._handle_queued_heartbeat(queued_tid):
+                return
+            ability = await asyncio.to_thread(
+                self.profiles.get, self.heartbeat_profile
+            )
+            if not ability.enabled or not ability.autonomous:
+                return
             if not await asyncio.to_thread(self._claim_heartbeat, now):
                 if self._heartbeat_next_at <= now:
                     self._heartbeat_next_at = float(now) + self.heartbeat_interval
                 return
             if self._heartbeat_next_at <= now:
                 self._heartbeat_next_at = float(now) + self.heartbeat_interval
-            ability = await asyncio.to_thread(
-                self.profiles.get, self.heartbeat_profile
-            )
-            if not ability.autonomous:
-                return
             journal_obj = await asyncio.to_thread(self.memory.read, "journal")
             journal_text = str((journal_obj or {}).get("content") or "").strip()
             prompt = (
@@ -1348,7 +1537,7 @@ class Pulse:
                     + html.escape(recent_journal)
                     + "</recent_journal>"
                 )
-            await self._engine_call(
+            started = await self._engine_call(
                 "start",
                 ability,
                 prompt,
@@ -1361,6 +1550,12 @@ class Pulse:
                 background=True,
                 defer_if_full=True,
             )
+            started_tid = str((started or {}).get("thread_id") or "")
+            _, is_queued, _ = await self._thread_state_after_dispatch(
+                started_tid, "self", started
+            )
+            if started_tid and is_queued:
+                self._queued_heartbeat_tid = started_tid
         except (ValueError, PermissionError, RuntimeError, OSError, sqlite3.Error):
             return
 
