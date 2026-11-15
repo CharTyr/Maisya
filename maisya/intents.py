@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import math
 import re
 import sqlite3
 import time
@@ -81,10 +82,48 @@ def next_daily_due(
     return candidate.timestamp(), f"{hour:02d}:{minute:02d}"
 
 
+_SLEEP_ENDPOINT_RE = re.compile(r"^(\d{1,2})(?::(\d{2}))?$")
+
+
+def _validate_tz_offset_minutes(tz_offset_minutes: object) -> int:
+    if isinstance(tz_offset_minutes, bool) or not isinstance(tz_offset_minutes, int):
+        raise ValueError("时区偏移必须是整数分钟")
+    if not -720 <= tz_offset_minutes <= 840:
+        raise ValueError("时区偏移应在 -720 到 840 分钟之间")
+    return tz_offset_minutes
+
+
+def _parse_sleep_endpoint(raw: str) -> int | None:
+    match = _SLEEP_ENDPOINT_RE.fullmatch(str(raw or "").strip())
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2)) if match.group(2) is not None else 0
+    if hour == 24:
+        return 1440 if minute == 0 else None
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return hour * 60 + minute
+    return None
+
+
 class Intents:
-    def __init__(self, store, *, clock=time.time, daily_proactive_limit=1):
+    def __init__(
+        self,
+        store,
+        *,
+        clock=time.time,
+        daily_proactive_limit=1,
+        tz_offset_minutes=480,
+    ):
         self.store, self.clock = store, clock
         self.daily_proactive_limit = int(daily_proactive_limit)
+        if tz_offset_minutes is None:
+            self.tz_offset_minutes = 480
+        elif callable(tz_offset_minutes):
+            _validate_tz_offset_minutes(tz_offset_minutes())
+            self.tz_offset_minutes = tz_offset_minutes
+        else:
+            self.tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
         with store.connect() as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS intents ("
@@ -129,6 +168,16 @@ class Intents:
                 db.execute(
                     "ALTER TABLE session_routes ADD COLUMN last_human_at REAL NOT NULL DEFAULT 0"
                 )
+
+    def _tz_offset_minutes(self, tz_offset_minutes=None) -> int:
+        raw = (
+            getattr(self, "tz_offset_minutes", 480)
+            if tz_offset_minutes is None
+            else tz_offset_minutes
+        )
+        if callable(raw):
+            raw = raw()
+        return _validate_tz_offset_minutes(raw)
 
     def _intent(self, row):
         result = dict(row)
@@ -419,27 +468,40 @@ class Intents:
                     (alias,),
                 )
 
-    def in_sleep_window(self, sleep_window="", *, now=None):
+    def in_sleep_window(self, sleep_window="", *, now=None, tz_offset_minutes=None):
         now = self.clock() if now is None else now
-        hour = (int(now) + 8 * 3600) % 86400 // 3600
-        if not sleep_window:
+        offset_min = self._tz_offset_minutes(tz_offset_minutes)
+        if not sleep_window or not isinstance(sleep_window, str):
             return False
-        try:
-            start, end = (int(part) for part in sleep_window.split("-", 1))
-        except (TypeError, ValueError):
+        parts = sleep_window.split("-", 1)
+        if len(parts) != 2:
             return False
+        start = _parse_sleep_endpoint(parts[0])
+        end = _parse_sleep_endpoint(parts[1])
+        if start is None or end is None or start == end:
+            return False
+        minute_of_day = ((math.floor(float(now)) + offset_min * 60) % 86400) // 60
         return (
-            0 <= start <= 24
-            and 0 <= end <= 24
-            and start != end
-            and (start <= hour < end if start < end else hour >= start or hour < end)
+            start <= minute_of_day < end
+            if start < end
+            else minute_of_day >= start or minute_of_day < end
         )
 
-    def social_gate(self, target, *, sleep_window="", now=None, aliases=()):
+    def social_gate(
+        self,
+        target,
+        *,
+        sleep_window="",
+        now=None,
+        aliases=(),
+        tz_offset_minutes=None,
+    ):
         if not CHAT_TARGET.fullmatch(target):
             return False, "invalid_target"
         chat_id = target.split(":", 1)[1]
-        if self.in_sleep_window(sleep_window, now=now):
+        if self.in_sleep_window(
+            sleep_window, now=now, tz_offset_minutes=tz_offset_minutes
+        ):
             return False, "sleep_window"
         with self.store.connect() as db:
             alias_ids = self._social_aliases(db, chat_id, aliases)
@@ -537,12 +599,13 @@ class Intents:
         now=None,
         exclude_intent_id: str = "",
         payload: dict | None = None,
+        tz_offset_minutes=None,
     ) -> bool:
         limit = int(self.daily_proactive_limit)
         if limit <= 0:
             return False
         now = self.clock() if now is None else now
-        start, end = self._day_bounds(now)
+        start, end = self._day_bounds(now, tz_offset_minutes=tz_offset_minutes)
         with self.store.connect() as db:
             counts = self._proactive_counts(
                 db, start, end, exclude_intent_id=exclude_intent_id
@@ -649,7 +712,8 @@ class Intents:
                     (alias, now),
                 )
 
-    @staticmethod
-    def _day_bounds(now):
-        start = now - (int(now) + 8 * 3600) % 86400
+    def _day_bounds(self, now, *, tz_offset_minutes=None):
+        offset_sec = self._tz_offset_minutes(tz_offset_minutes) * 60
+        now_sec = math.floor(float(now))
+        start = now_sec - (now_sec + offset_sec) % 86400
         return start, start + 86400

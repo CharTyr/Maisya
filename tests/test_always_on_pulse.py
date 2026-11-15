@@ -1029,3 +1029,253 @@ async def test_group_scroll_prompt_journal_dedup_and_serendipity_upgrade(tmp_pat
         assert f"chat:{p_care}" in scheduled_targets
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_real_engine_bridge_pulse_e2e_kick_queued_group_delivery_and_reschedule_race(
+    tmp_path,
+):
+    """End-to-end integration test using real ThreadEngine, Bridge, and Pulse (no proxy/stub doubles)."""
+    plugin = await loaded(tmp_path / "real_e2e_pulse", permissions=["qq:admin"])
+    blocker_gate = asyncio.Event()
+    blocker_entered = asyncio.Event()
+    scroll_gate = asyncio.Event()
+    scroll_entered = asyncio.Event()
+    try:
+        clock = [1_700_000_000.0]
+        plugin.intents.clock = lambda: clock[0]
+        plugin.bridge.clock = lambda: clock[0]
+        plugin.messages.clock = lambda: clock[0]
+        plugin.engine.max_active = 1
+
+        def _grp_event(text: str, *, user: str, msg_id: str, ts: float):
+            msg = event(text, user=user, group=True, platform="qq")
+            msg["message_id"] = msg_id
+            msg["session_id"] = "e2e00000000000000000000000000001"
+            msg["timestamp"] = str(ts)
+            msg["message_info"]["group_info"]["group_id"] = "100246809"
+            return msg
+
+        grp_sid = "e2e00000000000000000000000000001"
+        plugin.settings.enabled_chats.append(grp_sid)
+        await asyncio.wait_for(
+            plugin.after_receive(
+                message=_grp_event(
+                    "群友开始问问题",
+                    user="admin",
+                    msg_id="m_orig_real",
+                    ts=clock[0] - 10,
+                )
+            ),
+            timeout=3.0,
+        )
+
+        llm_prompts = []
+        wakes = []
+
+        async def capability(name, **arguments):
+            if name == "maisaka.proactive.trigger":
+                wakes.append(arguments)
+                return {"success": True}
+            if name == "llm.generate_with_tools":
+                prompt_text = str(arguments.get("prompt", ""))
+                llm_prompts.append(prompt_text)
+                if "OCCUPY_SLOT" in prompt_text:
+                    blocker_entered.set()
+                    await asyncio.wait_for(blocker_gate.wait(), timeout=3.0)
+                    return {"success": True, "response": "占位任务结束", "tool_calls": []}
+                if "SCROLL_RETURN_TASK" in prompt_text:
+                    scroll_entered.set()
+                    await asyncio.wait_for(scroll_gate.wait(), timeout=3.0)
+                    return {"success": True, "response": "实时核查结论 ready", "tool_calls": []}
+                if "SILENT_WORKFLOW_PROMPT" in prompt_text:
+                    return {"success": True, "response": "静默巡检新进展-42", "tool_calls": []}
+                if "PROACTIVE_WORKFLOW_PROMPT" in prompt_text:
+                    return {"success": True, "response": "群内定时简报结论", "tool_calls": []}
+                return {"success": True, "response": "通用结论", "tool_calls": []}
+            return {"success": True}
+
+        plugin.ctx.call_capability = capability
+
+        # 1. Real ThreadEngine concurrency contention + defer_if_full + concurrent kick_queued + reschedule race
+        scout = plugin.profiles.get("scout")
+        await asyncio.wait_for(
+            plugin.engine.start(
+                scout,
+                "OCCUPY_SLOT",
+                chat_id=grp_sid,
+                platform="qq",
+                user_id="admin",
+                wait_seconds=0,
+                background=True,
+            ),
+            timeout=3.0,
+        )
+        await asyncio.wait_for(blocker_entered.wait(), timeout=3.0)
+        assert len(plugin.engine.tasks) == 1
+
+        silent_intent = plugin.intents.schedule(
+            kind="silent",
+            source="workflow",
+            target=f"chat:{grp_sid}",
+            due_at=clock[0],
+            reason="静默定时巡检",
+            payload={
+                "profile": "scout",
+                "prompt": "SILENT_WORKFLOW_PROMPT",
+                "every_seconds": 600,
+                "scheduled_admin": True,
+                "platform": "qq",
+            },
+            bypass_limits=True,
+        )
+        proactive_intent = plugin.intents.schedule(
+            kind="proactive",
+            source="workflow",
+            target=f"chat:{grp_sid}",
+            due_at=clock[0],
+            reason="群聊定时播报",
+            payload={
+                "profile": "scout",
+                "prompt": "PROACTIVE_WORKFLOW_PROMPT",
+                "every_seconds": 600,
+                "scheduled_admin": True,
+                "platform": "qq",
+            },
+            bypass_limits=True,
+        )
+
+        await asyncio.wait_for(plugin.pulse.tick(), timeout=3.0)
+        sil_row = plugin.intents.get(silent_intent["intent_id"])
+        pro_row = plugin.intents.get(proactive_intent["intent_id"])
+        assert sil_row["status"] == "pending" and sil_row["payload"].get("already_started") is True
+        assert pro_row["status"] == "pending" and pro_row["payload"].get("wait_thread") is True
+        sil_tid = sil_row["thread_id"]
+        pro_tid = pro_row["thread_id"]
+        assert sil_tid and pro_tid and sil_tid != pro_tid
+        assert sil_tid not in plugin.engine.tasks and pro_tid not in plugin.engine.tasks
+
+        # Concurrent ticks while full: real kick_queued must not over-admit or duplicate intents
+        clock[0] += 20
+        await asyncio.wait_for(
+            asyncio.gather(plugin.pulse.tick(), plugin.pulse.tick()),
+            timeout=3.0,
+        )
+        assert plugin.threads.get(sil_tid, grp_sid)["processed_revision"] == 0
+        assert plugin.threads.get(pro_tid, grp_sid)["processed_revision"] == 0
+
+        # Release blocker, then advance past defer windows and run concurrent ticks to drain queued queue sequentially
+        blocker_gate.set()
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        clock[0] += 20
+        await asyncio.wait_for(
+            asyncio.gather(plugin.pulse.tick(), plugin.pulse.tick()),
+            timeout=3.0,
+        )
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        clock[0] += 20
+        await asyncio.wait_for(
+            asyncio.gather(plugin.pulse.tick(), plugin.pulse.tick()),
+            timeout=3.0,
+        )
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+
+        assert plugin.intents.get(silent_intent["intent_id"])["status"] == "done"
+        assert plugin.intents.get(proactive_intent["intent_id"])["status"] == "done"
+        assert plugin.threads.get(sil_tid, grp_sid)["completed_revision"] == 1
+        assert plugin.threads.get(pro_tid, grp_sid)["completed_revision"] == 1
+
+        # Exact 1 recurring copy per workflow (no duplicate reschedules from concurrent ticks),
+        # and next proactive run carries <previous_runs> from real ThreadEngine execution.
+        pending_now = [
+            it
+            for it in plugin.intents.list(f"chat:{grp_sid}")
+            if it["intent_id"] not in {silent_intent["intent_id"], proactive_intent["intent_id"]}
+        ]
+        assert len(pending_now) == 2
+        assert all("already_started" not in it["payload"] for it in pending_now)
+        next_proactive = [it for it in pending_now if it["kind"] == "proactive"][0]
+        assert "群内定时简报结论" in next_proactive["payload"]["recent_runs"][-1]["summary"]
+
+        # Human replies to unlock unreplied_lock from first proactive delivery before next round
+        await asyncio.wait_for(
+            plugin.after_receive(
+                message=_grp_event(
+                    "收到，继续",
+                    user="admin",
+                    msg_id="m_unlock_real",
+                    ts=clock[0] + 1,
+                )
+            ),
+            timeout=3.0,
+        )
+        plugin.intents.note_received(grp_sid)
+        clock[0] += 700
+        await asyncio.wait_for(plugin.pulse.tick(), timeout=3.0)
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        clock[0] += 5
+        await asyncio.wait_for(plugin.pulse.tick(), timeout=3.0)
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        assert any(
+            "PROACTIVE_WORKFLOW_PROMPT" in p and "<previous_runs>" in p
+            for p in llm_prompts
+        )
+
+        # Cancel pending recurring intents before testing group scroll return delivery
+        for row in plugin.intents.list(f"chat:{grp_sid}"):
+            plugin.intents.cancel(row["intent_id"], f"chat:{grp_sid}")
+
+        # 2. Real Bridge + ThreadEngine + Pulse group return delivery & scroll prompt (>= 5 messages)
+        wakes.clear()
+        plugin.engine.max_active = 4
+        route = await asyncio.wait_for(
+            plugin.bridge.route(grp_sid, "m_orig_real", 0),
+            timeout=3.0,
+        )
+        await asyncio.wait_for(
+            plugin.engine.start(
+                scout,
+                "SCROLL_RETURN_TASK",
+                chat_id=grp_sid,
+                platform="qq",
+                user_id="admin",
+                owner="chat",
+                wait_seconds=0,
+                background=True,
+                return_route=route,
+            ),
+            timeout=3.0,
+        )
+        await asyncio.wait_for(plugin.bridge.submitted(route), timeout=3.0)
+        await asyncio.wait_for(scroll_entered.wait(), timeout=3.0)
+
+        for idx in range(5):
+            clock[0] += 1
+            await asyncio.wait_for(
+                plugin.after_receive(
+                    message=_grp_event(
+                        f"群友新讨论-{idx}",
+                        user=f"u{idx}",
+                        msg_id=f"m_scroll_{idx}",
+                        ts=clock[0],
+                    )
+                ),
+                timeout=3.0,
+            )
+
+        scroll_gate.set()
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        clock[0] += 2
+
+        await asyncio.wait_for(plugin.pulse._returns(), timeout=3.0)
+        assert len(wakes) == 1
+        assert wakes[0]["stream_id"] == grp_sid
+        assert "当前群聊自原提问起已滚过多条新消息" in wakes[0]["intent"]
+        assert "ref_msg_ids=[source_msg_id]" in wakes[0]["intent"]
+        assert "实时核查结论 ready" in wakes[0]["intent"]
+        # Real Bridge marked return row as accepted so subsequent claim_ready is empty
+        assert plugin.bridge.claim_ready(plugin.enabled_for) == {}
+    finally:
+        blocker_gate.set()
+        scroll_gate.set()
+        await asyncio.wait_for(plugin.on_unload(), timeout=3.0)

@@ -1,5 +1,6 @@
 """角色的加载与只读能力边界。"""
 
+import hashlib
 import io
 import json
 import re
@@ -251,34 +252,146 @@ def _serialize_profile_dict(config: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _upgrade_existing_profile_toml(profile_id: str, destination: Path) -> None:
-    if profile_id not in {"maker", "digest"}:
-        return
-    if destination.is_symlink() or not destination.is_file():
+_HISTORICAL_PROFILE_TOML_HASHES: dict[str, frozenset[str]] = {
+    "scout": frozenset(
+        {
+            "7161b66a85071312bf1fe947889ab44454dc5ead9730fa7a4b4598f8bf080d7e",
+        }
+    ),
+    "maker": frozenset(
+        {
+            "c399b1ab201afd008a6cb634e08e14e7ac528e30b08bdb678d91cc9bf244386d",
+            "5f2b43364d8dbde8266f58982436b60259898eaf4821d6311569f8ad1eb96201",
+            "53a3dd169570356c7971f2747505ae893d96153ca0e7b3f1fb02a6493b85f32d",
+        }
+    ),
+    "digest": frozenset(
+        {
+            "3796966bd268076ec3d2142567d35cc121a357d98d4d75906ca445fd40dfe5ea",
+            "09dc77afc21a454066bd9750ba53030898bfe4e3ba3f17a2c0d862874dba622a",
+            "e4e0e412555a7250fe1156ec575f2978e827d2f940cf2d751aa131a18b152e17",
+        }
+    ),
+}
+
+_LEGACY_SCOUT_DEFAULT_TOOLS = (
+    "web_search",
+    "web_fetch",
+    "chat_read",
+    "message_read",
+    "memory_read",
+    "image_read",
+)
+_INITIAL_MAKER_DEFAULT_TOOLS = (
+    "web_search",
+    "web_fetch",
+    "chat_read",
+    "message_read",
+    "memory_read",
+    "image_read",
+    "workspace_file",
+    "sandbox_exec",
+    "result_attach",
+)
+_LEGACY_DIGEST_DEFAULT_TOOLS = (
+    "chat_read",
+    "message_read",
+    "memory_read",
+    "web_search",
+    "web_fetch",
+    "digest_feed",
+    "workspace_file",
+    "html_render",
+    "result_attach",
+)
+
+
+def _append_missing_tools(
+    tools: list[object], additions: tuple[str, ...]
+) -> tuple[list[object], bool]:
+    updated = list(tools)
+    changed = False
+    for name in additions:
+        if name not in updated:
+            updated.append(name)
+            changed = True
+    return updated, changed
+
+
+def _ensure_skill(config: dict[str, object], skill_id: str) -> None:
+    skills = config.get("skills")
+    if not isinstance(skills, list) or not skills:
+        config["skills"] = [skill_id]
+    elif skill_id not in skills:
+        config["skills"] = [*skills, skill_id]
+
+
+def _upgrade_existing_profile_toml(
+    profile_id: str,
+    destination: Path,
+    preset_toml: Path | None = None,
+) -> None:
+    if destination.is_symlink() or path_is_link_like(destination) or not destination.is_file():
         return
     try:
-        config = tomllib.loads(destination.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+        raw_bytes = destination.read_bytes()
+    except OSError:
+        return
+    known_hashes = _HISTORICAL_PROFILE_TOML_HASHES.get(profile_id)
+    if (
+        known_hashes
+        and preset_toml is not None
+        and preset_toml.is_file()
+        and not path_is_link_like(preset_toml)
+        and hashlib.sha256(raw_bytes.replace(b"\r\n", b"\n")).hexdigest() in known_hashes
+    ):
+        try:
+            preset_bytes = preset_toml.read_bytes()
+        except OSError:
+            preset_bytes = b""
+        if preset_bytes and raw_bytes != preset_bytes:
+            atomic_private_write(destination, preset_bytes)
+        return
+    if profile_id not in {"scout", "maker", "digest"}:
+        return
+    try:
+        config = tomllib.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
         return
     if not isinstance(config, dict):
         return
 
     changed = False
-    if profile_id == "maker":
-        tools = config.get("tools")
+    tools = config.get("tools")
+    if profile_id == "scout":
         if (
             isinstance(tools, list)
-            and "render_report" not in tools
-            and len(tools) == len(_LEGACY_MAKER_DEFAULT_TOOLS)
-            and set(tools) == set(_LEGACY_MAKER_DEFAULT_TOOLS)
+            and len(tools) == len(_LEGACY_SCOUT_DEFAULT_TOOLS)
+            and set(tools) == set(_LEGACY_SCOUT_DEFAULT_TOOLS)
         ):
-            config["tools"] = [*tools, "render_report"]
-            skills = config.get("skills")
-            if not isinstance(skills, list) or not skills:
-                config["skills"] = ["research-report"]
-            elif "research-report" not in skills:
-                config["skills"] = [*skills, "research-report"]
-            changed = True
+            config["tools"], added = _append_missing_tools(
+                tools, ("person_read", "recall_read")
+            )
+            changed = changed or added
+    elif profile_id == "maker":
+        if isinstance(tools, list):
+            if len(tools) == len(_INITIAL_MAKER_DEFAULT_TOOLS) and set(tools) == set(
+                _INITIAL_MAKER_DEFAULT_TOOLS
+            ):
+                config["tools"], added = _append_missing_tools(
+                    tools, ("person_read", "recall_read", "html_render", "render_report")
+                )
+                _ensure_skill(config, "research-report")
+                config.setdefault("task", "planner")
+                changed = changed or added
+            elif (
+                "render_report" not in tools
+                and len(tools) == len(_LEGACY_MAKER_DEFAULT_TOOLS)
+                and set(tools) == set(_LEGACY_MAKER_DEFAULT_TOOLS)
+            ):
+                config["tools"] = [*tools, "render_report"]
+                _ensure_skill(config, "research-report")
+                changed = True
     elif profile_id == "digest":
         if type(config.get("max_steps")) is int and config.get("max_steps") == 12:
             config["max_steps"] = 20
@@ -286,6 +399,15 @@ def _upgrade_existing_profile_toml(profile_id: str, destination: Path) -> None:
         if type(config.get("max_tokens")) is int and config.get("max_tokens") == 2500:
             config["max_tokens"] = 4500
             changed = True
+        if (
+            isinstance(tools, list)
+            and len(tools) == len(_LEGACY_DIGEST_DEFAULT_TOOLS)
+            and set(tools) == set(_LEGACY_DIGEST_DEFAULT_TOOLS)
+        ):
+            config["tools"], added = _append_missing_tools(
+                tools, ("person_read", "recall_read")
+            )
+            changed = changed or added
 
     if changed:
         atomic_private_write(destination, _serialize_profile_dict(config).encode("utf-8"))
@@ -295,11 +417,22 @@ class Profiles:
     def __init__(self, path: Path, *, contains_secret=lambda content: False):
         self.path = _ensure_managed_dir(path, path)
         self.contains_secret = contains_secret
-        for profile_id in ("scout", "maker", "digest"):
+        presets_root = Path(__file__).resolve().parents[1] / "presets/profiles"
+        preset_ids: list[str] = []
+        if presets_root.is_dir() and not path_is_link_like(presets_root):
+            for entry in sorted(presets_root.iterdir()):
+                if (
+                    entry.is_dir()
+                    and not path_is_link_like(entry)
+                    and (entry / "PROFILE.md").is_file()
+                    and (entry / "profile.toml").is_file()
+                    and not path_is_link_like(entry / "PROFILE.md")
+                    and not path_is_link_like(entry / "profile.toml")
+                ):
+                    preset_ids.append(entry.name)
+        for profile_id in preset_ids:
             target = _ensure_managed_dir(self.path, self.path / profile_id)
-            presets = (
-                Path(__file__).resolve().parents[1] / "presets/profiles" / profile_id
-            )
+            presets = presets_root / profile_id
             toml_path = target / "profile.toml"
             had_existing_toml = toml_path.exists() or path_is_link_like(toml_path)
             for name in ("PROFILE.md", "profile.toml"):
@@ -309,7 +442,9 @@ class Profiles:
                 with destination.open("x", encoding="utf-8") as output:
                     output.write((presets / name).read_text(encoding="utf-8"))
             if had_existing_toml:
-                _upgrade_existing_profile_toml(profile_id, toml_path)
+                _upgrade_existing_profile_toml(
+                    profile_id, toml_path, preset_toml=presets / "profile.toml"
+                )
 
     def get(self, profile_id: str) -> Profile:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", profile_id):
