@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "chartyr.maisya",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "Maisya",
   "description": "为 MaiBot 提供可调度的 Agent 能力。",
   "plugin_type": "extension",
