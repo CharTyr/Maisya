@@ -12,7 +12,11 @@ from pathlib import Path
 
 from .abilities import is_autonomous_snapshot
 from .bridge import _grant_admin_direct
-from .intents import is_profileless_daily, next_daily_due
+from .intents import (
+    _validate_tz_offset_minutes,
+    is_profileless_daily,
+    next_daily_due,
+)
 from .memory import MemoryLayers
 from .scout import call_capability
 from .trust import parse_stream_spec
@@ -72,10 +76,14 @@ class Pulse:
         heartbeat_profile="scout",
         chat_aliases=lambda chat_id, platform="": {chat_id},
         resolve_session=None,
+        tz_offset_minutes=None,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
         self.sleep_window, self.redact = sleep_window, redact
+        if tz_offset_minutes is not None and not callable(tz_offset_minutes):
+            tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
+        self.tz_offset_minutes = tz_offset_minutes
         self.proactive_level = proactive_level
         self.chat_proactive_levels = dict(chat_proactive_levels or {})
         self.acquaintance_users = list(acquaintance_users or [])
@@ -173,6 +181,68 @@ class Pulse:
         is_queued = isinstance(started, dict) and started.get("state") == "active"
         return False, is_queued, None
 
+    def _configured_tz_offset_minutes(self) -> int | None:
+        raw = getattr(self, "tz_offset_minutes", None)
+        if raw is None:
+            return None
+        if callable(raw):
+            raw = raw()
+            if raw is None:
+                return None
+        return _validate_tz_offset_minutes(raw)
+
+    def _effective_tz_offset_minutes(self) -> int:
+        configured = self._configured_tz_offset_minutes()
+        if configured is not None:
+            return configured
+        for obj in (self.intents, self.memory):
+            raw = getattr(obj, "tz_offset_minutes", None)
+            if raw is None:
+                continue
+            if callable(raw):
+                raw = raw()
+            if raw is not None:
+                try:
+                    return _validate_tz_offset_minutes(raw)
+                except ValueError:
+                    continue
+        return 480
+
+    def _tz_kwarg_for(self, fn, params=None) -> dict[str, int]:
+        tz_val = self._configured_tz_offset_minutes()
+        if tz_val is None:
+            return {}
+        sig_params = inspect.signature(fn).parameters if params is None else params
+        if "tz_offset_minutes" in sig_params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_params.values()
+        ):
+            return {"tz_offset_minutes": tz_val}
+        return {}
+
+    def _in_sleep_window(self, sleep_window=None, *, now=None) -> bool:
+        if self.intents is None:
+            return False
+        fn = self.intents.in_sleep_window
+        params = inspect.signature(fn).parameters
+        has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        kwargs = self._tz_kwarg_for(fn, params)
+        if now is not None and ("now" in params or has_var_kw):
+            kwargs["now"] = now
+        sw = self.sleep_window if sleep_window is None else sleep_window
+        return bool(fn(sw, **kwargs))
+
+    def _social_gate(self, target, *, sleep_window=None, now=None, aliases=()):
+        fn = self.intents.social_gate
+        params = inspect.signature(fn).parameters
+        has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        sw = self.sleep_window if sleep_window is None else sleep_window
+        kwargs = {"sleep_window": sw, **self._tz_kwarg_for(fn, params)}
+        if "aliases" in params or has_var_kw:
+            kwargs["aliases"] = aliases
+        if now is not None and ("now" in params or has_var_kw):
+            kwargs["now"] = now
+        return fn(target, **kwargs)
+
     def _proactive_quota_available(
         self,
         target: str = "",
@@ -186,7 +256,7 @@ class Pulse:
         fn = self.intents.proactive_quota_available
         params = inspect.signature(fn).parameters
         has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-        extra_kw = {}
+        extra_kw = self._tz_kwarg_for(fn, params)
         for key, val in (
             ("now", now),
             ("exclude_intent_id", exclude_intent_id),
@@ -486,7 +556,11 @@ class Pulse:
                     last["summary"] = summary[:-40]
                 next_payload["recent_runs"] = prev_runs
         if daily_at:
-            tz_offset = int(payload.get("tz_offset_minutes", 480))
+            tz_offset = (
+                int(payload["tz_offset_minutes"])
+                if payload.get("tz_offset_minutes") is not None
+                else self._effective_tz_offset_minutes()
+            )
             due_at, norm = next_daily_due(now, daily_at, tz_offset)
             next_payload["daily_at"] = norm
             next_payload["tz_offset_minutes"] = tz_offset
@@ -548,7 +622,7 @@ class Pulse:
                 if status == "failed":
                     await self._reschedule_recurring(row, record_run=False)
                 return
-        elif row["payload"].get("profile") and self.intents.in_sleep_window(self.sleep_window):
+        elif row["payload"].get("profile") and self._in_sleep_window():
             await asyncio.to_thread(
                 self.intents.finish, row["intent_id"], "deferred", "sleep_window"
             )
@@ -1144,7 +1218,6 @@ class Pulse:
         if level == "care" and source == "serendipity" and self._chat_arena(chat_id) != "private":
             return False, "care_blocks_serendipity"
         payload = row.get("payload") or {}
-        sg_fn = self.intents.social_gate
         aliases = tuple(
             x
             for x in (
@@ -1153,12 +1226,9 @@ class Pulse:
             )
             if x
         )
-        if "aliases" in inspect.signature(sg_fn).parameters:
-            allowed, reason = sg_fn(
-                row["target"], sleep_window=self.sleep_window, aliases=aliases
-            )
-        else:
-            allowed, reason = sg_fn(row["target"], sleep_window=self.sleep_window)
+        allowed, reason = self._social_gate(
+            row["target"], sleep_window=self.sleep_window, aliases=aliases
+        )
         if not allowed:
             return allowed, reason
         if not payload.get("scheduled_admin") and not self.intents.acquaintance_allowed(
@@ -1245,6 +1315,12 @@ class Pulse:
         tokens = _extract_tokens(reason)
         if not tokens:
             return {"scheduled": False}
+        try:
+            due_ts = float(due_at)
+        except (TypeError, ValueError):
+            return {"scheduled": False}
+        if not self._proactive_quota_available("", now=due_ts):
+            return {"scheduled": False}
         admins = self._admins()
         best = None
         seen_sids = set()
@@ -1270,7 +1346,16 @@ class Pulse:
                 payload={"platform": platform},
             ):
                 continue
-            if not self.intents.social_gate("chat:" + chat_id, sleep_window="")[0]:
+            if not self._social_gate("chat:" + chat_id, sleep_window="")[0]:
+                continue
+            candidate_payload = {"platform": platform}
+            if arena:
+                candidate_payload["chat_type"] = arena
+            if not self._proactive_quota_available(
+                "chat:" + chat_id,
+                now=due_ts,
+                payload=candidate_payload,
+            ):
                 continue
             try:
                 mem_content = self.memory.read("memory", chat_id=chat_id).get("content") or ""
@@ -1305,7 +1390,7 @@ class Pulse:
             or self.intents is None
             or not callable(self.activity)
             or self.longing_quiet_hours <= 0
-            or self.intents.in_sleep_window(self.sleep_window)
+            or self._in_sleep_window()
         ):
             return
         now = self.intents.clock()
@@ -1594,7 +1679,7 @@ class Pulse:
                     v in {"care", "lively"} for v in self.chat_proactive_levels.values()
                 )
             )
-            or self.intents.in_sleep_window(self.sleep_window)
+            or self._in_sleep_window()
             or any(
                 self.engine.chats.get(tid) == "self" for tid in self.engine.tasks
             )
