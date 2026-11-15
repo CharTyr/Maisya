@@ -1,20 +1,49 @@
 import re
 from pathlib import Path
+from typing import Literal
 
 from maibot_sdk.config import PluginConfigBase
-from pydantic import Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .pathsafe import path_is_link_like, safe_chmod
 from .sandbox import SandboxSettings
+from .trust import normalize_admin_id
 from .vault import VaultError
 
 PROACTIVE_LEVELS = frozenset({"quiet", "care", "lively"})
+UI_STYLES = frozenset({"maiwork", "millennium", "modern", "auto"})
 USER_ID_RE = re.compile(r"^([a-z][a-z0-9_-]{0,31}):([^\s:]{1,200})$")
+
+
+def canonical_ui_style(value: str | None) -> str:
+    style = str(value or "").strip().lower()
+    if style == "maiwork":
+        return "modern"
+    if style in {"millennium", "modern", "auto"}:
+        return style
+    return "millennium"
 
 
 class PluginSettings(PluginConfigBase):
     enabled: bool = False
     config_version: str = "0.1.0"
+
+
+class ProactiveSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    sleep_window: str = ""
+    proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
+    daily_proactive_limit: int = Field(default=1, ge=0, le=50)
+    heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
+    heartbeat_profile: str = Field(
+        default="scout",
+        pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+    )
+    chat_proactive_levels: dict[str, str] = Field(default_factory=dict)
+    acquaintance_users: list[str] = Field(default_factory=list)
+    longing_quiet_hours: int = Field(default=0, ge=0, le=720)
+    tz_offset_minutes: int = Field(default=480, ge=-720, le=840)
 
 
 WEB_PROVIDER_PATTERN = (
@@ -27,8 +56,13 @@ WEB_PROVIDER_PATTERN = (
 
 
 class Settings(PluginConfigBase):
+    model_config = ConfigDict(validate_assignment=True, extra="ignore")
+
     plugin: PluginSettings = Field(default_factory=PluginSettings)
+    admins: list[str] = Field(default_factory=list)
+    permission_mode: Literal["ask_risky", "autonomous", "always_ask"] = "ask_risky"
     enabled_chats: list[str] = Field(default_factory=list)
+    default_model: str = ""
     agent_max_steps: int = Field(default=16, ge=1, le=64)
     agent_timeout: int = Field(default=180, ge=10, le=900)
     agent_max_active: int = Field(default=8, ge=1, le=32)
@@ -39,7 +73,9 @@ class Settings(PluginConfigBase):
         default="auto",
         pattern=WEB_PROVIDER_PATTERN,
     )
-    ui_style: str = Field(default="millennium", pattern=r"^(maiwork|millennium|auto)$")
+    ui_style: str = Field(
+        default="millennium", pattern=r"^(maiwork|millennium|modern|auto)$"
+    )
     sleep_window: str = Field(
         default="",
         pattern=r"^$|^\d{1,2}(?::\d{2})?-\d{1,2}(?::\d{2})?$",
@@ -56,6 +92,43 @@ class Settings(PluginConfigBase):
     longing_quiet_hours: int = Field(default=0, ge=0, le=720)
     tz_offset_minutes: int = Field(default=480, ge=-720, le=840)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+
+    @field_validator("admins")
+    @classmethod
+    def _validate_admins(cls, value: list[str]) -> list[str]:
+        if len(value) > 200:
+            raise ValueError("管理员列表最多包含 200 项")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            normalized = normalize_admin_id(entry)
+            if not normalized:
+                raise ValueError(f"管理员条目格式无效：{entry!r}")
+            if normalized not in seen:
+                seen.add(normalized)
+                cleaned.append(normalized)
+        return cleaned
+
+    @field_validator("default_model")
+    @classmethod
+    def _validate_default_model(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if len(text) > 256:
+            raise ValueError("default_model 长度不能超过 256 个字符")
+        return text
+
+    def proactive_settings(self) -> ProactiveSettings:
+        return ProactiveSettings(
+            sleep_window=self.sleep_window,
+            proactive_level=self.proactive_level,
+            daily_proactive_limit=self.daily_proactive_limit,
+            heartbeat_interval_minutes=self.heartbeat_interval_minutes,
+            heartbeat_profile=self.heartbeat_profile,
+            chat_proactive_levels=dict(self.chat_proactive_levels),
+            acquaintance_users=list(self.acquaintance_users),
+            longing_quiet_hours=self.longing_quiet_hours,
+            tz_offset_minutes=self.tz_offset_minutes,
+        )
 
     @field_validator("sleep_window")
     @classmethod

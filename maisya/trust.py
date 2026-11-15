@@ -7,7 +7,7 @@ import re
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +24,22 @@ MENTION_ALL_TEXT = re.compile(
 MENTION_ALL_TARGETS = frozenset({"all", "全体成员", "所有人"})
 STREAM_SPEC_RE = re.compile(
     r"^([a-z][a-z0-9_-]{0,31}):(group|private):([^\s:][^\s]{0,199})$"
+)
+ADMIN_PLATFORM_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+GRANT_TIERS = frozenset({"once", "session", "always"})
+PERMISSION_MODES = frozenset({"ask_risky", "autonomous", "always_ask"})
+_PERMISSION_GRANTS_DDL = (
+    "CREATE TABLE IF NOT EXISTS permission_grants ("
+    "grant_key TEXT PRIMARY KEY, "
+    "scope TEXT NOT NULL, "
+    "session_id TEXT NOT NULL DEFAULT '', "
+    "action_key TEXT NOT NULL, "
+    "tier TEXT NOT NULL, "
+    "kind TEXT NOT NULL DEFAULT 'exec', "
+    "note TEXT NOT NULL DEFAULT '', "
+    "actor TEXT NOT NULL DEFAULT '', "
+    "created REAL NOT NULL, "
+    "expires_at REAL)"
 )
 
 
@@ -241,6 +257,7 @@ class MessageStore:
                 "account_id TEXT NOT NULL, scope TEXT NOT NULL, updated REAL NOT NULL, "
                 "human_count INTEGER NOT NULL DEFAULT 0, last_human_at REAL NOT NULL DEFAULT 0)"
             )
+            db.execute(_PERMISSION_GRANTS_DDL)
             cols = {
                 row[1]
                 for row in db.execute("PRAGMA table_info(session_routes)").fetchall()
@@ -693,27 +710,138 @@ class MessageStore:
             return [dict(item) for item in ordered[:cap]]
 
 
+def normalize_admin_id(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    parsed = parse_stream_spec(raw)
+    if parsed is not None:
+        plat, kind, tid = parsed
+        if kind == "private" and tid:
+            return f"{plat}:{tid}"
+        return None
+    if ":" not in raw:
+        if re.fullmatch(r"\d{1,32}", raw):
+            return f"qq:{raw}"
+        return None
+    platform, user = raw.split(":", 1)
+    plat = platform.strip().lower()
+    uid = user.strip()
+    if uid.lower().startswith("private:"):
+        uid = uid[8:].strip()
+    elif uid.lower().startswith("group:"):
+        return None
+    if (
+        not ADMIN_PLATFORM_RE.fullmatch(plat)
+        or not uid
+        or len(uid) > 200
+        or any(ch.isspace() for ch in uid)
+    ):
+        return None
+    return f"{plat}:{uid}"
+
+
+def _extract_permission_entries(permissions) -> list[str]:
+    if permissions is None:
+        return []
+    if isinstance(permissions, str):
+        return [permissions]
+    if isinstance(permissions, Mapping):
+        entries: list[str] = []
+        for key, val in permissions.items():
+            key_s = str(key or "").strip().lower()
+            if key_s in {"admins", "users", "allow", "allowed", "ids"}:
+                entries.extend(_extract_permission_entries(val))
+            elif ADMIN_PLATFORM_RE.fullmatch(key_s) and isinstance(
+                val, (list, tuple, set, frozenset)
+            ):
+                for item in val:
+                    if isinstance(item, str) and item.strip():
+                        raw = item.strip()
+                        entries.append(raw if ":" in raw else f"{key_s}:{raw}")
+            elif isinstance(val, bool) and val and ":" in str(key):
+                entries.append(str(key))
+        return entries
+    if isinstance(permissions, (list, tuple, set, frozenset)):
+        return [item for item in permissions if isinstance(item, str)]
+    if isinstance(permissions, Iterable):
+        return [item for item in permissions if isinstance(item, str)]
+    return []
+
+
 def normalize_admins(permissions) -> set[str]:
-    if not isinstance(permissions, (list, tuple, set)):
+    if not isinstance(permissions, (list, tuple, set, frozenset)):
         return set()
     result = set()
     for value in permissions:
-        if not isinstance(value, str) or ":" not in value:
-            continue
-        parsed = parse_stream_spec(value)
-        if parsed is not None:
-            plat, kind, tid = parsed
-            if kind == "private" and tid:
-                result.add(f"{plat}:{tid}")
-            continue
-        platform, user = value.split(":", 1)
-        plat = platform.strip().lower()
-        uid = user.strip()
-        if uid.lower().startswith("private:"):
-            uid = uid[8:].strip()
-        if plat and uid:
-            result.add(f"{plat}:{uid}")
+        normalized = normalize_admin_id(value)
+        if normalized:
+            result.add(normalized)
     return result
+
+
+def merge_admins(host_permissions, settings_admins=()) -> set[str]:
+    merged: set[str] = set()
+    for value in _extract_permission_entries(host_permissions):
+        normalized = normalize_admin_id(value)
+        if normalized:
+            merged.add(normalized)
+    for value in _extract_permission_entries(settings_admins):
+        normalized = normalize_admin_id(value)
+        if normalized:
+            merged.add(normalized)
+    return merged
+
+
+def validate_admin_update(
+    new_admins, *, actor: str = "", host_admins=None
+) -> list[str]:
+    if new_admins is None:
+        raw_list: list[str] = []
+    elif isinstance(new_admins, (list, tuple, set, frozenset)):
+        raw_list = list(new_admins)
+    else:
+        raise ValueError("admins 必须是字符串列表")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for entry in raw_list:
+        normalized = normalize_admin_id(entry)
+        if not normalized:
+            raise ValueError(f"管理员账号格式无效：{entry!r}")
+        if normalized not in seen:
+            seen.add(normalized)
+            cleaned.append(normalized)
+    host_set = merge_admins(host_admins, ())
+    effective = seen | host_set
+    if not effective:
+        raise ValueError("管理员列表不能为空，至少保留一名有效管理员")
+    actor_raw = str(actor or "").strip()
+    if actor_raw and actor_raw.lower() not in {"bot_console", "console"}:
+        norm_actor = normalize_admin_id(actor_raw) or actor_raw
+        if norm_actor not in effective:
+            raise ValueError("不能将当前核验操作者从有效管理员集合中移除")
+    return cleaned
+
+
+def verify_admin_message(
+    store: MessageStore,
+    source_msg_id: str,
+    session_id: str,
+    platform: str,
+    admins: set[str],
+    *,
+    max_age: int = 300,
+) -> Message | None:
+    msg = store.lookup(source_msg_id, session_id, platform, max_age=max_age)
+    if (
+        msg
+        and not msg.is_plugin_relayed
+        and (msg.is_local_operator or f"{msg.platform.lower()}:{msg.user_id}" in admins)
+    ):
+        return msg
+    return None
 
 
 def allowed(
@@ -723,12 +851,242 @@ def allowed(
     platform: str,
     admins: set[str],
 ) -> bool:
-    msg = store.lookup(source_msg_id, session_id, platform, max_age=300)
-    return bool(
-        msg
-        and not msg.is_plugin_relayed
-        and (msg.is_local_operator or f"{msg.platform.lower()}:{msg.user_id}" in admins)
+    return (
+        verify_admin_message(store, source_msg_id, session_id, platform, admins)
+        is not None
     )
+
+
+def admin_dm_allowed(
+    store: MessageStore,
+    source_msg_id: str,
+    session_id: str,
+    platform: str,
+    admins: set[str],
+    *,
+    is_private: bool | None = None,
+    plugin_enabled: bool = True,
+    max_age: int = 300,
+) -> bool:
+    if not plugin_enabled:
+        return False
+    msg = verify_admin_message(
+        store, source_msg_id, session_id, platform, admins, max_age=max_age
+    )
+    if msg is None:
+        return False
+    if is_private is not None:
+        return bool(is_private)
+    route = store.route_for(session_id)
+    if route is not None:
+        return route.get("chat_type") == "private" and not route.get("group_id")
+    return not msg.group_id
+
+
+class PermissionGrantStore:
+    """持久化与按次/按会话/永久权限授权记录（permission_grants）。"""
+
+    def __init__(self, path: Path, *, clock=None):
+        self.path = Path(path)
+        self.clock = clock
+        self._lock = threading.RLock()
+        if self.path.is_symlink():
+            raise ValueError("权限授权数据库不能是符号链接")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute(_PERMISSION_GRANTS_DDL)
+        safe_chmod(self.path, 0o600)
+
+    def _now(self) -> float:
+        return time.time() if self.clock is None else float(self.clock())
+
+    @staticmethod
+    def make_grant_key(
+        scope: str, action_key: str, *, tier: str = "always", session_id: str = ""
+    ) -> str:
+        return f"{tier}|{scope}|{session_id}|{action_key}"
+
+    def grant(
+        self,
+        *,
+        scope: str = "*",
+        action_key: str,
+        tier: str = "once",
+        session_id: str = "",
+        kind: str = "exec",
+        note: str = "",
+        actor: str = "",
+        ttl_seconds: float | None = None,
+    ) -> str:
+        tier_clean = str(tier or "").strip().lower()
+        if tier_clean not in GRANT_TIERS:
+            raise ValueError(f"不支持的授权档位：{tier!r}")
+        scope_clean = str(scope or "*").strip() or "*"
+        action_clean = str(action_key or "").strip()
+        if not action_clean:
+            raise ValueError("action_key 不能为空")
+        session_clean = str(session_id or "").strip()
+        if tier_clean == "session" and not session_clean:
+            session_clean = scope_clean
+        now = self._now()
+        expires_at = None if ttl_seconds is None else now + float(ttl_seconds)
+        key_session = session_clean if tier_clean in {"once", "session"} else ""
+        grant_key = self.make_grant_key(
+            scope_clean, action_clean, tier=tier_clean, session_id=key_session
+        )
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
+            db.execute(
+                "INSERT INTO permission_grants "
+                "(grant_key, scope, session_id, action_key, tier, kind, note, actor, created, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(grant_key) DO UPDATE SET "
+                "note=excluded.note, actor=excluded.actor, created=excluded.created, "
+                "expires_at=excluded.expires_at",
+                (
+                    grant_key,
+                    scope_clean,
+                    key_session,
+                    action_clean,
+                    tier_clean,
+                    str(kind or "exec").strip(),
+                    str(note or "").strip(),
+                    str(actor or "").strip(),
+                    now,
+                    expires_at,
+                ),
+            )
+        return grant_key
+
+    def _find_matching_grant(
+        self, db: sqlite3.Connection, *, scope: str, action_key: str, session_id: str, now: float
+    ) -> tuple[str, str] | None:
+        db.execute(
+            "DELETE FROM permission_grants WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (now,),
+        )
+        rows = db.execute(
+            "SELECT grant_key, scope, session_id, tier FROM permission_grants "
+            "WHERE action_key = ?",
+            (action_key,),
+        ).fetchall()
+        scope_clean = str(scope or "").strip() or "*"
+        session_clean = str(session_id or "").strip()
+        # Priority: always -> session -> once
+        for grant_key, g_scope, _g_sess, g_tier in rows:
+            if g_tier == "always" and g_scope in {scope_clean, "*"}:
+                return grant_key, g_tier
+        for grant_key, g_scope, g_sess, g_tier in rows:
+            if g_tier == "session":
+                if session_clean and g_sess == session_clean and g_scope in {scope_clean, "*"}:
+                    return grant_key, g_tier
+                if not session_clean and g_scope == scope_clean:
+                    return grant_key, g_tier
+        for grant_key, g_scope, g_sess, g_tier in rows:
+            if g_tier == "once" and g_scope in {scope_clean, "*"}:
+                if not g_sess or not session_clean or g_sess == session_clean:
+                    return grant_key, g_tier
+        return None
+
+    def has_grant(
+        self, *, scope: str = "*", action_key: str, session_id: str = ""
+    ) -> bool:
+        action_clean = str(action_key or "").strip()
+        if not action_clean:
+            return False
+        now = self._now()
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
+            return (
+                self._find_matching_grant(
+                    db,
+                    scope=scope,
+                    action_key=action_clean,
+                    session_id=session_id,
+                    now=now,
+                )
+                is not None
+            )
+
+    def check_or_consume(
+        self, *, scope: str = "*", action_key: str, session_id: str = ""
+    ) -> bool:
+        action_clean = str(action_key or "").strip()
+        if not action_clean:
+            return False
+        now = self._now()
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
+            matched = self._find_matching_grant(
+                db,
+                scope=scope,
+                action_key=action_clean,
+                session_id=session_id,
+                now=now,
+            )
+            if matched is None:
+                return False
+            grant_key, tier = matched
+            if tier == "once":
+                db.execute(
+                    "DELETE FROM permission_grants WHERE grant_key = ?", (grant_key,)
+                )
+            return True
+
+    def revoke(self, grant_key: str) -> bool:
+        key = str(grant_key or "").strip()
+        if not key:
+            return False
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
+            cur = db.execute(
+                "DELETE FROM permission_grants WHERE grant_key = ?", (key,)
+            )
+            return cur.rowcount > 0
+
+    def revoke_scope(self, scope: str, *, session_id: str | None = None) -> int:
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
+            if session_id is None:
+                cur = db.execute(
+                    "DELETE FROM permission_grants WHERE scope = ?", (scope,)
+                )
+            else:
+                cur = db.execute(
+                    "DELETE FROM permission_grants WHERE scope = ? AND session_id = ?",
+                    (scope, session_id),
+                )
+            return cur.rowcount
+
+    def list_grants(self, *, scope: str | None = None) -> list[dict]:
+        now = self._now()
+        with self._lock, closing(sqlite3.connect(self.path)) as db, db:
+            db.execute(
+                "DELETE FROM permission_grants WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                (now,),
+            )
+            if scope is None:
+                rows = db.execute(
+                    "SELECT grant_key, scope, session_id, action_key, tier, kind, note, actor, created, expires_at "
+                    "FROM permission_grants ORDER BY created DESC, grant_key ASC"
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT grant_key, scope, session_id, action_key, tier, kind, note, actor, created, expires_at "
+                    "FROM permission_grants WHERE scope = ? ORDER BY created DESC, grant_key ASC",
+                    (scope,),
+                ).fetchall()
+        return [
+            {
+                "grant_key": row[0],
+                "scope": row[1],
+                "session_id": row[2],
+                "action_key": row[3],
+                "tier": row[4],
+                "kind": row[5],
+                "note": row[6],
+                "actor": row[7],
+                "created": float(row[8]),
+                "expires_at": None if row[9] is None else float(row[9]),
+            }
+            for row in rows
+        ]
 
 
 def visible_tools(tools: list[str], restricted: set[str], is_admin: bool) -> list[str]:

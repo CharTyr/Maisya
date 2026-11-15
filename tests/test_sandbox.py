@@ -227,15 +227,32 @@ def test_network_rules_cover_host_prerouting_forward_and_peers():
         policy.nft_rules("bad; flush ruleset", "br-safe", "172.30.253.0/24")
 
 
-def test_runtime_configuration_requires_pinned_image_and_local_socket():
+def test_runtime_configuration_allows_tags_and_requires_local_socket():
+    tagged = SandboxSettings(enabled=True, image="python:latest")
+    assert tagged.enabled
+    assert tagged.image == "python:latest"
+    assert tagged.runtime == ""
+    assert not tagged.privileged_sandbox_mode
+
     with pytest.raises(ValueError):
-        SandboxSettings(enabled=True, image="python:latest")
+        SandboxSettings(
+            enabled=True, image="python:latest", privileged_sandbox_mode=True
+        )
+    with pytest.raises(ValueError):
+        SandboxSettings(
+            enabled=True,
+            image="image@sha256:" + "0" * 64,
+            runtime="runc",
+            privileged_sandbox_mode=True,
+        )
     with pytest.raises(ValueError):
         SandboxSettings(
             enabled=True, image="image@sha256:" + "0" * 64, socket="tcp://host:2375"
         )
     config = SandboxSettings()
     assert not config.enabled
+    assert config.image == "maisya-sandbox:latest"
+    assert config.runtime == ""
 
 
 @pytest.mark.asyncio

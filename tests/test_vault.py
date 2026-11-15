@@ -78,3 +78,24 @@ def test_multiline_key_and_json_escaping_redacted(tmp_path):
     assert (
         secret not in json.loads(vault.redact(json.dumps({"value": secret})))["value"]
     )
+
+
+def test_vault_meta_sync_and_env_redaction_helpers(tmp_path):
+    from maisya.vault import inject_env_secrets, redact_secrets
+
+    secret = "vault-token-" + os.urandom(12).hex()
+    vault = Vault(tmp_path / "vault")
+    vault.set("svc_a", secret, label="Service A", domain="api.example.org", fields=["token"])
+    assert vault.get_meta("svc_a")["domain"] == "api.example.org"
+    assert [item["handle"] for item in vault.list_meta()] == ["svc_a"]
+
+    with pytest.raises(VaultError):
+        vault.set("svc_b", secret, label=secret)
+    assert not (vault.path / "svc_b.enc").exists()
+
+    env = inject_env_secrets(vault, ["svc_a"], env={"LANG": "C.UTF-8"})
+    assert env == {"LANG": "C.UTF-8", "MAISYA_SECRET_SVC_A": secret}
+    assert "[REDACTED]" in redact_secrets(f"Authorization: Bearer {secret}", [secret])
+
+    assert vault.delete_meta("svc_a")
+    assert not vault.delete_meta("svc_a")

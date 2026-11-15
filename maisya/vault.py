@@ -2,6 +2,7 @@
 
 import base64
 from collections import Counter
+from collections.abc import Iterable
 import errno
 import json
 import math
@@ -9,6 +10,7 @@ import os
 import re
 import secrets
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import quote, quote_from_bytes
 
@@ -221,6 +223,26 @@ def atomic_private_write(path: Path, content: bytes) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+_META_FILE = "vault_meta.json"
+_BLOCKED_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SHELL",
+        "USER",
+        "IFS",
+        "ENV",
+        "BASH_ENV",
+    }
+)
+_BLOCKED_ENV_PREFIXES = ("LD_", "DYLD_")
+
+
 class Vault:
     def __init__(self, path: Path):
         try:
@@ -320,10 +342,98 @@ class Vault:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", handle):
             raise ValueError("凭据句柄只能包含字母、数字、下划线和短横线")
 
-    def set(self, handle: str, value: str) -> None:
+    @property
+    def meta_path(self) -> Path:
+        return self.path / _META_FILE
+
+    def _load_meta(self) -> dict[str, dict]:
+        meta_path = self.meta_path
+        if path_is_link_like(meta_path):
+            raise VaultError("凭据目录文件不能是符号链接")
+        if not meta_path.exists():
+            return {}
+        safe_chmod(meta_path, 0o600)
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise VaultError("凭据目录文件损坏或不可读") from None
+        if not isinstance(data, dict):
+            raise VaultError("凭据目录结构无效")
+        cleaned: dict[str, dict] = {}
+        for key, item in data.items():
+            if not isinstance(key, str) or not isinstance(item, dict):
+                continue
+            fields_raw = item.get("fields") or []
+            fields = (
+                [str(f).strip() for f in fields_raw if str(f).strip()]
+                if isinstance(fields_raw, (list, tuple))
+                else []
+            )
+            cleaned[key] = {
+                "handle": key,
+                "label": str(item.get("label") or key).strip(),
+                "domain": str(item.get("domain") or "").strip(),
+                "fields": fields,
+                "kind": str(item.get("kind") or "secret").strip(),
+                "note": str(item.get("note") or "").strip(),
+                "updated_at": float(item.get("updated_at") or 0.0),
+            }
+        return cleaned
+
+    def _save_meta(self, meta: dict[str, dict]) -> None:
+        if path_is_link_like(self.meta_path):
+            raise VaultError("凭据目录文件不能是符号链接")
+        payload = json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True).encode(
+            "utf-8"
+        )
+        if self.contains_secret(payload):
+            raise VaultError("凭据元数据不能包含明文秘密")
+        try:
+            atomic_private_write(self.meta_path, payload)
+        except OSError:
+            raise VaultError("凭据目录写入失败") from None
+
+    def _check_meta_fields_safe(self, values: Iterable[str]) -> None:
+        for item in values:
+            if item and self.contains_secret(item.encode("utf-8")):
+                raise VaultError("凭据元数据不能包含明文秘密")
+
+    def set(
+        self,
+        handle: str,
+        value: str,
+        *,
+        label: str | None = None,
+        domain: str | None = None,
+        fields: Iterable[str] | None = None,
+        kind: str | None = None,
+        note: str | None = None,
+    ) -> None:
         self._validate_handle(handle)
         if not isinstance(value, str) or not value or len(value.encode()) > 65536:
             raise ValueError("凭据必须为非空文本，且不超过 64 KiB")
+        meta = self._load_meta()
+        existing = meta.get(handle, {})
+        resolved_label = existing.get("label") or handle if label is None else str(label).strip() or handle
+        resolved_domain = existing.get("domain", "") if domain is None else str(domain).strip()
+        resolved_fields = (
+            list(existing.get("fields") or [])
+            if fields is None
+            else [str(f).strip() for f in fields if str(f).strip()]
+        )
+        resolved_kind = existing.get("kind") or "secret" if kind is None else str(kind).strip() or "secret"
+        resolved_note = existing.get("note", "") if note is None else str(note).strip()
+        meta_fields = [
+            resolved_label,
+            resolved_domain,
+            resolved_kind,
+            resolved_note,
+            *resolved_fields,
+        ]
+        self._check_meta_fields_safe(meta_fields)
+        for item in meta_fields:
+            if item and (value in item or any(v in item for v in secret_variants(value))):
+                raise VaultError("凭据元数据不能包含明文秘密")
         try:
             token = self._cipher.encrypt(
                 json.dumps({"handle": handle, "value": value}).encode()
@@ -334,10 +444,114 @@ class Vault:
         except OSError:
             raise VaultError(f"凭据 {handle} 写入失败") from None
         self.protect(value)
+        meta[handle] = {
+            "handle": handle,
+            "label": resolved_label,
+            "domain": resolved_domain,
+            "fields": resolved_fields,
+            "kind": resolved_kind,
+            "note": resolved_note,
+            "updated_at": round(time.time(), 6),
+        }
+        self._save_meta(meta)
+
+    def set_meta(
+        self,
+        handle: str,
+        *,
+        label: str | None = None,
+        domain: str | None = None,
+        fields: Iterable[str] | None = None,
+        kind: str | None = None,
+        note: str | None = None,
+    ) -> dict:
+        self._validate_handle(handle)
+        meta = self._load_meta()
+        existing = meta.get(handle, {})
+        resolved_label = (
+            existing.get("label") or handle if label is None else str(label).strip() or handle
+        )
+        resolved_domain = (
+            existing.get("domain", "") if domain is None else str(domain).strip()
+        )
+        resolved_fields = (
+            list(existing.get("fields") or [])
+            if fields is None
+            else [str(f).strip() for f in fields if str(f).strip()]
+        )
+        resolved_kind = (
+            existing.get("kind") or "secret" if kind is None else str(kind).strip() or "secret"
+        )
+        resolved_note = existing.get("note", "") if note is None else str(note).strip()
+        self._check_meta_fields_safe(
+            [resolved_label, resolved_domain, resolved_kind, resolved_note, *resolved_fields]
+        )
+        record = {
+            "handle": handle,
+            "label": resolved_label,
+            "domain": resolved_domain,
+            "fields": resolved_fields,
+            "kind": resolved_kind,
+            "note": resolved_note,
+            "updated_at": round(time.time(), 6),
+        }
+        meta[handle] = record
+        self._save_meta(meta)
+        return dict(record)
+
+    def get_meta(self, handle: str) -> dict | None:
+        self._validate_handle(handle)
+        meta = self._load_meta()
+        if handle in meta:
+            return dict(meta[handle])
+        enc = self.path / f"{handle}.enc"
+        if enc.exists():
+            return {
+                "handle": handle,
+                "label": handle,
+                "domain": "",
+                "fields": [],
+                "kind": "secret",
+                "note": "",
+                "updated_at": round(enc.stat().st_mtime, 6),
+            }
+        return None
+
+    def list_meta(self) -> list[dict]:
+        meta = self._load_meta()
+        live_handles = set(self.handles())
+        result: list[dict] = []
+        for handle in sorted(live_handles):
+            entry = meta.get(handle)
+            if entry is None:
+                enc = self.path / f"{handle}.enc"
+                entry = {
+                    "handle": handle,
+                    "label": handle,
+                    "domain": "",
+                    "fields": [],
+                    "kind": "secret",
+                    "note": "",
+                    "updated_at": round(enc.stat().st_mtime, 6) if enc.exists() else 0.0,
+                }
+            result.append(dict(entry))
+        return result
+
+    def delete_meta(self, handle: str) -> bool:
+        self._validate_handle(handle)
+        if not self.meta_path.exists():
+            return False
+        meta = self._load_meta()
+        if handle not in meta:
+            return False
+        meta.pop(handle)
+        self._save_meta(meta)
+        return True
 
     def delete(self, handle: str) -> None:
         self._validate_handle(handle)
         (self.path / f"{handle}.enc").unlink(missing_ok=True)
+        self.delete_meta(handle)
 
     def handles(self) -> list[str]:
         return sorted(path.stem for path in self.path.glob("*.enc"))
@@ -358,6 +572,25 @@ class Vault:
         except (InvalidToken, ValueError, KeyError, TypeError, OSError):
             raise VaultError(f"凭据 {handle} 读取或校验失败") from None
 
+    def inject_env_secrets(
+        self,
+        handles: Iterable[str],
+        *,
+        env: dict[str, str] | None = None,
+        prefix: str = "MAISYA_SECRET_",
+    ) -> dict[str, str]:
+        merged = dict(env or {})
+        for handle in handles:
+            secret = self.for_execution(handle)
+            normalized = re.sub(r"[^A-Za-z0-9_]", "_", handle).upper()
+            env_key = f"{prefix}{normalized}"
+            if env_key in _BLOCKED_ENV_NAMES or any(
+                env_key.startswith(pre) for pre in _BLOCKED_ENV_PREFIXES
+            ):
+                raise VaultError(f"凭据环境变量名受保护：{env_key}")
+            merged[env_key] = secret
+        return merged
+
     def protect(self, value: str | bytes | bytearray) -> None:
         if isinstance(value, (bytes, bytearray)):
             raw = bytes(value)
@@ -375,3 +608,34 @@ class Vault:
         if any(secret in blob for secret in self._byte_redactions):
             return True
         return any(secret.encode("utf-8") in blob for secret in self._redactions)
+
+
+def inject_env_secrets(
+    vault: Vault,
+    handles: Iterable[str],
+    *,
+    env: dict[str, str] | None = None,
+    prefix: str = "MAISYA_SECRET_",
+) -> dict[str, str]:
+    return vault.inject_env_secrets(handles, env=env, prefix=prefix)
+
+
+def redact_secrets(value, values):
+    if isinstance(values, Vault):
+        return values.redact(value)
+    if isinstance(values, (str, bytes, bytearray)):
+        items = [values]
+    elif isinstance(values, Iterable):
+        items = list(values)
+    else:
+        return value
+    patterns: set[str | bytes] = set()
+    for item in items:
+        if isinstance(item, (bytes, bytearray)):
+            raw = bytes(item)
+            if _is_high_entropy_secret(raw):
+                patterns.add(raw)
+            patterns.update(secret_variants(raw))
+        elif isinstance(item, str) and item:
+            patterns.update(secret_variants(item))
+    return redact_values(value, patterns)
