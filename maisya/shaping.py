@@ -3776,7 +3776,11 @@ async def handle_setup(
             )
 
             async def _restore_sources(dw: DigestWorkspace) -> None:
-                dw._save_sources(sources_snapshot["orig_sources"])
+                def _write_and_commit() -> None:
+                    dw._save_sources(sources_snapshot["orig_sources"])
+                    dw.work.commit()
+
+                await completed_thread(_write_and_commit)
 
             await _run_in_digest_workspace(
                 plugin,

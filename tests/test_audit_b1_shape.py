@@ -386,6 +386,37 @@ async def test_setup_prevalidates_and_rolls_back_on_midflight_error(tmp_path, mo
             },
             bypass_limits=True,
         )
+
+        # Seed persistent digest sources so both pre-validation and mid-flight rollback cover digest_sources
+        async def _seed_sources(dw):
+            dw._save_sources(
+                {
+                    "feeds": [
+                        {
+                            "id": "f1",
+                            "url": "https://example.com/f1.xml",
+                            "host": "example.com",
+                            "title": "Feed 1",
+                            "origin": "manual",
+                            "status": "active",
+                        }
+                    ],
+                    "rejected": [],
+                }
+            )
+            dw.work.commit()
+
+        await shaping_mod._run_in_digest_workspace(
+            plugin, "100246809", "qq", "digest", None, _seed_sources
+        )
+        before_sources = await shaping_mod.handle_digest_sources(
+            plugin,
+            action="read",
+            target_chat=target_chat,
+            current_chat_id="priv_admin_md5",
+            current_platform="qq",
+        )
+        assert [f["id"] for f in before_sources["feeds"]] == ["f1"]
         base_ver = (await read_settings_state(plugin))["version"]
 
         # 1) Pre-validation: invalid schedules=123 or invalid daily_at or bad deliver_to
@@ -448,6 +479,8 @@ async def test_setup_prevalidates_and_rolls_back_on_midflight_error(tmp_path, mo
                     "sleep_window": "01:00-08:00",
                     "enable_profiles": ["digest"],
                     "append_memory": "should rollback this line",
+                    "unsubscribe_ids": ["f1"],
+                    "auto_seed_sources": False,
                     "daily_at": ["09:00", "20:00"],
                     "run_now": True,
                     "deliver_to": "current",
@@ -466,6 +499,15 @@ async def test_setup_prevalidates_and_rolls_back_on_midflight_error(tmp_path, mo
             plugin.memory.read("memory", chat_id="100246809", allow_custom=True)["content"]
             == "initial group note\n"
         )
+        after_sources = await shaping_mod.handle_digest_sources(
+            plugin,
+            action="read",
+            target_chat=target_chat,
+            current_chat_id="priv_admin_md5",
+            current_platform="qq",
+        )
+        assert [f["id"] for f in after_sources["feeds"]] == ["f1"]
+        assert after_sources["rejected"] == []
         pending = plugin.intents.list_all(status="pending", limit=20)
         pending_ids = {row["intent_id"] for row in pending}
         assert pending_ids == {orig_intent["intent_id"]}
