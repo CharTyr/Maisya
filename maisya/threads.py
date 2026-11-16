@@ -90,13 +90,27 @@ def public(row):
 
 
 _INPUT_TAG_RE = re.compile(
-    r"\s*<(?:reference_ids|previous_result)>[\s\S]*?</(?:reference_ids|previous_result)>\s*"
+    r"\s*<(?:reference_ids|previous_result|maisya_temperament|recent_journal|previous_runs)>[\s\S]*?</(?:reference_ids|previous_result|maisya_temperament|recent_journal|previous_runs)>\s*"
 )
+_HEARTBEAT_TITLE_PREFIX = "按自身节奏做一次轻量公开探索并记录近况"
+_HEARTBEAT_TRAILER_RE = re.compile(r"\s*以下为近期已记录的手账[\s\S]*$")
 
 
 def _clean_input_title(raw_text: str) -> str:
-    cleaned = _INPUT_TAG_RE.sub(" ", str(raw_text or "")).strip()
-    cleaned = re.sub(r"\s+", " ", cleaned)
+    stripped = _INPUT_TAG_RE.sub("\n", str(raw_text or "")).strip()
+    if stripped.startswith(_HEARTBEAT_TITLE_PREFIX):
+        body = re.split(r"[:：]\s*", stripped, maxsplit=1)[1] if (":" in stripped or "：" in stripped) else ""
+        body = _HEARTBEAT_TRAILER_RE.sub("", body)
+        for line in body.splitlines():
+            item = line.strip()
+            if not item or item.startswith("#") or item.startswith("<!--"):
+                continue
+            item = re.sub(r"^(?:[-*]|\d+[.)])\s*", "", item).strip()
+            item = item.rstrip("。；;")
+            if item:
+                return f"闲暇漫游 · {item[:48]}"
+        return "闲暇漫游 · 公开兴趣探索"
+    cleaned = re.sub(r"\s+", " ", stripped)
     return cleaned[:80]
 
 
@@ -2058,6 +2072,14 @@ class ThreadStore:
                         )
                     except ValueError:
                         title = ""
+                if not title:
+                    search_row = db.execute(
+                        "SELECT text FROM thread_search WHERE thread_id=?",
+                        (tid,),
+                    ).fetchone()
+                    if search_row and search_row["text"]:
+                        first_line = str(search_row["text"]).splitlines()[0]
+                        title = _clean_input_title(first_line)
                 items.append(
                     {
                         "thread_id": tid,

@@ -12,6 +12,9 @@ import signal
 import socket
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -26,6 +29,27 @@ from .pathsafe import (
 )
 from .scout import call_capability
 from .workspaces import completed_thread
+
+
+def validate_mcp_http_url(raw_url: str) -> str:
+    """校验远程 HTTP MCP 端点：只允许 http/https，阻止云元数据链路本地地址。"""
+    url = str(raw_url or "").strip()
+    if not url or len(url) > 2048 or any(ch.isspace() for ch in url):
+        raise ValueError("远程 MCP 地址格式无效")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise ValueError("远程 MCP 地址必须以 http:// 或 https:// 开头")
+    host = parsed.hostname.strip().lower()
+    if host == "metadata.google.internal":
+        raise ValueError("远程 MCP 地址禁止访问云元数据端点")
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        if ip_obj.is_link_local or ip_obj.is_multicast:
+            raise ValueError("远程 MCP 地址禁止访问链路本地或组播地址")
+    except ValueError as err:
+        if "禁止" in str(err):
+            raise
+    return url
 
 
 def _is_native_absolute_program_path(raw: str) -> bool:
@@ -379,6 +403,109 @@ class StdioSession:
                 self._on_close(self.uid)
 
 
+class HttpMcpSession:
+    """面向远程 Streamable HTTP / JSON-RPC MCP 服务的客户端会话。"""
+
+    def __init__(self, url: str, headers: dict[str, str] | None = None):
+        self.url = validate_mcp_http_url(url)
+        self.headers = {str(k): str(v) for k, v in (headers or {}).items()}
+        self.counter = 0
+        self.session_id = ""
+        self.lock = asyncio.Lock()
+        self.tools: dict = {}
+
+    def _post_sync(self, body: dict) -> tuple[int, dict[str, str], bytes]:
+        payload = json.dumps({"jsonrpc": "2.0", **body}, ensure_ascii=False).encode("utf-8")
+        req_headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": "Maisya-MCP/1.0",
+            **self.headers,
+        }
+        if self.session_id:
+            req_headers["Mcp-Session-Id"] = self.session_id
+        req = urllib.request.Request(self.url, data=payload, headers=req_headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                status = int(getattr(resp, "status", 200) or 200)
+                resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                raw = resp.read(12 * 1024**2 + 1)
+                if len(raw) > 12 * 1024**2:
+                    raise RuntimeError("远程 MCP 响应过大")
+                return status, resp_headers, raw
+        except urllib.error.HTTPError as err:
+            err_body = ""
+            try:
+                err_body = err.read(512).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(f"远程 MCP 返回 HTTP {err.code}" + (f"：{err_body}" if err_body else "")) from None
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"无法连接远程 MCP：{err.reason}") from None
+
+    @staticmethod
+    def _parse_jsonrpc_body(raw: bytes, content_type: str, req_id: int | None) -> dict | None:
+        text = raw.decode("utf-8", errors="replace").strip()
+        if not text:
+            return None
+        if "text/event-stream" in content_type.lower() or text.startswith("data:") or "\ndata:" in text:
+            last_obj = None
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("data:"):
+                    continue
+                data_part = stripped[5:].strip()
+                if not data_part or data_part == "[DONE]":
+                    continue
+                try:
+                    obj = json.loads(data_part)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    last_obj = obj
+                    if req_id is not None and obj.get("id") == req_id:
+                        return obj
+            return last_obj
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+
+    async def notify(self, message: dict) -> None:
+        status, resp_headers, _raw = await completed_thread(self._post_sync, message)
+        sid = resp_headers.get("mcp-session-id")
+        if sid:
+            self.session_id = sid
+        if status >= 400:
+            raise RuntimeError(f"远程 MCP 通知失败（HTTP {status}）")
+
+    async def request(self, method: str, params: dict) -> dict:
+        async with self.lock, asyncio.timeout(30):
+            self.counter += 1
+            request_id = self.counter
+            status, resp_headers, raw = await completed_thread(
+                self._post_sync,
+                {"id": request_id, "method": method, "params": params},
+            )
+            sid = resp_headers.get("mcp-session-id")
+            if sid:
+                self.session_id = sid
+            if status in {202, 204}:
+                return {}
+            message = self._parse_jsonrpc_body(raw, resp_headers.get("content-type", ""), request_id)
+            if not isinstance(message, dict):
+                raise TypeError("远程 MCP 响应格式错误")
+            if "error" in message:
+                err_obj = message.get("error")
+                msg = err_obj.get("message") if isinstance(err_obj, dict) else str(err_obj)
+                raise RuntimeError(f"MCP 服务返回错误：{msg}" if msg else "MCP 服务返回错误")
+            result = message.get("result")
+            if not isinstance(result, dict):
+                raise TypeError("远程 MCP 响应格式错误")
+            return result
+
+    async def close(self) -> None:
+        return None
+
+
 class Services:
     def __init__(self, path, vault):
         self.path, self.vault = Path(path), vault
@@ -602,111 +729,127 @@ class Services:
         async with cand_lock:
             return await self._close_session_key_safe(session_key)
 
-    async def _session(self, service, context, config):
-        key = service, self.digest, context["chat_id"], context["thread_id"]
-        if key in self.sessions:
-            return self.sessions[key]
-        command = config.get("command")
-        if (
-            not isinstance(command, list)
-            or not command
-            or len(command) > 32
-            or not all(
-                isinstance(value, str) and "\x00" not in value for value in command
-            )
-            or not _is_native_absolute_program_path(command[0])
-        ):
-            raise ValueError("MCP 需要管理员登记的绝对程序路径与固定参数")
-        for old_key in list(self.sessions):
-            if old_key[1] != self.digest:
-                await self._evict_session_key(old_key, service, context["thread_id"])
-        while len(self.sessions) >= 16:
-            evicted = False
-            for cand_key in list(self.sessions):
-                if await self._evict_session_key(cand_key, service, context["thread_id"]):
-                    evicted = True
-                    break
-            if not evicted:
-                raise RuntimeError("当前活动 MCP 会话已达上限且均在使用中")
-        credentials = config.get("credentials", {})
-        if not isinstance(credentials, dict) or any(
-            not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", name) for name in credentials
-        ):
-            raise ValueError("MCP 凭据环境绑定无效")
-        if set(credentials) & {
-            "PATH",
-            "HOME",
-            "PYTHONPATH",
-            "LD_PRELOAD",
-            "LD_LIBRARY_PATH",
-            "SYSTEMROOT",
-            "WINDIR",
-            "COMSPEC",
-            "PATHEXT",
-            "USERPROFILE",
-            "APPDATA",
-            "LOCALAPPDATA",
-            "TEMP",
-            "TMP",
-            "PYTHONUTF8",
-            "PYTHONIOENCODING",
-        }:
-            raise ValueError("MCP 凭据不能覆盖启动环境")
-        cred_values = {}
-        for name, handle in credentials.items():
-            cred_values[name] = await completed_thread(
-                self.vault.for_execution, handle
-            )
-        home = Path(tempfile.mkdtemp(prefix="maisya-mcp-"))
-        uid = self._allocate_uid()
-        try:
-            safe_chmod(home, 0o700)
-            if sys.platform.startswith("linux") and os.geteuid() == 0:
-                os.chown(home, uid, uid)
-            environment = minimal_subprocess_env(home=home)
-            environment.update(cred_values)
-            memory = config.get("memory_mib", 256)
-            if type(memory) is not int or not 128 <= memory <= 4096:
-                raise ValueError("MCP 资源配置无效")
-            if sys.platform.startswith("linux") and os.geteuid() == 0:
-                async with self.group_lock:
-                    await completed_thread(self._prepare_group)
-            if os.name == "nt":
-                child = await asyncio.create_subprocess_exec(
-                    *command,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env=environment,
-                    cwd=home,
-                    limit=12 * 1024**2,
+    async def _open_ephemeral_session(
+        self,
+        config: dict,
+        *,
+        inline_env: dict[str, str] | None = None,
+        inline_headers: dict[str, str] | None = None,
+        allow_all_tools: bool = False,
+    ):
+        transport = str(config.get("transport") or ("http" if config.get("url") else "stdio")).strip().lower()
+        if transport == "http":
+            url = validate_mcp_http_url(str(config.get("url") or ""))
+            merged_headers: dict[str, str] = {}
+            raw_headers = config.get("headers") or {}
+            if isinstance(raw_headers, dict):
+                for hk, hv in raw_headers.items():
+                    if isinstance(hk, str) and isinstance(hv, str) and hk.strip():
+                        merged_headers[hk.strip()] = hv
+            raw_hc = config.get("header_credentials") or {}
+            if isinstance(raw_hc, dict):
+                for hk, handle in raw_hc.items():
+                    if isinstance(hk, str) and isinstance(handle, str) and hk.strip() and handle.strip():
+                        val = await completed_thread(self.vault.for_execution, handle.strip())
+                        merged_headers[hk.strip()] = val
+                        parts = val.strip().split(None, 1)
+                        if len(parts) == 2 and parts[0].lower() in {"bearer", "token", "basic", "apikey"} and len(parts[1].strip()) >= 6:
+                            self.vault.protect(parts[1].strip())
+            if isinstance(inline_headers, dict):
+                for hk, hv in inline_headers.items():
+                    if isinstance(hk, str) and isinstance(hv, str) and hk.strip():
+                        merged_headers[hk.strip()] = hv
+            session = HttpMcpSession(url, headers=merged_headers)
+        else:
+            command = config.get("command")
+            if (
+                not isinstance(command, list)
+                or not command
+                or len(command) > 32
+                or not all(
+                    isinstance(value, str) and "\x00" not in value for value in command
                 )
-            else:
-                child = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-I",
-                    str(Path(__file__).with_name("mcp_worker.py")),
-                    json.dumps([command, memory, uid, self.cgroup_name]),
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env=environment,
-                    cwd=home,
-                    start_new_session=True,
-                    limit=12 * 1024**2,
+                or not _is_native_absolute_program_path(command[0])
+            ):
+                raise ValueError("MCP 需要管理员登记的绝对程序路径与固定参数")
+            credentials = config.get("credentials", {})
+            if not isinstance(credentials, dict) or any(
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) for name in credentials
+            ):
+                raise ValueError("MCP 凭据环境绑定无效")
+            blocked_env = {
+                "PATH", "HOME", "PYTHONPATH", "LD_PRELOAD", "LD_LIBRARY_PATH",
+                "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE",
+                "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "PYTHONUTF8", "PYTHONIOENCODING",
+            }
+            if set(k.upper() for k in credentials) & blocked_env:
+                raise ValueError("MCP 凭据不能覆盖启动环境")
+            cred_values = {}
+            for name, handle in credentials.items():
+                cred_values[name] = await completed_thread(
+                    self.vault.for_execution, handle
                 )
-        except BaseException:
-            self.active_uids.discard(uid)
-            await completed_thread(rmtree_safe, home, ignore_errors=True)
-            raise
-        cgroup = (
-            Path("/sys/fs/cgroup") / self.cgroup_name / str(uid)
-            if sys.platform.startswith("linux") and os.geteuid() == 0
-            else None
-        )
-        session = StdioSession(
-            child, home, cgroup, uid=uid, on_close=self.active_uids.discard
-        )
+            if isinstance(inline_env, dict):
+                for ek, ev in inline_env.items():
+                    if (
+                        isinstance(ek, str)
+                        and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", ek)
+                        and ek.upper() not in blocked_env
+                        and not ek.upper().startswith(("LD_", "DYLD_"))
+                        and isinstance(ev, str)
+                    ):
+                        cred_values[ek] = ev
+            home = Path(tempfile.mkdtemp(prefix="maisya-mcp-"))
+            uid = self._allocate_uid()
+            try:
+                safe_chmod(home, 0o700)
+                if sys.platform.startswith("linux") and os.geteuid() == 0:
+                    os.chown(home, uid, uid)
+                environment = minimal_subprocess_env(home=home)
+                environment.update(cred_values)
+                memory = config.get("memory_mib", 256)
+                if type(memory) is not int or not 128 <= memory <= 4096:
+                    raise ValueError("MCP 资源配置无效")
+                if sys.platform.startswith("linux") and os.geteuid() == 0:
+                    async with self.group_lock:
+                        await completed_thread(self._prepare_group)
+                if os.name == "nt":
+                    child = await asyncio.create_subprocess_exec(
+                        *command,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        env=environment,
+                        cwd=home,
+                        limit=12 * 1024**2,
+                    )
+                else:
+                    child = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-I",
+                        str(Path(__file__).with_name("mcp_worker.py")),
+                        json.dumps([command, memory, uid, self.cgroup_name]),
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        env=environment,
+                        cwd=home,
+                        start_new_session=True,
+                        limit=12 * 1024**2,
+                    )
+            except BaseException:
+                self.active_uids.discard(uid)
+                await completed_thread(rmtree_safe, home, ignore_errors=True)
+                raise
+            cgroup = (
+                Path("/sys/fs/cgroup") / self.cgroup_name / str(uid)
+                if sys.platform.startswith("linux") and os.geteuid() == 0
+                else None
+            )
+            session = StdioSession(
+                child, home, cgroup, uid=uid, on_close=self.active_uids.discard
+            )
+
         try:
             response = await session.request(
                 "initialize",
@@ -725,21 +868,72 @@ class Services:
                 raise ValueError("MCP 协议或工具能力不兼容")
             await session.notify({"method": "notifications/initialized"})
             tools = await session.request("tools/list", {})
-            allowed = config.get("tools", [])
+            allowed = ["*"] if allow_all_tools else config.get("tools", ["*"])
             if not isinstance(allowed, list) or not all(
                 isinstance(name, str) for name in allowed
             ):
                 raise ValueError("MCP 工具白名单无效")
+            wildcard = "*" in allowed
             session.tools = {
                 item["name"]: item
                 for item in tools.get("tools", [])
-                if isinstance(item, dict) and item.get("name") in allowed
+                if isinstance(item, dict)
+                and isinstance(item.get("name"), str)
+                and (wildcard or item.get("name") in allowed)
             }
-            self.sessions[key] = session
             return session
         except BaseException:
             await session.close()
             raise
+
+    async def probe_server(
+        self,
+        config: dict,
+        *,
+        inline_env: dict[str, str] | None = None,
+        inline_headers: dict[str, str] | None = None,
+        timeout: float = 8.0,
+    ) -> dict:
+        """连接并试探 MCP 服务返回的工具清单（立即断开临时会话，不持久化）。"""
+        transport = str(config.get("transport") or ("http" if config.get("url") else "stdio")).strip().lower()
+        async with asyncio.timeout(timeout):
+            session = await self._open_ephemeral_session(
+                config,
+                inline_env=inline_env,
+                inline_headers=inline_headers,
+                allow_all_tools=True,
+            )
+            try:
+                tools_out = [
+                    {
+                        "name": str(item.get("name") or ""),
+                        "description": str(self.vault.redact(item.get("description") or ""))[:200],
+                    }
+                    for item in sorted(session.tools.values(), key=lambda x: str(x.get("name") or ""))
+                    if isinstance(item, dict) and item.get("name")
+                ]
+                return {"ok": True, "transport": transport, "tools": tools_out}
+            finally:
+                await session.close()
+
+    async def _session(self, service, context, config):
+        key = service, self.digest, context["chat_id"], context["thread_id"]
+        if key in self.sessions:
+            return self.sessions[key]
+        for old_key in list(self.sessions):
+            if old_key[1] != self.digest:
+                await self._evict_session_key(old_key, service, context["thread_id"])
+        while len(self.sessions) >= 16:
+            evicted = False
+            for cand_key in list(self.sessions):
+                if await self._evict_session_key(cand_key, service, context["thread_id"]):
+                    evicted = True
+                    break
+            if not evicted:
+                raise RuntimeError("当前活动 MCP 会话已达上限且均在使用中")
+        session = await self._open_ephemeral_session(config)
+        self.sessions[key] = session
+        return session
 
     def _prepare_group(self):
         base = Path("/sys/fs/cgroup") / self.cgroup_name
@@ -766,10 +960,12 @@ class Services:
         configuration = self.load()
         service, tool = arguments["service"], arguments["tool"]
         config = configuration.get("servers", {}).get(service)
+        allowed_tools = config.get("tools", ["*"]) if isinstance(config, dict) else []
+        wildcard = "*" in allowed_tools
         if (
             service not in profile.mcp
             or not isinstance(config, dict)
-            or tool not in config.get("tools", [])
+            or (not wildcard and tool not in allowed_tools)
         ):
             raise PermissionError("本档案未授权该 MCP 服务或工具")
         if config.get("access", "everyone") == "admins" and not await completed_thread(
@@ -795,7 +991,7 @@ class Services:
                 session.tools[tool].get("inputSchema", {}),
                 arguments["arguments"],
             )
-            raw_call_id = context["_tool_call_id"]
+            raw_call_id = str(context.get("_tool_call_id") or f"call_{uuid.uuid4().hex[:8]}")
             step_index = context.get("_step_index")
             receipt_call_id = (
                 f"s{step_index}:{raw_call_id}"
@@ -1033,9 +1229,10 @@ class Services:
         return call_args
 
     async def _call_web_mcp(self, service, tool, kind, arguments, context, runtime, config, *, binding=None):
+        allowed_web_tools = config.get("tools", []) if isinstance(config, dict) else []
         if (
             not isinstance(config, dict)
-            or tool not in config.get("tools", [])
+            or (tool not in allowed_web_tools and "*" not in allowed_web_tools)
             or (
                 config.get("readonly") is not True
                 and not (

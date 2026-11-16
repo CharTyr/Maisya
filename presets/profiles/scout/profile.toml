@@ -1,0 +1,17 @@
+title = "查证助手"
+name = "查证助手"
+description = "面向公开资料与当前会话上下文的只读查证、识图、人物与过往经历检索。"
+icon_shape = "globe"
+theme_color = "#1F8A70"
+enabled = true
+bound = true
+access = "everyone"
+session_mode = "ephemeral"
+execution_mode = "host"
+permission_mode = "ask_risky"
+shared_secrets = false
+task = "utils"
+environment = "readonly"
+network = "none"
+toolsets = ["context", "web"]
+skills = ["source-checking"]

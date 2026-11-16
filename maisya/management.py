@@ -8,8 +8,10 @@ import json
 import mimetypes
 import os
 import re
+import shlex
 import shutil
 import sqlite3
+import sys
 import time
 import tomllib
 import uuid
@@ -28,17 +30,33 @@ from .abilities import (
 )
 from .config import Settings, canonical_ui_style
 from .console import snapshot
+from .digest import DigestWorkspace
 from .memory import PRESETS_DIR, SKILL_ID_RE, MemoryLayers, parse_skill_meta
+from .packages import (
+    export_package,
+    import_package_bundle,
+    preview_export_package,
+    preview_package,
+    sanitize_export_text,
+)
 from .pathsafe import is_absolute_program_path, path_is_link_like
 from .shaping import collect_known_chats, resolve_chat_target, resolve_stream_spec
+from .shaping_setup import handle_digest_sources
 from .scout import call_capability
 from .share import links_in
 from .services import (
     validate_api_entry,
+    validate_mcp_http_url,
     validate_web_bindings,
 )
-from .trust import format_stream_spec, merge_admins, parse_stream_spec, validate_admin_update
-from .vault import atomic_private_write
+from .trust import (
+    clean_display_name,
+    format_stream_spec,
+    merge_admins,
+    parse_stream_spec,
+    validate_admin_update,
+)
+from .vault import atomic_private_write, secret_variants
 from .workspaces import completed_thread, regular_open
 
 
@@ -74,6 +92,131 @@ _IMAGE_MIME = {
 _SLEEP_WINDOW_VALUE_RE = re.compile(
     r"^(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?$"
 )
+
+
+def resolve_mcp_command(raw_cmd) -> list[str]:
+    """将简单裸命令名（如 npx/uvx/python3）尽量解析为本机绝对路径，显式相对路径保留以供校验拦截。"""
+    if isinstance(raw_cmd, str):
+        parts = shlex.split(raw_cmd) if raw_cmd.strip() else []
+    elif isinstance(raw_cmd, (list, tuple)):
+        parts = [str(x) for x in raw_cmd if str(x)]
+    else:
+        parts = []
+    if not parts:
+        return []
+    prog = parts[0].strip()
+    if is_absolute_program_path(prog) or "/" in prog or "\\" in prog:
+        return [prog, *parts[1:]]
+    extra_bins = [
+        str(Path(sys.executable).parent),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        str(Path.home() / ".local" / "bin"),
+        os.environ.get("PATH", ""),
+    ]
+    search_path = os.pathsep.join(p for p in extra_bins if p)
+    resolved = shutil.which(prog, path=search_path)
+    if not resolved and prog in {"python", "python3"} and sys.executable:
+        resolved = sys.executable
+    return [resolved or prog, *parts[1:]]
+
+
+def parse_mcp_json_payload(raw) -> dict:
+    """解析常见 mcpServers JSON 或单个服务配置，返回可直接回填表单的标准结构。"""
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(data, dict):
+        raise ValueError("MCP JSON 必须是 JSON 对象")
+    name = ""
+    spec = data
+    container = data.get("mcpServers") or data.get("servers")
+    if isinstance(container, dict) and container:
+        name, first = next(iter(container.items()))
+        if not isinstance(first, dict):
+            raise ValueError("mcpServers 中的服务项必须是对象")
+        spec = first
+    elif isinstance(data.get("name"), str) and any(k in data for k in ("command", "url", "serverUrl")):
+        name = data["name"].strip()
+    url = str(spec.get("url") or spec.get("serverUrl") or "").strip()
+    transport = str(spec.get("transport") or ("http" if url else "stdio")).strip().lower()
+    raw_cmd = spec.get("command")
+    raw_args = spec.get("args")
+    cmd_list: list[str] = []
+    if isinstance(raw_cmd, list):
+        cmd_list = [str(x) for x in raw_cmd if str(x)]
+    elif isinstance(raw_cmd, str) and raw_cmd.strip():
+        cmd_list = [raw_cmd.strip()]
+    if isinstance(raw_args, list):
+        cmd_list.extend(str(x) for x in raw_args if str(x))
+    raw_env = spec.get("env") if isinstance(spec.get("env"), dict) else {}
+    env_map = {str(k).strip(): str(v) for k, v in raw_env.items() if str(k).strip() and v is not None}
+    raw_hdrs = spec.get("headers") if isinstance(spec.get("headers"), dict) else {}
+    hdr_map = {str(k).strip(): str(v) for k, v in raw_hdrs.items() if str(k).strip() and v is not None}
+    env_lines = [f"{k}={v}" for k, v in (hdr_map or env_map).items()] if transport == "http" else [f"{k}={v}" for k, v in env_map.items()]
+    return {
+        "name": re.sub(r"[^A-Za-z0-9_-]+", "_", str(name or "").strip()).strip("_-") or "custom_mcp",
+        "transport": "http" if transport == "http" else "stdio",
+        "command": cmd_list,
+        "command_text": shlex.join(cmd_list),
+        "url": url,
+        "env": env_map,
+        "headers": hdr_map,
+        "env_text": "\n".join(env_lines),
+        "description": str(spec.get("description") or "").strip(),
+    }
+
+
+def _collect_inline_secret_handles(
+    vault,
+    service_name: str,
+    raw_pairs: object,
+    *,
+    keep_keys_in: object,
+    prev_handles: dict,
+    slot: str,
+    pending_secrets: list[tuple[str, str, str, str]] | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """加密表单直接填写的 env/headers 为内部 MCP 句柄，支持 __KEEP__ 沿用未改动的旧密钥。"""
+    keep_keys: set[str] = set()
+    if isinstance(keep_keys_in, (list, tuple, set)):
+        keep_keys.update(str(x).strip() for x in keep_keys_in if str(x).strip())
+    next_handles: dict[str, str] = {}
+    inline_keys: list[str] = []
+    if isinstance(raw_pairs, dict):
+        if "__KEEP__" in raw_pairs:
+            kv = raw_pairs["__KEEP__"]
+            if isinstance(kv, str) and kv.strip():
+                keep_keys.add(kv.strip())
+            elif isinstance(kv, (list, tuple, set)):
+                keep_keys.update(str(x).strip() for x in kv if str(x).strip())
+        for raw_k, raw_v in raw_pairs.items():
+            key = str(raw_k or "").strip()
+            if not key or key == "__KEEP__":
+                continue
+            if raw_v == "__KEEP__":
+                keep_keys.add(key)
+                continue
+            val = "" if raw_v is None else str(raw_v)
+            if val != "":
+                if len(val.encode("utf-8")) > 65536:
+                    raise ValueError("凭据必须为非空文本，且不超过 64 KiB")
+                if pending_secrets is not None:
+                    next_handles[key] = vault._mcp_secret_handle(service_name, key, slot=slot)
+                    pending_secrets.append((service_name, key, val, slot))
+                else:
+                    next_handles[key] = vault.set_mcp_secret(service_name, key, val, slot=slot)
+                if key not in inline_keys:
+                    inline_keys.append(key)
+    for k in sorted(keep_keys):
+        prev_h = (prev_handles or {}).get(k)
+        if prev_h and k not in next_handles:
+            next_handles[k] = prev_h
+            if k not in inline_keys:
+                inline_keys.append(k)
+    return next_handles, inline_keys
+
+
+
 
 
 def _normalize_sleep_window_setting(value) -> str:
@@ -524,7 +667,133 @@ class Management:
         kind = str(raw_kind or "").strip().lower()
         if kind == "mcp":
             return "mcp", "servers"
-        raise ValueError("服务类型仅支持 mcp")
+        if kind in {"api", "apis", "plugin_api"}:
+            return "api", "apis"
+        raise ValueError("服务类型仅支持 mcp 或 api")
+
+    def _normalize_mcp_spec(
+        self,
+        name: str,
+        raw_spec: dict,
+        *,
+        prev_spec: dict | None = None,
+        pending_secrets: list[tuple[str, str, str, str]] | None = None,
+    ) -> dict:
+        spec = dict(raw_spec)
+        prev = prev_spec if isinstance(prev_spec, dict) else {}
+        transport = "http" if (str(spec.get("transport") or "").strip().lower() == "http" or str(spec.get("url") or "").strip()) else "stdio"
+        if transport == "http":
+            spec["transport"] = "http"
+            spec["url"] = validate_mcp_http_url(str(spec.get("url") or ""))
+            spec.pop("command", None)
+        else:
+            spec.pop("transport", None)
+            spec.pop("url", None)
+            if "command" in spec:
+                spec["command"] = resolve_mcp_command(spec.get("command") or [])
+
+        raw_env = spec.pop("env", None)
+        keep_env_in = spec.pop("keep_env_keys", None)
+        if raw_env is not None or keep_env_in is not None:
+            env_handles, env_keys = _collect_inline_secret_handles(
+                self.plugin.vault,
+                name,
+                raw_env,
+                keep_keys_in=keep_env_in,
+                prev_handles=prev.get("credentials") or {},
+                slot="env",
+                pending_secrets=pending_secrets,
+            )
+            base_creds = dict(spec.get("credentials") or {}) if isinstance(spec.get("credentials"), dict) else {}
+            merged_creds = {**base_creds, **env_handles}
+            if merged_creds:
+                spec["credentials"] = merged_creds
+            else:
+                spec.pop("credentials", None)
+            if env_keys:
+                spec["inline_env_keys"] = env_keys
+            else:
+                spec.pop("inline_env_keys", None)
+        elif "credentials" not in spec and prev.get("credentials"):
+            spec["credentials"] = dict(prev["credentials"])
+            if prev.get("inline_env_keys"):
+                spec["inline_env_keys"] = list(prev["inline_env_keys"])
+
+        raw_hdrs = spec.pop("headers", None)
+        keep_hdr_in = spec.pop("keep_header_keys", None)
+        if raw_hdrs is not None or keep_hdr_in is not None:
+            hdr_handles, hdr_keys = _collect_inline_secret_handles(
+                self.plugin.vault,
+                name,
+                raw_hdrs,
+                keep_keys_in=keep_hdr_in,
+                prev_handles=prev.get("header_credentials") or {},
+                slot="header",
+                pending_secrets=pending_secrets,
+            )
+            base_hc = dict(spec.get("header_credentials") or {}) if isinstance(spec.get("header_credentials"), dict) else {}
+            merged_hc = {**base_hc, **hdr_handles}
+            if merged_hc:
+                spec["header_credentials"] = merged_hc
+            else:
+                spec.pop("header_credentials", None)
+            if hdr_keys:
+                spec["inline_header_keys"] = hdr_keys
+            else:
+                spec.pop("inline_header_keys", None)
+        elif "header_credentials" not in spec and prev.get("header_credentials"):
+            spec["header_credentials"] = dict(prev["header_credentials"])
+            if prev.get("inline_header_keys"):
+                spec["inline_header_keys"] = list(prev["inline_header_keys"])
+
+        if not spec.get("tools"):
+            spec["tools"] = ["*"]
+        return spec
+
+    def _commit_services_with_secrets(
+        self,
+        next_config: dict,
+        pending_secrets: list[tuple[str, str, str, str]],
+    ) -> None:
+        self._validate_services(next_config)
+        content_str = json.dumps(next_config, ensure_ascii=False)
+        content = content_str.encode("utf-8")
+        for _, _, val, slot in pending_secrets:
+            variants = set(secret_variants(val))
+            if slot == "header" and isinstance(val, str):
+                parts = val.strip().split(None, 1)
+                if len(parts) == 2 and parts[0].lower() in {"bearer", "token", "basic", "apikey"} and len(parts[1].strip()) >= 6:
+                    variants.update(secret_variants(parts[1].strip()))
+            if any(variant.encode("utf-8") in content for variant in variants):
+                raise ValueError("服务登记只接受结构化配置和凭据句柄")
+        vault = self.plugin.vault
+        prev_meta: dict = {}
+        meta_existed = False
+        enc_snapshots: dict[Path, bytes | None] = {}
+        if pending_secrets and vault is not None:
+            prev_meta = vault._load_meta()
+            meta_existed = vault.meta_path.exists()
+            for svc, key, _val, slot in pending_secrets:
+                handle = vault._mcp_secret_handle(svc, key, slot=slot)
+                enc_path = vault.path / f"{handle}.enc"
+                if enc_path not in enc_snapshots:
+                    enc_snapshots[enc_path] = enc_path.read_bytes() if enc_path.exists() else None
+        try:
+            for svc, key, val, slot in pending_secrets:
+                vault.set_mcp_secret(svc, key, val, slot=slot)
+            atomic_private_write(self.plugin.runtime.services.path, content)
+        except BaseException:
+            if pending_secrets and vault is not None:
+                for enc_path, old_bytes in enc_snapshots.items():
+                    if old_bytes is None:
+                        enc_path.unlink(missing_ok=True)
+                    else:
+                        atomic_private_write(enc_path, old_bytes)
+                if meta_existed or prev_meta:
+                    vault._save_meta(prev_meta)
+                elif vault.meta_path.exists():
+                    vault.meta_path.unlink(missing_ok=True)
+            raise
 
     def _upsert_service_item_sync(self, options: dict) -> dict:
         kind, bucket = self._service_bucket(options.get("kind") or "mcp")
@@ -551,17 +820,35 @@ class Management:
         )
         next_config = copy.deepcopy(current)
         next_config.setdefault("servers", {})
+        next_config.setdefault("apis", {})
         next_config.pop("templates", None)
+        prev_spec = copy.deepcopy(next_config.get(bucket, {}).get(orig_name or name) or {})
         if orig_name:
             _, orig_bucket = (
                 self._service_bucket(orig_kind) if orig_kind else (kind, bucket)
             )
             if (orig_bucket, orig_name) != (bucket, name):
                 next_config.get(orig_bucket, {}).pop(orig_name, None)
+
+        pending_secrets: list[tuple[str, str, str, str]] = []
+        if kind == "mcp":
+            spec = self._normalize_mcp_spec(
+                name,
+                spec,
+                prev_spec=prev_spec,
+                pending_secrets=pending_secrets,
+            )
+        elif kind == "api":
+            if "api_name" not in spec and spec.get("api"):
+                spec["api_name"] = str(spec.pop("api") or "").strip()
+            spec.pop("api", None)
         next_config[bucket][name] = spec
-        self._validate_services(next_config)
-        content = json.dumps(next_config, ensure_ascii=False).encode()
-        atomic_private_write(self.plugin.runtime.services.path, content)
+        self._commit_services_with_secrets(next_config, pending_secrets)
+        if kind == "mcp":
+            keep_h = set((spec.get("credentials") or {}).values()) | set((spec.get("header_credentials") or {}).values())
+            self.plugin.vault.purge_mcp_secrets(name, keep_handles=keep_h)
+            if orig_name and orig_name != name:
+                self.plugin.vault.purge_mcp_secrets(orig_name, keep_handles=keep_h)
         return {
             "kind": kind,
             "name": name,
@@ -590,6 +877,8 @@ class Management:
         self._validate_services(next_config)
         content = json.dumps(next_config, ensure_ascii=False).encode()
         atomic_private_write(self.plugin.runtime.services.path, content)
+        if kind == "mcp":
+            self.plugin.vault.purge_mcp_secrets(name)
         return {
             "kind": kind,
             "name": name,
@@ -605,6 +894,98 @@ class Management:
             or options.get("profile")
             or ""
         ).strip()
+        skill_id = str(options.get("skill_id") or "").strip()
+        raw_hid = options.get("history_id")
+        hid = str(raw_hid).strip() if raw_hid is not None else ""
+        if skill_id:
+            if not SKILL_ID_RE.fullmatch(skill_id):
+                raise ValueError("技能编号格式无效")
+            cur_sk = self.plugin.memory.read("skill", target=skill_id, allow_custom=True)
+            self._require_expected_version(
+                options,
+                cur_sk["version"],
+                message="技能版本已变化，请刷新后重试",
+                require_int=True,
+            )
+            sk_hist = self.plugin.memory.history("skill", target=skill_id)
+            tid_cand = hid[7:] if hid.startswith("thread:") else hid
+            sk_match_idx = (
+                next(
+                    (
+                        i
+                        for i, h in enumerate(sk_hist)
+                        if h.get("author") in {hid, tid_cand, f"thread:{tid_cand}"}
+                    ),
+                    None,
+                )
+                if hid
+                else next(
+                    (i for i, h in enumerate(sk_hist) if str(h.get("author") or "").startswith("thread:")),
+                    None,
+                )
+            )
+            if sk_match_idx is None or sk_match_idx + 1 >= len(sk_hist):
+                raise ValueError("未找到可撤回的技能自动补充版本")
+            prev_ver = int(sk_hist[sk_match_idx + 1]["version"])
+            saved_sk = self.plugin.memory.rollback(
+                "skill",
+                prev_ver,
+                target=skill_id,
+                expected_version=cur_sk["version"],
+                allow_custom=True,
+            )
+            reverted_tid = tid_cand or (
+                str(sk_hist[sk_match_idx].get("author") or "")[7:]
+                if str(sk_hist[sk_match_idx].get("author") or "").startswith("thread:")
+                else ""
+            )
+            if profile_id and reverted_tid:
+                try:
+                    n_cur = self.plugin.memory.read("notes", target=profile_id)
+                    n_hist = self.plugin.memory.history("notes", target=profile_id)
+                    n_idx = next(
+                        (
+                            i
+                            for i, h in enumerate(n_hist)
+                            if h.get("author") in {reverted_tid, f"thread:{reverted_tid}"}
+                        ),
+                        None,
+                    )
+                    if n_idx is not None:
+                        if n_idx + 1 < len(n_hist):
+                            self.plugin.memory.rollback(
+                                "notes",
+                                n_hist[n_idx + 1]["version"],
+                                target=profile_id,
+                                expected_version=n_cur["version"],
+                                allow_custom=True,
+                            )
+                        else:
+                            self.plugin.memory.write(
+                                "notes",
+                                "",
+                                target=profile_id,
+                                expected_version=n_cur["version"],
+                                author="rollback",
+                                allow_custom=True,
+                            )
+                except (ValueError, OSError, sqlite3.Error):
+                    pass
+            if reverted_tid and getattr(self.plugin, "threads", None) is not None:
+                with self.plugin.threads.connect() as db, db:
+                    db.execute(
+                        "UPDATE learning_receipts SET status = 'reverted' WHERE thread_id = ? AND status = 'applied'",
+                        (reverted_tid,),
+                    )
+            return {
+                "skill_id": skill_id,
+                "profile_id": profile_id,
+                "target": skill_id,
+                "content": saved_sk["content"],
+                "version": saved_sk["version"],
+                "restored_from": prev_ver,
+                "history": self.plugin.memory.history("skill", target=skill_id),
+            }
         if not profile_id:
             raise ValueError("请指定要撤回笔记的角色")
         self.plugin.profiles.get(profile_id)
@@ -616,8 +997,6 @@ class Management:
             require_int=True,
         )
         history = self.plugin.memory.history("notes", target=profile_id)
-        raw_hid = options.get("history_id")
-        hid = str(raw_hid).strip() if raw_hid is not None else ""
 
         restore_version: int | None = None
         reverted_tid: str | None = None
@@ -751,11 +1130,15 @@ class Management:
                     "chat_id": sid,
                     "stream_spec": spec,
                     "stream_id": spec or sid,
-                    "name": str(s_info.get("name") or gid or uid or spec or sid),
+                    "name": clean_display_name(
+                        s_info.get("name") or "", gid or uid or spec or sid
+                    ),
                     "platform": plat,
                     "chat_type": ctype,
                     "group_id": gid,
                     "user_id": uid,
+                    "avatar": str(s_info.get("avatar") or ""),
+                    "avatar_data": str(s_info.get("avatar_data") or ""),
                     "enabled": bool(aliases & enabled_set),
                     "aliases": aliases,
                 }
@@ -941,6 +1324,15 @@ class Management:
         plugin_enabled = bool(
             getattr(getattr(self.plugin.settings, "plugin", None), "enabled", False)
         )
+        hb_has_plan = False
+        if getattr(self.plugin, "memory", None) is not None:
+            try:
+                hb_path = self.plugin.memory.root / "memory/self/HEARTBEAT.md"
+                hb_raw = hb_path.read_text(encoding="utf-8") if hb_path.is_file() else ""
+                _, hb_plan = MemoryLayers.heartbeat_parts(hb_raw)
+                hb_has_plan = bool(hb_plan.strip())
+            except OSError:
+                hb_has_plan = False
         return {
             "settings": settings,
             "version": self._version(settings),
@@ -949,6 +1341,7 @@ class Management:
             "permission_mode": settings.get("permission_mode", "ask_risky"),
             "ui_style": settings["ui_style"],
             "plugin_enabled": plugin_enabled,
+            "heartbeat_has_plan": hb_has_plan,
             "sandbox_enabled": bool(docker.get("enabled", False)),
             "handles": handles,
             "vault_handles": handles,
@@ -960,6 +1353,17 @@ class Management:
 
     def _memory(self, options):
         plugin = self.plugin
+        unreplied_raw: list[str] = []
+        intents_mgr = getattr(plugin, "intents", None)
+        same_intents_db = bool(
+            intents_mgr is not None
+            and getattr(intents_mgr, "store", None) is not None
+            and (
+                intents_mgr.store is plugin.threads
+                or getattr(intents_mgr.store, "path", None)
+                == getattr(plugin.threads, "path", None)
+            )
+        )
         with plugin.threads.connect() as db:
             chats = {
                 row[0]
@@ -979,6 +1383,20 @@ class Management:
                     "SELECT workspace_id,owner,chat_id,name,profile,thread_id FROM agent_workspaces ORDER BY rowid DESC LIMIT 60"
                 )
             ]
+            pending_props = plugin.memory.list_skill_proposals(
+                status="pending", limit=10, db=db
+            )
+            if same_intents_db:
+                try:
+                    s_rows = db.execute(
+                        "SELECT DISTINCT chat_id FROM social_state WHERE locked = 1 ORDER BY updated DESC LIMIT 20"
+                    ).fetchall()
+                    for sr in s_rows:
+                        rcid = str(sr["chat_id"] if hasattr(sr, "keys") else sr[0]).strip()
+                        if rcid:
+                            unreplied_raw.append(rcid)
+                except sqlite3.Error:
+                    unreplied_raw = []
         chats.update(plugin.settings.enabled_chats)
         raw_nonempty = {str(c).strip() for c in chats if str(c or "").strip()}
         deduped = {
@@ -988,10 +1406,37 @@ class Management:
         source_ids = sorted(deduped | raw_nonempty)
         raw_chat_id = str(options.get("chat_id", "") or "").strip()
         chat_id = self._resolve_memory_chat_id(raw_chat_id)
+        proactive_quota = self._proactive_quota()
+        if not same_intents_db and intents_mgr is not None and getattr(intents_mgr, "store", None) is not None:
+            try:
+                with intents_mgr.store.connect() as sdb:
+                    s_rows = sdb.execute(
+                        "SELECT DISTINCT chat_id FROM social_state WHERE locked = 1 ORDER BY updated DESC LIMIT 20"
+                    ).fetchall()
+                    for sr in s_rows:
+                        rcid = str(sr["chat_id"] if hasattr(sr, "keys") else sr[0]).strip()
+                        if rcid:
+                            unreplied_raw.append(rcid)
+            except sqlite3.Error:
+                unreplied_raw = []
+        unreplied_chats: list[str] = []
+        for rcid in unreplied_raw:
+            canon = plugin.canonical_stream_spec(rcid) or rcid
+            if canon not in unreplied_chats:
+                unreplied_chats.append(canon)
+        mem_ctx = plugin.memory.context(chat_id)
+        _, hb_plan = MemoryLayers.heartbeat_parts(str((mem_ctx or {}).get("heartbeat") or ""))
+        proactive_status = {
+            **proactive_quota,
+            "unreplied_chats": unreplied_chats,
+            "heartbeat_enabled": bool(getattr(plugin.settings, "heartbeat_enabled", True)),
+            "heartbeat_has_plan": bool(hb_plan.strip()),
+            "sleep_window": str(getattr(plugin.settings, "sleep_window", "") or ""),
+        }
         return {
             "chats": sorted(deduped),
             "_source_chat_ids": source_ids,
-            "context": plugin.memory.context(chat_id),
+            "context": mem_ctx,
             "results": plugin.memory.search(options.get("query", ""), chat_id)
             if chat_id
             else [],
@@ -999,7 +1444,21 @@ class Management:
                 options.get("query", ""), chat_id, scope="self"
             ),
             "workspaces": workspaces,
-            "proactive_quota": self._proactive_quota(),
+            "proactive_quota": proactive_quota,
+            "proactive_status": proactive_status,
+            "pending_skill_proposals": pending_props,
+            "profiles": [
+                {
+                    "id": p.id,
+                    "title": p.title or p.id,
+                    "fish_seed": getattr(p, "fish_seed", "") or "",
+                }
+                for p in (
+                    plugin.profiles.list_profiles()
+                    if getattr(plugin, "profiles", None) is not None
+                    else ()
+                )
+            ],
         }
 
     def _intents(self):
@@ -1117,6 +1576,23 @@ class Management:
         title_cache: dict[str, str] = {}
         memory = getattr(self.plugin, "memory", None)
         profiles = getattr(self.plugin, "profiles", None)
+        skill_by_author: dict[str, tuple[str, dict, dict | None]] = {}
+        try:
+            sk_rows = db.execute(
+                "SELECT target, version, content, author, updated FROM memory_versions "
+                "WHERE kind='skill' AND document='SKILL.md' ORDER BY target ASC, version DESC"
+            ).fetchall()
+            sk_hist_map: dict[str, list[dict]] = {}
+            for sr in sk_rows:
+                sk_hist_map.setdefault(str(sr["target"] or ""), []).append(dict(sr))
+            for sk_target, sk_list in sk_hist_map.items():
+                for idx, entry in enumerate(sk_list):
+                    auth = str(entry.get("author") or "")
+                    if auth.startswith("thread:") and auth not in skill_by_author:
+                        prev_entry = sk_list[idx + 1] if idx + 1 < len(sk_list) else None
+                        skill_by_author[auth] = (sk_target, entry, prev_entry)
+        except sqlite3.Error:
+            skill_by_author = {}
 
         items: list[dict] = []
         for row in rows:
@@ -1168,14 +1644,38 @@ class Management:
                 else None
             )
 
+            sk_hit = skill_by_author.get(f"thread:{tid}") or skill_by_author.get(tid)
+            sk_target = ""
+            sk_title = ""
+            sk_matched = None
             summary = self._note_diff_excerpt(profile, matched, prev, thread_summary)
+            if sk_hit is not None:
+                sk_target, sk_matched, sk_prev = sk_hit
+                sk_meta = parse_skill_meta(sk_target, str(sk_matched.get("content") or ""))
+                sk_title = sk_meta.get("title") or sk_target
+                prev_lines = (
+                    {ln.strip() for ln in str(sk_prev.get("content") or "").splitlines() if ln.strip()}
+                    if sk_prev is not None
+                    else set()
+                )
+                cur_lines = [ln.strip() for ln in str(sk_matched.get("content") or "").splitlines() if ln.strip()]
+                added_lines = [
+                    ln.lstrip("-*• ").strip()
+                    for ln in cur_lines
+                    if ln not in prev_lines and not ln.startswith("#")
+                ]
+                sk_added = added_lines[0] if added_lines else thread_summary
+                summary = self._compact_receipt_text(
+                    self._safe_redact(f"已补入技能「{sk_title}」：{sk_added}"), limit=100
+                )
+
             raw_topic = self._compact_receipt_text(self._safe_redact(input_text), limit=48)
             prof_label = title_cache.get(profile, profile)
             topic = raw_topic or summary or (f"{prof_label} 笔记修订" if prof_label else "自动笔记回执")
 
-            raw_at = (matched or {}).get("updated") or row["updated"] or 0
+            raw_at = (sk_matched or matched or {}).get("updated") or row["updated"] or 0
             at = float(raw_at) if raw_at else 0.0
-            can_undo = bool(profile and status == "applied" and matched is not None)
+            can_undo = bool(status == "applied" and ((profile and matched is not None) or sk_matched is not None))
 
             items.append(
                 {
@@ -1186,8 +1686,11 @@ class Management:
                     "chat_id": chat_id,
                     "topic": topic,
                     "summary": summary,
-                    "version": matched["version"] if matched is not None else None,
+                    "version": (sk_matched or matched)["version"] if (sk_matched or matched) is not None else None,
                     "history_id": f"thread:{tid}" if can_undo else "",
+                    "skill_id": sk_target,
+                    "skill_title": sk_title,
+                    "asset_kind": "skill" if sk_matched is not None else "notes",
                     "at": at,
                     "can_undo": can_undo,
                 }
@@ -1262,26 +1765,43 @@ class Management:
         config = self.plugin.runtime.services.load()
         servers = config.get("servers") if isinstance(config.get("servers"), dict) else {}
         apis = config.get("apis") if isinstance(config.get("apis"), dict) else {}
-        mcp_items = [
-            {
-                "id": name,
-                "name": name,
-                "description": str(spec.get("description") or ""),
-                "readonly": bool(spec.get("readonly", True)),
-                "access": str(spec.get("access") or "admins"),
-                "tools": list(spec.get("tools") or []),
-                "credentials": sorted((spec.get("credentials") or {}).values())
-                if isinstance(spec.get("credentials"), dict)
-                else [],
-            }
-            for name, spec in sorted(servers.items())
-            if isinstance(spec, dict)
-        ]
+        mcp_items = []
+        for name, spec in sorted(servers.items()):
+            if not isinstance(spec, dict):
+                continue
+            transport = "http" if (spec.get("transport") == "http" or spec.get("url")) else "stdio"
+            env_keys = list(
+                spec.get("inline_env_keys")
+                or (list((spec.get("credentials") or {}).keys()) if isinstance(spec.get("credentials"), dict) else [])
+            )
+            header_keys = list(
+                spec.get("inline_header_keys")
+                or (list((spec.get("header_credentials") or {}).keys()) if isinstance(spec.get("header_credentials"), dict) else [])
+            )
+            mcp_items.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "transport": transport,
+                    "command": list(spec.get("command") or []),
+                    "url": str(spec.get("url") or ""),
+                    "description": str(spec.get("description") or ""),
+                    "readonly": bool(spec.get("readonly", True)),
+                    "access": str(spec.get("access") or "admins"),
+                    "tools": list(spec.get("tools") or []),
+                    "credentials": sorted((spec.get("credentials") or {}).values())
+                    if isinstance(spec.get("credentials"), dict)
+                    else [],
+                    "inline_env_keys": env_keys,
+                    "inline_header_keys": header_keys,
+                }
+            )
         api_items = [
             {
                 "id": name,
                 "name": name,
-                "api": str(spec.get("api") or name),
+                "api": str(spec.get("api_name") or spec.get("api") or name),
+                "api_name": str(spec.get("api_name") or spec.get("api") or name),
                 "description": str(spec.get("description") or ""),
                 "readonly": bool(spec.get("readonly", True)),
                 "access": str(spec.get("access") or "admins"),
@@ -1807,6 +2327,7 @@ class Management:
             identifier: str = "",
             provider: str = "",
             source: str = "host",
+            visual: bool = False,
             assigned_tasks=(),
         ) -> None:
             cleaned = (name or "").strip()
@@ -1826,6 +2347,7 @@ class Management:
                     "identifier": identifier.strip(),
                     "provider": provider.strip(),
                     "source": source,
+                    "visual": bool(visual),
                     "assigned_tasks": tasks_clean,
                 }
             else:
@@ -1833,6 +2355,8 @@ class Management:
                     existing["identifier"] = identifier.strip()
                 if provider and not existing["provider"]:
                     existing["provider"] = provider.strip()
+                if visual:
+                    existing["visual"] = True
                 cur_tasks = existing.setdefault("assigned_tasks", [])
                 for t in tasks_clean:
                     if t not in cur_tasks:
@@ -1847,6 +2371,7 @@ class Management:
                         identifier=str(item.get("identifier") or ""),
                         provider=str(item.get("provider") or ""),
                         source=str(item.get("source") or "host_config"),
+                        visual=bool(item.get("visual", False)),
                         assigned_tasks=item.get("assigned_tasks") or (),
                     )
             for task_key, assigned in (host_catalog.get("tasks") or {}).items():
@@ -1935,6 +2460,7 @@ class Management:
                                     "provider": str(
                                         val.get("api_provider") or val.get("provider") or ""
                                     ),
+                                    "visual": bool(val.get("visual", False)),
                                     "source": "available_models",
                                     "assigned_tasks": [key] if key != "web_search" else [],
                                 }
@@ -1949,13 +2475,14 @@ class Management:
                 else raw_stats
             )
             if isinstance(stat_items, list):
-                for item in stat_items[:128]:
+                for item in stat_items[:512]:
                     if isinstance(item, str) and item.strip():
                         probe_entries.append(
                             {
                                 "name": item.strip(),
                                 "identifier": "",
                                 "provider": "",
+                                "visual": False,
                                 "source": "statistics",
                             }
                         )
@@ -1973,6 +2500,7 @@ class Management:
                                         or item.get("api_provider")
                                         or ""
                                     ),
+                                    "visual": bool(item.get("visual", False)),
                                     "source": "statistics",
                                 }
                             )
@@ -1988,6 +2516,7 @@ class Management:
                         identifier=str(item.get("identifier") or ""),
                         provider=str(item.get("provider") or ""),
                         source=str(item.get("source") or "host"),
+                        visual=bool(item.get("visual", False)),
                         assigned_tasks=item.get("assigned_tasks") or (),
                     )
             for key, val in (cached_probe.get("tasks") or {}).items():
@@ -2038,12 +2567,619 @@ class Management:
             "grants",
             "onboarding",
             "models",
+            "chat_sources",
         }
     )
 
-    async def _read_profiles_payload(self) -> dict:
+    def _distilled_threads_path(self) -> Path:
+        return Path(self.plugin.data_root) / "distilled_threads.json"
+
+    def _load_distilled_threads(self) -> set[str]:
+        path = self._distilled_threads_path()
+        if not path.is_file() or path_is_link_like(path):
+            return set()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return set()
+        items = raw.get("threads") if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            return set()
+        return {str(x).strip() for x in items if str(x).strip()}
+
+    def _record_distilled_thread(self, thread_id: str) -> None:
+        tid = str(thread_id or "").strip()
+        if not tid:
+            return
+        path = self._distilled_threads_path()
+        if path_is_link_like(path):
+            return
+        cur = sorted(self._load_distilled_threads() | {tid})[-256:]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_private_write(
+            path, json.dumps({"threads": cur}, ensure_ascii=False).encode("utf-8")
+        )
+
+    def _match_umbrella_skill_sync(
+        self, text_blob: str, bound_skills: list[str]
+    ) -> tuple[str, str]:
+        mem = getattr(self.plugin, "memory", None)
+        if mem is None:
+            return "", ""
+        all_ids = list(mem.skills())
+        briefs = {b["id"]: b for b in mem.skill_briefs(all_ids)}
+        hay = text_blob.lower()
+        best_id, best_score = "", 0
+        for sid in all_ids:
+            info = briefs.get(sid) or {}
+            title = str(info.get("title") or sid)
+            desc = str(info.get("description") or "")
+            score = 0
+            if sid in bound_skills:
+                score += 1
+            tokens = [
+                t
+                for t in re.split(r"[^a-z0-9\u4e00-\u9fff]+", f"{sid} {title} {desc}".lower())
+                if len(t) >= 2 and t not in {"工作", "规范", "指南", "方法", "使用", "进行", "流程", "任务", "skill"}
+            ]
+            hits = sum(1 for tok in set(tokens) if tok in hay)
+            score += hits * 2
+            if score > best_score and hits >= 2:
+                best_id, best_score = sid, score
+        if best_id:
+            return best_id, str((briefs.get(best_id) or {}).get("title") or best_id)
+        return "", ""
+
+    def _extract_thread_skill_signals_sync(self, db, tid: str, full_row: dict) -> dict:
+        history = full_row.get("history") if isinstance(full_row.get("history"), list) else []
+        res = full_row.get("result") if isinstance(full_row.get("result"), dict) else {}
+        res_text = str(res.get("text") or "").strip()
+        snap = full_row.get("profile_snapshot") if isinstance(full_row.get("profile_snapshot"), dict) else {}
+        bound_skills = [str(s) for s in (snap.get("skills") or ()) if str(s).strip()]
+
+        ev_rows = db.execute(
+            "SELECT kind, payload FROM thread_events WHERE thread_id=? ORDER BY seq LIMIT 160",
+            (tid,),
+        ).fetchall()
+        tool_names: list[str] = []
+        failed_tools: set[str] = set()
+        recovered = False
+        steered = False
+        for ev in ev_rows:
+            ek = str(ev["kind"] or "")
+            if ek in {"steer", "steer_interrupted"}:
+                steered = True
+            try:
+                ep = json.loads(ev["payload"] or "{}")
+            except Exception:
+                ep = {}
+            if not isinstance(ep, dict):
+                continue
+            if ek == "tool" and ep.get("tool"):
+                tn = str(ep["tool"]).strip()
+                if tn and tn not in tool_names:
+                    tool_names.append(tn)
+            elif ek == "tools":
+                cmap = {
+                    c.get("id"): (c.get("function") or {}).get("name")
+                    for c in (ep.get("calls") or ())
+                    if isinstance(c, dict)
+                }
+                for r in ep.get("results") or ():
+                    if not isinstance(r, dict):
+                        continue
+                    tn = str(cmap.get(r.get("call_id")) or "").strip()
+                    if tn and tn not in tool_names:
+                        tool_names.append(tn)
+                    val = r.get("value")
+                    is_err = isinstance(val, dict) and bool(
+                        val.get("error") or val.get("exit_code", 0) != 0 or val.get("ok") is False
+                    )
+                    if is_err and tn:
+                        failed_tools.add(tn)
+                    elif tn and tn in failed_tools:
+                        recovered = True
+
+        user_msgs = [
+            str(m.get("content") or "").strip()
+            for m in history
+            if isinstance(m, dict) and m.get("role") == "user" and str(m.get("content") or "").strip()
+        ]
+        for msg in history:
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or ():
+                    if isinstance(tc, dict):
+                        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+                        tn = str((fn or {}).get("name") or "").strip()
+                        if tn and tn not in tool_names:
+                            tool_names.append(tn)
+
+        signals: list[str] = []
+        if steered or len(user_msgs) >= 2:
+            signals.append("包含转向修正")
+        if recovered:
+            signals.append("排错恢复经验")
+        if len(tool_names) >= 2:
+            signals.append(f"{len(tool_names)} 项工具链")
+        elif tool_names:
+            signals.append(f"调用 {tool_names[0]}")
+        if res_text:
+            signals.append("已产出结论")
+
+        worth = bool(recovered or steered or tool_names or (user_msgs and res_text))
+        blob = " ".join([*user_msgs[:3], res_text[:300], *tool_names])
+        matched_id, matched_title = self._match_umbrella_skill_sync(blob, bound_skills)
+        return {
+            "worth": worth,
+            "signals": signals,
+            "tool_names": tool_names,
+            "steered": steered,
+            "recovered": recovered,
+            "bound_skills": bound_skills,
+            "matched_skill": matched_id,
+            "matched_skill_title": matched_title,
+            "recommended_op": "patch" if matched_id else "create",
+        }
+
+    def _distill_candidates_sync(self) -> list[dict]:
+        threads_mgr = getattr(self.plugin, "threads", None)
+        if threads_mgr is None:
+            return []
+        handled = self._load_distilled_threads()
+        rows = threads_mgr.list_threads(limit=30)
+        out: list[dict] = []
+        with threads_mgr.connect() as db:
+            for row in rows:
+                tid = str(row.get("thread_id") or "").strip()
+                if not tid or tid in handled:
+                    continue
+                state = str(row.get("state") or "").strip().lower()
+                if state in {"active", "running", "waiting"}:
+                    continue
+                try:
+                    full_row = threads_mgr.get(tid, "", allow_self=True, allow_any_chat=True)
+                except Exception:
+                    continue
+                sig_info = self._extract_thread_skill_signals_sync(db, tid, full_row)
+                if not sig_info["worth"]:
+                    continue
+                res = full_row.get("result") if isinstance(full_row.get("result"), dict) else {}
+                res_text = str(res.get("text") or "").strip()
+                raw_title = str(row.get("title") or "").strip()
+                if not raw_title and not res_text:
+                    continue
+                title = sanitize_export_text(self.plugin, raw_title or tid)[:80]
+                summary = sanitize_export_text(
+                    self.plugin, res_text or full_row.get("summary") or raw_title
+                ).replace("\n", " ")[:180]
+                out.append(
+                    {
+                        "thread_id": tid,
+                        "title": title,
+                        "summary": summary,
+                        "profile_id": str(row.get("profile") or "default"),
+                        "chat_id": str(row.get("chat_id") or ""),
+                        "state": state,
+                        "updated": float(row.get("updated") or 0.0),
+                        "signals": sig_info["signals"],
+                        "recommended_op": sig_info["recommended_op"],
+                        "matched_skill": sig_info["matched_skill"],
+                        "matched_skill_title": sig_info["matched_skill_title"],
+                    }
+                )
+                if len(out) >= 6:
+                    break
+        return out
+
+    async def _distill_skill_from_thread(self, options: dict) -> dict:
+        tid = str(options.get("thread_id") or "").strip()
+        if not tid:
+            raise ValueError("请指定要提炼的线程 ID")
+        if bool(options.get("dismiss")):
+            await completed_thread(self._record_distilled_thread, tid)
+            return {"dismissed": True, "thread_id": tid}
+        preview_only = bool(options.get("preview_only"))
+        row = await completed_thread(
+            self.plugin.threads.get, tid, "", allow_self=True, allow_any_chat=True
+        )
+        def _inspect_sig():
+            with self.plugin.threads.connect() as db:
+                return self._extract_thread_skill_signals_sync(db, tid, row)
+
+        sig_info = await completed_thread(_inspect_sig)
+        history = row.get("history") if isinstance(row.get("history"), list) else []
+        res = row.get("result") if isinstance(row.get("result"), dict) else {}
+        user_prompts: list[str] = []
+        assistant_notes: list[str] = []
+        for msg in history:
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "")
+            content = str(msg.get("content") or "").strip()
+            if role == "user" and content:
+                user_prompts.append(sanitize_export_text(self.plugin, content)[:500])
+            elif role == "assistant" and content:
+                assistant_notes.append(sanitize_export_text(self.plugin, content)[:600])
+        tool_names = list(sig_info["tool_names"])
+        raw_res_text = sanitize_export_text(self.plugin, str(res.get("text") or "").strip())[:800]
+
+        forced_mode = str(options.get("op") or options.get("mode") or "").strip().lower()
+        matched_skill = str(options.get("matched_skill") or sig_info["matched_skill"] or "").strip()
+        existing_skills = await completed_thread(self.plugin.memory.skills)
+        existing_briefs = await completed_thread(self.plugin.memory.skill_briefs, existing_skills)
+        existing_md = ""
+        matched_meta: dict = {}
+        if matched_skill and matched_skill in existing_skills:
+            read_cur = await completed_thread(self.plugin.memory.read, "skill", target=matched_skill)
+            existing_md = str(read_cur.get("content") or "")
+            matched_meta = next((b for b in existing_briefs if b["id"] == matched_skill), {})
+
+        op_mode = (
+            forced_mode
+            if forced_mode in {"patch", "create"}
+            else ("patch" if (matched_skill and existing_md and preview_only) else "create")
+        )
+
+        raw_req_title = str(options.get("title") or "").strip()
+        clean_goal = (user_prompts[0].splitlines()[0][:40] if user_prompts else "").strip()
+        fallback_title = sanitize_export_text(
+            self.plugin, raw_req_title or (matched_meta.get("title") if op_mode == "patch" else "") or clean_goal or "通用作业规范"
+        ).strip() or "通用作业规范"
+        fallback_desc = sanitize_export_text(
+            self.plugin,
+            str(options.get("description") or "").strip()
+            or (
+                str(matched_meta.get("description") or "")
+                if op_mode == "patch" and matched_meta.get("description")
+                else f"适用时机：处理与「{fallback_title[:24]}」同类任务时启用。按步骤核验并交付结构化结果。"
+            ),
+        )[:200]
+
+        llm_op = ""
+        llm_slug = ""
+        llm_title, llm_desc, llm_rules, llm_pitfalls, llm_ref_path, llm_ref_body, llm_rationale = (
+            "",
+            "",
+            [],
+            [],
+            "",
+            "",
+            "",
+        )
+        ctx = getattr(self.plugin, "ctx", None)
+        if ctx is not None and not options.get("offline") and not options.get("content"):
+            try:
+                digest_input = json.dumps(
+                    {
+                        "user_requests": user_prompts[:3],
+                        "tools_used": tool_names[:12],
+                        "signals": sig_info["signals"],
+                        "outcome": raw_res_text or "\n".join(assistant_notes[-2:]),
+                        "existing_skills": [
+                            {"id": b["id"], "title": b.get("title"), "description": b.get("description", "")[:100]}
+                            for b in existing_briefs[:16]
+                        ],
+                        "matched_skill": matched_skill,
+                    },
+                    ensure_ascii=False,
+                )
+                sys_prompt = (
+                    "你是参考 Hermes 规范的技能复盘提炼器。请把本次活动提炼为跨会话可复用的类级程序性记忆（写祈使句规则与避坑指南，严禁写成单次任务流水账，严禁保留群号/账号/路径/密钥）。\n"
+                    "优先级：1. 若 existing_skills 中已有同领域技能，选 op='patch' 并给出要增补的祈使句规则与避坑项；2. 若无覆盖，选 op='create' 创建类级技能（slug 用英文小写连字符如 network-rule-check，禁止用今天具体事件命名）。\n"
+                    "仅输出 JSON：{\"op\":\"patch|create\",\"target_skill\":\"已有ID或新英文slug\",\"title\":\"类级中文名\",\"description\":\"适用时机：... 执行行为：...\",\"rules\":[\"祈使句规则1\",\"规则2\"],\"pitfalls\":[\"避坑要点与原因\"],\"rationale\":\"一句话说明为何合并到已有技能或新建类级技能\"}"
+                )
+                llm_res = await asyncio.wait_for(
+                    call_capability(
+                        ctx,
+                        "llm.generate_with_tools",
+                        timeout_ms=12000,
+                        messages=[
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": digest_input},
+                        ],
+                        tools=[],
+                    ),
+                    timeout=12.0,
+                )
+                raw_resp = (
+                    str(llm_res.get("response") or llm_res.get("content") or "")
+                    if isinstance(llm_res, dict)
+                    else ""
+                ).strip()
+                m = re.search(r"\{[\s\S]*\}", raw_resp)
+                if m:
+                    parsed_llm = json.loads(m.group(0))
+                    if isinstance(parsed_llm, dict):
+                        cand_op = str(parsed_llm.get("op") or "").strip().lower()
+                        cand_target = str(parsed_llm.get("target_skill") or "").strip()
+                        if cand_op in {"patch", "create"} and not forced_mode:
+                            if cand_op == "patch" and cand_target in existing_skills:
+                                llm_op = "patch"
+                                matched_skill = cand_target
+                                read_cur = await completed_thread(self.plugin.memory.read, "skill", target=matched_skill)
+                                existing_md = str(read_cur.get("content") or "")
+                                matched_meta = next((b for b in existing_briefs if b["id"] == matched_skill), {})
+                            elif cand_op == "create":
+                                llm_op = "create"
+                                llm_slug = cand_target
+                        llm_title = sanitize_export_text(self.plugin, str(parsed_llm.get("title") or ""))[:60]
+                        llm_desc = sanitize_export_text(self.plugin, str(parsed_llm.get("description") or ""))[:200]
+                        llm_rules = [
+                            sanitize_export_text(self.plugin, str(r)).strip()
+                            for r in (parsed_llm.get("rules") or parsed_llm.get("steps") or ())
+                            if str(r).strip()
+                        ]
+                        llm_pitfalls = [
+                            sanitize_export_text(self.plugin, str(p)).strip()
+                            for p in (parsed_llm.get("pitfalls") or parsed_llm.get("tips") or ())
+                            if str(p).strip()
+                        ]
+                        llm_rationale = sanitize_export_text(self.plugin, str(parsed_llm.get("rationale") or ""))[:160]
+            except Exception:
+                pass
+
+        if llm_op and not forced_mode:
+            op_mode = llm_op
+        if op_mode == "patch" and (not matched_skill or not existing_md):
+            op_mode = "create"
+
+        final_title = llm_title or (str(matched_meta.get("title") or "") if op_mode == "patch" else "") or fallback_title
+        final_desc = llm_desc or fallback_desc
+        if not llm_rules:
+            tool_hint = "、".join(tool_names) if tool_names else "会话检索与工作区工具"
+            llm_rules = [
+                f"先核清输入边界与目标格式（典型触发：{user_prompts[0][:80] if user_prompts else final_title}），缺省细节自行按常规补齐，不反复追问。",
+                f"优先按顺序组合 {tool_hint} 获取一手依据，遇到失败或空结果时切换检索词重试后再下结论。",
+                "输出结构化可复核结果，严格剥离单次会话群号、宿主机私密路径与凭据。",
+            ]
+        if not llm_pitfalls:
+            llm_pitfalls = [
+                "禁止把单次对话里的临时数值或私密上下文硬编码进通用流程；只保留可迁移的判断规则。"
+            ]
+
+        explicit_content = str(options.get("content") or "").strip()
+        if explicit_content:
+            full_md = sanitize_export_text(self.plugin, explicit_content)
+        elif op_mode == "patch" and existing_md:
+            addition_lines = [
+                "",
+                "## 实战增补规则与避坑要点",
+                *[f"- {r}" for r in llm_rules[:5]],
+                *[f"- 注意：{p}" for p in llm_pitfalls[:4]],
+            ]
+            addition_block = "\n".join(addition_lines)
+            if "## 实战增补规则与避坑要点" in existing_md:
+                full_md = existing_md.rstrip() + "\n" + "\n".join([f"- {r}" for r in llm_rules[:4]]) + "\n"
+            else:
+                full_md = existing_md.rstrip() + "\n" + addition_block + "\n"
+        else:
+            safe_yaml_title = final_title.replace('"', "'")
+            safe_yaml_desc = final_desc.replace('"', "'")
+            body_lines = [
+                "## 适用时机与边界",
+                final_desc,
+                "",
+                "## 核心执行规则",
+                *[f"{idx}. {r}" for idx, r in enumerate(llm_rules[:6], 1)],
+                "",
+                "## 常见陷阱与避坑指南",
+                *[f"- {p}" for p in llm_pitfalls[:5]],
+            ]
+            full_md = (
+                f'---\nname: "{safe_yaml_title}"\ndescription: "{safe_yaml_desc}"\n---\n\n'
+                f"# {final_title}\n\n" + "\n".join(body_lines) + "\n"
+            )
+
+        if op_mode == "patch":
+            skill_id = matched_skill
+            rationale = llm_rationale or f"检测到现有技能「{matched_meta.get('title') or matched_skill}」已覆盖该任务领域，按 Hermes 规范优先向原技能增补实战规则与避坑项，避免产生碎片化单次技能。"
+        else:
+            req_slug = str(options.get("target") or llm_slug or "").strip()
+            if req_slug and SKILL_ID_RE.fullmatch(req_slug):
+                base_slug = req_slug
+            else:
+                ascii_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", final_title).strip("_-").lower()[:32]
+                if ascii_slug and SKILL_ID_RE.fullmatch(ascii_slug):
+                    base_slug = ascii_slug
+                else:
+                    base_slug = f"workflow-{tid.replace('th_', '')[:8] or uuid.uuid4().hex[:6]}"
+            existing_set = set(existing_skills)
+            skill_id = base_slug
+            if not options.get("overwrite"):
+                suffix = 2
+                while skill_id in existing_set:
+                    skill_id = f"{base_slug[:54]}-{suffix}"
+                    suffix += 1
+            rationale = llm_rationale or "当前技能库尚无覆盖此类任务的主干技能，提炼为类级通用规范（仅保留祈使句规则与避坑指南，不记单次流水账）。"
+
+        default_bind = list(
+            dict.fromkeys(
+                [
+                    str(row.get("profile") or "default"),
+                    *(
+                        b_pid
+                        for b_pid in (options.get("profile_ids") or ())
+                        if str(b_pid).strip()
+                    ),
+                ]
+            )
+        )
+
+        if preview_only:
+            return {
+                "preview": True,
+                "thread_id": tid,
+                "op": op_mode,
+                "id": skill_id,
+                "skill_id": skill_id,
+                "matched_skill": matched_skill,
+                "title": final_title,
+                "description": final_desc,
+                "existing_content": existing_md if op_mode == "patch" else "",
+                "content": full_md,
+                "signals": sig_info["signals"],
+                "rationale": rationale,
+                "suggested_profiles": default_bind,
+                "version": (
+                    (await completed_thread(self.plugin.memory.read, "skill", target=skill_id)).get("version")
+                    if op_mode == "patch"
+                    else None
+                ),
+            }
+
+        if op_mode == "patch" and skill_id in set(existing_skills):
+            cur_ver = (await completed_thread(self.plugin.memory.read, "skill", target=skill_id)).get("version")
+            saved = await completed_thread(
+                self.plugin.memory.write,
+                "skill",
+                full_md,
+                target=skill_id,
+                expected_version=cur_ver,
+                author=f"distill:{tid}",
+                allow_custom=True,
+            )
+            saved_ver = saved["version"]
+        else:
+            if skill_id in set(existing_skills) and options.get("overwrite"):
+                cur_ver = (await completed_thread(self.plugin.memory.read, "skill", target=skill_id)).get("version")
+                saved = await completed_thread(
+                    self.plugin.memory.write,
+                    "skill",
+                    full_md,
+                    target=skill_id,
+                    expected_version=cur_ver,
+                    author=f"distill:{tid}",
+                    allow_custom=True,
+                )
+                saved_ver = saved["version"]
+            else:
+                created = await completed_thread(
+                    self.plugin.memory.create_skill,
+                    skill_id,
+                    title=final_title,
+                    description=final_desc,
+                    content=full_md,
+                    allow_custom=True,
+                )
+                skill_id = created["target"]
+                saved_ver = created["version"]
+
+        comp_path = str(options.get("companion_path") or llm_ref_path or "").strip()
+        comp_body = str(options.get("companion_content") or llm_ref_body or "").strip()
+        if comp_path and comp_body:
+            await completed_thread(
+                self.plugin.memory.write_skill_file,
+                skill_id,
+                comp_path,
+                sanitize_export_text(self.plugin, comp_body),
+                author=f"distill:{tid}",
+            )
+
+        await completed_thread(self._record_distilled_thread, tid)
+
+        bind_pids = options.get("profile_ids")
+        if isinstance(bind_pids, list):
+            for pid in bind_pids:
+                clean_pid = str(pid or "").strip()
+                if clean_pid:
+                    try:
+                        await completed_thread(
+                            self._set_profile_skill_binding, clean_pid, skill_id, True
+                        )
+                    except (ValueError, OSError):
+                        pass
+
+        return {
+            "op": op_mode,
+            "id": skill_id,
+            "skill_id": skill_id,
+            "title": final_title,
+            "description": final_desc,
+            "version": saved_ver,
+            "content": full_md,
+            "rationale": rationale,
+            "signals": sig_info["signals"],
+        }
+
+    def _bind_skill_profiles_sync(self, options: dict) -> dict:
+        skill_id = str(options.get("skill") or options.get("target") or "").strip()
+        if not skill_id or skill_id not in self.plugin.memory.skills():
+            raise ValueError("技能不存在")
+        raw_pids = options.get("profile_ids")
+        if not isinstance(raw_pids, list):
+            raise ValueError("bind_skill_profiles 需要提供 profile_ids 列表")
+        wanted = {str(p).strip() for p in raw_pids if str(p).strip()}
+        bound_out: list[str] = []
+        for path in sorted(self.plugin.profiles.path.iterdir()):
+            if not path.is_dir() or path.is_symlink():
+                continue
+            try:
+                prof = self.plugin.profiles.get(path.name)
+            except (ValueError, OSError):
+                continue
+            should_bind = prof.id in wanted
+            if should_bind != (skill_id in prof.skills):
+                self._set_profile_skill_binding(prof.id, skill_id, should_bind)
+            if should_bind:
+                bound_out.append(prof.id)
+        return {"skill": skill_id, "bound_profiles": bound_out}
+
+    def _digest_overview_sync(self) -> list[dict]:
+        rows_out: list[dict] = []
+        seen: set[str] = set()
+        if getattr(self.plugin, "threads", None) is None or getattr(self.plugin, "runtime", None) is None:
+            return rows_out
+        ws_root = getattr(getattr(getattr(self.plugin, "runtime", None), "files", None), "root", None)
+        if ws_root is not None and not (ws_root / "workspaces").is_dir():
+            return rows_out
+        try:
+            with self.plugin.threads.connect() as db:
+                ws_rows = db.execute(
+                    "SELECT thread_id, chat_id, owner FROM agent_workspaces WHERE name='digest' ORDER BY rowid DESC LIMIT 40"
+                ).fetchall()
+        except sqlite3.Error:
+            ws_rows = []
+        for ws in ws_rows:
+            cid = str(ws["chat_id"] or "").strip()
+            canon = "self" if cid == "self" else (self.plugin.canonical_stream_spec(cid) or cid)
+            if not canon or canon in seen:
+                continue
+            try:
+                t_row = self.plugin.threads.get(
+                    ws["thread_id"], ws["chat_id"], allow_self=True, allow_any_chat=True
+                )
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                continue
+            if not t_row:
+                continue
+            try:
+                with self.plugin.runtime.files.activity(t_row) as work:
+                    src = DigestWorkspace(work)._load_sources()
+            except (OSError, ValueError, RuntimeError):
+                continue
+            seen.add(canon)
+            rows_out.append(
+                {
+                    "chat_id": canon,
+                    "topics": [str(t) for t in (src.get("topics") or ()) if str(t or "").strip()],
+                    "feeds": [
+                        {
+                            "id": str(f.get("id") or ""),
+                            "title": str(f.get("title") or f.get("url") or ""),
+                            "url": str(f.get("url") or ""),
+                            "state": str(f.get("state") or "trial"),
+                        }
+                        for f in (src.get("feeds") or ())
+                        if isinstance(f, dict) and (f.get("url") or f.get("id"))
+                    ][:24],
+                }
+            )
+        return rows_out
+
+    async def _read_profiles_payload(self, *, include_chat_sources: bool = False) -> dict:
         result = await completed_thread(self._assets)
-        result["known_chats"] = await completed_thread(self._known_chats_sync)
+        known_chats = await completed_thread(self._known_chats_sync)
+        result["known_chats"] = known_chats
         host_models = await self._collect_host_models()
         result["available_models"] = host_models["names"]
         result["model_catalog"] = host_models["models"]
@@ -2053,6 +3189,21 @@ class Management:
         result["docker"] = await completed_thread(self._docker_status)
         result["admins_info"] = await completed_thread(self._admins_info)
         result["permission_mode"] = str(self.plugin.settings.permission_mode or "ask_risky")
+        result["digest_overview"] = await completed_thread(self._digest_overview_sync)
+        if include_chat_sources:
+            src_ids = list(
+                dict.fromkeys(
+                    cid
+                    for p in result.get("profiles") or ()
+                    for cid in (p.get("allow_chats") or ())
+                    if cid
+                )
+            )
+            result["chat_sources"] = (
+                await self.plugin._resolve_chat_sources(src_ids) if src_ids else {}
+            )
+        else:
+            result["chat_sources"] = {}
         return result
 
     def _enrich_onboarding_view(self, raw_view: dict | None) -> dict:
@@ -2239,7 +3390,9 @@ class Management:
                 "context": sel.get("context") if isinstance(sel, dict) else None,
             }
         elif section in {"abilities", "profiles"}:
-            result = await self._read_profiles_payload()
+            result = await self._read_profiles_payload(
+                include_chat_sources=(section == "profiles")
+            )
         elif section == "profile_detail":
             pid = str(
                 options.get("profile_id")
@@ -2255,11 +3408,88 @@ class Management:
             result["model_tasks"] = host_models["tasks"]
         elif section == "skills":
             assets = await completed_thread(self._assets)
+            connectors = await completed_thread(self._connectors_info)
+            profile_cards = [
+                {
+                    "id": p["id"],
+                    "name": p.get("title") or p["id"],
+                    "fish_seed": p.get("fish_seed") or "",
+                    "skills": list(p.get("skills") or ()),
+                    "toolsets": list(p.get("toolsets") or ()),
+                }
+                for p in assets["profiles"]
+            ]
+            pmap = {p["id"]: p for p in profile_cards}
+            enriched_skills = []
+            for sk in assets["skill_items"]:
+                used_by = list(sk.get("used_by") or ())
+                enriched_skills.append(
+                    {
+                        **sk,
+                        "category": "system" if sk.get("is_preset") else "personal",
+                        "modified_preset": bool(sk.get("is_modified")),
+                        "bound_profiles": [
+                            {"id": pid, "name": pmap[pid]["name"]}
+                            for pid in used_by
+                            if pid in pmap
+                        ],
+                    }
+                )
+            sys_titles = {
+                "context": "会话与记忆",
+                "web": "联网搜索",
+                "workspace": "文件读写",
+                "exec": "命令运行",
+                "schedule": "定时提醒",
+            }
+            system_tools = [
+                {
+                    "id": ts["id"],
+                    "title": sys_titles.get(ts["id"], ts["id"]),
+                    "description": ts["label"].split("：", 1)[-1]
+                    if "：" in ts["label"]
+                    else ts["label"],
+                    "tools": list(ts["tools"]),
+                    "bound_profiles": [
+                        {"id": p["id"], "name": p["name"]}
+                        for p in profile_cards
+                        if ts["id"] in p["toolsets"]
+                    ],
+                }
+                for ts in assets["toolsets"]
+            ]
+            external_services = [
+                *[{"kind": "mcp", **item} for item in (connectors.get("mcp") or ())],
+                *[
+                    {"kind": "plugin_api", **item}
+                    for item in (connectors.get("plugin_apis") or ())
+                ],
+            ]
+            candidates = await completed_thread(self._distill_candidates_sync)
+            cand_cids = list(
+                dict.fromkeys(
+                    c["chat_id"] for c in candidates if isinstance(c, dict) and c.get("chat_id")
+                )
+            )
+            chat_sources = (
+                await self.plugin._resolve_chat_sources(cand_cids)
+                if cand_cids
+                else {}
+            )
+            pending_proposals = await completed_thread(
+                self.plugin.memory.list_skill_proposals, status="pending"
+            )
             result = {
-                "skills": assets["skill_items"],
+                "skills": enriched_skills,
                 "skill_map": assets["skills"],
                 "preset_skills": assets["preset_skills"],
+                "system_tools": system_tools,
+                "external_services": external_services,
+                "pending_proposals": pending_proposals,
+                "candidates": candidates,
                 "profiles": [p["id"] for p in assets["profiles"]],
+                "profile_cards": profile_cards,
+                "chat_sources": chat_sources,
             }
         elif section == "connectors":
             result = await completed_thread(self._connectors_info)
@@ -2315,6 +3545,50 @@ class Management:
             result["available_models"] = host_models["names"]
             result["model_catalog"] = host_models["models"]
             result["model_tasks"] = host_models["tasks"]
+            recent_dms = (
+                await completed_thread(self.plugin._recent_dms_sync, 16)
+                if callable(getattr(self.plugin, "_recent_dms_sync", None))
+                else []
+            )
+            admins_block = result.get("admins_info") or {}
+            admin_specs = []
+            if callable(getattr(self.plugin, "_admin_to_stream_spec", None)):
+                admin_specs = [
+                    self.plugin._admin_to_stream_spec(a)
+                    for a in (
+                        *(admins_block.get("host_admins") or ()),
+                        *(admins_block.get("plugin_admins") or ()),
+                        *(result.get("admins") or ()),
+                    )
+                ]
+            src_ids = list(
+                dict.fromkeys(
+                    [
+                        *(
+                            ((result.get("settings") or {}).get("enabled_chats"))
+                            or result.get("enabled_chats")
+                            or ()
+                        ),
+                        *(
+                            dm.get("chat_id")
+                            for dm in recent_dms
+                            if isinstance(dm, dict) and dm.get("chat_id")
+                        ),
+                        *(s for s in admin_specs if s),
+                        *(
+                            c.get("stream_spec") or c.get("chat_id")
+                            for c in known_chat_rows[:24]
+                            if isinstance(c, dict)
+                            and (c.get("stream_spec") or c.get("chat_id"))
+                        ),
+                    ]
+                )
+            )
+            sources = await self.plugin._resolve_chat_sources(src_ids)
+            if callable(getattr(self.plugin, "_apply_sources_to_dms", None)):
+                self.plugin._apply_sources_to_dms(recent_dms, sources)
+            result["recent_dms"] = recent_dms
+            result["chat_sources"] = sources
         elif section == "services":
             config = await completed_thread(self.plugin.runtime.services.load)
             if isinstance(config, dict):
@@ -2381,6 +3655,15 @@ class Management:
             handles = await completed_thread(self.plugin.vault.handles)
             items = await completed_thread(self.plugin.vault.list_meta)
             result = {"items": items, "handles": handles}
+        elif section == "vault_item":
+            handle = str(options.get("handle") or "").strip()
+            meta = await completed_thread(self.plugin.vault.get_meta, handle)
+            if meta is None:
+                raise ValueError(f"未找到密码别名：{handle}")
+            result = {
+                "handle": meta["handle"],
+                "updated_at": float(meta.get("updated_at") or 0.0),
+            }
         elif section == "grants":
             scope = str(options.get("scope") or "").strip()
             grants_store = getattr(self.plugin, "grants", None) or getattr(
@@ -2405,6 +3688,36 @@ class Management:
                 "available_models": host_models["names"],
                 "tasks": host_models["tasks"],
             }
+        elif section == "chat_sources":
+            raw_ids = options.get("chat_ids")
+            chat_ids = (
+                [str(x).strip() for x in raw_ids if str(x).strip()][:48]
+                if isinstance(raw_ids, list)
+                else []
+            )
+            result = {
+                "sources": await self.plugin._resolve_chat_sources(chat_ids),
+            }
+        elif section == "package_export_preview":
+            pid = str(
+                options.get("profile_id") or options.get("target") or ""
+            ).strip()
+            pkg_kind = str(
+                options.get("package_kind") or options.get("kind") or "template"
+            ).strip().lower()
+            raw_skills = options.get("skill_ids")
+            skill_ids = (
+                [str(s).strip() for s in raw_skills if str(s).strip()]
+                if isinstance(raw_skills, list)
+                else None
+            )
+            result = await completed_thread(
+                preview_export_package,
+                self.plugin,
+                pid,
+                kind=pkg_kind,
+                skill_ids=skill_ids,
+            )
         else:
             raise ValueError("未知管理查询")
         return result
@@ -2795,7 +4108,14 @@ class Management:
         }
 
     def _read_artifact_stream(
-        self, stream, name: str, offset: int, *, total_hint: int | None = None, extra: dict | None = None
+        self,
+        stream,
+        name: str,
+        offset: int,
+        *,
+        chunk_size: int | None = None,
+        total_hint: int | None = None,
+        extra: dict | None = None,
     ) -> dict:
         media_kind, mime = _media_kind(name)
         meta = dict(extra or {})
@@ -2807,7 +4127,8 @@ class Management:
             if self.plugin.vault.contains_secret(raw):
                 raise PermissionError("产物包含已登记凭据，已拒绝预览")
             total = total_hint if total_hint is not None else len(raw)
-            chunk = raw[offset : offset + 196608]
+            bin_win = max(1024, min(int(chunk_size), 196608)) if isinstance(chunk_size, int) else 196608
+            chunk = raw[offset : offset + bin_win]
             next_off = offset + len(chunk) if offset + len(chunk) < len(raw) else None
             return {
                 **meta,
@@ -2821,7 +4142,8 @@ class Management:
             }
         raw = stream.read(2 * 1024 * 1024)
         decoded = self.plugin.vault.redact(raw.decode("utf-8", errors="replace"))
-        end = min(len(decoded), offset + 16000)
+        txt_win = max(1024, min(int(chunk_size), 196608)) if isinstance(chunk_size, int) else 16000
+        end = min(len(decoded), offset + txt_win)
         return {
             **meta,
             "name": name,
@@ -2865,6 +4187,8 @@ class Management:
         offset = opts.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 128 * 1024**2:
             raise ValueError("预览偏移量无效")
+        raw_chunk_sz = opts.get("chunk_size")
+        req_chunk_sz = int(raw_chunk_sz) if type(raw_chunk_sz) is int and 1024 <= raw_chunk_sz <= 196608 else None
 
         if kind == "attachment":
             handle = opts.get("handle", "")
@@ -2893,6 +4217,7 @@ class Management:
                     source,
                     row["name"],
                     offset,
+                    chunk_size=req_chunk_sz,
                     total_hint=row["size"],
                     extra={
                         "kind": "attachment",
@@ -2915,6 +4240,7 @@ class Management:
                     source,
                     PurePosixPath(rel_path).name,
                     offset,
+                    chunk_size=req_chunk_sz,
                     total_hint=size,
                     extra={
                         "kind": "workspace_file",
@@ -3308,6 +4634,24 @@ class Management:
             raw_view: dict, *, probe_sequence: int | None = None
         ) -> dict:
             view = await completed_thread(self._enrich_onboarding_view, raw_view)
+            ob_src_ids = list(
+                dict.fromkeys(
+                    [
+                        *(view.get("enabled_chats") or ()),
+                        *(
+                            dm.get("chat_id")
+                            for dm in (view.get("recent_dms") or ())
+                            if isinstance(dm, dict) and dm.get("chat_id")
+                        ),
+                        *((view.get("known_chats") or ())[:16]),
+                    ]
+                )
+            )
+            if ob_src_ids and callable(getattr(self.plugin, "_resolve_chat_sources", None)):
+                sources = await self.plugin._resolve_chat_sources(ob_src_ids)
+                view["chat_sources"] = sources
+                if callable(getattr(self.plugin, "_apply_sources_to_dms", None)):
+                    self.plugin._apply_sources_to_dms(view.get("recent_dms"), sources)
             out = {**view, "onboarding": view}
             if probe_sequence is not None:
                 out["probe_sequence"] = probe_sequence
@@ -3567,6 +4911,91 @@ class Management:
                 "mime": "application/zip",
                 "bytes": len(raw_zip),
             }
+        elif action == "package_export":
+            pid = str(
+                options.get("profile_id") or options.get("target") or ""
+            ).strip()
+            pkg_kind = str(
+                options.get("package_kind") or options.get("kind") or "template"
+            ).strip().lower()
+            raw_skills = options.get("skill_ids")
+            skill_ids = (
+                [str(s).strip() for s in raw_skills if str(s).strip()]
+                if isinstance(raw_skills, list)
+                else None
+            )
+            pkg = await completed_thread(
+                export_package, plugin, pid, kind=pkg_kind, skill_ids=skill_ids
+            )
+            result = {
+                "profile_id": pkg["profile_id"],
+                "kind": pkg["kind"],
+                "kind_label": pkg["kind_label"],
+                "filename": pkg["filename"],
+                "base64": pkg["base64"],
+                "mime": "application/zip",
+                "bytes": pkg["bytes"],
+                "sha256": pkg["sha256"],
+                "manifest": pkg["manifest"],
+                "desensitized": True,
+            }
+        elif action == "package_upload_chunk":
+            result = await completed_thread(self._stage_package_chunk, options)
+        elif action == "package_preview":
+            tok = str(options.get("transfer_token") or "").strip()
+            staged_bytes = None
+            if tok:
+                tr = self.transfers.get(tok)
+                if not tr or tr.get("direction") != "package_stage":
+                    raise ValueError("导入包传输令牌无效或已过期")
+                staged_bytes = bytes(tr["data"])
+            result = await completed_thread(
+                preview_package,
+                plugin,
+                raw_bytes=staged_bytes,
+                base64_data=str(options.get("base64") or options.get("data") or ""),
+                remote_url=str(options.get("remote_url") or options.get("url") or ""),
+                share_link=str(options.get("share_link") or ""),
+            )
+            result = {
+                **result,
+                "enabled_chats": list(plugin.settings.enabled_chats),
+                **({"transfer_token": tok} if tok else {}),
+            }
+        elif action == "package_import":
+            tok = str(options.get("transfer_token") or "").strip()
+            staged_bytes = None
+            if tok:
+                tr = self.transfers.pop(tok, None)
+                if not tr or tr.get("direction") != "package_stage":
+                    raise ValueError("导入包传输令牌无效或已过期")
+                staged_bytes = bytes(tr["data"])
+            imported = await completed_thread(
+                import_package_bundle,
+                plugin,
+                raw_bytes=staged_bytes,
+                base64_data=str(options.get("base64") or options.get("data") or ""),
+                remote_url=str(options.get("remote_url") or options.get("url") or ""),
+                share_link=str(options.get("share_link") or ""),
+                target_profile_id=str(
+                    options.get("profile_id") or options.get("target") or ""
+                ).strip(),
+                overwrite=bool(options.get("overwrite", False)),
+                schedule_target_chat=str(
+                    options.get("schedule_target_chat") or ""
+                ).strip(),
+            )
+            prof_out = (
+                self._serialize_profile(plugin.profiles.get(imported["profile_id"]))
+                if imported.get("profile_id")
+                else None
+            )
+            result = {
+                **imported,
+                "id": imported.get("profile_id") or "",
+                "profile": prof_out,
+                "done": True,
+            }
         elif action == "profile_import_zip":
             b64_data = str(options.get("base64") or options.get("data") or "").strip()
             if not b64_data:
@@ -3627,6 +5056,117 @@ class Management:
             result = await completed_thread(
                 self._set_profile_skill_binding, profile_id, skill_id, bound
             )
+        elif action == "bind_skill_profiles":
+            result = await completed_thread(self._bind_skill_profiles_sync, options)
+        elif action == "distill_skill_from_thread":
+            result = await self._distill_skill_from_thread(options)
+        elif action == "confirm_skill_proposal":
+            prop_id = str(options.get("proposal_id") or "").strip()
+            prop = await completed_thread(plugin.memory.get_skill_proposal, prop_id)
+            if not prop:
+                raise ValueError("未找到待确认的技能草稿")
+            sk_id = str(options.get("skill_id") or prop["skill_id"]).strip()
+            sk_title = str(options.get("title") or prop["title"]).strip()
+            sk_desc = str(options.get("description") or prop["description"]).strip()
+            sk_md = str(options.get("content") or prop["content"])
+            if sk_id in await completed_thread(plugin.memory.skills):
+                cur_sk = await completed_thread(plugin.memory.read, "skill", target=sk_id)
+                saved = await completed_thread(
+                    plugin.memory.write,
+                    "skill",
+                    sk_md,
+                    target=sk_id,
+                    expected_version=cur_sk["version"],
+                    allow_custom=True,
+                )
+            else:
+                saved = await completed_thread(
+                    lambda: plugin.memory.create_skill(
+                        sk_id,
+                        title=sk_title,
+                        description=sk_desc,
+                        content=sk_md,
+                        allow_custom=True,
+                    )
+                )
+            bind_profiles = options.get("bind_profiles")
+            if bind_profiles is None and prop.get("profile_id"):
+                bind_profiles = [prop["profile_id"]]
+            if isinstance(bind_profiles, list):
+                for pid in bind_profiles:
+                    p_str = str(pid or "").strip()
+                    if p_str:
+                        await completed_thread(
+                            self._set_profile_skill_binding, p_str, sk_id, True
+                        )
+            await completed_thread(plugin.memory.resolve_skill_proposal, prop_id, "created")
+            result = {
+                "proposal_id": prop_id,
+                "skill_id": sk_id,
+                "version": saved.get("version", 1),
+                "bound_profiles": list(bind_profiles or []),
+            }
+        elif action == "dismiss_skill_proposal":
+            prop_id = str(options.get("proposal_id") or "").strip()
+            ok = await completed_thread(
+                plugin.memory.resolve_skill_proposal, prop_id, "dismissed"
+            )
+            result = {"proposal_id": prop_id, "dismissed": ok}
+        elif action == "digest_sources_op":
+            result = await handle_digest_sources(
+                plugin,
+                op=str(options.get("op") or "add").strip().lower(),
+                target_chat=str(options.get("target_chat") or options.get("chat_id") or "").strip(),
+                patch={
+                    **({"topics": options["topics"]} if "topics" in options else {}),
+                    **({"urls": options["urls"]} if "urls" in options else {}),
+                    **({"feed_id": options["feed_id"]} if "feed_id" in options else {}),
+                    **({"url": options["url"]} if "url" in options else {}),
+                },
+                current_chat_id="",
+                current_platform="qq",
+                resolve_chat_target_fn=resolve_chat_target,
+                clean_str_list_fn=lambda v, label="列表": [str(x).strip() for x in (v if isinstance(v, list) else [v]) if str(x or "").strip()],
+            )
+        elif action == "export_skill_zip":
+            skill_id = str(options.get("skill") or options.get("target") or "").strip()
+            if not skill_id:
+                raise ValueError("export_skill_zip 需要指定技能编号")
+            pkg = await completed_thread(
+                export_package, plugin, "", kind="capability_pack", skill_ids=[skill_id]
+            )
+            result = {
+                "skill_id": skill_id,
+                "filename": pkg["filename"],
+                "base64": pkg["base64"],
+                "mime": "application/zip",
+                "bytes": pkg["bytes"],
+                "manifest": pkg["manifest"],
+                "desensitized": True,
+            }
+        elif action == "save_skill_file":
+            sk_id = str(options.get("target") or options.get("skill") or "").strip()
+            rel_path = str(options.get("path") or "").strip()
+            if not sk_id or not rel_path:
+                raise ValueError("save_skill_file 需要提供 target 与 path")
+            wr = await completed_thread(
+                plugin.memory.write_skill_file,
+                sk_id,
+                rel_path,
+                str(options.get("content") or ""),
+            )
+            files = await completed_thread(plugin.memory.skill_files, sk_id)
+            comp_paths = [c["path"] for c in files[:20] if isinstance(c, dict) and c.get("path")]
+            result = {**wr, "target": sk_id, "path": wr.get("file_path", rel_path), "companion_files": comp_paths}
+        elif action == "delete_skill_file":
+            sk_id = str(options.get("target") or options.get("skill") or "").strip()
+            rel_path = str(options.get("path") or "").strip()
+            if not sk_id or not rel_path:
+                raise ValueError("delete_skill_file 需要提供 target 与 path")
+            rm = await completed_thread(plugin.memory.remove_skill_file, sk_id, rel_path)
+            files = await completed_thread(plugin.memory.skill_files, sk_id)
+            comp_paths = [c["path"] for c in files[:20] if isinstance(c, dict) and c.get("path")]
+            result = {**rm, "target": sk_id, "path": rm.get("removed", rel_path), "companion_files": comp_paths}
         elif action == "delete_skill":
             target = str(options.get("target") or "").strip()
             if target in plugin.memory.preset_skills():
@@ -3749,23 +5289,32 @@ class Management:
         elif action == "intent_run_now":
             iid = str(options.get("intent_id") or "").strip()
             row = await completed_thread(plugin.intents.get, iid)
+            if row["status"] not in {"pending", "paused"}:
+                raise ValueError("意图不存在或已处理")
             if row["status"] == "paused":
                 await completed_thread(
                     plugin.intents.resume, iid, row["target"], is_admin=True
                 )
 
+            has_pulse = getattr(plugin, "pulse", None) is not None
+
             def _mark_due_now():
                 now_ts = plugin.intents.clock() - 1.0
+                next_st = "claimed" if has_pulse else "pending"
                 with plugin.intents.store.connect() as db, db:
                     db.execute(
-                        "UPDATE intents SET due_at=?, status='pending' WHERE intent_id=?",
-                        (now_ts, iid),
+                        "UPDATE intents SET due_at=?, status=? WHERE intent_id=?",
+                        (now_ts, next_st, iid),
                     )
                 return plugin.intents.get(iid)
 
             fresh = await completed_thread(_mark_due_now)
-            if getattr(plugin, "pulse", None) is not None:
-                await plugin.pulse._dispatch(fresh)
+            if has_pulse:
+                try:
+                    await plugin.pulse._dispatch(fresh)
+                except Exception:
+                    await completed_thread(plugin.intents.finish, iid, "deferred")
+                    raise
             try:
                 latest = await completed_thread(plugin.intents.get, iid)
             except (ValueError, KeyError):
@@ -3877,6 +5426,74 @@ class Management:
             )
         elif action == "set_profile_models":
             result = await completed_thread(self._set_profile_models, options)
+        elif action == "parse_mcp_json":
+            raw_json = options.get("json_text")
+            if raw_json is None:
+                raw_json = options.get("payload")
+            if raw_json is None:
+                raise ValueError("请先粘贴 mcpServers 配置 JSON")
+            result = await completed_thread(parse_mcp_json_payload, raw_json)
+        elif action == "probe_mcp_service":
+            raw_json = options.get("json_text")
+            parsed_cfg = (
+                await completed_thread(parse_mcp_json_payload, raw_json)
+                if raw_json and not options.get("command") and not options.get("url")
+                else None
+            )
+            svc_name = str(
+                options.get("name") or (parsed_cfg or {}).get("name") or ""
+            ).strip()
+            svc_cfg = (
+                (await completed_thread(plugin.runtime.services.load)).get("servers", {}).get(svc_name) or {}
+                if svc_name
+                else {}
+            )
+            raw_url = str(options.get("url") or (parsed_cfg or {}).get("url") or "").strip()
+            transport = str(
+                options.get("transport")
+                or (parsed_cfg or {}).get("transport")
+                or ("http" if raw_url else "stdio")
+            ).strip().lower()
+
+            def _extract_inline(raw_map: object) -> dict[str, str]:
+                out: dict[str, str] = {}
+                if isinstance(raw_map, dict):
+                    for k, v in raw_map.items():
+                        ks = str(k or "").strip()
+                        if ks and ks != "__KEEP__" and v not in (None, "", "__KEEP__"):
+                            out[ks] = str(v)
+                return out
+
+            inline_env = _extract_inline(options.get("env") or (parsed_cfg or {}).get("env"))
+            inline_headers = _extract_inline(options.get("headers") or (parsed_cfg or {}).get("headers"))
+            if transport == "http":
+                probe_spec = {
+                    "transport": "http",
+                    "url": validate_mcp_http_url(raw_url),
+                    "header_credentials": dict(svc_cfg.get("header_credentials") or {}),
+                }
+            else:
+                raw_cmd = options.get("command") or (parsed_cfg or {}).get("command") or []
+                resolved_cmd = resolve_mcp_command(raw_cmd)
+                if not resolved_cmd or not is_absolute_program_path(resolved_cmd[0]):
+                    raise ValueError(
+                        f"未能找到可执行程序「{(resolved_cmd or [''])[0]}」，请填写本机程序绝对路径"
+                    )
+                probe_spec = {
+                    "command": resolved_cmd,
+                    "credentials": dict(svc_cfg.get("credentials") or {}),
+                }
+            probed = await plugin.runtime.services.probe_server(
+                probe_spec,
+                inline_env=inline_env or None,
+                inline_headers=inline_headers or None,
+                timeout=8.0,
+            )
+            result = {
+                **probed,
+                "name": svc_name,
+                "resolved_command": probe_spec.get("command") or [],
+            }
         elif action == "upsert_service_item":
             result = await completed_thread(self._upsert_service_item_sync, options)
             await plugin.runtime.services.close_sessions()
@@ -3981,7 +5598,13 @@ class Management:
             self.plugin.vault._validate_handle(name)
             if not isinstance(server, dict) or set(server) - {
                 "command",
+                "transport",
+                "url",
+                "headers",
                 "credentials",
+                "header_credentials",
+                "inline_env_keys",
+                "inline_header_keys",
                 "tools",
                 "readonly",
                 "access",
@@ -3989,17 +5612,34 @@ class Management:
                 "description",
             }:
                 raise ValueError("MCP 服务含未知配置项")
-            command = server.get("command", [])
-            if (
-                not isinstance(command, list)
-                or not command
-                or not all(
-                    isinstance(part, str) and "\x00" not in part for part in command
-                )
-                or not is_absolute_program_path(command[0])
-            ):
-                raise ValueError("MCP 程序使用绝对路径与固定参数")
-            for handle in server.get("credentials", {}).values():
+            is_http = str(server.get("transport") or "").strip().lower() == "http" or bool(
+                str(server.get("url") or "").strip()
+            )
+            if is_http:
+                validate_mcp_http_url(str(server.get("url") or ""))
+                if "headers" in server:
+                    hdrs = server["headers"]
+                    if not isinstance(hdrs, dict) or any(
+                        not isinstance(k, str)
+                        or not isinstance(v, str)
+                        or any(bad in k or bad in v for bad in ("\r", "\n", "\x00"))
+                        for k, v in hdrs.items()
+                    ):
+                        raise ValueError("远程 MCP 请求头配置无效")
+            else:
+                command = server.get("command", [])
+                if (
+                    not isinstance(command, list)
+                    or not command
+                    or not all(
+                        isinstance(part, str) and "\x00" not in part for part in command
+                    )
+                    or not is_absolute_program_path(command[0])
+                ):
+                    raise ValueError("MCP 程序使用绝对路径与固定参数")
+            for handle in (server.get("credentials") or {}).values():
+                self.plugin.vault._validate_handle(handle)
+            for handle in (server.get("header_credentials") or {}).values():
                 self.plugin.vault._validate_handle(handle)
         validate_web_bindings(config)
 
@@ -4082,3 +5722,37 @@ class Management:
             )
             return {**imported, "done": True}
         return {"token": token, "offset": len(transfer["data"])}
+
+    def _stage_package_chunk(self, options):
+        self.transfers = {
+            key: value
+            for key, value in self.transfers.items()
+            if value["expires"] > time.time()
+        }
+        token = str(options.get("token") or "").strip()
+        if not token:
+            if len(self.transfers) >= 4:
+                raise ValueError("传输较多，请稍后再试")
+            token = uuid.uuid4().hex
+            self.transfers[token] = {
+                "data": bytearray(),
+                "expires": time.time() + 300,
+                "direction": "package_stage",
+            }
+        transfer = self.transfers.get(token)
+        if (
+            not transfer
+            or transfer.get("direction") != "package_stage"
+            or options.get("offset", 0) != len(transfer["data"])
+        ):
+            raise ValueError("导入位置无效或传输过期")
+        chunk = base64.b64decode(str(options.get("data") or ""), validate=True)
+        if len(chunk) > 24576 or len(transfer["data"]) + len(chunk) > 4 * 1024**2:
+            self.transfers.pop(token, None)
+            raise ValueError("导入包超过 4 MiB 上限")
+        transfer["data"].extend(chunk)
+        return {
+            "token": token,
+            "offset": len(transfer["data"]),
+            "done": bool(options.get("done")),
+        }

@@ -10,10 +10,22 @@ import time
 import tomllib
 from pathlib import Path
 
+from .abilities import BUILTIN_PROFILES
 from .config import Settings
-from .memory import SKILL_ID_RE
 from .pathsafe import path_is_link_like
-from .trust import format_stream_spec, parse_stream_spec, session_rank_key
+from .shaping_setup import (
+    export_profile_bundle,
+    format_toml as _format_toml,
+    handle_digest_sources,
+    handle_services,
+    handle_setup,
+    handle_skill_proposal,
+    import_profile_bundle,
+    profile_summary as _profile_summary,
+    resolve_file_route as _resolve_file_route,
+    tools_file_op as _tools_file_op,
+)
+from .trust import clean_display_name, format_stream_spec, parse_stream_spec, session_rank_key
 from .vault import atomic_private_write
 from .workspaces import completed_thread
 
@@ -124,7 +136,8 @@ async def _session_snapshot(plugin) -> tuple[dict, object, dict[str, dict]]:
         spec = str(s.get("stream_spec") or "").strip() or (format_stream_spec(plat, "group" if gid else "private", gid or uid) if plat and (gid or uid) else "")
         merged[sid] = {
             "session_id": sid, "platform": plat, "chat_type": ctype, "group_id": gid, "user_id": uid,
-            "stream_spec": spec, "name": str(s.get("name") or "").strip(), "avatar": str(s.get("avatar") or ""),
+            "stream_spec": spec, "name": clean_display_name(s.get("name") or "", gid or uid or sid), "avatar": str(s.get("avatar") or ""),
+            "avatar_data": str(s.get("avatar_data") or ""),
             "account_id": str(s.get("account_id") or r.get("account_id") or "").strip(),
             "human_count": int(s.get("human_count") or r.get("human_count") or 0),
             "last_human_at": float(s.get("last_human_at") or r.get("last_human_at") or 0.0), "updated": float(s.get("updated") or r.get("updated") or 0.0),
@@ -249,9 +262,11 @@ async def collect_known_chats(plugin) -> list[dict]:
         best = max(grp, key=session_rank_key) if len(grp) > 1 else grp[0]
         aliases = set().union(*(g["aliases"] for g in grp))
         avatar = best.get("avatar") or next((g.get("avatar", "") for g in grp if g.get("avatar")), "")
-        name = next((g["name"] for g in sorted(grp, key=session_rank_key, reverse=True) if g.get("name") and g["name"] not in aliases), best["display_name"])
+        avatar_data = best.get("avatar_data") or next((g.get("avatar_data", "") for g in grp if g.get("avatar_data")), "")
+        raw_name = next((g["name"] for g in sorted(grp, key=session_rank_key, reverse=True) if g.get("name") and g["name"] not in aliases), best["display_name"])
+        name = clean_display_name(raw_name, best["group_id"] or best["user_id"] or best["stream_spec"] or best["session_id"])
         level = next((level_map[c] for c in [best["stream_spec"], best["session_id"], *sorted(aliases)] if c and c in level_map), "")
-        out.append({"chat_id": best["session_id"], "stream_spec": best["stream_spec"], "stream_id": best["stream_spec"] or best["session_id"], "name": name, "platform": best["platform"], "chat_type": best["chat_type"], "group_id": best["group_id"], "user_id": best["user_id"], "avatar": avatar, "enabled": bool(aliases & enabled_set), "proactive_level": level})
+        out.append({"chat_id": best["session_id"], "stream_spec": best["stream_spec"], "stream_id": best["stream_spec"] or best["session_id"], "name": name, "platform": best["platform"], "chat_type": best["chat_type"], "group_id": best["group_id"], "user_id": best["user_id"], "avatar": avatar, "avatar_data": avatar_data, "enabled": bool(aliases & enabled_set), "proactive_level": level})
     return out
 
 
@@ -333,13 +348,7 @@ async def _commit_settings(plugin, candidate: dict, *, expected_version: int | N
         entry = {"version": new_ver, "timestamp": time.time(), "author": author, "changes": changes, "snapshot": copy.deepcopy(validated)}
         versions = (hist["versions"] + [entry])[-_MAX_SETTINGS_HISTORY:]
         await completed_thread(atomic_private_write, _history_path(plugin), json.dumps({"versions": versions}, ensure_ascii=False).encode("utf-8"))
-    return {
-        "kind": "settings", "version": new_ver, "previous_version": int(prev["version"]),
-        "changes": changes, "snapshot": validated, "settings": validated,
-        "rollback_hint": f"maisya_shape(action='settings', op='rollback', version={prev['version']}, expected_version={new_ver})",
-    }
-
-
+    return {"kind": "settings", "version": new_ver, "previous_version": int(prev["version"]), "changes": changes, "snapshot": validated, "settings": validated, "rollback_hint": f"maisya_shape(action='settings', op='rollback', version={prev['version']}, expected_version={new_ver})"}
 def _apply_list_delta(current: list[str], *, add_items: list[str] = (), remove_items: list[str] = ()) -> list[str]:
     out = list(current)
     for item in add_items:
@@ -347,8 +356,6 @@ def _apply_list_delta(current: list[str], *, add_items: list[str] = (), remove_i
             out.append(item)
     rem = set(remove_items)
     return [x for x in out if x not in rem] if rem else out
-
-
 async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "", current_platform: str = "", expected_version: int | None = None, author: str = "maisya_shape", caller_ident: str = "") -> dict:
     if not isinstance(patch, dict) or not patch:
         raise ValueError("settings patch 必须是非空对象")
@@ -375,16 +382,27 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
         if "add_admins" in patch or "remove_admins" in patch:
             cand["admins"] = _apply_list_delta(list(cand.get("admins") or []), add_items=_clean_str_list(patch.get("add_admins", []), label="add_admins"), remove_items=_clean_str_list(patch.get("remove_admins", []), label="remove_admins"))
             changes.append("admins")
-    for simple in ("permission_mode", "default_model", "proactive_level", "ui_style"):
+    for simple in ("permission_mode", "default_model", "proactive_level", "ui_style", "heartbeat_profile", "web_provider"):
         if simple in patch and simple in Settings.model_fields:
             cand[simple] = str(patch[simple] or "").strip()
             changes.append(simple)
+    if "heartbeat_enabled" in patch and "heartbeat_enabled" in Settings.model_fields:
+        cand["heartbeat_enabled"] = bool(patch["heartbeat_enabled"])
+        changes.append("heartbeat_enabled")
+    for int_field in ("heartbeat_interval_minutes", "longing_quiet_hours", "tz_offset_minutes"):
+        if int_field in patch and int_field in Settings.model_fields:
+            cand[int_field] = int(patch[int_field])
+            changes.append(int_field)
     if "chat_proactive_levels" in patch and "chat_proactive_levels" in Settings.model_fields:
         raw_lv = patch["chat_proactive_levels"]
         if raw_lv is not None and not isinstance(raw_lv, dict):
             raise ValueError("chat_proactive_levels 必须是映射对象")
         cand["chat_proactive_levels"] = {await resolve_stream_spec(plugin, k, current_chat_id=current_chat_id, current_platform=current_platform): (v.strip() if isinstance(v, str) else v) for k, v in (raw_lv or {}).items() if str(k or "").strip()}
         changes.append("chat_proactive_levels")
+    for list_field in ("acquaintance_users",):
+        if list_field in patch and list_field in Settings.model_fields:
+            cand[list_field] = _clean_str_list(patch[list_field], label=list_field)
+            changes.append(list_field)
     if "sleep_window" in patch:
         cand["sleep_window"] = normalize_sleep_window(patch["sleep_window"])
         changes.append("sleep_window")
@@ -410,38 +428,19 @@ async def rollback_settings(plugin, version: int, *, expected_version: int | Non
     return await _commit_settings(plugin, copy.deepcopy(target["snapshot"]), expected_version=expected_version, author=author, changes=[f"rollback:{version}"], caller_ident=caller_ident)
 
 
-def _format_toml(cfg: dict) -> str:
-    def _val(v) -> str:
-        if isinstance(v, bool):
-            return "true" if v else "false"
-        if isinstance(v, (int, float)):
-            return repr(v)
-        if isinstance(v, (list, tuple)):
-            return "[" + ", ".join(_val(i) for i in v) + "]"
-        return json.dumps(str(v), ensure_ascii=False)
-    return "\n".join(f"{k} = {_val(v)}" for k, v in cfg.items() if v is not None) + "\n"
-
-
-def _profile_summary(plugin, profile_id: str) -> dict:
-    prof = plugin.profiles.get(profile_id)
-    return {
-        "profile_id": profile_id, "title": getattr(prof, "title", "") or profile_id,
-        "description": getattr(prof, "description", ""), "enabled": bool(prof.enabled),
-        "access": getattr(prof, "access", "everyone"), "session_mode": getattr(prof, "session_mode", "task"),
-        "allow_chats": list(getattr(prof, "allow_chats", ()) or ()), "skills": list(getattr(prof, "skills", ()) or ()),
-        "mcp": list(getattr(prof, "mcp", ()) or ()),
-    }
-
-
 async def _handle_profile(plugin, *, op: str, target: str, base: str, patch: dict | None, content: str, author: str) -> dict:
     if op == "list":
         ids = sorted(p.name for p in plugin.profiles.path.iterdir() if p.is_dir() and not path_is_link_like(p) and (p / "profile.toml").is_file())
         return {"kind": "profile", "profiles": [await completed_thread(_profile_summary, plugin, pid) for pid in ids]}
+    if op == "import":
+        return await completed_thread(import_profile_bundle, plugin, target, patch, content)
     if not target:
         raise ValueError("profile 操作需要指定 target（档案标识）")
     if op == "read":
         doc = await completed_thread(plugin.memory.read, "profile", target=target, document="PROFILE.md", allow_custom=True)
         return {**doc, "kind": "profile", "profile": await completed_thread(_profile_summary, plugin, target)}
+    if op == "export":
+        return await completed_thread(export_profile_bundle, plugin, target, patch)
     if op == "delete":
         res = await completed_thread(plugin.profiles.delete, target)
         await completed_thread(plugin.memory.purge_profile, target)
@@ -449,8 +448,11 @@ async def _handle_profile(plugin, *, op: str, target: str, base: str, patch: dic
     if op == "create":
         opts = dict(patch or {}) if isinstance(patch, dict) else {}
         base_id = str(opts.pop("base", base or "") or "").strip() or ("default" if (plugin.profiles.path / "default" / "profile.toml").is_file() else "scout")
-        await completed_thread(plugin.profiles.clone, base_id, target)
-        await completed_thread(plugin.memory.seed_profile, target)
+        if target in BUILTIN_PROFILES and (plugin.profiles.path / target / "profile.toml").is_file():
+            await completed_thread(plugin.memory.seed_profile, target)
+        else:
+            await completed_thread(plugin.profiles.clone, base_id, target)
+            await completed_thread(plugin.memory.seed_profile, target)
         if not opts and not content:
             return {"kind": "profile", "profile": await completed_thread(_profile_summary, plugin, target)}
         patch, op = opts, "patch"
@@ -469,72 +471,50 @@ async def _handle_profile(plugin, *, op: str, target: str, base: str, patch: dic
     raise ValueError(f"profile 不支持 op={op}")
 
 
-def _resolve_file_route(kind: str, target: str, document: str) -> tuple[str, str, str]:
-    raw = str(document or "").strip()
-    if any(bad in raw for bad in ("\x00", "..", "\\")) or raw.startswith("/"):
-        raise ValueError("受管文件路径禁止目录穿越或绝对路径")
-    if kind in {"memory", "journal", "heartbeat", "skill"}:
-        return kind, target, raw
-    fixed = {"TOOLS.md": ("tools", "self", "TOOLS.md"), "memory/self/TOOLS.md": ("tools", "self", "TOOLS.md"), "JOURNAL.md": ("journal", "self", "JOURNAL.md"), "memory/self/JOURNAL.md": ("journal", "self", "JOURNAL.md"), "HEARTBEAT.md": ("heartbeat", "self", "HEARTBEAT.md"), "memory/self/HEARTBEAT.md": ("heartbeat", "self", "HEARTBEAT.md"), "MEMORY.md": ("memory", target, "MEMORY.md")}
-    if raw in fixed or raw.upper() in fixed:
-        return fixed.get(raw) or fixed[raw.upper()]
-    parts = raw.split("/")
-    if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md" and SKILL_ID_RE.fullmatch(parts[1]):
-        return "skill", parts[1], "SKILL.md"
-    if len(parts) == 3 and parts[0] == "profiles" and parts[2] in {"PROFILE.md", "profile.toml"} and SKILL_ID_RE.fullmatch(parts[1]):
-        return "profile", parts[1], parts[2]
-    raise ValueError(f"仅允许访问受管系统文件：{raw or '(未指定)'}")
-
-
-def _tools_file_op(plugin, op: str, content: str, version: int | None, expected_version: int | None, author: str) -> dict:
-    path, asset = plugin.data_root / "memory/self/TOOLS.md", "tools:self:TOOLS.md"
-    if path_is_link_like(path) or path_is_link_like(path.parent):
-        raise ValueError("受管文件路径禁止符号链接")
-    with plugin.store.connect() as db, db:
-        rows = db.execute("SELECT * FROM memory_versions WHERE asset=? ORDER BY version ASC", (asset,)).fetchall()
-        cur_ver = int(rows[-1]["version"]) if rows else 0
-        if op == "read":
-            hit = next((r for r in rows if int(r["version"]) == int(version)), None) if version is not None else None
-            if version is not None and hit is None:
-                raise ValueError(f"未找到版本 {version}")
-            return {"kind": "file", "document": "TOOLS.md", "version": int(hit["version"]) if hit else cur_ver, "content": hit["content"] if hit else (path.read_text(encoding="utf-8") if path.is_file() else "")}
-        if op == "history":
-            return {"kind": "file", "document": "TOOLS.md", "history": [dict(r) for r in rows]}
-        if expected_version is None or int(expected_version) != cur_ver:
-            raise ValueError(f"版本冲突或缺少 expected_version（当前版本 {cur_ver}）")
-        if op == "rollback":
-            hit = next((r for r in rows if int(r["version"]) == int(version or -1)), None)
-            if hit is None:
-                raise ValueError(f"未找到回滚版本 {version}")
-            content = hit["content"]
-        _assert_no_secret(plugin, content, "TOOLS.md")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_private_write(path, content.encode("utf-8"))
-        new_ver = cur_ver + 1
-        db.execute("INSERT INTO memory_versions (asset, version, kind, target, chat_id, document, content, author, updated) VALUES (?, ?, 'tools', 'self', '', 'TOOLS.md', ?, ?, ?)", (asset, new_ver, content, author, time.time()))
-        return {"kind": "file", "document": "TOOLS.md", "version": new_ver, "previous_version": cur_ver, "content": content, "rollback_hint": f"maisya_shape(action='file', op='rollback', document='TOOLS.md', version={cur_ver}, expected_version={new_ver})"}
-
-
-async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: str, document: str, content: str, version: int | None, expected_version: int | None, current_chat_id: str, current_platform: str, author: str) -> dict:
+async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: str, document: str, content: str, patch: dict | None, version: int | None, expected_version: int | None, current_chat_id: str, current_platform: str, author: str) -> dict:
     if op == "list":
         skills = [s["skill_id"] if isinstance(s, dict) else str(s) for s in await completed_thread(plugin.memory.skills)]
-        return {"kind": "file", "files": ["JOURNAL.md", "HEARTBEAT.md", "TOOLS.md", "MEMORY.md", *(f"skills/{s}/SKILL.md" for s in skills)]}
+        pids = sorted(p.name for p in plugin.profiles.path.iterdir() if p.is_dir() and not path_is_link_like(p))
+        return {"kind": "file", "files": ["JOURNAL.md", "HEARTBEAT.md", "TOOLS.md", "MEMORY.md", *(f"profiles/{p}/MEMORY.md" for p in pids), *(f"profiles/{p}/NOTES.md" for p in pids), *(f"skills/{s}/SKILL.md" for s in skills)]}
     f_kind, f_target, f_doc = _resolve_file_route(kind, target, document)
     if f_kind == "tools":
-        return await completed_thread(_tools_file_op, plugin, op, content, version, expected_version, author)
+        return await completed_thread(_tools_file_op, plugin, op, content, version, expected_version, author, _assert_no_secret)
     chat_id = current_chat_id
     if target_chat and str(target_chat).strip():
-        chat_id, _ = await resolve_chat_target(plugin, target_chat, current_chat_id=current_chat_id, current_platform=current_platform, allow_unknown_ascii=False)
+        chat_id, _ = await resolve_chat_target(plugin, target_chat, current_chat_id=current_chat_id, current_platform=current_platform, allow_unknown_ascii=True)
     if op == "read":
         return await completed_thread(plugin.memory.read, f_kind, target=f_target, chat_id=chat_id, document=f_doc, version=version, allow_custom=True)
     if op == "history":
-        return {"kind": "file", "history": await completed_thread(plugin.memory.history, f_kind, target=f_target, chat_id=chat_id, document=f_doc)}
+        return {"kind": f_kind, "history": await completed_thread(plugin.memory.history, f_kind, target=f_target, chat_id=chat_id, document=f_doc)}
+    if op == "patch":
+        p_obj = dict(patch or {}) if isinstance(patch, dict) else {}
+        cur = await completed_thread(plugin.memory.read, f_kind, target=f_target, chat_id=chat_id, document=f_doc, allow_custom=True)
+        cur_ver = int(cur["version"])
+        if expected_version is not None and int(expected_version) != cur_ver:
+            raise ValueError(f"版本冲突：当前版本 {cur_ver}，传入 expected_version={expected_version}")
+        next_text = cur["content"] or ""
+        if "old_string" in p_obj and "new_string" in p_obj:
+            old_s, new_s = str(p_obj["old_string"]), str(p_obj["new_string"])
+            if old_s not in next_text:
+                raise ValueError("patch old_string 未命中当前文本")
+            next_text = next_text.replace(old_s, new_s) if p_obj.get("replace_all") else next_text.replace(old_s, new_s, 1)
+        elif "append" in p_obj or content:
+            extra = str(p_obj.get("append") if "append" in p_obj else content).strip()
+            if extra and extra not in next_text:
+                next_text = (next_text.rstrip() + "\n" + extra + "\n").lstrip("\n")
+        elif "content" in p_obj:
+            next_text = str(p_obj["content"])
+        else:
+            raise ValueError("patch 需要提供 append、old_string/new_string 或 content")
+        _assert_no_secret(plugin, next_text, f_doc or f_kind)
+        res = await completed_thread(plugin.memory.write, f_kind, next_text, expected_version=cur_ver, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=True)
+        return {**res, "previous_version": cur_ver, "rollback_hint": f"maisya_shape(action='{f_kind}', op='rollback', target='{f_target}', version={cur_ver}, expected_version={res['version']})"}
     if op == "write":
         if expected_version is None:
             raise ValueError("覆写文档必须提供 expected_version")
         _assert_no_secret(plugin, content, f_doc or f_kind)
         res = await completed_thread(plugin.memory.write, f_kind, content, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=True)
-        return {**res, "rollback_hint": f"maisya_shape(action='file', op='rollback', document='{document or f_doc}', version={expected_version}, expected_version={res['version']})"}
+        return {**res, "previous_version": int(expected_version), "rollback_hint": f"maisya_shape(action='file', op='rollback', document='{document or f_doc}', version={expected_version}, expected_version={res['version']})"}
     if op == "rollback":
         if version is None or expected_version is None:
             raise ValueError("回滚文档需要提供 version 与 expected_version")
@@ -547,9 +527,20 @@ async def build_overview(plugin, *, current_chat_id: str = "", current_platform:
     pids = sorted(p.name for p in plugin.profiles.path.iterdir() if p.is_dir() and not path_is_link_like(p) and (p / "profile.toml").is_file())
     pending = plugin.intents.list_all(status="pending", limit=20) if getattr(plugin, "intents", None) is not None else []
     eff_admins = sorted(_effective_host_admins(plugin) | set(getattr(plugin.settings, "admins", ()) or ()))
+    hb_doc = await completed_thread(plugin.memory.read, "heartbeat", allow_custom=True) if getattr(plugin, "memory", None) is not None else {"content": ""}
+    vault_aliases = await completed_thread(plugin.vault.handles) if getattr(plugin, "vault", None) is not None else []
     return {
         "kind": "overview", "plugin_enabled": bool(plugin.settings.plugin.enabled), "known_chats": known_chats, "admins": eff_admins,
+        "vault_aliases": vault_aliases,
+        "heartbeat": {
+            "enabled": bool(getattr(plugin.settings, "heartbeat_enabled", True)),
+            "interval_minutes": int(getattr(plugin.settings, "heartbeat_interval_minutes", 60)),
+            "sleep_window": str(getattr(plugin.settings, "sleep_window", "")),
+            "daily_proactive_limit": int(getattr(plugin.settings, "daily_proactive_limit", 1)),
+            "content": str(hb_doc.get("content") or "")[:1200],
+        },
         "profiles": [await completed_thread(_profile_summary, plugin, pid) for pid in pids],
+        "pending_skill_proposals": [{"proposal_id": p["proposal_id"], "skill_id": p["skill_id"], "title": p["title"]} for p in (await completed_thread(plugin.memory.list_skill_proposals, status="pending", limit=10) if getattr(plugin, "memory", None) is not None else [])],
         "intents": [{"intent_id": r["intent_id"], "mode": r.get("mode", "schedule"), "condition": r.get("condition", ""), "due_at": r["due_at"], "last_checked_at": r.get("last_checked_at"), "last_triggered_at": r.get("last_triggered_at")} for r in pending],
     }
 
@@ -560,21 +551,30 @@ async def execute_shape(
     expected_version: int | str | None = None, base: str = "", url: str = "", preview_token: str = "",
     current_chat_id: str = "", current_platform: str = "", source_msg_id: str = "", author: str = "maisya_shape", admin_verified: bool = False,
 ) -> dict:
-    # WAVE2-COMPAT: unused url/preview_token kept until plugin.py core-wiring cleanup.
     del url, preview_token
     act, knd = str(action or "").strip().lower(), str(kind or "").strip().lower()
-    if act in {"overview", "settings", "profile", "file"} and (not knd or knd == act):
+    file_areas = {"file", "memory", "role_memory", "notes", "journal", "heartbeat", "tools", "skill"}
+    top_areas = {"overview", "setup", "settings", "profile", "digest_sources", "services", "skill_proposal", *file_areas}
+    if act in top_areas and (not knd or knd == act):
         area = act
-        resolved_op = str(op or "").strip().lower() or ("read" if area == "overview" else ("rollback" if version is not None else ("write" if content else ("patch" if patch is not None else "read"))))
+        resolved_op = str(op or "").strip().lower() or ("read" if area == "overview" else ("write" if area == "setup" else ("rollback" if version is not None else ("write" if content and patch is None else ("patch" if patch is not None else "read")))))
     else:
         area, resolved_op = knd or act, str(op or act or "read").strip().lower()
-    if area in {"setup", "webhooks", "services", "recipe", "digest_sources"}:
-        raise ValueError(f"已收敛移除 {area}，仅支持 overview / settings / profile / file")
-    caller_ident = _verify_admin(plugin, source_msg_id, current_chat_id, current_platform, require_auth=(resolved_op not in {"read", "list", "history"}), admin_verified=admin_verified)
+    if area in {"webhooks", "recipe"}:
+        raise ValueError(f"已收敛移除 {area}（主动能力由单一心跳与条件盯梢承载，导出请用 profile export）")
+    caller_ident = _verify_admin(plugin, source_msg_id, current_chat_id, current_platform, require_auth=(area == "setup" or resolved_op not in {"read", "list", "history"}), admin_verified=admin_verified)
     if area == "overview":
         if resolved_op != "read":
             raise ValueError("overview 仅支持只读操作")
         return _redact(plugin, await build_overview(plugin, current_chat_id=current_chat_id, current_platform=current_platform, target_chat=target_chat))
+    if area == "skill_proposal":
+        return _redact(plugin, await handle_skill_proposal(plugin, op=resolved_op, target=target, patch=patch, author=author))
+    if area == "setup":
+        return _redact(plugin, await handle_setup(plugin, target_chat=target_chat, patch=patch, content=content, current_chat_id=current_chat_id, current_platform=current_platform, source_msg_id=source_msg_id, author=author, caller_ident=caller_ident, resolve_chat_target_fn=resolve_chat_target, resolve_stream_spec_fn=resolve_stream_spec, patch_settings_fn=patch_settings, handle_profile_fn=_handle_profile, handle_file_fn=_handle_file, clean_str_list_fn=_clean_str_list, assert_no_secret_fn=_assert_no_secret, normalize_workspace_fn=normalize_profile_workspace, default_digest_prompt=DEFAULT_DIGEST_SCHEDULE_PROMPT))
+    if area == "digest_sources":
+        return _redact(plugin, await handle_digest_sources(plugin, op=resolved_op, target_chat=target_chat, patch=patch, current_chat_id=current_chat_id, current_platform=current_platform, resolve_chat_target_fn=resolve_chat_target, clean_str_list_fn=_clean_str_list))
+    if area == "services":
+        return _redact(plugin, await handle_services(plugin, op=resolved_op, target=target, patch=patch, assert_no_secret_fn=_assert_no_secret))
     if area == "settings":
         if resolved_op == "read":
             return _redact(plugin, await read_settings_state(plugin))
@@ -591,6 +591,6 @@ async def execute_shape(
         raise ValueError(f"settings 不支持 op={resolved_op}")
     if area == "profile":
         return _redact(plugin, await _handle_profile(plugin, op=resolved_op, target=target, base=base, patch=patch, content=content, author=author))
-    if area in {"file", "memory", "journal", "heartbeat", "tools", "skill"}:
-        return _redact(plugin, await _handle_file(plugin, kind=area, op=resolved_op, target=target, target_chat=target_chat, document=document, content=content, version=version, expected_version=expected_version, current_chat_id=current_chat_id, current_platform=current_platform, author=author))
-    raise ValueError(f"不支持的自管理类型：{area}（仅支持 overview / settings / profile / file）")
+    if area in file_areas:
+        return _redact(plugin, await _handle_file(plugin, kind=area, op=resolved_op, target=target, target_chat=target_chat, document=document, content=content, patch=patch, version=version, expected_version=expected_version, current_chat_id=current_chat_id, current_platform=current_platform, author=author))
+    raise ValueError(f"不支持的自管理类型：{area}")

@@ -211,10 +211,11 @@ class Intents:
             raise ValueError("意图不存在")
         return self._intent(row)
 
-    def list(self, target, *, limit=20):
+    def list(self, target, *, limit=20, include_paused: bool = False):
+        statuses = "('pending','paused')" if include_paused else "('pending')"
         with self.store.connect() as db:
             rows = db.execute(
-                "SELECT * FROM intents WHERE target=? AND status='pending' "
+                f"SELECT * FROM intents WHERE target=? AND status IN {statuses} "
                 "ORDER BY due_at LIMIT ?",
                 (target, min(max(int(limit), 1), 50)),
             ).fetchall()

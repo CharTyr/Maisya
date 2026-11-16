@@ -8,6 +8,7 @@ import re
 import stat
 import tarfile
 import tempfile
+import threading
 import time
 import zipfile
 from contextlib import contextmanager
@@ -303,6 +304,8 @@ class MemoryLayers:
             clock,
         )
         self.chat_aliases = None
+        self._r_lock = threading.RLock()
+        self._lock_depth = threading.local()
         with store.connect() as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS memory_versions (asset TEXT,version INTEGER,kind TEXT,target TEXT,chat_id TEXT,document TEXT,content TEXT,author TEXT,updated REAL,PRIMARY KEY(asset,version))"
@@ -315,6 +318,23 @@ class MemoryLayers:
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS experience_receipts (thread_id TEXT,revision INTEGER,PRIMARY KEY(thread_id,revision))"
+            )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS skill_proposals (
+                    proposal_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    profile_id TEXT NOT NULL DEFAULT 'default',
+                    skill_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    signals TEXT NOT NULL DEFAULT '[]',
+                    rationale TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )"""
             )
         _ensure_managed_dir(root, root / "memory/self")
         heartbeat_preset = PRESETS_DIR / "memory/HEARTBEAT.md"
@@ -484,8 +504,17 @@ class MemoryLayers:
 
     @contextmanager
     def _lock(self):
-        with file_lock(self.root / ".memory.lock"):
-            yield
+        with self._r_lock:
+            depth = getattr(self._lock_depth, "count", 0)
+            self._lock_depth.count = depth + 1
+            try:
+                if depth == 0:
+                    with file_lock(self.root / ".memory.lock"):
+                        yield
+                else:
+                    yield
+            finally:
+                self._lock_depth.count = depth
 
     def _memory_path_for(self, chat_id: str) -> tuple[str, Path]:
         target = hashlib.sha256(chat_id.encode("utf-8")).hexdigest()[:32]
@@ -573,7 +602,7 @@ class MemoryLayers:
     def _locate(
         self, kind, target="", chat_id="", document="", *, db=None, resolve_alias=True
     ):
-        if kind in {"profile", "notes", "skill"}:
+        if kind in {"profile", "notes", "role_memory", "skill"}:
             if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
                 raise ValueError("角色或技能编号无效")
             if kind == "profile":
@@ -586,6 +615,9 @@ class MemoryLayers:
             elif kind == "notes":
                 self.profiles.get(target)
                 directory, document = self.profiles.path / target, "NOTES.md"
+            elif kind == "role_memory":
+                self.profiles.get(target)
+                directory, document = self.profiles.path / target, "MEMORY.md"
             else:
                 directory, document = (
                     self.root / "abilities/skills" / target,
@@ -606,7 +638,11 @@ class MemoryLayers:
             directory = self.root / "memory/self"
         else:
             raise ValueError("未知记忆层")
-        base_root = self.profiles.path if kind in {"profile", "notes"} else self.root
+        base_root = (
+            self.profiles.path
+            if kind in {"profile", "notes", "role_memory"}
+            else self.root
+        )
         _ensure_managed_dir(base_root, directory)
         return f"{kind}:{target}:{document}", directory / document, document, target
 
@@ -645,6 +681,7 @@ class MemoryLayers:
 
     LIMITS = {
         "memory": 16000,
+        "role_memory": 8000,
         "journal": 8000,
         "notes": 16000,
         "heartbeat": 16000,
@@ -661,7 +698,12 @@ class MemoryLayers:
             content,
         ):
             raise ValueError("内容包含凭据，已拒绝保存")
-        if allow_custom or kind == "memory" or kind == "profile" and document == "profile.toml":
+        if (
+            allow_custom
+            or kind in {"memory", "role_memory"}
+            or kind == "profile"
+            and document == "profile.toml"
+        ):
             return
         if re.search(
             r"本群|群名|群号|群友称呼|业务抬头|资产代号|工作区代号|服务器地址|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d{8,}\b|\b(?:\d{1,3}\.){3}\d{1,3}\b|/(?:root|Users|home)/",
@@ -1462,6 +1504,91 @@ class MemoryLayers:
             db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
         return {"deleted": True, "skill": target}
 
+    def patch_skill(
+        self,
+        target: str,
+        old_string: str,
+        new_string: str,
+        *,
+        replace_all: bool = False,
+        author: str = "agent",
+    ) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        if not isinstance(old_string, str) or not old_string:
+            raise ValueError("补丁替换需要非空 old_string")
+        if not isinstance(new_string, str):
+            raise ValueError("补丁替换需要字符串 new_string")
+        with self._lock():
+            cur = self.read("skill", target=target)
+            body = str(cur.get("content") or "")
+            count = body.count(old_string)
+            if count == 0:
+                raise ValueError("目标技能中未找到待替换文本片段，请先读取最新 SKILL.md")
+            if count > 1 and not replace_all:
+                raise ValueError(f"待替换片段在 SKILL.md 中出现 {count} 次，请提供更精确上下文或指定 replace_all")
+            updated = (
+                body.replace(old_string, new_string)
+                if replace_all
+                else body.replace(old_string, new_string, 1)
+            )
+            return self._write(
+                "skill",
+                updated,
+                target=target,
+                expected_version=cur.get("version"),
+                author=author,
+                allow_custom=True,
+            )
+
+    def write_skill_file(
+        self,
+        target: str,
+        rel_path: str,
+        content: str,
+        *,
+        author: str = "agent",
+    ) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        clean_rel = self._validate_companion_rel(rel_path)
+        first_seg = clean_rel.split("/", 1)[0]
+        if first_seg not in {"references", "templates", "scripts", "assets"}:
+            raise ValueError("附属文件必须位于 references/、templates/、scripts/ 或 assets/ 目录下")
+        if not isinstance(content, str):
+            raise ValueError("附属文件内容必须为文本")
+        raw_bytes = content.encode("utf-8")
+        self._guard_companion_bytes(clean_rel, raw_bytes)
+        with self._lock():
+            if target not in set(self.skills()):
+                raise ValueError(f"目标技能不存在: {target}")
+            cur = self.read("skill", target=target)
+            skills_root = _ensure_managed_dir(self.root, self.root / "abilities/skills")
+            skill_dir = _ensure_managed_dir(skills_root, skills_root / target)
+            if not (skill_dir / "SKILL.md").is_file() and cur.get("content"):
+                atomic_private_write(skill_dir / "SKILL.md", str(cur["content"]).encode("utf-8"))
+            existing_comps = dict(self.read_skill_companions(target))
+            if clean_rel not in existing_comps and len(existing_comps) >= _SKILL_MAX_FILES:
+                raise ValueError("该技能附属文件数量已达上限")
+            target_file = skill_dir / clean_rel
+            _ensure_managed_dir(skill_dir, target_file.parent)
+            atomic_private_write(target_file, raw_bytes)
+        return {"ok": True, "skill": target, "file_path": clean_rel, "bytes": len(raw_bytes)}
+
+    def remove_skill_file(self, target: str, rel_path: str) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("技能编号无效")
+        clean_rel = self._validate_companion_rel(rel_path)
+        with self._lock():
+            skill_dir = self.root / "abilities/skills" / target
+            if path_is_link_like(skill_dir) or not skill_dir.is_dir():
+                raise ValueError("目标技能本地附属目录不存在")
+            target_file = skill_dir / clean_rel
+            if path_is_link_like(target_file) or not target_file.is_file():
+                raise ValueError(f"附属文件不存在: {clean_rel}")
+            target_file.unlink()
+        return {"ok": True, "skill": target, "removed": clean_rel}
+
     def seed_profile(self, target: str) -> dict[str, int]:
         versions = {
             "PROFILE.md": self.read(
@@ -1476,6 +1603,11 @@ class MemoryLayers:
             versions["NOTES.md"] = self.read(
                 "notes", target=target, allow_custom=True
             )["version"]
+        role_mem_path = self.profiles.path / target / "MEMORY.md"
+        if role_mem_path.is_file() and not path_is_link_like(role_mem_path):
+            versions["MEMORY.md"] = self.read(
+                "role_memory", target=target, allow_custom=True
+            )["version"]
         return versions
 
     def purge_profile(self, target: str) -> None:
@@ -1486,15 +1618,115 @@ class MemoryLayers:
                 f"profile:{target}:PROFILE.md",
                 f"profile:{target}:profile.toml",
                 f"notes:{target}:NOTES.md",
+                f"role_memory:{target}:MEMORY.md",
             }
             rows = db.execute(
-                "SELECT DISTINCT asset FROM memory_versions WHERE kind IN ('profile', 'notes') AND target=?",
+                "SELECT DISTINCT asset FROM memory_versions WHERE kind IN ('profile', 'notes', 'role_memory') AND target=?",
                 (target,),
             ).fetchall()
             assets.update(row[0] for row in rows)
             for asset in assets:
                 db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
                 db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
+
+    def save_skill_proposal(
+        self,
+        *,
+        thread_id: str,
+        revision: int = 0,
+        profile_id: str = "default",
+        skill_id: str,
+        title: str,
+        description: str,
+        content: str,
+        signals: list[str] | None = None,
+        rationale: str = "",
+    ) -> dict:
+        clean_id = _slug_skill_id(skill_id) or f"workflow-{hashlib.sha1(str(thread_id).encode()).hexdigest()[:8]}"
+        self._guard("skill", content, "", allow_custom=True)
+        now = float(self.clock())
+        prop_id = f"sp_{hashlib.sha1(f'{thread_id}:{revision}:{clean_id}'.encode('utf-8')).hexdigest()[:12]}"
+        sig_json = json.dumps(list(signals or []), ensure_ascii=False)
+        with self.store.connect() as db, db:
+            db.execute(
+                """INSERT INTO skill_proposals (
+                    proposal_id, thread_id, revision, profile_id, skill_id, title,
+                    description, content, signals, rationale, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                ON CONFLICT(proposal_id) DO UPDATE SET
+                    skill_id=excluded.skill_id,
+                    title=excluded.title,
+                    description=excluded.description,
+                    content=excluded.content,
+                    signals=excluded.signals,
+                    rationale=excluded.rationale,
+                    status='pending',
+                    updated_at=excluded.updated_at""",
+                (
+                    prop_id,
+                    str(thread_id or ""),
+                    int(revision or 0),
+                    str(profile_id or "default"),
+                    clean_id,
+                    str(title or clean_id)[:80],
+                    str(description or "")[:200],
+                    content,
+                    sig_json,
+                    str(rationale or "")[:240],
+                    now,
+                    now,
+                ),
+            )
+        return self.get_skill_proposal(prop_id) or {"proposal_id": prop_id, "skill_id": clean_id}
+
+    def get_skill_proposal(self, proposal_id: str) -> dict | None:
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT * FROM skill_proposals WHERE proposal_id=?",
+                (str(proposal_id or "").strip(),),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["signals"] = json.loads(d.get("signals") or "[]")
+        except json.JSONDecodeError:
+            d["signals"] = []
+        return d
+
+    def list_skill_proposals(
+        self, *, status: str = "pending", limit: int = 20, db=None
+    ) -> list[dict]:
+        sql = "SELECT * FROM skill_proposals WHERE status=? ORDER BY updated_at DESC LIMIT ?"
+        params = (str(status or "pending"), int(limit))
+        try:
+            if db is not None:
+                rows = db.execute(sql, params).fetchall()
+            else:
+                with self.store.connect() as conn:
+                    rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["signals"] = json.loads(d.get("signals") or "[]")
+            except json.JSONDecodeError:
+                d["signals"] = []
+            out.append(d)
+        return out
+
+    def resolve_skill_proposal(self, proposal_id: str, status: str = "created") -> bool:
+        if status not in {"created", "dismissed", "pending"}:
+            raise ValueError("草稿状态无效")
+        now = float(self.clock())
+        with self.store.connect() as db, db:
+            cur = db.execute(
+                "UPDATE skill_proposals SET status=?, updated_at=? WHERE proposal_id=?",
+                (status, now, str(proposal_id or "").strip()),
+            )
+            return bool(cur.rowcount)
 
     def write(
         self,
@@ -1758,7 +1990,12 @@ class MemoryLayers:
         }
 
     def methods(self, profile):
-        pieces = [self.read("notes", target=profile.id)["content"]]
+        pieces: list[str] = []
+        role_mem = self.read("role_memory", target=profile.id)["content"].strip()
+        if role_mem:
+            pieces.append(f"### 角色长期记忆\n{role_mem}")
+        notes_txt = self.read("notes", target=profile.id)["content"]
+        pieces.append(notes_txt)
         for skill in profile.skills:
             content = self.read("skill", target=skill)["content"]
             if not content.strip():

@@ -1,14 +1,23 @@
 """Maisya 宿主入口。"""
 
 import asyncio
+import base64
+import hashlib
 import html
+import http.client
 import inspect
+import io
+import ipaddress
 import json
+import os
 import re
+import socket
 import sqlite3
+import ssl
 import threading
 import time
 import tomllib
+import urllib.parse
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +52,7 @@ if __package__:
         admin_dm_allowed,
         alias as message_alias,
         allowed,
+        clean_display_name,
         filter_tools,
         format_stream_spec,
         merge_admins,
@@ -86,6 +96,7 @@ else:
         admin_dm_allowed,
         alias as message_alias,
         allowed,
+        clean_display_name,
         filter_tools,
         format_stream_spec,
         merge_admins,
@@ -203,7 +214,7 @@ def _sanitize_host_model_catalog(config_data: dict) -> dict:
     seen: set[str] = set()
     raw_models = config_data.get("models")
     if isinstance(raw_models, list):
-        for entry in raw_models[:512]:
+        for entry in raw_models[:1024]:
             if not isinstance(entry, dict):
                 continue
             name = str(entry.get("name") or "").strip()
@@ -217,6 +228,12 @@ def _sanitize_host_model_catalog(config_data: dict) -> dict:
                     for t in entry["assigned_tasks"][:32]
                     if isinstance(t, str) and str(t).strip()
                 ]
+            caps = entry.get("capabilities")
+            is_visual = bool(
+                entry.get("visual")
+                or entry.get("is_visual")
+                or (isinstance(caps, (list, tuple, set)) and "vision" in caps)
+            )
             models.append(
                 {
                     "name": name,
@@ -226,7 +243,8 @@ def _sanitize_host_model_catalog(config_data: dict) -> dict:
                     "provider": str(
                         entry.get("api_provider") or entry.get("provider") or ""
                     ).strip()[:128],
-                    "source": "host_config",
+                    "visual": is_visual,
+                    "source": str(entry.get("source") or "host_config")[:64],
                     "assigned_tasks": list(dict.fromkeys(raw_assigned or ())),
                 }
             )
@@ -274,6 +292,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self._bootstrap_platforms = {}
         self._relayed_bootstrap_sources = {}
         self._recent_dm_memory: dict[str, dict] = {}
+        self._ephemeral_turn_secrets: dict[str, list[dict]] = {}
         self._vault_command_outcomes: dict[tuple[str, str, str], tuple[bool, str, int]] = {}
         self._stream_cache = {
             "expires": 0.0,
@@ -282,6 +301,8 @@ class MaisyaPlugin(MaiBotPlugin):
             "_streams_id": 0,
         }
         self._avatar_cache = {}
+        self._avatar_data_mem = {}
+        self._avatar_data_neg = {}
         self._avatar_inflight = {}
         self._avatar_sem = None
         self._host_model_catalog = {"models": [], "tasks": {}, "updated": 0.0}
@@ -388,6 +409,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self.runtime.memory = self.memory
         self.runtime.permitted = self._activity_permitted
         self.runtime.recall = self._agent_recall
+        self.runtime._plugin_ref = self
         await self.runtime.sandbox.probe()
         self.engine = ThreadEngine(
             self.threads,
@@ -428,6 +450,9 @@ class MaisyaPlugin(MaiBotPlugin):
             memory=self.memory,
             profiles=self.profiles,
             plugin_enabled=lambda: self.settings.plugin.enabled,
+            heartbeat_enabled=lambda: bool(
+                getattr(self.settings, "heartbeat_enabled", True)
+            ),
             heartbeat_interval=getattr(
                 self.settings, "heartbeat_interval_minutes", 60
             )
@@ -497,6 +522,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self._continuing_turn_chats.clear()
         self._reply_sources.clear()
         self._turn_ops_receipts.clear()
+        self._ephemeral_turn_secrets.clear()
         self._vault_command_outcomes.clear()
         self._clear_bootstrap_caches()
         self.messages = None
@@ -635,7 +661,7 @@ class MaisyaPlugin(MaiBotPlugin):
         else:
             _apply()
 
-    def _recent_dms_sync(self, limit: int = 12) -> list[dict]:
+    def _recent_dms_sync(self, limit: int = 16) -> list[dict]:
         streams = (getattr(self, "_stream_cache", {}) or {}).get("streams", {}) or {}
         by_user: dict[str, dict] = {}
         lock = getattr(self, "_bootstrap_lock", None)
@@ -647,7 +673,13 @@ class MaisyaPlugin(MaiBotPlugin):
         for item in mem_items:
             uid_key = str(item.get("user_id") or "").strip()
             if uid_key:
-                by_user[uid_key] = dict(item)
+                copied = dict(item)
+                raw_uid = str(copied.get("raw_user_id") or "").strip() or (
+                    uid_key.split(":", 1)[1] if ":" in uid_key else uid_key
+                )
+                copied["raw_user_id"] = raw_uid
+                copied["name"] = clean_display_name(copied.get("name"), raw_uid)
+                by_user[uid_key] = copied
         if self.messages is not None:
             for r in self.messages.list_routes(limit=256):
                 if str(r.get("chat_type") or "").strip().lower() != "private":
@@ -660,16 +692,19 @@ class MaisyaPlugin(MaiBotPlugin):
                 admin_id = f"{plat}:{uid}" if plat else uid
                 spec = format_stream_spec(plat, "private", uid) if plat else uid
                 s_info = streams.get(sid) or {}
-                label = str(s_info.get("name") or uid).strip()
+                label = clean_display_name(s_info.get("name"), uid)
                 upd = float(r.get("updated") or 0.0)
                 prev = by_user.get(admin_id)
                 if prev is None or upd >= float(prev.get("updated") or 0.0):
                     by_user[admin_id] = {
                         "chat_id": spec,
+                        "stream_spec": spec,
                         "session_id": sid,
                         "user_id": admin_id,
+                        "raw_user_id": uid,
                         "platform": plat,
                         "name": label,
+                        "avatar_data": str(s_info.get("avatar_data") or ""),
                         "updated": upd,
                     }
         for sid, s_info in streams.items():
@@ -689,16 +724,32 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             by_user[admin_id] = {
                 "chat_id": spec,
+                "stream_spec": spec,
                 "session_id": str(sid),
                 "user_id": admin_id,
+                "raw_user_id": uid,
                 "platform": plat,
-                "name": str(s_info.get("name") or uid).strip(),
+                "name": clean_display_name(s_info.get("name"), uid),
+                "avatar_data": str(s_info.get("avatar_data") or ""),
                 "updated": 0.0,
             }
         ordered = sorted(
             by_user.values(), key=lambda x: float(x.get("updated") or 0.0), reverse=True
         )
         return ordered[:limit]
+
+    @staticmethod
+    def _admin_to_stream_spec(raw_admin: str) -> str:
+        tok = str(raw_admin or "").strip()
+        if not tok:
+            return ""
+        parsed = parse_stream_spec(tok)
+        if parsed is not None:
+            return format_stream_spec(*parsed)
+        if ":" in tok:
+            plat, uid = tok.split(":", 1)
+            return format_stream_spec(plat.strip().lower(), "private", uid.strip()) or tok
+        return tok
 
     def enrich_onboarding_view(self, view: dict | None) -> dict:
         out = dict(view or {})
@@ -737,7 +788,12 @@ class MaisyaPlugin(MaiBotPlugin):
             out["available_models"] = []
         return out
 
-    async def onboarding_view(self, *, is_admin_view: bool = True) -> dict:
+    async def onboarding_view(
+        self,
+        *,
+        is_admin_view: bool = True,
+        existing_sources: dict[str, dict] | None = None,
+    ) -> dict:
         if self.onboarding is None:
             return self.enrich_onboarding_view(
                 {
@@ -781,7 +837,48 @@ class MaisyaPlugin(MaiBotPlugin):
             default_profile_ready=default_profile_ready,
             profiles_path=self.profiles.path if self.profiles is not None else None,
         )
-        return self.enrich_onboarding_view(raw_view)
+        enriched = self.enrich_onboarding_view(raw_view)
+        admin_specs = [
+            self._admin_to_stream_spec(a)
+            for a in (*enriched.get("host_admins", ()), *enriched.get("plugin_admins", ()))
+        ]
+        source_ids = list(
+            dict.fromkeys(
+                [
+                    *(enriched.get("enabled_chats") or []),
+                    *(d.get("chat_id") for d in (enriched.get("recent_dms") or []) if isinstance(d, dict) and d.get("chat_id")),
+                    *(s for s in admin_specs if s),
+                    *((enriched.get("known_chats") or [])[:16]),
+                ]
+            )
+        )
+        if existing_sources is not None:
+            enriched["_source_chat_ids"] = source_ids
+            enriched["chat_sources"] = existing_sources
+        elif source_ids:
+            sources = await self._resolve_chat_sources(source_ids)
+            enriched["chat_sources"] = sources
+            self._apply_sources_to_dms(enriched.get("recent_dms"), sources)
+        return enriched
+
+    @staticmethod
+    def _apply_sources_to_dms(recent_dms, sources: dict[str, dict]) -> None:
+        if not isinstance(recent_dms, list) or not isinstance(sources, dict):
+            return
+        for dm in recent_dms:
+            if not isinstance(dm, dict):
+                continue
+            meta = (
+                sources.get(dm.get("chat_id") or "")
+                or sources.get(dm.get("session_id") or "")
+                or {}
+            )
+            if meta.get("avatar_data"):
+                dm["avatar_data"] = meta["avatar_data"]
+            if meta.get("name"):
+                dm["name"] = clean_display_name(
+                    meta["name"], dm.get("raw_user_id") or dm.get("user_id") or ""
+                )
 
     def _scrub_probe_text(self, value: str) -> str:
         text = str(value or "")
@@ -994,7 +1091,7 @@ class MaisyaPlugin(MaiBotPlugin):
             if cand is None or not cand.is_plugin_relayed
         )
 
-    def _resolve_host_model_config_path(self) -> Path | None:
+    def _resolve_host_root(self) -> Path | None:
         host_root: Path | None = None
         if getattr(self, "data_root", None):
             dr = Path(self.data_root).absolute()
@@ -1009,6 +1106,12 @@ class MaisyaPlugin(MaiBotPlugin):
                     host_root = dd.parent.parent.parent
         if host_root is None or path_is_link_like(host_root):
             return None
+        return host_root
+
+    def _resolve_host_model_config_path(self) -> Path | None:
+        host_root = self._resolve_host_root()
+        if host_root is None:
+            return None
         cfg_dir = host_root / "config"
         cfg_path = cfg_dir / "model_config.toml"
         if (
@@ -1019,29 +1122,102 @@ class MaisyaPlugin(MaiBotPlugin):
             return None
         return cfg_path
 
+    def _resolve_shared_model_catalog_path(self, host_root: Path | None) -> Path | None:
+        candidates: list[Path] = []
+        env_raw = os.environ.get("MAIBOT_SHARED_MODEL_CATALOG", "").strip()
+        if env_raw:
+            candidates.append(Path(env_raw))
+        if host_root is not None:
+            candidates.append(host_root / "host" / "model_catalog.toml")
+            if host_root.parent.name == "instances":
+                candidates.append(host_root.parent.parent / "host" / "model_catalog.toml")
+        for cand in candidates:
+            try:
+                if (
+                    cand.is_file()
+                    and not path_is_link_like(cand)
+                    and not path_is_link_like(cand.parent)
+                    and cand.stat().st_size <= 4 * 1024 * 1024
+                ):
+                    return cand
+            except OSError:
+                continue
+        return None
+
     def refresh_host_model_catalog(self) -> bool:
-        """只读同步宿主实例 config/model_config.toml 中的公开模型名与任务分配（不读取密钥/URL）。"""
+        """只读同步宿主 model_config.toml 与共享 model_catalog.toml 中的公开模型名与任务分配（不读取密钥/URL）。"""
         try:
+            host_root = self._resolve_host_root()
             cfg_path = self._resolve_host_model_config_path()
-            if cfg_path is None:
+            shared_cand = self._resolve_shared_model_catalog_path(host_root)
+            if cfg_path is None and shared_cand is None:
                 return False
-            st = cfg_path.stat()
-            if st.st_size > 2 * 1024 * 1024:
-                return False
-            sig = (int(st.st_mtime_ns), int(st.st_size))
+
+            cfg_stat = cfg_path.stat() if cfg_path is not None else None
+            if cfg_stat is not None and cfg_stat.st_size > 2 * 1024 * 1024:
+                cfg_path = None
+                cfg_stat = None
+            shared_stat = shared_cand.stat() if shared_cand is not None else None
+
+            raw_cfg_models: list[dict] = []
+            raw_tasks = None
+            if cfg_path is not None:
+                raw = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+                cfg_models = raw.get("models")
+                if isinstance(cfg_models, list):
+                    raw_cfg_models = [m for m in cfg_models if isinstance(m, dict)]
+                raw_tasks = raw.get("model_task_config")
+                del raw
+
+            use_shared = False
+            if shared_cand is not None and shared_stat is not None:
+                in_host = bool(
+                    host_root is not None
+                    and shared_cand.absolute().is_relative_to(host_root.absolute())
+                )
+                is_instance_sibling = bool(
+                    host_root is not None
+                    and host_root.parent.name == "instances"
+                    and shared_cand.absolute().is_relative_to(host_root.parent.parent.absolute())
+                )
+                if in_host or is_instance_sibling or not raw_cfg_models:
+                    use_shared = True
+
+            sig = (
+                (int(cfg_stat.st_mtime_ns), int(cfg_stat.st_size)) if cfg_stat is not None else None,
+                (int(shared_stat.st_mtime_ns), int(shared_stat.st_size))
+                if (use_shared and shared_stat is not None)
+                else None,
+            )
             if (
                 self._host_model_mtime == sig
                 and isinstance(self._host_model_catalog, dict)
                 and self._host_model_catalog.get("models")
             ):
                 return False
-            raw = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
-            subset = {
-                "models": raw.get("models"),
-                "model_task_config": raw.get("model_task_config"),
-            }
-            del raw
-            catalog = _sanitize_host_model_catalog(subset)
+
+            merged_by_name: dict[str, dict] = {}
+            if use_shared and shared_cand is not None:
+                shared_raw = tomllib.loads(shared_cand.read_text(encoding="utf-8"))
+                shared_models = shared_raw.get("models")
+                if isinstance(shared_models, list):
+                    for item in shared_models[:1024]:
+                        if isinstance(item, dict):
+                            mname = str(item.get("name") or "").strip()
+                            if mname:
+                                merged_by_name[mname] = {**item, "source": "shared_catalog"}
+                del shared_raw
+            for item in raw_cfg_models[:1024]:
+                mname = str(item.get("name") or "").strip()
+                if mname:
+                    merged_by_name[mname] = {**item, "source": "host_config"}
+
+            catalog = _sanitize_host_model_catalog(
+                {
+                    "models": list(merged_by_name.values()),
+                    "model_task_config": raw_tasks,
+                }
+            )
             self._host_model_catalog = catalog
             self._host_model_mtime = sig
             if getattr(self, "data_root", None):
@@ -2188,6 +2364,36 @@ class MaisyaPlugin(MaiBotPlugin):
             safe_err = self.vault.redact(redact_values(str(error), secrets))
             return False, f"凭据输入未保存：{safe_err}", 2
 
+    def _store_ephemeral_secret(self, session_id: str, value: str, *, kind: str = "private_key") -> None:
+        sid = str(session_id or "").strip()
+        if not sid or not value:
+            return
+        now = time.time()
+        bucket = [
+            item
+            for item in (self._ephemeral_turn_secrets.get(sid) or ())
+            if now - float(item.get("ts") or 0.0) <= 300.0
+        ]
+        if not any(item.get("value") == value for item in bucket):
+            bucket.append({"kind": kind, "value": value, "ts": now})
+        self._ephemeral_turn_secrets[sid] = bucket[-16:]
+
+    def get_ephemeral_secrets(self, session_id: str) -> list[dict]:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        now = time.time()
+        bucket = [
+            dict(item)
+            for item in (self._ephemeral_turn_secrets.get(sid) or ())
+            if now - float(item.get("ts") or 0.0) <= 300.0
+        ]
+        if bucket:
+            self._ephemeral_turn_secrets[sid] = bucket
+        else:
+            self._ephemeral_turn_secrets.pop(sid, None)
+        return bucket
+
     async def _vault_input(self, message, identity, text):
         command = bool(VAULT_COMMAND.match(text.strip()))
         private = not (message.get("message_info") or {}).get("group_info")
@@ -2205,7 +2411,10 @@ class MaisyaPlugin(MaiBotPlugin):
         else:
             clean = PRIVATE_KEY.sub("[PRIVATE KEY REDACTED]", text)
             for match in PRIVATE_KEY.finditer(text):
-                secrets.update(secret_variants(match.group()))
+                raw_pem = match.group()
+                secrets.update(secret_variants(raw_pem))
+                if identity is not None and identity.session_id:
+                    self._store_ephemeral_secret(identity.session_id, raw_pem, kind="private_key")
         sanitized = redact_values(message, secrets)
         sanitized["processed_plain_text"] = clean
         sanitized["raw_message"] = [{"type": "text", "data": clean}]
@@ -3659,7 +3868,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_shape",
-        description="管理员统一读取、局部修改或回滚 Maisya 全部配置与核心文件（仅限 overview / settings / profile / file）。overview 读取全局与目标会话现状；settings 支持 read/patch/write/history/rollback；profile 支持 list/read/patch/write/create/delete；file 支持 read/write/history/rollback（可读写会话 MEMORY.md、JOURNAL.md、HEARTBEAT.md、技能或工具资料，流标识统一 平台:类型:id 如 qq:group:100246809）。",
+        description="管理员对话管家入口：统一查看、一站式配置（setup）、微调单一心跳（heartbeat / settings）、读写各角色独立记忆（role_memory / notes）、管理简报资讯源（digest_sources）、外部工具连接（services）、确认或忽略新技能草稿（skill_proposal）、会话备忘与回滚（rollback）。流标识统一使用 平台:类型:id（如 qq:group:100246809）。",
         parameters={
             "type": "object",
             "properties": {
@@ -3667,9 +3876,18 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "string",
                     "enum": [
                         "overview",
+                        "setup",
                         "settings",
                         "profile",
                         "file",
+                        "role_memory",
+                        "notes",
+                        "memory",
+                        "journal",
+                        "heartbeat",
+                        "digest_sources",
+                        "services",
+                        "skill_proposal",
                         "read",
                         "patch",
                         "write",
@@ -3683,19 +3901,50 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "string",
                     "enum": [
                         "overview",
+                        "setup",
                         "settings",
                         "profile",
                         "file",
+                        "role_memory",
+                        "notes",
                         "memory",
                         "journal",
                         "heartbeat",
+                        "digest_sources",
+                        "services",
+                        "skill_proposal",
                         "tools",
                         "skill",
                     ],
                 },
                 "op": {
                     "type": "string",
-                    "enum": ["read", "list", "patch", "write", "history", "rollback", "create", "delete"],
+                    "enum": [
+                        "read",
+                        "list",
+                        "patch",
+                        "write",
+                        "add",
+                        "remove",
+                        "upsert",
+                        "history",
+                        "rollback",
+                        "create",
+                        "delete",
+                        "export",
+                        "import",
+                        "confirm",
+                        "dismiss",
+                    ],
+                },
+                "url": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "description": "profile(op='import') 公开 https:// .zip 直链，或 services 远程地址。",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "profile(op='import') 同名角色冲突时是否平滑更新现有角色。",
                 },
                 "target": {"type": "string", "maxLength": 64},
                 "target_chat": {
@@ -3709,9 +3958,56 @@ class MaisyaPlugin(MaiBotPlugin):
                     "description": "profile 文档可填 PROFILE.md 或 profile.toml；file 类型可指定 MEMORY.md、JOURNAL.md、HEARTBEAT.md 或技能文件路径。",
                 },
                 "content": {"type": "string", "maxLength": 65536},
+                "topics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 20,
+                    "description": "setup/digest_sources 可选：简报关注主题列表。",
+                },
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 20,
+                    "description": "setup/digest_sources 可选：订阅源 URL 列表。",
+                },
+                "daily_at": {
+                    "type": "string",
+                    "maxLength": 16,
+                    "description": "setup 可选：每日定时推送时刻（如 08:30）。",
+                },
+                "every_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2592000,
+                    "description": "setup 可选：周期执行秒数（>= 300）。",
+                },
+                "run_now": {
+                    "type": "boolean",
+                    "description": "setup 可选：为 true 时保存配置后立即在后台试跑一期。",
+                },
+                "deliver_to": {
+                    "type": "string",
+                    "enum": ["auto", "target", "current", "none"],
+                    "description": "setup 立即试跑时结果回传位置：current 仅回传当前管理员私聊预览，target 推往目标会话。",
+                },
+                "profile": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "setup 可选：要启用或绑定的角色编号（如 digest / scout / default）。",
+                },
+                "sleep_window": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "description": "setup/settings 可选：免打扰时段（如 23:30-08:00 或 off）。",
+                },
+                "memory": {
+                    "type": "string",
+                    "maxLength": 16000,
+                    "description": "setup 可选：同步写入目标会话的 MEMORY.md 内容。",
+                },
                 "patch": {
                     "type": "object",
-                    "description": "局部更新对象：settings 支持 enabled_chats/admins/permission_mode/default_model/proactive_level/daily_proactive_limit/sleep_window/ui_style/sandbox；profile 支持 title/enabled/autonomous/permission_mode/execution_mode/model_name/fallback_models/tools/toolsets/skills/mcp/apis/sandbox_targets/secrets/instructions。",
+                    "description": "局部更新对象：setup 支持 topics/digest_topics/digest_feeds/urls/daily_at/run_now/deliver_to/memory/sleep_window/profile/chat_proactive_levels；settings 支持 enabled_chats/admins/permission_mode/default_model/proactive_level/chat_proactive_levels/daily_proactive_limit/sleep_window/heartbeat_enabled/heartbeat_interval_minutes/longing_quiet_hours/acquaintance_users/ui_style/sandbox；services 支持直接附带 command/url/env/headers/readonly 增删 MCP；skill_proposal 支持 bind_profiles；profile 支持 title/enabled/autonomous/permission_mode/execution_mode/model_name/fallback_models/tools/toolsets/skills/mcp/apis/sandbox_targets/secrets/instructions。",
                 },
                 "source_msg_id": {"type": "string"},
                 "expected_version": {"type": "integer", "minimum": 0},
@@ -3737,6 +4033,17 @@ class MaisyaPlugin(MaiBotPlugin):
         expected_version=None,
         version=None,
         base="default",
+        topics=None,
+        urls=None,
+        daily_at="",
+        every_seconds=None,
+        run_now=None,
+        deliver_to="",
+        profile="",
+        sleep_window="",
+        memory="",
+        url=None,
+        overwrite=None,
         **kwargs,
     ):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
@@ -3746,6 +4053,33 @@ class MaisyaPlugin(MaiBotPlugin):
                 self.authorize_admin_source, source_msg_id, chat_id, platform
             ):
                 raise PermissionError("塑形需要真实管理员消息授权")
+            merged_patch = dict(patch) if isinstance(patch, dict) else None
+            extra_top = {}
+            if topics:
+                extra_top["topics"] = topics
+                extra_top.setdefault("digest_topics", topics)
+            if urls:
+                extra_top["urls"] = urls
+            if daily_at:
+                extra_top["daily_at"] = daily_at
+            if every_seconds is not None and int(every_seconds) > 0:
+                extra_top["every_seconds"] = int(every_seconds)
+            if run_now is not None:
+                extra_top["run_now"] = bool(run_now)
+            if deliver_to:
+                extra_top["deliver_to"] = deliver_to
+            if profile:
+                extra_top["profile"] = profile
+            if sleep_window:
+                extra_top["sleep_window"] = sleep_window
+            if memory:
+                extra_top["memory"] = memory
+            if url is not None and str(url).strip():
+                extra_top["url"] = str(url).strip()
+            if overwrite is not None:
+                extra_top["overwrite"] = bool(overwrite)
+            if extra_top:
+                merged_patch = {**extra_top, **(merged_patch or {})}
             result = await execute_shape(
                 self,
                 action=action,
@@ -3755,7 +4089,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 target_chat=target_chat,
                 document=document,
                 content=content,
-                patch=patch,
+                patch=merged_patch,
                 version=version,
                 expected_version=expected_version,
                 base=base,
@@ -3766,11 +4100,16 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             norm_action = str(action or "").strip().lower()
             norm_op = str(op or "").strip().lower()
-            mutating_ops = {"write", "patch", "create", "rollback", "delete"}
-            if norm_action in mutating_ops or norm_op in mutating_ops or (
-                not norm_op
-                and norm_action in {"settings", "profile", "file"}
-                and (patch is not None or bool(content) or version is not None)
+            mutating_ops = {"setup", "write", "patch", "create", "rollback", "delete", "add", "remove", "upsert", "confirm", "dismiss"}
+            if (
+                norm_action in mutating_ops
+                or norm_op in mutating_ops
+                or (norm_op == "import" and isinstance(result, dict) and result.get("imported"))
+                or (
+                    not norm_op
+                    and norm_action in {"settings", "profile", "file"}
+                    and (patch is not None or bool(content) or version is not None)
+                )
             ):
                 self._record_ops_receipt(chat_id, f"shape:{norm_op or norm_action}")
             redacted = self.vault.redact(result)
@@ -3797,13 +4136,13 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_later",
-        description="按自然语言为之后安排一次提醒、主动回访、周期工作流或条件盯梢（watch）。mode 支持 once（单次）、recurring（周期/每日定点 daily_at）、watch（按 condition 盯梢检查，满足条件才打扰，常配合 every_seconds>=300）。schedule 安排（管理员支持 target_chat 跨群、daily_at 定点钟点与 replace 覆盖防重复），list 查看，cancel 取消。",
+        description="按自然语言为之后安排一次提醒、主动回访、周期工作流或条件盯梢（watch），也可列出、暂停、恢复、取消或立即触发一次。mode 支持 once（单次）、recurring（周期/每日定点 daily_at）、watch（按 condition 盯梢检查，满足条件才打扰，常配合 every_seconds>=300）。",
         parameters={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["schedule", "list", "cancel"],
+                    "enum": ["schedule", "list", "cancel", "pause", "resume", "run_now"],
                 },
                 "mode": {
                     "type": "string",
@@ -3938,10 +4277,17 @@ class MaisyaPlugin(MaiBotPlugin):
                 if raw_target_chat.lower() == "all":
                     if not is_admin_caller:
                         raise PermissionError("列出全部会话待办需要真实管理员消息授权")
+                    pending_rows = await asyncio.to_thread(
+                        self.intents.list_all, status="pending", limit=50
+                    )
+                    paused_rows = await asyncio.to_thread(
+                        self.intents.list_all, status="paused", limit=50
+                    )
                     rows = self.vault.redact(
-                        await asyncio.to_thread(
-                            self.intents.list_all, status="pending", limit=50
-                        )
+                        sorted(
+                            [*pending_rows, *paused_rows],
+                            key=lambda item: float(item.get("due_at") or 0.0),
+                        )[:50]
                     )
                     return {
                         "success": True,
@@ -3964,17 +4310,21 @@ class MaisyaPlugin(MaiBotPlugin):
                     and not (is_admin_caller or is_admin_dm)
                 ):
                     raise PermissionError("当前会话没有启用 Maisya")
-                rows = await asyncio.to_thread(self.intents.list, "chat:" + effective_chat_id)
+                rows = await asyncio.to_thread(
+                    self.intents.list,
+                    "chat:" + effective_chat_id,
+                    include_paused=True,
+                )
                 rows = self.vault.redact(rows)
                 return {
                     "success": True,
                     "intents": rows,
                     "content": json.dumps(rows, ensure_ascii=False),
                 }
-            if action == "cancel":
+            if action in {"cancel", "pause", "resume", "run_now"}:
                 existing = await asyncio.to_thread(self.intents.get, intent_id)
                 if (existing.get("payload") or {}).get("scheduled_admin") is True and not is_admin_caller:
-                    raise PermissionError("管理员创建的计划任务仅限管理员取消")
+                    raise PermissionError("管理员创建的计划任务仅限管理员操作")
                 if raw_target_chat:
                     effective_chat_id, _ = await self.resolve_chat_id(
                         raw_target_chat,
@@ -3982,20 +4332,63 @@ class MaisyaPlugin(MaiBotPlugin):
                         current_platform=platform,
                     )
                     if effective_chat_id != chat_id and not is_admin_caller:
-                        raise PermissionError("跨会话取消计划需要真实管理员消息授权")
-                    cancel_target = "chat:" + effective_chat_id
+                        raise PermissionError("跨会话调整计划需要真实管理员消息授权")
+                    op_target = "chat:" + effective_chat_id
                 elif is_admin_caller or is_admin_dm:
-                    cancel_target = existing["target"]
+                    op_target = existing["target"]
                 else:
                     if not await asyncio.to_thread(self.enabled_for, chat_id, platform):
                         raise PermissionError("当前会话没有启用 Maisya")
-                    cancel_target = "chat:" + chat_id
-                result = await asyncio.to_thread(
-                    self.intents.cancel, intent_id, cancel_target
-                )
+                    op_target = "chat:" + chat_id
+                if existing.get("target") != op_target:
+                    raise PermissionError("目标会话与该计划不匹配，无权操作")
+                if action == "cancel":
+                    result = await asyncio.to_thread(
+                        self.intents.cancel, intent_id, op_target, is_admin=is_admin_caller
+                    )
+                elif action == "pause":
+                    result = await asyncio.to_thread(
+                        self.intents.pause, intent_id, op_target, is_admin=is_admin_caller
+                    )
+                elif action == "resume":
+                    result = await asyncio.to_thread(
+                        self.intents.resume, intent_id, op_target, is_admin=is_admin_caller
+                    )
+                else:
+                    if existing.get("status") not in {"pending", "paused"}:
+                        raise ValueError("意图不存在或已处理")
+                    if existing.get("status") == "paused":
+                        await asyncio.to_thread(
+                            self.intents.resume, intent_id, op_target, is_admin=is_admin_caller
+                        )
+
+                    has_pulse = getattr(self, "pulse", None) is not None
+
+                    def _mark_due():
+                        due_ts = self.intents.clock() - 1.0
+                        next_st = "claimed" if has_pulse else "pending"
+                        with self.intents.store.connect() as db, db:
+                            db.execute(
+                                "UPDATE intents SET due_at=?, status=? WHERE intent_id=?",
+                                (due_ts, next_st, intent_id),
+                            )
+                        return self.intents.get(intent_id)
+
+                    fresh = await asyncio.to_thread(_mark_due)
+                    if has_pulse:
+                        try:
+                            await self.pulse._dispatch(fresh)
+                        except Exception:
+                            await asyncio.to_thread(self.intents.finish, intent_id, "deferred")
+                            raise
+                    try:
+                        latest = await asyncio.to_thread(self.intents.get, intent_id)
+                    except (ValueError, KeyError):
+                        latest = fresh
+                    result = {"intent_id": intent_id, "intent": latest}
                 if is_admin_caller:
-                    self._record_ops_receipt(chat_id, "later:cancel")
-                return {"success": True, **result}
+                    self._record_ops_receipt(chat_id, f"later:{action}")
+                return {"success": True, **self.vault.redact(result)}
             if action != "schedule":
                 raise ValueError("未知的意图动作")
 
@@ -4526,12 +4919,27 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             admin_lines.extend(
                 [
-                    "管理员配置入口收敛为 overview / settings / profile / file 四类：用 maisya_shape(action='overview'|'settings'|'profile'|'file', op=..., target_chat=..., source_msg_id=...) 读取、局部 patch、写入或回滚，尽量合并修改，避免碎片调用。",
-                    "所有流标识统一用 平台:类型:id（如 qq:group:100246809，target_chat 也兼容群号/群名/current）；注意在私聊中宿主 search_chat_history 只能搜当前私聊，要摸清目标群近期聊什么与口味，应交给目标会话开启的线程用 chat_read 了解。",
+                    "管理员可通过 maisya_shape(action='overview'|'setup'|'settings'|'profile'|'file'|'digest_sources'|'services'|'skill_proposal', op=..., target_chat=..., source_msg_id=...) 读取与调整全部能力：setup 支持一句开启群、配置简报主题/定时/各群主动分寸(chat_proactive_levels)并用 run_now=True, deliver_to='current' 立即在私聊试跑预览；settings 支持 enabled_chats、sleep_window、heartbeat_enabled、heartbeat_interval_minutes、daily_proactive_limit、chat_proactive_levels、longing_quiet_hours；file 支持 HEARTBEAT.md、MEMORY.md、profiles/<id>/MEMORY.md、JOURNAL.md 与 skills/<id>/SKILL.md；services 支持直接附带 env/url 登记 MCP；profile(op='export') 生成脱敏 .maisya.zip（聊天发压缩包走 package_export + share），profile(op='import') 支持公开 https:// .zip 直链导入（重名时先问用户更新还是另存新名）。尽量合并修改，避免碎片调用。",
+                    "所有流标识统一用 平台:类型:id（如 qq:group:100246809，target_chat 也兼容群号/群名/current）；密码保险箱仅作用户主动存别名之用，若用户直接在对话里给出临时密码、Token 或私钥委托执行任务，直接通过 maisya_agent 传给线程完成即可，绝不拒单或强制要求先存保险箱；在私聊中宿主 search_chat_history 只能搜当前私聊，要摸清目标群近期聊什么与口味，应交给目标会话开启的线程用 chat_read 了解。",
                     "两段式自然反馈规则（重要）：只要 maisya_agent(start/send/reopen/approve) 返回 state='active'（后台线程已跑起），请在本轮**立即调用 reply**（reply_style=\"长回复\"）自然简短地交代已完成的配置/调整以及后台正在按新要求跑，等系统通过 <maisya_returns> 自动唤醒后再交付成图或结论；若返回 state='waiting' 且含 pending_approval，先向管理员确认风险详情，得到同意后调 maisya_agent(action='approve', thread_id=..., grant_tier='once'|'session'|'always'|'deny', source_msg_id=...)；**绝对不要调用 wait 或反复调用 maisya_recall 轮询等待，也不要对运行中的同一线程重复发指令**。",
-                    "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(mode='once'|'recurring'|'watch', daily_at=..., condition=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
+                    "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(action='schedule'|'list'|'pause'|'resume'|'run_now'|'cancel', mode='once'|'recurring'|'watch', daily_at=..., condition=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
                 ]
             )
+            pending_props = (
+                await asyncio.to_thread(
+                    self.memory.list_skill_proposals, status="pending", limit=5
+                )
+                if getattr(self, "memory", None) is not None
+                else []
+            )
+            if pending_props:
+                prop_desc = "、".join(
+                    f"{p['skill_id']}({p.get('title') or p['skill_id']})"
+                    for p in pending_props
+                )
+                admin_lines.append(
+                    f"当前有 {len(pending_props)} 个自动提炼的新技能草稿等待预览确认（{prop_desc}）；若管理员询问或同意保存，可调 maisya_shape(action='skill_proposal', op='confirm'|'dismiss', target=..., source_msg_id=...)。"
+                )
 
         if not enabled and is_admin:
             latest_source = sources[-1] if sources else ""
@@ -4603,7 +5011,7 @@ class MaisyaPlugin(MaiBotPlugin):
         idle_session = not index and not returned and not active_memory
         if idle_session:
             parts = [
-                "日常闲聊、接梗与常识直接调用 reply；需查证创作或主动探索调 maisya_agent（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads），安排提醒或周期工作流调 maisya_later。",
+                "日常闲聊、接梗与常识直接调用 reply；纯查事实、核实出处、读图或并行快查优先调轻快的 profile='scout'，需做图卡/写网页报告/改工作区/跑脚本调 profile='default'（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads），安排提醒或周期工作流调 maisya_later。",
                 "查群友印象用宿主长期记忆（如 query_memory），查过往线程与备忘用 maisya_recall；含准确链接或附件的结果用 share 交付后结束本轮。",
                 *(
                     [
@@ -4630,7 +5038,7 @@ class MaisyaPlugin(MaiBotPlugin):
             parts = [
                 "普通闲聊、常识和接梗直接调用 reply；需要独立查证、计算创作或因自身好奇探索时可调用 maisya_agent（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads）。",
                 "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
-                "同名 workspace 持续保留文件并按消息顺序推进；start 开启（默认 profile='default'，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史/空闲线程，list 检索线程，stop 停止，maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
+                "同名 workspace 持续保留文件并按消息顺序推进；start 开启（纯只读核实快查优先选 profile='scout'，创作出图/跑脚本/综合任务选 profile='default'，周期资讯选 'digest'，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史/空闲线程，list 检索线程，stop 停止，maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
                 *(
                     [
                         "管理员明确指正方法、档案或本会话办事约定时，可用 maisya_shape 读取、修改或回滚（日常聊天事实不必手动写入）。",
@@ -4968,6 +5376,264 @@ class MaisyaPlugin(MaiBotPlugin):
             return text
         return ""
 
+    @staticmethod
+    def _safe_avatar_data_uri(value) -> str:
+        text = str(value or "").strip()
+        if not text or len(text) > 65536:
+            return ""
+        if re.fullmatch(
+            r"data:image/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+",
+            text,
+        ):
+            return text
+        return ""
+
+    def _can_fetch_remote_avatar(self) -> bool:
+        override = getattr(self, "_enable_remote_avatar_fetch", None)
+        if override is False:
+            return False
+        if getattr(socket.socket.connect, "__name__", "") == "no_network":
+            return False
+        if override is True:
+            return True
+        host_root = self._resolve_host_root()
+        if host_root is None:
+            return False
+        return bool((host_root / "config" / "bot_config.toml").is_file())
+
+    def _avatar_disk_cache_path(
+        self, platform: str, target_type: str, target_id: str
+    ) -> Path | None:
+        data_root = getattr(self, "data_root", None)
+        if not data_root:
+            return None
+        key = f"{platform}:{target_type}:{target_id}".encode("utf-8")
+        digest = hashlib.sha1(key).hexdigest()
+        return Path(data_root) / "avatars" / f"{digest}.b64"
+
+    @classmethod
+    def _bytes_to_avatar_data_uri(cls, raw_bytes: bytes) -> str:
+        if not raw_bytes or len(raw_bytes) > 262144:
+            return ""
+        try:
+            from PIL import Image, ImageOps
+        except ImportError:
+            return ""
+        try:
+            with Image.open(io.BytesIO(raw_bytes)) as img:
+                img.load()
+                fitted = ImageOps.fit(
+                    img.convert("RGB"),
+                    (48, 48),
+                    method=Image.Resampling.LANCZOS,
+                )
+                buf = io.BytesIO()
+                fitted.save(buf, format="JPEG", quality=76, optimize=True)
+            encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+            uri = f"data:image/jpeg;base64,{encoded}"
+            return cls._safe_avatar_data_uri(uri)
+        except Exception:
+            return ""
+
+    def _load_cached_avatar_data(
+        self, platform: str, target_type: str, target_id: str
+    ) -> str:
+        plat = str(platform or "").strip().lower()
+        ttype = str(target_type or "").strip().lower() or "private"
+        tid = str(target_id or "").strip()
+        if not plat or not tid:
+            return ""
+        mem_cache = getattr(self, "_avatar_data_mem", None)
+        mem_key = (plat, ttype, tid)
+        now = time.time()
+        if isinstance(mem_cache, dict):
+            entry = mem_cache.get(mem_key)
+            if isinstance(entry, dict) and now < float(entry.get("expires", 0.0)):
+                cached = self._safe_avatar_data_uri(entry.get("data"))
+                if cached:
+                    return cached
+        disk_path = self._avatar_disk_cache_path(plat, ttype, tid)
+        if (
+            disk_path is not None
+            and disk_path.is_file()
+            and not path_is_link_like(disk_path)
+            and not path_is_link_like(disk_path.parent)
+        ):
+            try:
+                st = disk_path.stat()
+                if (now - st.st_mtime) <= 7 * 86400 and st.st_size <= 65536:
+                    raw_text = disk_path.read_text(encoding="utf-8").strip()
+                    uri = self._safe_avatar_data_uri(raw_text)
+                    if uri:
+                        if isinstance(mem_cache, dict):
+                            mem_cache[mem_key] = {
+                                "expires": now + 3600.0,
+                                "data": uri,
+                            }
+                        return uri
+            except OSError:
+                pass
+        host_root = self._resolve_host_root()
+        if host_root is not None and re.fullmatch(r"[A-Za-z0-9_.-]+", tid):
+            avatar_dir = host_root / "data" / "avatar"
+            if avatar_dir.is_dir() and not path_is_link_like(avatar_dir):
+                for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                    cand_names = (
+                        [f"{plat}_group_{tid}{ext}", f"group_{tid}{ext}", f"{tid}{ext}"]
+                        if ttype == "group"
+                        else [f"{plat}_{tid}{ext}", f"{tid}{ext}"]
+                    )
+                    for fname in cand_names:
+                        cand = avatar_dir / fname
+                        if (
+                            cand.is_file()
+                            and not path_is_link_like(cand)
+                            and cand.stat().st_size <= 262144
+                        ):
+                            try:
+                                uri = self._bytes_to_avatar_data_uri(cand.read_bytes())
+                                if uri:
+                                    self._store_avatar_data(plat, ttype, tid, uri)
+                                    return uri
+                            except OSError:
+                                continue
+        return ""
+
+    def _store_avatar_data(
+        self, platform: str, target_type: str, target_id: str, data_uri: str
+    ) -> None:
+        safe = self._safe_avatar_data_uri(data_uri)
+        if not safe:
+            return
+        mem_cache = getattr(self, "_avatar_data_mem", None)
+        if not isinstance(mem_cache, dict):
+            mem_cache = {}
+            self._avatar_data_mem = mem_cache
+        mem_key = (platform, target_type, target_id)
+        mem_cache[mem_key] = {"expires": time.time() + 3600.0, "data": safe}
+        disk_path = self._avatar_disk_cache_path(platform, target_type, target_id)
+        if disk_path is not None and not path_is_link_like(disk_path.parent):
+            try:
+                disk_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_private_write(disk_path, safe.encode("utf-8"))
+            except OSError:
+                pass
+
+    @staticmethod
+    def _resolve_global_ip(hostname: str, port: int) -> tuple[int, str] | None:
+        if not hostname:
+            return None
+        try:
+            infos = socket.getaddrinfo(
+                hostname, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+            )
+        except OSError:
+            return None
+        if not infos:
+            return None
+        selected: tuple[int, str] | None = None
+        for family, _, _, _, sockaddr in infos:
+            ip_str = str(sockaddr[0]).split("%", 1)[0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+            except ValueError:
+                return None
+            if not ip_obj.is_global:
+                return None
+            if selected is None:
+                selected = (family, ip_str)
+        return selected
+
+    def _download_remote_avatar_data(self, url: str) -> str:
+        if not self._can_fetch_remote_avatar():
+            return ""
+        cur_url = str(url or "").strip()
+        for _ in range(2):
+            parsed = urllib.parse.urlsplit(cur_url)
+            scheme = parsed.scheme.lower()
+            if scheme not in {"https", "http"} or not parsed.hostname:
+                return ""
+            if parsed.username or parsed.password:
+                return ""
+            port = parsed.port or (443 if scheme == "https" else 80)
+            resolved = self._resolve_global_ip(parsed.hostname, port)
+            if resolved is None:
+                return ""
+            _, ip_str = resolved
+            req_target = parsed.path or "/"
+            if parsed.query:
+                req_target = f"{req_target}?{parsed.query}"
+            headers = {
+                "Host": f"{parsed.hostname}:{port}"
+                if parsed.port
+                else parsed.hostname,
+                "User-Agent": "Maisya-Avatar/1.0",
+                "Accept": "image/*",
+                "Connection": "close",
+            }
+            conn = None
+            try:
+                if scheme == "https":
+                    ctx = ssl.create_default_context()
+                    conn = http.client.HTTPSConnection(
+                        ip_str, port=port, timeout=1.5, context=ctx
+                    )
+                    # SNI & certificate hostname check still verify the original domain.
+                    orig_connect = conn.connect
+
+                    def _pinned_connect(
+                        _conn=conn, _orig=orig_connect, _host=parsed.hostname
+                    ):
+                        sock = socket.create_connection((ip_str, port), timeout=1.5)
+                        _conn.sock = _conn._context.wrap_socket(
+                            sock, server_hostname=_host
+                        )
+
+                    conn.connect = _pinned_connect
+                else:
+                    conn = http.client.HTTPConnection(ip_str, port=port, timeout=1.5)
+                conn.request("GET", req_target, headers=headers)
+                resp = conn.getresponse()
+                if resp.status in (301, 302, 303, 307, 308):
+                    loc = resp.getheader("Location") or ""
+                    if not loc:
+                        return ""
+                    nxt = urllib.parse.urljoin(cur_url, loc)
+                    nxt_host = (urllib.parse.urlsplit(nxt).hostname or "").lower()
+                    if not nxt_host:
+                        return ""
+                    cur_url = nxt
+                    continue
+                if resp.status != 200:
+                    return ""
+                ctype = str(resp.getheader("Content-Type") or "").lower()
+                if ctype and not ctype.startswith("image/"):
+                    return ""
+                body = resp.read(262145)
+                if not body or len(body) > 262144:
+                    return ""
+                return self._bytes_to_avatar_data_uri(body)
+            except Exception:
+                return ""
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        return ""
+
+    @staticmethod
+    def _fallback_avatar_url(platform: str, target_type: str, target_id: str) -> str:
+        plat = str(platform or "").strip().lower()
+        ttype = str(target_type or "").strip().lower()
+        tid = str(target_id or "").strip()
+        if plat == "qq" and tid.isdigit() and 4 <= len(tid) <= 13:
+            if ttype == "group":
+                return f"https://p.qlogo.cn/gh/{tid}/{tid}/100"
+            return f"https://q1.qlogo.cn/g?b=qq&nk={tid}&s=100"
+        return ""
+
     def _try_ctx(self):
         try:
             return self.ctx
@@ -5009,15 +5675,16 @@ class MaisyaPlugin(MaiBotPlugin):
                     gid = str(item.get("group_id") or "").strip()
                     uid = str(item.get("user_id") or "").strip()
                     target_id = gid if is_group else uid
-                    name = str(
+                    raw_name = str(
                         (
                             item.get("group_name")
                             if is_group
                             else (item.get("user_cardname") or item.get("user_nickname"))
                         )
                         or item.get("name")
-                        or sid
+                        or ""
                     ).strip()
+                    name = clean_display_name(raw_name, target_id or sid)
                     plat_l = str(item.get("platform") or "").strip().lower()
                     spec = (
                         format_stream_spec(plat_l, "group" if is_group else "private", target_id)
@@ -5054,7 +5721,7 @@ class MaisyaPlugin(MaiBotPlugin):
     async def _resolve_chat_sources(self, chat_ids=None) -> dict[str, dict]:
         if chat_ids is None:
             return await self._ensure_stream_cache()
-        ordered = [cid for cid in dict.fromkeys(str(x or "").strip() for x in (chat_ids or [])) if cid][:32]
+        ordered = [cid for cid in dict.fromkeys(str(x or "").strip() for x in (chat_ids or [])) if cid][:48]
         if not ordered:
             return {}
         now = time.monotonic()
@@ -5062,6 +5729,7 @@ class MaisyaPlugin(MaiBotPlugin):
         stream_map = await self._ensure_stream_cache()
         _, by_alias = self._stream_by_alias()
         avatar_snapshot = dict(getattr(self, "_avatar_cache", {}) or {})
+        can_remote = self._can_fetch_remote_avatar()
 
         def _assemble_sources() -> tuple[dict[str, dict], dict]:
             sources: dict[str, dict] = {}
@@ -5077,6 +5745,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         "group_id": "",
                         "user_id": "",
                         "avatar": "",
+                        "avatar_data": "",
                     }
                     continue
                 parsed = parse_stream_spec(cid)
@@ -5093,36 +5762,69 @@ class MaisyaPlugin(MaiBotPlugin):
                             break
                 if meta:
                     avatar = meta.get("direct_avatar", "")
+                    plat_m = meta["platform"]
+                    ttype_m = meta["target_type"]
+                    tid_m = meta["target_id"]
+                    av_data = self._safe_avatar_data_uri(avatar) or (
+                        self._load_cached_avatar_data(plat_m, ttype_m, tid_m)
+                        if (plat_m and tid_m)
+                        else ""
+                    )
                     sources[cid] = {
                         "chat_id": meta["chat_id"],
                         "stream_spec": meta.get("stream_spec", "") or norm_spec,
-                        "name": meta["name"],
-                        "platform": meta["platform"],
+                        "name": clean_display_name(
+                            meta["name"], tid_m or meta["chat_id"]
+                        ),
+                        "platform": plat_m,
                         "chat_type": meta["chat_type"],
                         "group_id": meta.get("group_id", ""),
                         "user_id": meta.get("user_id", ""),
                         "avatar": avatar,
+                        "avatar_data": av_data,
                     }
-                    if (
-                        not avatar
-                        and ctx is not None
-                        and meta["platform"]
-                        and meta["target_id"]
-                    ):
+                    if not avatar and ctx is not None and plat_m and tid_m:
                         cache_key = (
-                            meta["platform"],
-                            meta["target_type"],
-                            meta["target_id"],
+                            plat_m,
+                            ttype_m,
+                            tid_m,
                             meta["account_id"],
                             meta["scope"],
                         )
                         cached = avatar_snapshot.get(cache_key)
                         if cached and now < cached.get("expires", 0.0):
                             sources[cid]["avatar"] = cached.get("url", "")
+                            if not av_data and cached.get("data"):
+                                sources[cid]["avatar_data"] = cached["data"]
                         else:
                             bucket = pending_avatars.get(cache_key)
                             if bucket is None:
-                                pending_avatars[cache_key] = ([cid], meta)
+                                pending_avatars[cache_key] = (
+                                    [cid],
+                                    {**meta, "skip_host_capability": False},
+                                )
+                            else:
+                                bucket[0].append(cid)
+                    elif not av_data and can_remote and plat_m and tid_m:
+                        cache_key = (
+                            plat_m,
+                            ttype_m,
+                            tid_m,
+                            meta["account_id"],
+                            meta["scope"],
+                        )
+                        cached = avatar_snapshot.get(cache_key)
+                        if not (cached and now < cached.get("expires", 0.0)):
+                            bucket = pending_avatars.get(cache_key)
+                            if bucket is None:
+                                pending_avatars[cache_key] = (
+                                    [cid],
+                                    {
+                                        **meta,
+                                        "direct_avatar": avatar,
+                                        "skip_host_capability": True,
+                                    },
+                                )
                             else:
                                 bucket[0].append(cid)
                 else:
@@ -5140,25 +5842,65 @@ class MaisyaPlugin(MaiBotPlugin):
                             route.get("chat_type")
                             or ("group" if gid_r else ("private" if uid_r else ""))
                         ).strip().lower()
+                        tid_r = gid_r or uid_r
+                        ttype_r = "group" if gid_r else ("private" if uid_r else "")
                         spec_r = (
                             format_stream_spec(
-                                plat_r, "group" if gid_r else "private", gid_r or uid_r
+                                plat_r, "group" if gid_r else "private", tid_r
                             )
-                            if (plat_r and (gid_r or uid_r))
+                            if (plat_r and tid_r)
                             else norm_spec
+                        )
+                        av_data = (
+                            self._load_cached_avatar_data(
+                                plat_r, "group" if ttype_r == "group" else "user", tid_r
+                            )
+                            if (plat_r and tid_r)
+                            else ""
                         )
                         sources[cid] = {
                             "chat_id": lookup_id,
                             "stream_spec": spec_r,
-                            "name": gid_r or uid_r or spec_r or cid,
+                            "name": tid_r or spec_r or cid,
                             "platform": plat_r,
                             "chat_type": ctype_r,
                             "group_id": gid_r,
                             "user_id": uid_r,
                             "avatar": "",
+                            "avatar_data": av_data,
                         }
+                        if (
+                            not av_data
+                            and can_remote
+                            and self._fallback_avatar_url(plat_r, ttype_r, tid_r)
+                        ):
+                            tt_norm = "group" if ttype_r == "group" else "user"
+                            cache_key = (plat_r, tt_norm, tid_r, "", "")
+                            cached = avatar_snapshot.get(cache_key)
+                            if not (cached and now < cached.get("expires", 0.0)):
+                                bucket = pending_avatars.get(cache_key)
+                                if bucket is None:
+                                    pending_avatars[cache_key] = (
+                                        [cid],
+                                        {
+                                            "platform": plat_r,
+                                            "target_type": tt_norm,
+                                            "target_id": tid_r,
+                                            "account_id": "",
+                                            "scope": "",
+                                            "skip_host_capability": True,
+                                        },
+                                    )
+                                else:
+                                    bucket[0].append(cid)
                     elif parsed is not None:
                         plat_p, ctype_p, tid_p = parsed
+                        tt_norm = "group" if ctype_p == "group" else "user"
+                        av_data = (
+                            self._load_cached_avatar_data(plat_p, tt_norm, tid_p)
+                            if (plat_p and tid_p)
+                            else ""
+                        )
                         sources[cid] = {
                             "chat_id": resolved_sid or norm_spec,
                             "stream_spec": norm_spec,
@@ -5168,7 +5910,31 @@ class MaisyaPlugin(MaiBotPlugin):
                             "group_id": tid_p if ctype_p == "group" else "",
                             "user_id": tid_p if ctype_p == "private" else "",
                             "avatar": "",
+                            "avatar_data": av_data,
                         }
+                        if (
+                            not av_data
+                            and can_remote
+                            and self._fallback_avatar_url(plat_p, ctype_p, tid_p)
+                        ):
+                            cache_key = (plat_p, tt_norm, tid_p, "", "")
+                            cached = avatar_snapshot.get(cache_key)
+                            if not (cached and now < cached.get("expires", 0.0)):
+                                bucket = pending_avatars.get(cache_key)
+                                if bucket is None:
+                                    pending_avatars[cache_key] = (
+                                        [cid],
+                                        {
+                                            "platform": plat_p,
+                                            "target_type": tt_norm,
+                                            "target_id": tid_p,
+                                            "account_id": "",
+                                            "scope": "",
+                                            "skip_host_capability": True,
+                                        },
+                                    )
+                                else:
+                                    bucket[0].append(cid)
                     else:
                         platform = (
                             self.messages.platform_for(cid)
@@ -5184,12 +5950,13 @@ class MaisyaPlugin(MaiBotPlugin):
                             "group_id": "",
                             "user_id": "",
                             "avatar": "",
+                            "avatar_data": "",
                         }
             return sources, pending_avatars
 
         sources, pending_avatars = await asyncio.to_thread(_assemble_sources)
 
-        if pending_avatars and ctx is not None:
+        if pending_avatars and (ctx is not None or can_remote):
             sem = getattr(self, "_avatar_sem", None)
             if sem is None:
                 sem = asyncio.Semaphore(4)
@@ -5198,67 +5965,121 @@ class MaisyaPlugin(MaiBotPlugin):
             if not isinstance(inflight, dict):
                 inflight = {}
                 self._avatar_inflight = inflight
+            neg_cache = getattr(self, "_avatar_data_neg", None)
+            if not isinstance(neg_cache, dict):
+                neg_cache = {}
+                self._avatar_data_neg = neg_cache
 
             async def _fetch(cache_key, meta):
                 try:
                     async with sem:
-                        url = ""
+                        url = str(meta.get("direct_avatar") or "")
+                        av_data = ""
                         now_done = time.monotonic()
                         expires = now_done + 15.0
-                        try:
-                            res = await call_capability(
-                                ctx,
-                                "chat.get_avatar",
-                                platform=meta["platform"],
-                                target_id=meta["target_id"],
-                                target_type=meta["target_type"],
-                                account_id=meta["account_id"],
-                                scope=meta["scope"],
-                            )
-                            now_done = time.monotonic()
-                            if (
-                                isinstance(res, dict)
-                                and res.get("success")
-                                and isinstance(res.get("avatar"), dict)
-                            ):
-                                av = res["avatar"]
-                                if av.get("status") == "available":
-                                    url = self._safe_avatar_url(av.get("url"))
-                                if url and av.get("expires_at"):
-                                    try:
-                                        ttl = float(av["expires_at"]) - time.time()
-                                        expires = now_done + max(5.0, min(300.0, ttl))
-                                    except (TypeError, ValueError):
-                                        expires = now_done + 300.0
-                                elif url:
-                                    expires = now_done + 300.0
-                                else:
-                                    expires = now_done + 180.0
-                            else:
-                                err_detail = (
-                                    res.get("error") or res
-                                    if isinstance(res, dict)
-                                    else res
+                        skip_cap = bool(meta.get("skip_host_capability")) or ctx is None
+                        if not skip_cap and ctx is not None:
+                            try:
+                                res = await call_capability(
+                                    ctx,
+                                    "chat.get_avatar",
+                                    platform=meta["platform"],
+                                    target_id=meta["target_id"],
+                                    target_type=meta["target_type"],
+                                    account_id=meta["account_id"],
+                                    scope=meta["scope"],
                                 )
+                                now_done = time.monotonic()
+                                if (
+                                    isinstance(res, dict)
+                                    and res.get("success")
+                                    and isinstance(res.get("avatar"), dict)
+                                ):
+                                    av = res["avatar"]
+                                    if av.get("status") == "available":
+                                        url = self._safe_avatar_url(av.get("url"))
+                                    if url and av.get("expires_at"):
+                                        try:
+                                            ttl = float(av["expires_at"]) - time.time()
+                                            expires = now_done + max(5.0, min(300.0, ttl))
+                                        except (TypeError, ValueError):
+                                            expires = now_done + 300.0
+                                    elif url:
+                                        expires = now_done + 300.0
+                                    else:
+                                        expires = now_done + 180.0
+                                else:
+                                    err_detail = (
+                                        res.get("error") or res
+                                        if isinstance(res, dict)
+                                        else res
+                                    )
+                                    if getattr(ctx, "logger", None):
+                                        ctx.logger.warning(
+                                            "chat.get_avatar failed for %s:%s: %s",
+                                            meta["platform"],
+                                            meta["target_id"],
+                                            err_detail,
+                                        )
+                                    expires = now_done + 15.0
+                            except Exception as exc:
                                 if getattr(ctx, "logger", None):
                                     ctx.logger.warning(
-                                        "chat.get_avatar failed for %s:%s: %s",
+                                        "chat.get_avatar error for %s:%s: %s",
                                         meta["platform"],
                                         meta["target_id"],
-                                        err_detail,
+                                        exc,
                                     )
-                                expires = now_done + 15.0
-                        except Exception as exc:
-                            if getattr(ctx, "logger", None):
-                                ctx.logger.warning(
-                                    "chat.get_avatar error for %s:%s: %s",
-                                    meta["platform"],
-                                    meta["target_id"],
-                                    exc,
+                                url = ""
+                                expires = time.monotonic() + 15.0
+                        av_data = self._safe_avatar_data_uri(url) or (
+                            await asyncio.to_thread(
+                                self._load_cached_avatar_data,
+                                meta["platform"],
+                                meta["target_type"],
+                                meta["target_id"],
+                            )
+                        )
+                        if not av_data and self._can_fetch_remote_avatar():
+                            neg_key = (
+                                meta["platform"],
+                                meta["target_type"],
+                                meta["target_id"],
+                            )
+                            now_dl = time.monotonic()
+                            if now_dl >= float(neg_cache.get(neg_key, 0.0)):
+                                cand_url = (
+                                    url
+                                    if url.lower().startswith(("https://", "http://"))
+                                    else self._fallback_avatar_url(
+                                        meta["platform"],
+                                        meta["target_type"],
+                                        meta["target_id"],
+                                    )
                                 )
-                            url = ""
-                            expires = time.monotonic() + 15.0
-                        self._avatar_cache[cache_key] = {"expires": expires, "url": url}
+                                if cand_url:
+                                    av_data = await asyncio.to_thread(
+                                        self._download_remote_avatar_data, cand_url
+                                    )
+                                    if av_data:
+                                        await asyncio.to_thread(
+                                            self._store_avatar_data,
+                                            meta["platform"],
+                                            meta["target_type"],
+                                            meta["target_id"],
+                                            av_data,
+                                        )
+                                        if skip_cap:
+                                            expires = time.monotonic() + 300.0
+                                    else:
+                                        neg_cache[neg_key] = time.monotonic() + 300.0
+                                        if skip_cap:
+                                            expires = time.monotonic() + 300.0
+                        self._avatar_cache[cache_key] = {
+                            "expires": expires,
+                            "url": url,
+                            "data": av_data,
+                        }
                         return url
                 finally:
                     cur = asyncio.current_task()
@@ -5266,23 +6087,28 @@ class MaisyaPlugin(MaiBotPlugin):
                         inflight.pop(cache_key, None)
 
             wait_items: list[tuple[tuple, list[str], asyncio.Task]] = []
+            fresh_tasks: set[asyncio.Task] = set()
             for cache_key, (cids, meta) in pending_avatars.items():
                 task = inflight.get(cache_key)
                 if task is None or task.done():
                     task = asyncio.create_task(_fetch(cache_key, meta))
                     inflight[cache_key] = task
+                    fresh_tasks.add(task)
                 wait_items.append((cache_key, cids, task))
-            if wait_items:
+            if fresh_tasks:
                 await asyncio.wait(
-                    {task for _, _, task in wait_items},
+                    fresh_tasks,
                     timeout=0.25,
                 )
             now_end = time.monotonic()
             for cache_key, cids, _ in wait_items:
                 cached = self._avatar_cache.get(cache_key)
-                if cached and now_end < cached.get("expires", 0.0) and cached.get("url"):
+                if cached and now_end < cached.get("expires", 0.0):
                     for target_cid in cids:
-                        sources[target_cid]["avatar"] = cached["url"]
+                        if cached.get("url"):
+                            sources[target_cid]["avatar"] = cached["url"]
+                        if cached.get("data") and not sources[target_cid].get("avatar_data"):
+                            sources[target_cid]["avatar_data"] = cached["data"]
 
         return sources
 
@@ -5383,11 +6209,41 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
                 return used, buckets
 
+            def _named_workspaces_list():
+                if self.threads is None:
+                    return []
+                try:
+                    with self.threads.connect() as db:
+                        rows = db.execute(
+                            "SELECT workspace_id, name, chat_id, profile FROM agent_workspaces ORDER BY rowid DESC LIMIT 40"
+                        ).fetchall()
+                    out_ws = []
+                    seen_names: set[str] = set()
+                    for r in rows:
+                        nm = str(r["name"] or "").strip()
+                        if not nm or "#archived_" in nm or nm in seen_names:
+                            continue
+                        seen_names.add(nm)
+                        out_ws.append(
+                            {
+                                "workspace_id": str(r["workspace_id"] or ""),
+                                "name": nm,
+                                "chat_id": str(r["chat_id"] or ""),
+                                "profile": str(r["profile"] or ""),
+                            }
+                        )
+                    return out_ws
+                except sqlite3.Error:
+                    return []
+
             result["profiles"] = [
                 card["id"] for card in profile_cards if card.get("enabled", True)
             ]
             result["profile_cards"] = profile_cards
+            result["named_workspaces"] = await asyncio.to_thread(_named_workspaces_list)
             result["enabled_chats"] = list(self.settings.enabled_chats)
+            ob_view = await self.onboarding_view(is_admin_view=True, existing_sources={})
+            ob_source_ids = list(ob_view.pop("_source_chat_ids", []) or [])
             source_chat_ids = list(
                 dict.fromkeys(
                     [
@@ -5397,11 +6253,23 @@ class MaisyaPlugin(MaiBotPlugin):
                             for t in result.get("threads", [])
                             if t.get("chat_id")
                         ),
+                        *(
+                            it["chat_id"]
+                            for it in (
+                                result.get("scheduled_intents", [])
+                                + result.get("watches", [])
+                            )
+                            if isinstance(it, dict) and it.get("chat_id")
+                        ),
+                        *ob_source_ids,
                     ]
                 )
             )
-            result["chat_sources"] = await self._resolve_chat_sources(source_chat_ids)
-            result["chat_meta"] = result["chat_sources"]
+            sources = await self._resolve_chat_sources(source_chat_ids)
+            result["chat_sources"] = sources
+            result["chat_meta"] = sources
+            ob_view["chat_sources"] = sources
+            self._apply_sources_to_dms(ob_view.get("recent_dms"), sources)
             daily_used, daily_buckets = await asyncio.to_thread(_daily_proactive_summary)
             result["pulse"] = {
                 "enabled": bool(self.settings.plugin.enabled),
@@ -5414,6 +6282,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 "daily_limit": int(self.settings.daily_proactive_limit),
                 "daily_used": daily_used,
                 "daily_buckets": daily_buckets,
+                "heartbeat_enabled": bool(
+                    getattr(self.settings, "heartbeat_enabled", True)
+                ),
                 "heartbeat_interval_minutes": int(
                     self.settings.heartbeat_interval_minutes
                 ),
@@ -5439,7 +6310,6 @@ class MaisyaPlugin(MaiBotPlugin):
                 }
             )
             result["docker"] = await asyncio.to_thread(self._docker_status)
-            ob_view = await self.onboarding_view(is_admin_view=True)
             result["onboarding"] = ob_view
             result["known_chats"] = list(ob_view.get("known_chats") or [])
             result["recent_dms"] = list(ob_view.get("recent_dms") or [])
@@ -5539,7 +6409,13 @@ class MaisyaPlugin(MaiBotPlugin):
         target = await asyncio.to_thread(locate)
         if not target:
             raise ValueError("线程不存在")
-        return await asyncio.to_thread(self.threads.get, thread_id, target["chat_id"])
+        return await asyncio.to_thread(
+            self.threads.get,
+            thread_id,
+            target["chat_id"],
+            allow_self=True,
+            allow_any_chat=True,
+        )
 
     @API("maisya_note", description="给原线程补充方向或从控制台直接发起工作流", version="1", public=False)
     async def console_send(
@@ -5610,6 +6486,14 @@ class MaisyaPlugin(MaiBotPlugin):
                 raise PermissionError("原会话尚未启用 Maisya")
             live_ability = await asyncio.to_thread(self.profiles.get, row["profile"])
             self.runtime.available(live_ability)
+            if str(row.get("state") or "") not in {"active", "waiting", "idle"}:
+                row = await asyncio.to_thread(
+                    self.threads.reopen,
+                    thread_id,
+                    row["chat_id"],
+                    allow_self=(row["owner"] == "self"),
+                    allow_any_chat=True,
+                )
             result = await self.engine.send(
                 thread_id,
                 message,

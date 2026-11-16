@@ -72,8 +72,9 @@ class Pulse:
         memory=None,
         profiles=None,
         plugin_enabled=lambda: True,
+        heartbeat_enabled=True,
         heartbeat_interval=3600,
-        heartbeat_profile="scout",
+        heartbeat_profile="default",
         chat_aliases=lambda chat_id, platform="": {chat_id},
         resolve_session=None,
         tz_offset_minutes=None,
@@ -98,6 +99,7 @@ class Pulse:
         self.memory = memory
         self.profiles = profiles
         self.plugin_enabled = plugin_enabled
+        self.heartbeat_enabled = heartbeat_enabled
         self.heartbeat_interval = heartbeat_interval
         self.heartbeat_profile = heartbeat_profile
         self.chat_aliases = chat_aliases
@@ -2024,10 +2026,16 @@ class Pulse:
         self._queued_heartbeat_tid = ""
         return False
 
+    def _is_heartbeat_enabled(self) -> bool:
+        val = self.heartbeat_enabled
+        return bool(val() if callable(val) else val)
+
     async def _heartbeat(self):
         if (
             self.closing
             or not self.plugin_enabled()
+            or not self._is_heartbeat_enabled()
+            or self.heartbeat_interval <= 0
             or self.memory is None
             or self.profiles is None
             or self.engine is None

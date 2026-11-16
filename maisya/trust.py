@@ -26,6 +26,20 @@ STREAM_SPEC_RE = re.compile(
     r"^([a-z][a-z0-9_-]{0,31}):(group|private):([^\s:][^\s]{0,199})$"
 )
 ADMIN_PLATFORM_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_INVISIBLE_NAME_RE = re.compile(
+    r"[\s\u00a0\u115f\u1160\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u3164\ufeff]+"
+)
+
+
+def clean_display_name(raw_name: object, fallback: object = "") -> str:
+    """清理含空字符、盲文占位或零宽字符的显示名，全空时回落标识。"""
+    text = str(raw_name or "").strip()
+    stripped = _INVISIBLE_NAME_RE.sub("", text)
+    if not stripped:
+        return str(fallback or "").strip()
+    return " ".join(text.replace("\u3164", " ").replace("\u2800", " ").split()) or str(fallback or "").strip()
+
+
 GRANT_TIERS = frozenset({"once", "session", "always"})
 PERMISSION_MODES = frozenset({"ask_risky", "autonomous", "always_ask"})
 _PERMISSION_GRANTS_DDL = (
@@ -362,7 +376,8 @@ class MessageStore:
             chat_type = "group" if message.group_id else "private"
             route_user = "" if message.group_id else message.user_id
             inc = 0
-            with closing(sqlite3.connect(self.path)) as db, db:
+            with closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+                db.execute("BEGIN IMMEDIATE")
                 seen_human = (
                     db.execute(
                         "SELECT relayed FROM trusted_sources "
@@ -577,7 +592,8 @@ class MessageStore:
             if not pending:
                 return 0
             pre_write_sig = self._db_sig()
-            with closing(sqlite3.connect(self.path)) as db, db:
+            with closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+                db.execute("BEGIN IMMEDIATE")
                 db.executemany(
                     "INSERT INTO session_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0) "
                     "ON CONFLICT(session_id) DO UPDATE SET "

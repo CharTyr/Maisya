@@ -4,6 +4,7 @@ import base64
 from collections import Counter
 from collections.abc import Iterable
 import errno
+import hashlib
 import json
 import math
 import os
@@ -517,9 +518,9 @@ class Vault:
             }
         return None
 
-    def list_meta(self) -> list[dict]:
+    def list_meta(self, *, include_internal: bool = False) -> list[dict]:
         meta = self._load_meta()
-        live_handles = set(self.handles())
+        live_handles = set(self.handles(include_internal=True))
         result: list[dict] = []
         for handle in sorted(live_handles):
             entry = meta.get(handle)
@@ -534,6 +535,8 @@ class Vault:
                     "note": "",
                     "updated_at": round(enc.stat().st_mtime, 6) if enc.exists() else 0.0,
                 }
+            if not include_internal and entry.get("kind") == "mcp_inline":
+                continue
             result.append(dict(entry))
         return result
 
@@ -553,8 +556,73 @@ class Vault:
         (self.path / f"{handle}.enc").unlink(missing_ok=True)
         self.delete_meta(handle)
 
-    def handles(self) -> list[str]:
-        return sorted(path.stem for path in self.path.glob("*.enc"))
+    def handles(self, *, include_internal: bool = False) -> list[str]:
+        all_handles = sorted(path.stem for path in self.path.glob("*.enc"))
+        if include_internal:
+            return all_handles
+        try:
+            meta = self._load_meta()
+        except VaultError:
+            meta = {}
+        return [
+            h
+            for h in all_handles
+            if (meta.get(h) or {}).get("kind") != "mcp_inline"
+        ]
+
+    @staticmethod
+    def _mcp_secret_handle(service: str, key: str, slot: str = "env") -> str:
+        svc_str = str(service or "")
+        slot_str = str(slot or "env")
+        key_str = str(key or "")
+        safe_svc = re.sub(r"[^A-Za-z0-9_-]+", "_", svc_str).strip("_-")[:20] or "svc"
+        svc_hash = hashlib.sha256(svc_str.encode("utf-8")).hexdigest()[:8]
+        digest = hashlib.sha256(
+            f"{len(svc_str)}:{svc_str}|{len(slot_str)}:{slot_str}|{len(key_str)}:{key_str}".encode("utf-8")
+        ).hexdigest()[:12]
+        return f"mcp_in_{safe_svc}_{svc_hash}_{digest}"
+
+    def set_mcp_secret(self, service: str, key: str, value: str, *, slot: str = "env") -> str:
+        """加密保存直接在 MCP 配置中填写的密钥（归类为内部句柄，不混入用户密码保险箱列表）。"""
+        svc_str = str(service or "")
+        handle = self._mcp_secret_handle(svc_str, key, slot=slot)
+        self.set(
+            handle,
+            value,
+            label=f"{svc_str}.{key}",
+            domain=f"mcp:{svc_str}",
+            kind="mcp_inline",
+            note=f"mcp:{svc_str}:{slot}",
+        )
+        if slot == "header" and isinstance(value, str):
+            parts = value.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].lower() in {"bearer", "token", "basic", "apikey"} and len(parts[1].strip()) >= 6:
+                self.protect(parts[1].strip())
+        return handle
+
+    def purge_mcp_secrets(self, service: str, *, keep_handles: Iterable[str] = ()) -> int:
+        keep = set(keep_handles or ())
+        svc_str = str(service or "")
+        safe_svc = re.sub(r"[^A-Za-z0-9_-]+", "_", svc_str).strip("_-")[:20] or "svc"
+        svc_hash = hashlib.sha256(svc_str.encode("utf-8")).hexdigest()[:8]
+        exact_prefix = f"mcp_in_{safe_svc}_{svc_hash}_"
+        try:
+            meta = self._load_meta()
+        except VaultError:
+            meta = {}
+        removed = 0
+        for h in self.handles(include_internal=True):
+            if h in keep:
+                continue
+            info = meta.get(h) or {}
+            if info.get("kind") == "mcp_inline" and (
+                h.startswith(exact_prefix)
+                or info.get("domain") == f"mcp:{svc_str}"
+                or info.get("note") in {f"mcp:{svc_str}:env", f"mcp:{svc_str}:header"}
+            ):
+                self.delete(h)
+                removed += 1
+        return removed
 
     def for_execution(self, handle):
         self._validate_handle(handle)

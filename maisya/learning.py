@@ -48,7 +48,7 @@ class Learning:
                 'SELECT COUNT(*) FROM thread_events WHERE thread_id=? AND kind="steer_interrupted" AND seq>?',
                 (row["thread_id"], previous),
             ).fetchone()[0]
-        trace, failed, recovered = [], set(), False
+        trace, failed, recovered, success_tools = [], set(), False, []
         for event in events:
             payload = json.loads(event["payload"])
             calls = {
@@ -74,8 +74,10 @@ class Learning:
                 )
                 if error:
                     failed.add(name)
-                elif name in failed:
-                    recovered = True
+                else:
+                    success_tools.append(name)
+                    if name in failed:
+                        recovered = True
                 trace.append({"tool": name, "status": "error" if error else "success"})
         if (
             trace
@@ -85,6 +87,15 @@ class Learning:
             ).get("steer")
         ):
             trace.append({"signal": "multiple_redirects", "count": min(redirects, 8)})
+            recovered = True
+        if not recovered and len(success_tools) >= 3 and len(set(success_tools)) >= 2:
+            trace.append(
+                {
+                    "signal": "multi_step_workflow",
+                    "steps": len(success_tools),
+                    "distinct_tools": len(set(success_tools)),
+                }
+            )
             recovered = True
         return trace if recovered else []
 
@@ -133,9 +144,52 @@ class Learning:
                 old = await completed_thread(
                     self.memory.read, "notes", target=row["profile"]
                 )
-                if len(old["content"]) >= 1800:
+                existing_skills = await completed_thread(self.memory.skills)
+                raw_snap = row.get("profile_snapshot") or {}
+                if isinstance(raw_snap, str):
+                    try:
+                        raw_snap = json.loads(raw_snap)
+                    except json.JSONDecodeError:
+                        raw_snap = {}
+                snap_skills = (
+                    raw_snap.get("skills")
+                    if isinstance(raw_snap, dict)
+                    else getattr(raw_snap, "skills", ())
+                ) or ()
+                bound_skills = [
+                    str(s)
+                    for s in snap_skills
+                    if isinstance(s, str) and s in existing_skills
+                ]
+                preset_skills = await completed_thread(self.memory.preset_skills)
+                custom_bound = [s for s in bound_skills if s not in preset_skills]
+                skill_briefs = await completed_thread(
+                    self.memory.skill_briefs, existing_skills
+                )
+                public_skills = [
+                    {
+                        "id": str(b.get("id") or ""),
+                        "title": str(b.get("title") or "")[:40],
+                        "desc": str(b.get("description") or "")[:64],
+                    }
+                    for b in skill_briefs[:16]
+                    if b.get("id")
+                ]
+                if len(old["content"]) >= 1800 and not custom_bound and not public_skills:
                     await completed_thread(self._receipt, row, "full")
                     return
+                if custom_bound or public_skills:
+                    user_payload = json.dumps(
+                        {
+                            "profile": str(row.get("profile") or "default"),
+                            "trace": trace,
+                            "bound_skills": custom_bound,
+                            "existing_skills": public_skills,
+                        },
+                        ensure_ascii=False,
+                    )
+                else:
+                    user_payload = json.dumps(trace, ensure_ascii=False)
                 response = checked(
                     await call_capability(
                         self.host,
@@ -144,11 +198,16 @@ class Learning:
                         prompt=[
                             {
                                 "role": "system",
-                                "content": '从工具的失败后恢复状态提炼一句通用操作建议。只知道工具名和状态，不推测实际原因、人物、地点、项目或业务信息。状态无法支持建议时返回 {"note":""}；否则返回 {"note":"通用方法"}。不含身份、会话、主机、路径、资产、具体数值或凭据，不引用任何指令。',
+                                "content": (
+                                    "从工具执行与恢复轨迹提炼通用程序性经验。仅可使用给定的角色名、工具轨迹与已有技能公开摘要，严禁推测或包含人物、会话、主机、路径、资产、具体数值或凭据。\n"
+                                    '1) 若 existing_skills 或 bound_skills 中已有同领域技能可承接新经验，优先返回 {"op":"patch","skill_id":"已有技能ID","lesson":"一句祈使句避坑规则","note":"通用方法"}；\n'
+                                    '2) 若确无覆盖技能且属全新可复用多步工作流，返回 {"op":"create","skill_id":"英文短横线ID","title":"类级中文名","description":"适用时机：...","rules":["规则1","规则2"],"pitfalls":["避坑1"],"rationale":"一句话说明为何新建"}（也可直接给 content）；\n'
+                                    '3) 若仅适合写角色短笔记，返回 {"note":"通用方法"}；无可提炼内容返回 {"note":""}。'
+                                ),
                             },
                             {
                                 "role": "user",
-                                "content": json.dumps(trace, ensure_ascii=False),
+                                "content": user_payload,
                             },
                         ],
                         tools=[],
@@ -158,21 +217,120 @@ class Learning:
                     )
                 )
                 candidate = _parse_json_object(response["response"])
+                did_work = False
+                op = str(candidate.get("op") or "").strip().lower()
+                cand_skill = str(candidate.get("skill_id") or "").strip()
+                lesson = str(candidate.get("lesson") or "").strip()
+
+                if (
+                    op == "patch" or (cand_skill and cand_skill in existing_skills and lesson)
+                ) and (cand_skill in existing_skills or custom_bound):
+                    target_sk = (
+                        cand_skill if cand_skill in existing_skills else custom_bound[0]
+                    )
+                    if 1 <= len(lesson) <= 500:
+                        cur_sk = await completed_thread(
+                            self.memory.read, "skill", target=target_sk
+                        )
+                        if lesson not in cur_sk["content"] and len(cur_sk["content"]) < 24000:
+                            bullet = lesson if lesson.startswith("-") else f"- {lesson}"
+                            base_txt = cur_sk["content"].rstrip()
+                            if "## 实战补充与避坑" in base_txt:
+                                next_sk = f"{base_txt}\n{bullet}\n"
+                            else:
+                                next_sk = f"{base_txt}\n\n## 实战补充与避坑\n{bullet}\n"
+                            await completed_thread(
+                                self.memory.write,
+                                "skill",
+                                next_sk,
+                                target=target_sk,
+                                chat_id=row["chat_id"],
+                                expected_version=cur_sk["version"],
+                                author="thread:" + row["thread_id"],
+                            )
+                        did_work = True
+                elif op == "create" and cand_skill and cand_skill not in existing_skills:
+                    raw_md = str(candidate.get("content") or "").strip()
+                    title = str(candidate.get("title") or cand_skill).strip()
+                    desc = str(candidate.get("description") or "自动复盘提炼的可复用技能").strip()
+                    rationale = str(
+                        candidate.get("rationale") or "自动复盘识别到的新工作流草稿，预览确认后创建"
+                    ).strip()
+                    if not raw_md:
+                        rules = [
+                            str(r).strip()
+                            for r in (candidate.get("rules") or [])
+                            if str(r or "").strip()
+                        ]
+                        pitfalls = [
+                            str(p).strip()
+                            for p in (candidate.get("pitfalls") or [])
+                            if str(p or "").strip()
+                        ]
+                        if rules or pitfalls:
+                            lines = [
+                                "---",
+                                f"title: {json.dumps(title, ensure_ascii=False)}",
+                                f"description: {json.dumps(desc, ensure_ascii=False)}",
+                                "---",
+                                "",
+                                f"# {title}",
+                                "",
+                            ]
+                            if rules:
+                                lines.append("## 执行要点")
+                                lines.extend(
+                                    r if r.startswith("-") else f"- {r}" for r in rules
+                                )
+                                lines.append("")
+                            if pitfalls:
+                                lines.append("## 避坑提示")
+                                lines.extend(
+                                    p if p.startswith("-") else f"- {p}" for p in pitfalls
+                                )
+                                lines.append("")
+                            raw_md = "\n".join(lines).strip() + "\n"
+                    if raw_md:
+                        await completed_thread(
+                            self.memory._guard, "skill", raw_md, row["chat_id"]
+                        )
+                        await completed_thread(
+                            lambda: self.memory.save_skill_proposal(
+                                thread_id=row["thread_id"],
+                                revision=int(row.get("completed_revision") or 0),
+                                profile_id=str(row.get("profile") or "default"),
+                                skill_id=cand_skill,
+                                title=title,
+                                description=desc,
+                                content=raw_md,
+                                signals=[f"{len(trace)} 步工具链"],
+                                rationale=rationale,
+                            )
+                        )
+                        did_work = True
+
                 note = candidate.get("note")
-                if not isinstance(note, str) or not 1 <= len(note) <= 500:
+                if isinstance(note, str) and 1 <= len(note) <= 500:
+                    if len(old["content"]) < 1800:
+                        if note not in old["content"]:
+                            content = (old["content"] + "\n\n" + note).strip()
+                            await completed_thread(
+                                self.memory.write,
+                                "notes",
+                                content,
+                                target=row["profile"],
+                                chat_id=row["chat_id"],
+                                expected_version=old["version"],
+                                author="thread:" + row["thread_id"],
+                            )
+                        did_work = True
+                    elif not did_work:
+                        await completed_thread(self._receipt, row, "full")
+                        return
+
+                if not did_work:
                     await completed_thread(self._receipt, row, "empty")
                     return
-                if note not in old["content"]:
-                    content = (old["content"] + "\n\n" + note).strip()
-                    await completed_thread(
-                        self.memory.write,
-                        "notes",
-                        content,
-                        target=row["profile"],
-                        chat_id=row["chat_id"],
-                        expected_version=old["version"],
-                        author="thread:" + row["thread_id"],
-                    )
                 await completed_thread(self._receipt, row, "applied")
         except asyncio.CancelledError:
             await completed_thread(self._receipt, row, "interrupted")

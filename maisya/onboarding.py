@@ -95,7 +95,7 @@ def _extract_safe_models(host_model_catalog: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_models, (list, tuple)):
         return []
     safe_models: list[dict[str, Any]] = []
-    for item in raw_models[:128]:
+    for item in raw_models[:1024]:
         if not isinstance(item, dict):
             continue
         name = _sanitize_text(item.get("name") or item.get("identifier") or "", max_len=120)
@@ -109,6 +109,7 @@ def _extract_safe_models(host_model_catalog: Any) -> list[dict[str, Any]]:
                     "name": name or ident,
                     "identifier": ident or name,
                     "provider": provider,
+                    "visual": bool(item.get("visual", False)),
                     "assigned_tasks": [t for t in safe_tasks if t],
                 }
             )
@@ -239,39 +240,39 @@ def compute_readiness_checklist(
         "key": "default_profile",
         "required": False,
         "state": "ok" if prof_ready is True else ("off" if prof_ready is False else "warn"),
-        "title": "默认档案就绪",
+        "title": "默认角色就绪",
         "detail": (
-            "default 能力档案可读"
+            "默认角色可读"
             if prof_ready is True
-            else ("未找到 default 能力档案" if prof_ready is False else "待运行时确认 default 档案目录")
+            else ("未找到默认角色" if prof_ready is False else "待确认默认角色目录")
         ),
         "step": "runtime",
     }
 
-    # 5) 工具组与 MCP 状态（5 大 Toolset + MCP）
+    # 5) 系统工具与外部服务
     mcp_count = len(mcp_servers) if isinstance(mcp_servers, (dict, list, tuple)) else 0
     item_tools = {
         "key": "toolsets_mcp",
         "required": False,
         "state": "ok",
-        "title": "工具组与 MCP 状态",
-        "detail": f"5 大工具组（{', '.join(TOOLSETS)}）就绪，已登记 {mcp_count} 个只读 MCP 服务",
+        "title": "系统工具状态",
+        "detail": f"5 类系统工具已就绪，已登记 {mcp_count} 个外部服务",
         "step": "runtime",
     }
 
-    # 6) 宿主工具运行模式 / 沙箱状态
+    # 6) 运行模式 / 沙箱状态
     ds = docker_status if isinstance(docker_status, dict) else {}
     docker_enabled = bool(ds.get("enabled", False))
     docker_ready = bool(ds.get("ready", False))
     host_runner_ready = bool(ds.get("host_runner_ready", True))
     if docker_enabled and docker_ready:
-        rt_state, rt_detail = "ok", "Docker 隔离沙箱已就绪"
+        rt_state, rt_detail = "ok", "容器沙箱已就绪"
     elif docker_enabled and not docker_ready:
         rt_state = "warn" if host_runner_ready else "off"
-        rt_detail = "Docker 已开启但暂未就绪，将回落宿主机受控工作区执行" if host_runner_ready else "Docker 与宿主工作区执行器均未就绪"
+        rt_detail = "容器沙箱暂未就绪，将回退宿主机受控工作区" if host_runner_ready else "容器与宿主机工作区均未就绪"
     else:
         rt_state = "ok" if host_runner_ready else "warn"
-        rt_detail = "Docker 未启用，使用 HostWorkspaceRunner 宿主机受控工作区执行"
+        rt_detail = "容器沙箱未启用，使用宿主机受控工作区执行"
     item_runtime = {
         "key": "runtime",
         "required": False,
@@ -283,15 +284,21 @@ def compute_readiness_checklist(
 
     # 7) 安全提示确认
     safety_ack = bool(rv.get("safety_acknowledged", False))
+    perm_labels = {
+        "ask_risky": "仅高危操作确认",
+        "autonomous": "自主执行",
+        "always_ask": "每次询问",
+    }
+    perm_label = perm_labels.get(perm_mode, perm_mode)
     item_safety = {
         "key": "safety",
         "required": False,
         "state": "ok" if safety_ack else "warn",
         "title": "安全提示确认",
         "detail": (
-            f"已确认 {perm_mode} 高风险确认门槛"
+            f"已确认「{perm_label}」确认门槛"
             if safety_ack
-            else f"当前权限模式 {perm_mode}：建议在引导第 4 步确认高风险操作门槛"
+            else f"当前权限策略为「{perm_label}」：建议在引导第 4 步确认高风险操作门槛"
         ),
         "step": "runtime",
     }

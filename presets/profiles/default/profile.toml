@@ -1,6 +1,6 @@
 title = "全能默认助手"
 name = "全能默认助手"
-description = "MaiBot 默认全能探索与执行助手，整合会话检索、联网查证、工作区产物、脚本运行与延后自唤醒。"
+description = "MaiBot 默认全能探索与创作执行助手，整合联网查证、图文对比卡片与报告、工作区持续修改、脚本运行与延后自唤醒。"
 icon_shape = "compass"
 theme_color = "#2F6FED"
 enabled = true
@@ -12,5 +12,5 @@ permission_mode = "ask_risky"
 shared_secrets = true
 task = "utils"
 environment = "readonly"
-network = "none"
+network = "public"
 toolsets = ["context", "web", "workspace", "exec", "schedule"]

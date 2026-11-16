@@ -5,6 +5,7 @@ import json
 import mimetypes
 import sqlite3
 import time
+from typing import Any
 
 from .abilities import Profile
 from .context_budget import (
@@ -13,7 +14,7 @@ from .context_budget import (
     estimate_tokens,
     resolve_context_budget,
 )
-from .threads import _is_junk_thread_row
+from .threads import _clean_input_title, _is_junk_thread_row
 
 
 def _safe_json_loads(raw, default):
@@ -90,6 +91,31 @@ def _step_command_summary(tool_name: str, args: dict, redact) -> str:
         return ""
 
 
+def _compact_step_args(raw: Any, redact, *, max_chars: int = 1600) -> Any:
+    """Bound step args size so snapshot() stays well below host 512 KiB JSON limit."""
+    if not isinstance(raw, dict):
+        return {}
+    redacted = redact(raw)
+    if not isinstance(redacted, dict):
+        return {}
+    encoded = json.dumps(redacted, ensure_ascii=False)
+    if len(encoded) <= max_chars:
+        return redacted
+    compacted: dict[str, Any] = {}
+    for k, v in redacted.items():
+        if isinstance(v, str) and len(v) > 320:
+            compacted[k] = v[:320] + "…"
+        elif isinstance(v, (dict, list)):
+            sub = json.dumps(v, ensure_ascii=False)
+            compacted[k] = v if len(sub) <= 320 else sub[:320] + "…"
+        else:
+            compacted[k] = v
+    re_encoded = json.dumps(compacted, ensure_ascii=False)
+    if len(re_encoded) <= max_chars:
+        return compacted
+    return re_encoded[:max_chars] + "…"
+
+
 def _build_steps(db, thread_id: str, redact, *, limit: int = 120) -> list[dict]:
     records = db.execute(
         "SELECT seq, kind, revision, payload, at FROM thread_events "
@@ -120,7 +146,7 @@ def _build_steps(db, thread_id: str, redact, *, limit: int = 120) -> list[dict]:
                 tool_name = str(fn.get("name") or call.get("name") or "tool")
                 raw_args = fn.get("arguments") if "arguments" in fn else call.get("arguments")
                 args = _safe_json_loads(raw_args, {}) if isinstance(raw_args, str) else (raw_args if isinstance(raw_args, dict) else {})
-                red_args = redact(args)
+                red_args = _compact_step_args(args, redact)
                 val = res_by_id.get(call_id)
                 val_dict = val if isinstance(val, dict) else {}
                 status = "ok"
@@ -165,11 +191,14 @@ def _build_steps(db, thread_id: str, redact, *, limit: int = 120) -> list[dict]:
         else:
             red_text = str(redact(str(ev["payload"] or "")))
         title_map = {
+            "opened": "开启线程",
             "input": "收到触发输入",
+            "output": "输出阶段结果",
             "waiting": "等待确认或回复",
             "finished": "生成最终结果",
             "failed": "执行出错",
             "stopped": "停止线程",
+            "reopened": "重新唤醒线程",
             "steer": "收到转向补充",
             "steer_interrupted": "中断并转向",
             "context_prune": "上下文压缩清理",
@@ -188,7 +217,7 @@ def _build_steps(db, thread_id: str, redact, *, limit: int = 120) -> list[dict]:
                 "tool": "",
                 "title": title_map.get(kind, kind or "事件"),
                 "command": "",
-                "args": redact(payload_obj) if isinstance(payload_obj, dict) else {},
+                "args": _compact_step_args(payload_obj, redact),
                 "status": status,
                 "duration_ms": delta_ms,
                 "output_preview": red_text[:400],
@@ -198,6 +227,9 @@ def _build_steps(db, thread_id: str, redact, *, limit: int = 120) -> list[dict]:
             }
         )
         prev_ts = at
+    max_steps_bytes = 220_000
+    while len(steps) > 1 and len(json.dumps(steps, ensure_ascii=False).encode("utf-8")) > max_steps_bytes:
+        steps.pop(0)
     return steps
 
 
@@ -356,7 +388,11 @@ def snapshot(
             "SELECT t.thread_id,t.chat_id,t.profile,t.owner,t.state,t.result,t.updated,"
             "COALESCE(length(t.history), 0) AS hist_len,"
             "(SELECT MIN(e0.at) FROM thread_events e0 WHERE e0.thread_id=t.thread_id) AS created_at,"
-            "(SELECT json_extract(e.payload,'$.text') FROM thread_events e WHERE e.thread_id=t.thread_id AND e.kind='input' ORDER BY seq LIMIT 1) AS title "
+            "COALESCE("
+            "NULLIF((SELECT json_extract(e.payload,'$.text') FROM thread_events e WHERE e.thread_id=t.thread_id AND e.kind='input' ORDER BY seq LIMIT 1), ''),"
+            "NULLIF((SELECT text FROM thread_search s WHERE s.thread_id=t.thread_id LIMIT 1), ''),"
+            "NULLIF(t.summary, '')"
+            ") AS title "
             "FROM agent_threads t "
             + ("WHERE chat_id=? " if chat_id else "")
             + "ORDER BY updated DESC LIMIT 60",
@@ -408,7 +444,7 @@ def snapshot(
             }
             | {
                 "created": float(row["created_at"] or row["updated"] or 0.0),
-                "title": redact(str(row["title"] or row["thread_id"]))[:120],
+                "title": redact(_clean_input_title(str(row["title"] or "")) or str(row["thread_id"]))[:120],
                 "has_error": "error" in json.loads(row["result"]),
                 "excerpt": _excerpt_of(row["result"], redact),
                 "workspace": ws_map.get(row["thread_id"], ""),
@@ -461,6 +497,19 @@ def snapshot(
                     "processed_revision",
                 )
             }
+            matched_th = next((t for t in threads if t["thread_id"] == thread_id), None)
+            if matched_th and matched_th.get("title"):
+                selected["title"] = matched_th["title"]
+            else:
+                srch_row = db.execute(
+                    "SELECT COALESCE("
+                    "NULLIF((SELECT json_extract(e.payload,'$.text') FROM thread_events e WHERE e.thread_id=? AND e.kind='input' ORDER BY seq LIMIT 1), ''),"
+                    "NULLIF((SELECT text FROM thread_search s WHERE s.thread_id=? LIMIT 1), '')"
+                    ") AS title",
+                    (thread_id, thread_id),
+                ).fetchone()
+                raw_sel_title = str((srch_row["title"] if srch_row else "") or row["summary"] or "")
+                selected["title"] = redact(_clean_input_title(raw_sel_title) or thread_id)[:120]
             selected["workspace"] = ws_map.get(thread_id, "")
             selected["can_delete"] = (
                 row["state"] not in {"active", "waiting"}
@@ -481,6 +530,7 @@ def snapshot(
                 if isinstance(a, dict) and str(a.get("handle") or "").startswith("att_")
             ][:16]
             profile_text = str(profile.get("instructions", ""))
+            role_mem_text = ""
             notes_text = ""
             mem_ctx = {}
             profile_for_budget = None
@@ -489,6 +539,7 @@ def snapshot(
                     profile_obj = memory.profiles.get(row["profile"])
                     profile_for_budget = profile_obj
                     profile_text = profile_obj.instructions
+                    role_mem_text = memory.read("role_memory", target=profile_obj.id)["content"]
                     notes_text = memory.methods(profile_obj)
                 except (ValueError, OSError, RuntimeError, sqlite3.Error):
                     pass
@@ -557,10 +608,21 @@ def snapshot(
                     {
                         "id": "sys-profile",
                         "cat": "system",
-                        "label": f"能力说明 ({row['profile']})",
+                        "label": "角色设定说明",
                         "chars": len(profile_text),
                         "tokens": estimate_tokens(profile_text),
                         "preview": str(redact(profile_text))[:800],
+                    }
+                )
+            if role_mem_text.strip():
+                context_items.append(
+                    {
+                        "id": "sys-role-memory",
+                        "cat": "memory",
+                        "label": "角色长期记忆",
+                        "chars": len(role_mem_text),
+                        "tokens": estimate_tokens(role_mem_text),
+                        "preview": str(redact(role_mem_text))[:800],
                     }
                 )
             if notes_text.strip():
@@ -568,7 +630,7 @@ def snapshot(
                     {
                         "id": "sys-notes",
                         "cat": "system",
-                        "label": "方法笔记 (NOTES.md)",
+                        "label": "方法经验笔记",
                         "chars": len(notes_text),
                         "tokens": estimate_tokens(notes_text),
                         "preview": str(redact(notes_text))[:800],
@@ -586,9 +648,9 @@ def snapshot(
                     }
                 )
             for mem_key, mem_label in (
-                ("memory", "会话备忘 (MEMORY.md)"),
-                ("journal", "近期手账 (JOURNAL.md)"),
-                ("heartbeat", "探索节奏 (HEARTBEAT.md)"),
+                ("memory", "会话记忆"),
+                ("journal", "近期手账"),
+                ("heartbeat", "探索节奏"),
             ):
                 mem_val = str(mem_ctx.get(mem_key) or "")
                 if mem_val.strip():
@@ -727,10 +789,7 @@ def snapshot(
             ).fetchall()
         ]
         try:
-            if thread_id:
-                intent_where = "WHERE status IN ('pending','paused') AND (thread_id=? OR target=?) "
-                intent_params = (thread_id, "chat:" + selected["chat_id"])
-            elif chat_id:
+            if chat_id:
                 intent_where = "WHERE status IN ('pending','paused') AND target=? "
                 intent_params = ("chat:" + chat_id,)
             else:
@@ -829,6 +888,27 @@ def snapshot(
             "pending_intents": pending_intents,
             "error_count": sum(1 for item in threads if item["has_error"]),
         }
+        try:
+            prop_rows = db.execute(
+                "SELECT proposal_id,skill_id,title,rationale,profile_id "
+                "FROM skill_proposals WHERE status='pending' ORDER BY updated_at DESC LIMIT 10"
+            ).fetchall()
+            pending_proposals_total = db.execute(
+                "SELECT COUNT(*) AS c FROM skill_proposals WHERE status='pending'"
+            ).fetchone()["c"]
+        except sqlite3.OperationalError:
+            prop_rows = []
+            pending_proposals_total = 0
+        pending_skill_proposals = [
+            {
+                "proposal_id": str(r["proposal_id"] or ""),
+                "skill_id": str(r["skill_id"] or ""),
+                "title": redact(str(r["title"] or ""))[:120],
+                "rationale": redact(str(r["rationale"] or ""))[:240],
+                "profile_id": str(r["profile_id"] or "default"),
+            }
+            for r in prop_rows[:5]
+        ]
     return {
         "success": True,
         "threads": threads,
@@ -840,6 +920,8 @@ def snapshot(
         "watches": watches,
         "deliveries": deliveries,
         "stats": stats,
+        "pending_skill_proposals": pending_skill_proposals,
+        "pending_skill_proposals_count": int(pending_proposals_total),
     }
 
 

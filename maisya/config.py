@@ -35,9 +35,10 @@ class ProactiveSettings(BaseModel):
     sleep_window: str = ""
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     daily_proactive_limit: int = Field(default=1, ge=0, le=50)
+    heartbeat_enabled: bool = True
     heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
     heartbeat_profile: str = Field(
-        default="scout",
+        default="default",
         pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
     )
     chat_proactive_levels: dict[str, str] = Field(default_factory=dict)
@@ -82,9 +83,10 @@ class Settings(PluginConfigBase):
     )
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     daily_proactive_limit: int = Field(default=1, ge=0, le=50)
+    heartbeat_enabled: bool = True
     heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
     heartbeat_profile: str = Field(
-        default="scout",
+        default="default",
         pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
     )
     chat_proactive_levels: dict[str, str] = Field(default_factory=dict)

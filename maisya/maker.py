@@ -1000,10 +1000,69 @@ class AgentRuntime(Scout):
             "result_attach",
             "digest_feed",
             "render_report",
+            "package_export",
         }:
             if not profile.uses_workspace:
                 raise PermissionError("当前角色未启用工作区工具")
             work = await self._work(context)
+            if name == "package_export":
+                from .packages import export_package
+
+                plugin_ref = getattr(self, "_plugin_ref", None)
+                if plugin_ref is None:
+                    raise RuntimeError("导出插件实例未就绪")
+                target_pid = str(arguments.get("profile_id") or "").strip() or profile.id
+                target_card = await completed_thread(plugin_ref.profiles.get, target_pid)
+                is_adm = bool(await completed_thread(self.authorized, context))
+                if target_card.access == "admins" and not is_adm:
+                    raise PermissionError("导出管理员专属角色需要已核验管理员触发")
+                if target_card.access == "listed":
+                    if not await completed_thread(
+                        self._listed_profile_permits,
+                        target_card,
+                        context,
+                        is_admin=is_adm,
+                    ):
+                        raise PermissionError("目标角色不在当前会话可用范围内")
+                pkg_kind = str(arguments.get("kind") or "template").strip().lower()
+                pkg = await completed_thread(
+                    export_package,
+                    plugin_ref,
+                    target_pid,
+                    kind=pkg_kind,
+                    is_admin=is_adm,
+                    caller_chat_id=str(context.get("chat_id") or ""),
+                    caller_platform=str(context.get("platform") or ""),
+                )
+                rel_path = f"out/exports/{pkg['filename']}"
+                await completed_thread(work.write_bytes, rel_path, pkg["zip_bytes"])
+                await completed_thread(work.commit)
+                handles = await completed_thread(
+                    self.files.attach, context, work, [rel_path]
+                )
+                existing = list(self.attachments.get(context["thread_id"], ()))
+                seen_keys = {
+                    (item.get("handle"), item.get("path"))
+                    for item in existing
+                    if isinstance(item, dict)
+                }
+                for item in handles:
+                    key = (item.get("handle"), item.get("path")) if isinstance(item, dict) else item
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        existing.append(item)
+                self.attachments[context["thread_id"]] = existing
+                return {
+                    "ok": True,
+                    "profile_id": pkg["profile_id"] or target_pid,
+                    "kind": pkg["kind"],
+                    "kind_label": pkg["kind_label"],
+                    "filename": pkg["filename"],
+                    "path": rel_path,
+                    "attachment_handle": handles[0]["handle"] if handles else "",
+                    "desensitized": True,
+                    "delivery_hint": "请让主脑调用 maisya_agent(action='share') 将导出的 .maisya.zip 压缩包文件直接发回聊天",
+                }
             if name == "digest_feed":
                 from .digest import run_digest_tool
 
@@ -1300,10 +1359,62 @@ class AgentRuntime(Scout):
                 raise RuntimeError(
                     "当前档案或工具指定 Docker 沙箱执行，但 Docker 沙箱未启用或未就绪"
                 )
-            secrets_tuple = (
-                tuple(profile.secrets)
-                if (getattr(profile, "shared_secrets", True) and profile.secrets)
-                else ()
+            requested_secrets: list[str] = []
+            if getattr(profile, "shared_secrets", True):
+                for h in profile.secrets or ():
+                    if h and h not in requested_secrets:
+                        requested_secrets.append(h)
+                arg_secrets = arguments.get("secrets")
+                if isinstance(arg_secrets, (list, tuple)):
+                    for raw_h in arg_secrets:
+                        h = str(raw_h or "").strip()
+                        if h and h not in requested_secrets:
+                            requested_secrets.append(h)
+                if self.vault is not None:
+                    known_handles = await completed_thread(self.vault.handles)
+                    cmd_str = (
+                        command
+                        if isinstance(command, str)
+                        else " ".join(str(x) for x in command)
+                    )
+                    for h in known_handles:
+                        env_name = "MAISYA_SECRET_" + re.sub(r"[^A-Za-z0-9_]", "_", h).upper()
+                        if (
+                            env_name in cmd_str or f"/run/secrets/{h}" in cmd_str
+                        ) and h not in requested_secrets:
+                            requested_secrets.append(h)
+            secrets_tuple = tuple(requested_secrets)
+            clean_env: dict[str, str] = {}
+            raw_env = arguments.get("env")
+            if isinstance(raw_env, dict):
+                blocked_env = {
+                    "PATH", "HOME", "PYTHONPATH", "PYTHONHOME", "TMPDIR",
+                    "TEMP", "TMP", "SHELL", "USER", "IFS", "ENV", "BASH_ENV",
+                }
+                for ek, ev in list(raw_env.items())[:32]:
+                    k_str = str(ek or "").strip()
+                    if (
+                        not k_str
+                        or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", k_str)
+                        or k_str.upper() in blocked_env
+                        or k_str.upper().startswith(("LD_", "DYLD_"))
+                        or not isinstance(ev, str)
+                        or len(ev) > 8192
+                    ):
+                        continue
+                    clean_env[k_str] = ev
+            plugin_ref = getattr(self, "_plugin_ref", None)
+            ephemeral_items = (
+                plugin_ref.get_ephemeral_secrets(chat_id)
+                if plugin_ref is not None and callable(getattr(plugin_ref, "get_ephemeral_secrets", None))
+                else []
+            )
+            for idx, e_item in enumerate(ephemeral_items, 1):
+                e_val = str((e_item or {}).get("value") or "")
+                if e_val:
+                    clean_env.setdefault(f"MAISYA_TEMP_KEY_{idx}", e_val)
+            extra_redacts = tuple(
+                v for v in clean_env.values() if isinstance(v, str) and len(v) >= 4
             )
             req = ExecutionRequest(
                 command=command,
@@ -1314,6 +1425,8 @@ class AgentRuntime(Scout):
                 session_id=thread_id,
                 permission_mode=eff_perm,
                 secrets=secrets_tuple,
+                extra_redactions=extra_redacts,
+                env=clean_env,
                 timeout=timeout,
                 shell=isinstance(command, str),
                 risk_hint=risk_hint,
