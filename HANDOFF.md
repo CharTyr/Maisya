@@ -2,7 +2,9 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [管理台与接入](docs/04-管理台与接入.md)。
 
-最后更新：2026-11-16（**`v0.3.3` 产品蓝图对齐与安全加固基线**，对应本地 `main` 已完成 4 个提交并通过全量验证的状态；未推送远端，未部署上线）。
+最后更新：2026-11-17。**`docs/08` 心跳恢复方案与 `docs/09` 调度手册方案已全部落地并通过全量本地 + Playwright + 真实宿主隔离契约验收。** 当前分支 `main`。
+
+全量验收实测结果：`tests/` 共 **593 passed**（0 failed / 0 skipped，耗时 149.18s）；`tests_host/run_contract.py` 共 **23 tests OK**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；`python3 webui/build.py --check` 返回 `0`；`wc -l maisya/shaping.py` = **588**（`<= 600`）。
 
 ---
 
@@ -27,7 +29,7 @@
   - 用户在聊天中直接发密码/Token 让 Bot 办事时正常执行，依赖出站与上下文脱敏兜底，**绝不因未提前录入保险箱而拒单**；密码保险箱仅作长期复用凭据时使用。
 - **Planner 工具、对话塑形与执行边界**：
   - 可见工具：`maisya_agent`（`start | send | stop | reopen | list | approve | share`）、`maisya_recall`、`maisya_later`；
-  - 延迟工具：`maisya_shape`（**严禁设 `visibility` 标记**，`maisya/shaping.py` 严格 ≤ 600 行，现为 596 行），支持 `overview | setup | settings | profile | file | digest_sources | services | skill_proposal` 与 `setup(..., run_now=True, deliver_to='current')` 私聊试跑预览。
+  - 延迟工具：`maisya_shape`（**严禁设 `visibility` 标记**，`maisya/shaping.py` 严格 ≤ 600 行，现为 588 行），支持 `overview | setup | settings | profile | file | planner | digest_sources | services | skill_proposal` 与 `setup(..., run_now=True, deliver_to='current')` 私聊试跑预览。
   - 双源管理员（`宿主 plugin.permission ∪ Settings.admins`）私聊直接核验直通；`HostWorkspaceRunner`（默认 `ask_risky` 审批挂起）与可选 `DockerRunner` 隔离协作。
 - **五页双主题玻璃盒 WebUI（[`webui/now.html`](webui/now.html)）**：
   - [`webui.json`](webui.json) v2 暴露唯一入口 `webui/now.html`，内嵌 **`现场 | 产物 | 能力 | 手账 | 设置`** 五页与 5 步冷启动引导（引导逻辑保持不变），提供千禧机械（`millennium`，默认）、清朗手账（`modern`，兼容旧值 `"maiwork"`）与 `auto` 三档外观。
@@ -35,18 +37,18 @@
 
 ---
 
-## 2. 最新验收实测结果（本地 `main` 最新提交后实测）
+## 2. 最新全量验收状态（v0.3 + 心跳恢复 + 调度手册）
 
 - **全量本地与 Playwright Chromium UI 单测**：
-  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`523 passed`**（`0 failed / 0 skipped`，耗时 `103.37s`）。
+  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`593 passed`**（`0 failed / 0 skipped`，耗时 `149.18s`）。
 - **独立宿主隔离契约（真实 MaiBot SDK）**：
-  - `python3 tests_host/run_contract.py`：**`Ran 22 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
+  - `python3 tests_host/run_contract.py`：**`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
 - **前端构建与语法校验**：
-  - `python3 webui/build.py --check` 返回退出码 `0`；[`webui/now.html`](webui/now.html) 两段内嵌脚本通过 `node --check`。
+  - `python3 webui/build.py --check` 返回退出码 `0`。
 - **代码边界、格式与隐私扫描**：
-  - `wc -l maisya/shaping.py` = **`596`**（`<= 600`）；
+  - `wc -l maisya/shaping.py` = **`588`**（`<= 600`）；
   - `git diff --check` 返回 `0`；
-  - 全部 67 个变更文件的本地地址与凭据关键词扫描：`findings=0`。
+  - 变更及新增交付文件的本地地址与凭据关键词扫描：`findings=0`。
 
 ---
 
@@ -82,10 +84,41 @@ python3 tests_sandbox/run_isolated.py --execute
 1. **当前仓库与预览状态**：
    - 本轮所有设计对齐、GPT 审查修复与回归测试已按模块拆分提交在本地 `main` 分支（**尚未 `git push` 至 `origin/main`，也未部署到线上服务器**）；
    - 若本地开发预览服务仍在端口 `18765` 运行，测试结束后按需关闭或续用即可。
-2. **已就绪的下一份设计方案（尚未编码）**：
-   - 工作区保留了一份未跟踪新设计稿 [`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md)（将心跳与久违想念收口为 `heartbeat_mode = off | gentle | lively` 三档、全局+单会话两层每日主动额度、无由头零模型调用、有由头单次 `utils` 便宜 JSON 判断及 `heartbeat_ticks` 玻璃盒记录），可作为下一会话按其第 9 节 TDD 顺序直接推进的入口。
+2. **正在实现的两份方案**：
+   - [`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md) 与 [`docs/09-调度手册方案.md`](docs/09-调度手册方案.md) 已有部分代码与测试；以第 5 节为接手入口。
 3. **部署红线（来自 [AGENTS.md](AGENTS.md)）**：
    - `AGENTS.local.md`、`config.toml`、`.local-checks/` 与 `.trellis/` 只留本地，严禁写入或提交进仓库；测试夹具统一使用 `qq:group:100246809`、`qq:private:10001`。
    - 任何涉及线上 `plugins/` 的放入、覆盖或删除（会触发插件热重载）前，**必须取得用户当次明确同意**；
    - 部署前必须先将既有线上插件文件与运行期数据（SQLite 必须用只读 `.backup()` 复制）备份至 `/root/backups/`，并保留线上 `config.toml`；
    - 严禁修改 MaiBot 宿主源码、严禁擅自更改 `config/bot_config.toml`、严禁重启 MaiBot 或适配器服务（重启由用户操作）。
+
+---
+
+## 5. 已完成：心跳恢复（docs/08）与调度手册（docs/09）落地（2026-11-17）
+
+方案原文与已定决策见 [08 心跳恢复方案](docs/08-心跳恢复方案.md)、[09 调度手册方案](docs/09-调度手册方案.md)。两份方案全部步骤（含 08 第 1～7 步与 09 第 1～7 步）已全部完成、接入验证并准备提交上线。
+
+### 5.1 已完成清单
+
+| 方案步骤 | 状态 | 主要改动 |
+|---|---|---|
+| 09 第 1～3 步 | ✅ | `memory.py` 新增 `kind="planner"`（`abilities/planner/PLANNER.md`、初始化写入 `v0 preset` 版本记录、未改过的预设随版本升级）；`presets/planner/PLANNER.md`；`plugin.py` 字节稳定 `<maisya_planner_manual>` + 名册注入；`shaping.py` / `shaping_setup.py` 支持 `planner` 读写回滚与名册检查 |
+| 09 第 4～5 步 UI 与接口 | ✅ | `management.py` `planner` 读写、回滚与稳定注入预览；`webui/fragments/abilities.html` 与 `webui/management.html.in`（含移动端轮播）固定首位「MaiBot（调度）」卡片、`PLANNER.md` 编辑回滚、Token 估算预览与调度草稿采纳/忽略 |
+| 09 第 6～7 步 第二阶段与文档 | ✅ | `learning.py` + `plugin.py` 三类抽象调度信号（连续 steer ≥ 2 次、stop 后 10 分钟换档、同请求串行补派且不误报并发）提炼不含聊天原文的 `profile_id="planner"` 待确认草稿；`tests_host/test_contract.py` 实测宿主原样透传 `function.description` 及 KV 前缀缓存评估；文档全部同步 |
+| 08 第 1～5 步 核心重构 | ✅ | `config.py` 三档 `heartbeat_mode`（默认 `off`）、`v0.3.0` 遗留全量配置（含无 `heartbeat_enabled` 落盘）兼容迁移、`intents.py` 全局+单会话两层额度与 `heartbeat_ticks` 表、`pulse.py` 三步心跳与抖动、对话调整与概览心跳块 |
+| 08 第 6～7 步 WebUI 与文档 | ✅ | `management.py` / `console.py` / `webui/fragments/settings.html` / `webui/now.html.in` / `webui/management.html.in`（三段档位、两层每日上限、折叠 `0 = 跟随档位`、手账主动状态条、现场近期心跳记录）及全部文档与回归测试对齐 |
+
+### 5.2 全量验收结果
+
+- 新增测试：[`tests/test_planner_manual.py`](tests/test_planner_manual.py)（21 项）、[`tests/test_heartbeat_restore.py`](tests/test_heartbeat_restore.py)（49 项）；
+- 全量本地与 Playwright：`PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider` -> **`593 passed`**（0 failed / 0 skipped）；
+- 宿主 SDK 隔离契约：`python3 tests_host/run_contract.py` -> **`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；
+- 构建与边界检查：`python3 webui/build.py --check` 返回 `0`，`wc -l maisya/shaping.py` = `588`。
+
+新增入库文件清单：[`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md)、[`docs/09-调度手册方案.md`](docs/09-调度手册方案.md)、[`presets/planner/PLANNER.md`](presets/planner/PLANNER.md)、[`tests/test_heartbeat_restore.py`](tests/test_heartbeat_restore.py)、[`tests/test_planner_manual.py`](tests/test_planner_manual.py)。
+
+### 5.3 已知坑
+
+- `tests/test_takeover_hardening.py::test_later_proactive_daily_quota_and_non_admin_mention_all_strip` 用真实时钟排 60 秒 / 90 秒后的惦记，**在 23:58 前后跑会跨日失败**，与本次改动无关。
+- `shaping.py` 有 `<= 600` 行的测试红线（当前 588 行），新增逻辑放 `shaping_setup.py`。
+- 提示词里不要直接写 `<maisya_profiles>` 这类标签名：测试和模型都会按标签切块。

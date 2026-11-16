@@ -46,7 +46,7 @@
    - 查看或逐条撤销已记住的长期授权（`permission_grants`）；
    - 「重新打开首次安装引导」按钮。
 3. **密码保险箱（可选）**：仅存「别名 + 密码」，列表与「查看」详情只展示别名与保存日期、绝不回显密码内容。如用户在对话中直接发临时密码让 Bot 干活，Bot 会直接用于当次任务且自动脱敏，不强求用户先存保险箱。
-4. **基础运行**：全局主模型覆盖（`default_model`）、心跳开关与检查间隔、每日主动上限（`daily_proactive_limit`，`0..50`）、整点免打扰时段（`sleep_window`）、可选 `DockerRunner` 容器开关，以及外观主题切换（`millennium` 千禧机械默认 / `modern` 现代极简，兼容旧值 `maiwork` / `auto` 跟随宿主）；更细的心跳习惯或分群主动度随时在对话里告诉 MaiBot 即可调整。
+4. **基础运行**：全局主模型覆盖（`default_model`）、「关 / 克制 / 活泼」三段闲暇心跳档位（`heartbeat_mode`，默认 `off`）、全局每日主动上限（`daily_proactive_limit`，默认 `3`，范围 `0..50`）与单会话每日上限（`per_chat_daily_proactive_limit`，默认 `1`，范围 `0..10`）、可折叠高级间隔/想念覆盖（`0 = 跟随档位`）、整点免打扰时段（`sleep_window`）、可选 `DockerRunner` 容器开关，以及外观主题切换（`millennium` 千禧机械默认 / `modern` 现代极简，兼容旧值 `maiwork` / `auto` 跟随宿主）；单群主动分寸或更细的习惯随时在对话里告诉 MaiBot 即可调整。
 
 ---
 
@@ -54,9 +54,9 @@
 
 除网页管理台外，核验身份后的管理员也可以在任意私聊或启用群聊中让 MaiBot 自行调整配置（`maisya_shape` 保持为延迟工具，先通过 `tool_search` 展开）：
 
-1. `overview`：读取全局或指定会话当前启用态、角色摘要、待触发定时/盯梢任务与系统文件状态；
+1. `overview`：读取全局或指定会话当前启用态、角色摘要、心跳状态、待触发定时/盯梢任务与系统文件状态；
 2. `setup`：管理员一句对话完成「开启指定群 + 设简报主题/每天定时/单群主动分寸」并用 `run_now=True, deliver_to="current"` 当场试跑发回私聊预览；
-3. `settings` / `profile` / `file` / `digest_sources` / `services`：调整核心配置、微调单群主动度与心跳开关、管理角色与独立 `profiles/<id>/MEMORY.md`、编辑/回滚 `MEMORY.md` / `JOURNAL.md` / `HEARTBEAT.md` / `SKILL.md`、增删早报信源，或直接登记含 `env` / `url` 的 MCP 连接（导出角色生成脱敏 `.maisya.zip` 压缩包，不再产生虚构内链）。
+3. `settings` / `profile` / `file` / `planner` / `digest_sources` / `services` / `skill_proposal`：调整核心配置、微调单群主动度与心跳档位、管理角色与独立 `profiles/<id>/MEMORY.md`、读写回滚 `PLANNER.md` / `MEMORY.md` / `JOURNAL.md` / `HEARTBEAT.md` / `SKILL.md`、确认调度与技能经验草稿、增删早报信源，或直接登记含 `env` / `url` 的 MCP 连接（导出角色生成脱敏 `.maisya.zip` 压缩包，不再产生虚构内链）。
 
 ---
 
@@ -77,8 +77,9 @@
 | **宿主 `A_Memorix`** | 群友长期聊天印象、人物关系、聊过什么日常话题 | 依然由 MaiBot 宿主管理；Maisya 线程只在需要时通过 `memory_read` / `person_read` 只读检索 |
 | **会话备忘（`MEMORY.md`）** | 仅限该会话的办事约定、格式偏好、常驻选题与资产说明 | 管理员在 **`手账 → 会话备忘`** 或用 `maisya_shape` 编辑，支持版本历史回滚 |
 | **角色独立记忆（`profiles/<id>/MEMORY.md`）** | 仅归属该能力档案的领域背景、长期约定与偏好 | 在 **`能力 → 角色 → 角色记忆`** 或用 `maisya_shape` 编辑，支持版本回滚 |
+| **调度手册（`PLANNER.md`）** | 何时直回、何时派线程、拆分并行与交付规范（跨会话通用，不含具体会话/密钥） | 在 **`能力 → 角色 → MaiBot（调度）`** 或用 `maisya_shape(action="planner")` 编辑回滚，含待确认调度草稿 |
 | **近期手账（`JOURNAL.md`）** | 近 7 天以 MaiBot 自身视角积累的公开探索经历（同日自动合并） | 自身线程公开成果或管理员在 **`手账 → 自身近况`** 整理 |
-| **探索脾性（`HEARTBEAT.md`）** | 自我探索的兴趣方向与基线；留空且所有会话为 `quiet` 时不发起自主探索 | 在 **`手账 → 心跳说明`** 或用 `maisya_shape` 编辑 |
+| **探索脾性（`HEARTBEAT.md`）** | 自我探索的公开方向与气质基线；需先在 `设置` 开启「克制/活泼」档位，正文留空时仅开启久违想念（只会想念） | 在 **`手账 → 闲暇心跳`** 或用 `maisya_shape` 编辑 |
 | **档案说明与笔记（`PROFILE.md` / `NOTES.md` / `SKILL.md`）** | 自定义档案约束（`PROFILE.md` 上限 `150` 行）、跨会话技能规范与自动提炼短笔记 | 档案与资料库共管，支持版本回滚 |
 
 ---
@@ -109,11 +110,13 @@
 | `ui_style` | string | `"millennium"` | 管理台主题：`millennium` / `modern`（兼容旧值 `maiwork`）/ `auto` |
 | `proactive_level` | string | `"care"` | 全局主动分寸：`quiet` / `care` / `lively` |
 | `chat_proactive_levels` | table | `{}` | 按会话覆盖主动分寸 |
-| `daily_proactive_limit` | int | `1` | 普通闲聊主动唤醒每日全局上限（`0..50`） |
+| `heartbeat_mode` | string | `"off"` | 闲暇心跳档位：`off`（默认关）/ `gentle`（克制 `180m` & `72h`）/ `lively`（活泼 `90m` & `24h`） |
+| `daily_proactive_limit` | int | `3` | 全局每日主动唤醒总量上限（`0..50`） |
+| `per_chat_daily_proactive_limit` | int | `1` | 单会话每日主动唤醒上限（`0..10`，按流标识与 `session_id` 别名合并计数） |
 | `sleep_window` | string | `""` | 免打扰区间（如 `"01-08"` 或 `"23:00-07:30"`） |
-| `heartbeat_interval_minutes` | int | `60` | 自我探索心跳检查间隔（`5..1440` 分钟；`HEARTBEAT.md` 留空时不额外打扰） |
+| `heartbeat_interval_minutes` | int | `0` | 高级心跳基准间隔覆盖：`0` 跟随档位，或 `30..1440` 分钟 |
 | `acquaintance_users` | list | `[]` | 允许冷私聊主动打招呼的熟识账号列表 |
-| `longing_quiet_hours` | int | `0` | 熟识会话静默多久触发久违想念（`0` 关闭，或 `12..720` 小时） |
+| `longing_quiet_hours` | int | `0` | 高级久违想念静默阈值覆盖：`0` 跟随档位（关闭想念请设 `heartbeat_mode="off"`），或 `12..720` 小时 |
 | `agent_max_steps` / `agent_timeout` / `agent_max_active` | int | `16` / `180` / `8` | 单个活动步数预算、单轮超时秒数、全插件最大并发活动线程数 |
 | `thread_context_tokens` | int | `262144` | 自适应 Token 上下文窗口上限（小窗口模型自动向下封顶） |
 | `sandbox.enabled` / `sandbox.image` | bool / string | `false` / `"maisya-sandbox:latest"` | 可选 Docker 隔离执行开关与镜像名 |
