@@ -2,7 +2,7 @@
 
 [← 回到 README](../../README.md)
 
-日常使用中，首次安装引导与 MaiBot 后台嵌入的 **四页管理台** 已覆盖绝大多数设置；管理员也可以在任意私聊或启用群聊里用自然语言直接调整配置、档案与会话备忘。这里说明统一会话格式、双源管理员、对话塑形与底层字段速查。
+日常使用中，首次安装引导与 MaiBot 后台嵌入的 **五页管理台**（`现场 | 产物 | 能力 | 手账 | 设置`）已覆盖绝大多数配置；管理员也可以在任意私聊或启用群聊里用自然语言直接向 MaiBot 提出需求，由它一并完成群聊开启、早报设置、心跳节奏调整、私聊试跑预览及记忆修改。这里说明统一会话格式、双源管理员、对话塑形与底层字段速查。
 
 ---
 
@@ -39,26 +39,24 @@
 
 `v0.3` 将设置页收敛为四个结构化区块：
 
-1. **会话开关**：`plugin.enabled` 总开关、管理员私聊直通提示，以及按 `<platform>:<group|private>:<id>` 逐条增删 `enabled_chats` 与单会话主动分寸（`quiet` / `care` / `lively`）。
+1. **会话开关**：`plugin.enabled` 总开关、管理员私聊直通提示，以及按 `<platform>:<group|private>:<id>` 逐条增删 `enabled_chats`（单会话主动分寸保持在对话中由管理员随时让 MaiBot 通过 `maisya_shape` 调整，不堆砌在设置表单里）。
 2. **权限与管理员**：
    - 分区展示只读 `host_admins` 与可增删 `plugin_admins`；
    - **高风险操作确认策略（`permission_mode`）**：`ask_risky`（默认，仅危险/越界/首次注入凭据操作前询问确认）、`autonomous`（管理员全自主放行）、`always_ask`（所有执行动作均先确认）；
    - 查看或逐条撤销已记住的长期授权（`permission_grants`）；
    - 「重新打开首次安装引导」按钮。
-3. **安全存储**：展示保险箱句柄脱敏索引（句柄名、类别、域名说明），支持新增与删除，绝不回显明文。
-4. **基础运行**：全局主模型覆盖（`default_model`）、每日主动上限（`daily_proactive_limit`，`0..50`）、整点免打扰时段（`sleep_window`）、可选 `DockerRunner` 容器开关，以及外观主题切换（`millennium` 千禧机械默认 / `modern` 现代极简，兼容旧值 `maiwork` / `auto` 跟随宿主）。
+3. **密码保险箱（可选）**：仅存「别名 + 密码」，列表与「查看」详情只展示别名与保存日期、绝不回显密码内容。如用户在对话中直接发临时密码让 Bot 干活，Bot 会直接用于当次任务且自动脱敏，不强求用户先存保险箱。
+4. **基础运行**：全局主模型覆盖（`default_model`）、心跳开关与检查间隔、每日主动上限（`daily_proactive_limit`，`0..50`）、整点免打扰时段（`sleep_window`）、可选 `DockerRunner` 容器开关，以及外观主题切换（`millennium` 千禧机械默认 / `modern` 现代极简，兼容旧值 `maiwork` / `auto` 跟随宿主）；更细的心跳习惯或分群主动度随时在对话里告诉 MaiBot 即可调整。
 
 ---
 
 ## 三、对话式轻量管理（`maisya_shape`）
 
-除网页管理台外，核验身份后的管理员也可以在任意私聊或启用群聊中让 MaiBot 自行调整配置：
+除网页管理台外，核验身份后的管理员也可以在任意私聊或启用群聊中让 MaiBot 自行调整配置（`maisya_shape` 保持为延迟工具，先通过 `tool_search` 展开）：
 
-- `maisya_shape` 保持为延迟工具，由 MaiBot 按需先通过 `tool_search` 展开，并收敛为 4 类正交操作：
-  1. `overview`：读取全局或指定会话当前启用态、档案摘要、待触发定时/盯梢任务与系统文件状态；
-  2. `settings`：局部 `patch`、全写、历史查看与回滚核心配置（含 `enabled_chats`、`admins`、`permission_mode`、`default_model`、`sleep_window`、`proactive_level`、`daily_proactive_limit`、`ui_style`、`sandbox`，禁止从对话把 `plugin.enabled` 设为 `false`）；
-  3. `profile`：创建、读取、局部修改、启停或删除自定义能力档案（`PROFILE.md` 留空可自动生成初稿）；
-  4. `file`：安全读写与版本回滚 `MEMORY.md`、`JOURNAL.md`、`HEARTBEAT.md` 或技能文档（自动拦截疑似明文密钥）。
+1. `overview`：读取全局或指定会话当前启用态、角色摘要、待触发定时/盯梢任务与系统文件状态；
+2. `setup`：管理员一句对话完成「开启指定群 + 设简报主题/每天定时/单群主动分寸」并用 `run_now=True, deliver_to="current"` 当场试跑发回私聊预览；
+3. `settings` / `profile` / `file` / `digest_sources` / `services`：调整核心配置、微调单群主动度与心跳开关、管理角色与独立 `profiles/<id>/MEMORY.md`、编辑/回滚 `MEMORY.md` / `JOURNAL.md` / `HEARTBEAT.md` / `SKILL.md`、增删早报信源，或直接登记含 `env` / `url` 的 MCP 连接（导出角色生成脱敏 `.maisya.zip` 压缩包，不再产生虚构内链）。
 
 ---
 
@@ -77,9 +75,10 @@
 | 存储位置 | 记什么 | 谁来管、怎么生效 |
 |:-----|:-----|:-----|
 | **宿主 `A_Memorix`** | 群友长期聊天印象、人物关系、聊过什么日常话题 | 依然由 MaiBot 宿主管理；Maisya 线程只在需要时通过 `memory_read` / `person_read` 只读检索 |
-| **会话备忘（`MEMORY.md`）** | 仅限该会话的办事约定、格式偏好、常驻选题与资产说明（上限 `2,200` 字） | 管理员在 **`资料库 → 系统文件`** 或用 `maisya_shape` 编辑，支持版本历史回滚 |
-| **近期手账（`JOURNAL.md`）** | 近 7 天以 MaiBot 自身视角积累的公开探索经历（上限 `1,500` 字，同日自动合并） | 自身线程公开成果或管理员整理 |
-| **探索脾性（`HEARTBEAT.md`）** | 自我探索的兴趣方向与基线；留空且所有会话为 `quiet` 时不发起自主探索 | 在 **`资料库 → 系统文件`** 编辑 |
+| **会话备忘（`MEMORY.md`）** | 仅限该会话的办事约定、格式偏好、常驻选题与资产说明 | 管理员在 **`手账 → 会话备忘`** 或用 `maisya_shape` 编辑，支持版本历史回滚 |
+| **角色独立记忆（`profiles/<id>/MEMORY.md`）** | 仅归属该能力档案的领域背景、长期约定与偏好 | 在 **`能力 → 角色 → 角色记忆`** 或用 `maisya_shape` 编辑，支持版本回滚 |
+| **近期手账（`JOURNAL.md`）** | 近 7 天以 MaiBot 自身视角积累的公开探索经历（同日自动合并） | 自身线程公开成果或管理员在 **`手账 → 自身近况`** 整理 |
+| **探索脾性（`HEARTBEAT.md`）** | 自我探索的兴趣方向与基线；留空且所有会话为 `quiet` 时不发起自主探索 | 在 **`手账 → 心跳说明`** 或用 `maisya_shape` 编辑 |
 | **档案说明与笔记（`PROFILE.md` / `NOTES.md` / `SKILL.md`）** | 自定义档案约束（`PROFILE.md` 上限 `150` 行）、跨会话技能规范与自动提炼短笔记 | 档案与资料库共管，支持版本回滚 |
 
 ---
@@ -121,7 +120,7 @@
 
 ### 定制档案 `profile.toml` 核心字段
 
-存放在 `<宿主根>/data/maisya/abilities/profiles/<profile_id>/profile.toml`（内建仅有 `default`，定制档案通常从页面引导或 `default` 派生）：
+存放在 `<宿主根>/data/maisya/abilities/profiles/<profile_id>/profile.toml`（开箱内建 `default` / `scout` / `digest` 三位角色，定制档案通常从页面引导或 `default` 派生）：
 
 | 字段 | 说明 |
 |:-----|:-----|
