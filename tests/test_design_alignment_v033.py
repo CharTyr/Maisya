@@ -809,8 +809,15 @@ async def test_conversational_import_conflict_later_controls_and_scout_routing(t
             for item in plan["modified_kwargs"]["items"]
             for part in (item.get("parts") or ())
         )
-        assert "profile='scout'" in injected_txt
-        assert "profile='default'" in injected_txt
+        # 路由不再写死在提示词里（docs/09），由档案名册的描述承担
+        import html as _html
+        import re as _re
+
+        roster_match = _re.search(r"<maisya_profiles>(.*?)</maisya_profiles>", injected_txt, flags=_re.S)
+        assert roster_match is not None
+        roster = {p["id"]: p for p in json.loads(_html.unescape(roster_match.group(1)))}
+        assert roster["scout"]["description"] and roster["default"]["description"]
+        assert "<maisya_planner_manual>" in injected_txt
     finally:
         await plugin.on_unload()
 

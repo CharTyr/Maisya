@@ -41,13 +41,17 @@ async def test_longing_disabled_by_default_config_webui_and_pulse(tmp_path):
     example_toml = tomllib.loads((root / "config.example.toml").read_text("utf-8"))
     assert example_toml["proactive_level"] == "care"
 
-    expected_help = "设为 0 默认关闭；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。"
-    for rel in ("webui/settings.html",):
-        text = (root / rel).read_text("utf-8")
-        assert 'id="set-longing"' in text
-        assert 'min="0"' in text
-        assert "longing_quiet_hours ?? 0" in text
-        assert expected_help in text
+    expected_help = "0 = 跟随档位（克制 72 小时 / 活泼 24 小时）；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。"
+    settings_frag = (root / "webui/fragments/settings.html").read_text("utf-8")
+    assert 'id="set-longing"' in settings_frag
+    assert 'min="0"' in settings_frag
+    assert expected_help in settings_frag
+    mgmt_js = (root / "webui/management.html.in").read_text("utf-8")
+    assert "longing_quiet_hours ?? 0" in mgmt_js
+    compiled_now = (root / "webui/now.html").read_text("utf-8")
+    assert "set-longing" in compiled_now
+    assert "longing_quiet_hours ?? 0" in compiled_now
+    assert expected_help in compiled_now
 
     plugin = await loaded(tmp_path)
     try:
@@ -694,6 +698,17 @@ async def test_zero_idle_polling_cache_invalidation_and_bg_longing_throttle(tmp_
         )
         hb_path = Path(plugin.memory.root) / "memory/self/HEARTBEAT.md"
 
+        async def decision_capability(name, **kwargs):
+            if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(kwargs.get("prompt", "")):
+                return {"success": True, "response": '{"action":"explore","topic":"检查站内更新"}', "tool_calls": []}
+            return {"success": True, "response": "ok", "tool_calls": []}
+
+        plugin.ctx.call_capability = decision_capability
+        plugin.pulse.heartbeat_enabled = lambda: True
+        plugin.pulse.heartbeat_interval = 3600
+        plugin.pulse.rng = lambda: 0.5
+        plugin.pulse.invalidate_caches()
+
         read_calls = 0
         claim_calls = 0
         orig_read = plugin.memory.read
@@ -713,7 +728,7 @@ async def test_zero_idle_polling_cache_invalidation_and_bg_longing_throttle(tmp_
         plugin.memory.read = count_read
         plugin.pulse._claim_heartbeat = count_claim
 
-        # 1. Empty HEARTBEAT.md: reads once on first tick, ZERO reads & ZERO _claim_heartbeat on repeated ticks
+        # 1. Empty HEARTBEAT.md: reads once on first tick, records ok:no_reason, ZERO reads & ZERO _claim_heartbeat on repeated ticks
         hb_path.write_text(
             "## 气质与分寸\n温柔\n\n## 自主探索方向\n\n## 临时备忘\n", encoding="utf-8"
         )
@@ -721,6 +736,7 @@ async def test_zero_idle_polling_cache_invalidation_and_bg_longing_throttle(tmp_
         await plugin.pulse._heartbeat()
         assert read_calls == 1
         assert claim_calls == 0
+        assert plugin.intents.heartbeat_ticks()[0]["outcome"] == "ok:no_reason"
 
         for _ in range(5):
             now[0] += 10
@@ -730,7 +746,7 @@ async def test_zero_idle_polling_cache_invalidation_and_bg_longing_throttle(tmp_
 
         # 2. Updating HEARTBEAT.md (new mtime/content) populates plan and claims once;
         #    idle ticks before heartbeat_interval do ZERO reads & ZERO _claim_heartbeat calls.
-        plugin.pulse.heartbeat_interval = 3600
+        plugin.pulse.invalidate_caches()
         hb_path.write_text(
             "## 气质与分寸\n温柔\n\n## 自主探索方向\n检查站内更新\n\n## 临时备忘\n",
             encoding="utf-8",
@@ -764,29 +780,11 @@ async def test_zero_idle_polling_cache_invalidation_and_bg_longing_throttle(tmp_
         assert claim_calls == 3
         assert read_calls == reads_after_run + 1
 
-        # 5. background_tick=True throttles _longing to <= 1 call per 30s; direct tick() runs always
-        longing_calls = 0
-
-        async def count_longing():
-            nonlocal longing_calls
-            longing_calls += 1
-
-        plugin.pulse._longing = count_longing
-        plugin.pulse._heartbeat_next_at = now[0] + 99999
-        await plugin.pulse.tick(background_tick=True)
-        await plugin.pulse.tick(background_tick=True)
-        now[0] += 10
-        await plugin.pulse.tick(background_tick=True)
-        assert longing_calls == 1
-
-        now[0] += 25  # +35s total
-        await plugin.pulse.tick(background_tick=True)
-        assert longing_calls == 2
-
-        # Direct tick() is never throttled
-        await plugin.pulse.tick()
-        await plugin.pulse.tick()
-        assert longing_calls == 4
+        # 5. Standalone _longing() is folded into unified _heartbeat(); background_tick skips non-blockingly when locked
+        assert not hasattr(plugin.pulse, "_longing")
+        lock = plugin.pulse._get_tick_lock()
+        async with lock:
+            await asyncio.wait_for(plugin.pulse.tick(background_tick=True), timeout=0.5)
     finally:
         await plugin.on_unload()
 
@@ -800,10 +798,13 @@ async def test_group_scroll_prompt_journal_dedup_and_serendipity_upgrade(tmp_pat
 
         # 1. Group return scroll prompt when messages_since_trigger >= 5 + group + source_msg_id + not admin_direct
         wakes = []
+        decision = {"value": {"action": "explore", "topic": "探索新鲜工具"}}
 
         async def capture_capability(name, **kwargs):
             if name == "maisaka.proactive.trigger":
                 wakes.append((kwargs.get("stream_id"), kwargs.get("intent")))
+            if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(kwargs.get("prompt", "")):
+                return {"success": True, "response": json.dumps(decision["value"], ensure_ascii=False), "tool_calls": []}
             return {"success": True}
 
         plugin.ctx.call_capability = capture_capability
@@ -896,6 +897,9 @@ async def test_group_scroll_prompt_journal_dedup_and_serendipity_upgrade(tmp_pat
         await plugin.after_receive(
             message=event("你好", user="u1", group=False, platform="qq")
         )
+        plugin.pulse.heartbeat_enabled = lambda: True
+        plugin.pulse.heartbeat_interval = 3600
+        plugin.pulse.rng = lambda: 0.5
         plugin.pulse.invalidate_caches()
         await plugin.pulse._heartbeat()
         await asyncio.gather(*list(plugin.engine.tasks.values()), return_exceptions=True)
@@ -1022,12 +1026,17 @@ async def test_group_scroll_prompt_journal_dedup_and_serendipity_upgrade(tmp_pat
         plugin.intents.proactive_quota_available = arena_quota
         plugin.pulse.enabled_chats = lambda: [g_lively, p_care]
         plugin.intents.schedule = MagicMock(wraps=plugin.intents.schedule)
-        await plugin.pulse._longing()
+        hb_path.write_text("## 气质与分寸\n温柔\n\n## 自主探索方向\n\n", encoding="utf-8")
+        decision["value"] = {"action": "miss", "ref": "c1", "reason": "好久没聊，问候一下"}
+        now[0] += 7200
+        plugin.pulse.invalidate_caches()
+        await plugin.pulse._heartbeat()
         assert any(f"chat:{g_lively}" in str(c) for c in quota_calls)
         scheduled_targets = [
             call.kwargs["target"] for call in plugin.intents.schedule.call_args_list
         ]
         assert f"chat:{p_care}" in scheduled_targets
+        assert f"chat:{g_lively}" not in scheduled_targets
     finally:
         await plugin.on_unload()
 

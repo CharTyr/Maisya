@@ -370,24 +370,35 @@ async def test_heartbeat_triggers_self_exploration_only_when_configured_and_resp
     tmp_path,
 ):
     plugin = await loaded(tmp_path)
+    now = [1795226400.0]
+    plugin.intents.clock = lambda: now[0]
     calls = []
 
     async def capability(name, **arguments):
         calls.append((name, arguments))
+        if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(arguments.get("prompt", "")):
+            return {"success": True, "response": '{"action":"explore","topic":"轻量 SQLite 扩展库"}', "tool_calls": []}
         return {"success": True, "response": "今天看了一个轻量 SQLite 扩展库。", "tool_calls": []}
 
     plugin.ctx.call_capability = capability
     try:
-        # Empty HEARTBEAT.md -> zero LLM calls
+        # Default off mode -> zero LLM calls; even when enabled, empty HEARTBEAT.md -> zero LLM calls
+        await plugin.pulse.tick()
+        assert calls == []
+        plugin.pulse.heartbeat_enabled = lambda: True
+        plugin.pulse.heartbeat_interval = 3600
+        plugin.pulse.rng = lambda: 0.5
+        plugin.pulse.invalidate_caches()
         await plugin.pulse.tick()
         assert calls == []
 
-        # Populated HEARTBEAT.md -> launches one self scout thread in workspace="heartbeat"
+        # Populated HEARTBEAT.md -> decision + launches one self thread in workspace="heartbeat"
         saved = plugin.memory.write("heartbeat", "看看今天社区有什么好玩的工具库")
         assert saved["version"] == 1
+        plugin.pulse.invalidate_caches()
         await plugin.pulse.tick()
         await plugin.engine.drain()
-        assert len(calls) == 1
+        assert len(calls) == 2
         threads = plugin.threads.search("", "self", limit=5)
         assert len(threads) == 1
         assert plugin.threads.get(threads[0]["thread_id"], "self")["owner"] == "self"
@@ -395,20 +406,22 @@ async def test_heartbeat_triggers_self_exploration_only_when_configured_and_resp
         # Immediate second tick respects cooldown interval
         await plugin.pulse.tick()
         await plugin.engine.drain()
-        assert len(calls) == 1
+        assert len(calls) == 2
 
         # Quiet level or sleep_window suppresses heartbeat even if interval elapsed
-        plugin.pulse.heartbeat_interval = 0
+        now[0] += 7200
+        plugin.pulse.invalidate_caches()
         plugin.pulse.proactive_level = "quiet"
         await plugin.pulse.tick()
         await plugin.engine.drain()
-        assert len(calls) == 1
+        assert len(calls) == 2
+        now[0] += 7200
+        plugin.pulse.invalidate_caches()
         plugin.pulse.proactive_level = "care"
         plugin.pulse.sleep_window = "0-24"
-        plugin.intents.clock = lambda: 1795202400
         await plugin.pulse.tick()
         await plugin.engine.drain()
-        assert len(calls) == 1
+        assert len(calls) == 2
     finally:
         await plugin.on_unload()
 

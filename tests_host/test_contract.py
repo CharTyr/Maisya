@@ -1591,6 +1591,65 @@ class HostContract(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_planner_tool_definition_description_mutation_survives_host_normalizer(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as directory:
+
+                async def rpc(method, plugin_id, payload, **kwargs):
+                    if payload["capability"] == "config.get":
+                        return {"success": True, "value": ["qq:Alice"]}
+                    return {"success": True}
+
+                plugin = create_plugin()
+                plugin._set_context(
+                    PluginContext(
+                        PLUGIN_ID,
+                        rpc_call=rpc,
+                        paths=build_plugin_paths(PLUGIN_ID, Path(directory)),
+                    )
+                )
+                plugin.set_plugin_config(
+                    {
+                        "plugin": {"enabled": True, "config_version": "0.1.0"},
+                        "enabled_chats": ["contract-chat"],
+                    }
+                )
+                await plugin.on_load()
+                try:
+                    raw_tools = [
+                        {
+                            "name": "maisya_agent",
+                            "description": "原始描述",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"action": {"type": "string"}},
+                            },
+                        },
+                        {
+                            "name": "reply",
+                            "description": "回复",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    ]
+                    hook = await plugin.before_planner(
+                        session_id="contract-chat",
+                        tool_definitions=raw_tools,
+                        items=[],
+                    )
+                    mutated_tools = []
+                    for item in hook["modified_kwargs"]["tool_definitions"]:
+                        copy_item = dict(item)
+                        if copy_item.get("name") == "maisya_agent":
+                            copy_item["description"] = "原始描述\n[manual_marker]"
+                        mutated_tools.append(copy_item)
+                    normalized = normalize_tool_options(mutated_tools)
+                    agent_opt = next(t for t in normalized if t.name == "maisya_agent")
+                    self.assertIn("[manual_marker]", agent_opt.description)
+                finally:
+                    await plugin.on_unload()
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     print("SDK:", importlib.metadata.version("maibot-plugin-sdk"))

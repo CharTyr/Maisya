@@ -1038,6 +1038,11 @@
       digestOverview: [],
       allowPickerOpen: false,
       allowQuery: "",
+      plannerData: null,
+      plannerSummary: null,
+      plannerVersion: null,
+      plannerDirty: false,
+      plannerSeq: 0,
       pkgMode: "export",
       pkgTier: "template",
       pkgTransferToken: "",
@@ -1069,6 +1074,7 @@
     }
 
     const getCur = () => pState.profiles.find((p) => p.id === pState.selectedId) || pState.profiles[0] || null;
+    const isPlannerSelected = () => !pState.creating && pState.selectedId === "__planner__";
     const say = (txt, err = false) => {
       const el = $("#pr-feedback");
       if (!el) return;
@@ -1228,24 +1234,169 @@
         : `<div class="mil-hint">暂无匹配项</div>`;
     }
 
+    function togglePlannerMode(on) {
+      const panel = $("#pr-planner-panel");
+      if (panel) panel.hidden = !on;
+      const fishBox = $("#pr-fish-box");
+      if (fishBox) fishBox.hidden = on;
+      const grid = $("#pr-editor .pr-primary-grid");
+      if (grid) grid.hidden = on;
+      const advWrap = $("#pr-editor .pr-adv-wrap");
+      if (advWrap) advWrap.hidden = on;
+      if (on && $("#pr-digest-guide")) $("#pr-digest-guide").hidden = true;
+      const saveBtn = $("#pr-btn-save");
+      if (saveBtn) saveBtn.textContent = on ? "保存调度手册" : "保存档案";
+      const delBtn = $("#pr-btn-delete");
+      const expBtn = $("#pr-btn-export");
+      if (on) {
+        if (delBtn) delBtn.disabled = true;
+        if (expBtn) expBtn.disabled = true;
+        if ($("#pr-head-title")) $("#pr-head-title").textContent = "MaiBot（调度） · 调度手册 PLANNER.md";
+        const headFish = $("#pr-head-fish");
+        if (headFish) headFish.innerHTML = roleFishHtml("maibot_planner", "", 28, { still: true });
+      }
+    }
+
+    function updatePlannerLenBadge() {
+      const lenEl = $("#pl-len");
+      const mdEl = $("#pl-md");
+      if (!lenEl || !mdEl) return;
+      const chars = String(mdEl.value || "").length;
+      lenEl.textContent = `${chars} / 2000 字（上限 6000）`;
+      lenEl.className = `mil-tag num${chars > 6000 ? " mil-tag--bad" : chars > 2000 ? " mil-tag--warn" : ""}`;
+    }
+
+    function renderPlannerPanel(data, forceMd = false) {
+      if (!data) return;
+      pState.plannerData = data;
+      const manual = data.manual || {};
+      pState.plannerVersion = manual.version ?? 0;
+      if ($("#pl-ver")) $("#pl-ver").textContent = `v${pState.plannerVersion}`;
+      const mdEl = $("#pl-md");
+      if (mdEl && (forceMd || !pState.plannerDirty)) {
+        mdEl.value = manual.content || "";
+        pState.plannerDirty = false;
+      }
+      updatePlannerLenBadge();
+
+      const chk = data.check || {};
+      const warnEl = $("#pl-check-warn");
+      if (warnEl) {
+        const warns = [];
+        if (Array.isArray(chk.unknown_profiles) && chk.unknown_profiles.length) {
+          warns.push(`手册中提到的角色不在当前可用名册内：${chk.unknown_profiles.join("、")}`);
+        }
+        if (chk.over_suggested_length) {
+          warns.push(`正文共 ${chk.chars} 字，超过建议长度 ${chk.suggested_chars || 2000} 字，建议精简以节省每轮上下文开销`);
+        }
+        warnEl.textContent = warns.join("；");
+        warnEl.hidden = warns.length === 0;
+      }
+
+      const props = Array.isArray(data.pending_proposals) ? data.pending_proposals : [];
+      if (pState.plannerSummary) pState.plannerSummary.pending_proposals_count = props.length;
+      const pWrap = $("#pl-proposals-wrap");
+      const pList = $("#pl-proposals-list");
+      const pCnt = $("#pl-prop-count");
+      if (pCnt) pCnt.textContent = `${props.length} 条`;
+      if (pWrap) pWrap.hidden = props.length === 0;
+      if (pList) {
+        pList.innerHTML = props.map((pr) => `<div class="ms-entry-row" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div class="mil-row" style="justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">
+            <strong>${esc(pr.title || "调度经验草稿")}</strong>
+            <div class="mil-row" style="gap:4px">${(pr.signals || []).map((s) => `<span class="mil-tag">${esc(s)}</span>`).join("")}</div>
+          </div>
+          ${pr.rationale ? `<div class="mil-hint">${esc(pr.rationale)}</div>` : ""}
+          <pre class="mil-pre" style="margin:0;white-space:pre-wrap">${esc(pr.content || "")}</pre>
+          <div class="mil-row" style="justify-content:flex-end;gap:6px">
+            <button type="button" class="mil-key mil-key--sm" data-pl-prop-dismiss="${esc(pr.proposal_id)}">忽略</button>
+            <button type="button" class="mil-key mil-key--sm mil-key--hot" data-pl-prop-confirm="${esc(pr.proposal_id)}">采纳写入手册</button>
+          </div>
+        </div>`).join("");
+      }
+
+      const hist = Array.isArray(manual.history) ? manual.history : [];
+      const hWrap = $("#pl-hist-wrap");
+      const hList = $("#pl-hist-list");
+      if (hWrap && hList) {
+        hWrap.hidden = hist.length === 0;
+        hList.innerHTML = hist.map((h) => `<button type="button" class="mil-key mil-key--sm" data-pl-rb="${esc(h.version)}">恢复 v${esc(h.version)} · ${fmtTime(h.at || h.updated)}</button>`).join("");
+      }
+
+      const rosterEl = $("#pl-roster-preview");
+      const roster = Array.isArray(data.roster) ? data.roster : [];
+      if (rosterEl) {
+        rosterEl.innerHTML = roster.length
+          ? roster.map((r) => `<div class="ms-entry-row" style="flex-direction:column;align-items:stretch;gap:3px">
+              <div class="mil-row" style="justify-content:space-between;align-items:center;gap:6px">
+                <span><strong>${esc(r.title || r.id)}</strong> <span class="mono mil-hint">${esc(r.id)}</span></span>
+                <div class="mil-row" style="gap:4px">${(r.capabilities || []).map((c) => `<span class="mil-tag">${esc(c)}</span>`).join("")}</div>
+              </div>
+              <div class="mil-hint">${esc(r.description || "暂无说明")}</div>
+            </div>`).join("")
+          : `<div class="mil-hint">当前没有可调度的启用角色</div>`;
+      }
+
+      const prev = data.injection_preview || {};
+      const tokEl = $("#pl-token-tag");
+      const prevEl = $("#pl-inject-preview");
+      if (tokEl) tokEl.textContent = `约 ${Number(prev.estimated_tokens || 0)} tokens · ${Number(prev.chars || 0)} 字符`;
+      if (prevEl) prevEl.textContent = String(prev.text || "");
+    }
+
+    async function loadPlannerDetail(forceMd = false) {
+      const seq = ++pState.plannerSeq;
+      const res = await hostRpc("read", "planner", {});
+      if (disposed || sig?.aborted || pState.selectedId !== "__planner__" || seq !== pState.plannerSeq) return;
+      if (!res?.success) { say(res?.error || "调度手册读取失败", true); return; }
+      togglePlannerMode(true);
+      renderPlannerPanel(res, forceMd);
+    }
+
+    function selectRoleById(pid) {
+      if (!pid) return;
+      if (pid === "__planner__") {
+        pState.selectedId = "__planner__";
+        pState.creating = false;
+        pState.plannerDirty = false;
+        say("");
+        renderRoster();
+        togglePlannerMode(true);
+        if (pState.plannerData) renderPlannerPanel(pState.plannerData, true);
+        loadPlannerDetail(true);
+        return;
+      }
+      pState.selectedId = pid;
+      pState.creating = false;
+      renderRoster();
+      fillEditorFromProfile(getCur(), false);
+      loadProfileDetail(pid);
+    }
+
     function renderMobRoleCarousel() {
       const car = $("#mob-role-carousel");
       const dots = $("#mob-role-dots");
       if (!car) return;
-      const cur = getCur();
-      const curId = cur?.id || "";
-      car.innerHTML = pState.profiles.map((p) => {
+      const curId = isPlannerSelected() ? "__planner__" : (getCur()?.id || "");
+      const items = [
+        { id: "__planner__", name: "MaiBot（调度）", fish_seed: "", sub: "调度手册", isPlanner: true },
+        ...pState.profiles.map((p) => ({
+          ...p,
+          sub: p.access === "admins" ? "仅管理员" : p.enabled === false ? "停用" : "可用",
+        })),
+      ];
+      car.innerHTML = items.map((p) => {
         const active = p.id === curId;
-        const off = p.enabled === false;
-        const fish = roleFishHtml(p.id, p.fish_seed || "", active ? 52 : 42, active ? {} : { still: true }, off ? "mil-fish--off" : "");
+        const off = !p.isPlanner && p.enabled === false;
+        const fish = roleFishHtml(p.isPlanner ? "maibot_planner" : p.id, p.fish_seed || "", active ? 52 : 42, active ? {} : { still: true }, off ? "mil-fish--off" : "");
         return `<button type="button" class="mob-role-item${active ? " is-active" : ""}" role="option" aria-selected="${String(active)}" data-mob-role="${esc(p.id)}">
           <span class="mob-role-avatar">${fish}</span>
           <span class="mob-role-name">${esc(p.name || p.title || p.id)}</span>
-          <span class="mob-role-sub">${esc(p.access === "admins" ? "仅管理员" : p.enabled === false ? "停用" : "可用")}</span>
+          <span class="mob-role-sub">${esc(p.sub)}</span>
         </button>`;
       }).join("");
       if (dots) {
-        dots.innerHTML = pState.profiles.map((p) =>
+        dots.innerHTML = items.map((p) =>
           `<button type="button" class="mob-role-dot${p.id === curId ? " is-active" : ""}" data-mob-role="${esc(p.id)}" aria-label="${esc(p.name || p.title || p.id)}"></button>`
         ).join("");
       }
@@ -1253,17 +1404,27 @@
       if (activeEl && typeof activeEl.scrollIntoView === "function") {
         try { activeEl.scrollIntoView({ inline: "center", block: "nearest", behavior: calm() ? "auto" : "smooth" }); } catch (_) {}
       }
-      if (cur) {
-        $("#ab-mob-role-title").textContent = cur.name || cur.title || cur.id;
-        $("#ab-mob-role-env").textContent = cur.access === "admins" ? "仅管理员" : cur.execution_mode === "sandbox" ? "沙箱" : "常规";
-        $("#mob-val-overview").textContent = cur.id;
-        $("#mob-val-models").textContent = pState.modelChain[0] || cur.model_name || "跟随默认";
-        const connCount = (Array.isArray(cur.mcp) ? cur.mcp.length : (cur.mcp_servers?.length || 0))
-          + (Array.isArray(cur.apis) ? cur.apis.length : 0)
-          + (Array.isArray(cur.connectors) ? cur.connectors.length : 0);
-        const abCount = (cur.toolsets?.length ?? ALL_TOOLSETS.length) + (cur.skills?.length || 0) + connCount;
-        $("#mob-val-skills").textContent = `${abCount} 项`;
-        $("#mob-val-fish").textContent = parseFishCustom(cur.fish_seed)?.species ? "定制" : "自动";
+      if (isPlannerSelected()) {
+        $("#ab-mob-role-title").textContent = "MaiBot（调度）";
+        $("#ab-mob-role-env").textContent = "常驻主脑";
+        $("#mob-val-overview").textContent = "PLANNER.md";
+        $("#mob-val-models").textContent = "跟随主脑";
+        $("#mob-val-skills").textContent = "查看手册与名册";
+        $("#mob-val-fish").textContent = "主脑固定";
+      } else {
+        const cur = getCur();
+        if (cur) {
+          $("#ab-mob-role-title").textContent = cur.name || cur.title || cur.id;
+          $("#ab-mob-role-env").textContent = cur.access === "admins" ? "仅管理员" : cur.execution_mode === "sandbox" ? "沙箱" : "常规";
+          $("#mob-val-overview").textContent = cur.id;
+          $("#mob-val-models").textContent = pState.modelChain[0] || cur.model_name || "跟随默认";
+          const connCount = (Array.isArray(cur.mcp) ? cur.mcp.length : (cur.mcp_servers?.length || 0))
+            + (Array.isArray(cur.apis) ? cur.apis.length : 0)
+            + (Array.isArray(cur.connectors) ? cur.connectors.length : 0);
+          const abCount = (cur.toolsets?.length ?? ALL_TOOLSETS.length) + (cur.skills?.length || 0) + connCount;
+          $("#mob-val-skills").textContent = `${abCount} 项`;
+          $("#mob-val-fish").textContent = parseFishCustom(cur.fish_seed)?.species ? "定制" : "自动";
+        }
       }
     }
 
@@ -1271,8 +1432,22 @@
       const box = $("#pr-roster");
       if (!box) return;
       const q = pState.rosterQuery.trim().toLowerCase();
+      const plannerSel = !pState.creating && pState.selectedId === "__planner__";
+      const plannerMatch = !q || "maibot 调度 planner 调度手册 planner.md".includes(q);
+      const pendingPlannerCnt = Number(
+        pState.plannerData?.pending_proposals?.length ?? pState.plannerSummary?.pending_proposals_count ?? 0
+      );
+      const plannerCard = plannerMatch
+        ? `<button type="button" class="ab-card${plannerSel ? " is-selected" : ""}" role="option" aria-selected="${String(plannerSel)}" data-pick-profile-id="__planner__">
+          <div class="now-card-head">
+            <div class="now-card-title">${roleFishHtml("maibot_planner", "", 26, { still: !plannerSel })}<span class="now-card-title-txt">MaiBot（调度）</span></div>
+            <span class="mil-tag ${pendingPlannerCnt > 0 ? "mil-tag--warn" : "mil-tag--ok"}">${pendingPlannerCnt > 0 ? `待确认 ${pendingPlannerCnt}` : "常驻主脑"}</span>
+          </div>
+          <div class="now-card-meta"><span class="mono">PLANNER.md</span><span>· 调度与交付手册</span></div>
+        </button>`
+        : "";
       const filtered = pState.profiles.filter((p) => !q || `${p.id} ${p.name || p.title || ""} ${p.description || ""}`.toLowerCase().includes(q));
-      box.innerHTML = filtered.map((p) => {
+      const profileCardsHtml = filtered.map((p) => {
         const sel = !pState.creating && p.id === pState.selectedId;
         const fish = roleFishHtml(p.id, p.fish_seed || "", 26, { still: !sel }, p.enabled === false ? "mil-fish--off" : "");
         return `<button type="button" class="ab-card${sel ? " is-selected" : ""}" role="option" aria-selected="${String(sel)}" data-pick-profile-id="${esc(p.id)}">
@@ -1282,11 +1457,13 @@
           </div>
           <div class="now-card-meta"><span class="mono">${esc(p.id)}</span>${p.model_name ? `<span>· ${esc(p.model_name)}</span>` : ""}</div>
         </button>`;
-      }).join("") || `<div class="mil-hint">没有匹配的档案</div>`;
+      }).join("");
+      box.innerHTML = (plannerCard + profileCardsHtml) || `<div class="mil-hint">没有匹配的档案</div>`;
       renderMobRoleCarousel();
     }
 
     function fillEditorFromProfile(p, isNew = false, opts = {}) {
+      togglePlannerMode(false);
       const asyncDetail = Boolean(opts?.fromAsyncDetail);
       if (!asyncDetail) {
         pState.fishTouched = false;
@@ -1562,6 +1739,7 @@
       pState.connectors = normalizeConnectors(res.connectors || res.mcp_servers || []);
       pState.models = (Array.isArray(res.model_catalog) && res.model_catalog.length) ? res.model_catalog : (res.available_models || []);
       pState.digestOverview = Array.isArray(res.digest_overview) ? res.digest_overview : [];
+      pState.plannerSummary = res.planner_summary || null;
       pState.chatSources = { ...(pState.chatSources || {}), ...(res.chat_sources || {}) };
       const rawKnown = res.known_chat_specs || res.known_chats || [];
       pState.knownChats = [...new Set(rawKnown.map((c) => {
@@ -1570,10 +1748,15 @@
         if (sp && c && typeof c === "object" && !pState.chatSources[sp]) pState.chatSources[sp] = c;
         return sp;
       }).filter(Boolean))];
-      if (!pState.selectedId || !pState.profiles.some((p) => p.id === pState.selectedId)) {
+      if (!pState.selectedId || (pState.selectedId !== "__planner__" && !pState.profiles.some((p) => p.id === pState.selectedId))) {
         pState.selectedId = pState.profiles[0]?.id || "default";
       }
       renderRoster();
+      if (pState.selectedId === "__planner__") {
+        togglePlannerMode(true);
+        loadPlannerDetail(false);
+        return;
+      }
       const cur = getCur();
       if (cur) {
         const keepModelDrop = Boolean($("#pr-model-dropdown") && !$("#pr-model-dropdown").hidden);
@@ -1682,32 +1865,78 @@
       const pick = ev.target.closest("[data-pick-profile-id], [data-mob-role]");
       if (pick) {
         const pid = pick.dataset.pickProfileId || pick.dataset.mobRole;
-        if (pid) {
-          pState.selectedId = pid;
-          pState.creating = false;
-          renderRoster();
-          fillEditorFromProfile(getCur(), false);
-          loadProfileDetail(pid);
+        selectRoleById(pid);
+        return;
+      }
+
+      if (ev.target.closest("#pl-reload")) {
+        pState.plannerDirty = false;
+        await loadPlannerDetail(true);
+        say("已重新读取调度手册");
+        return;
+      }
+
+      const plRb = ev.target.closest("[data-pl-rb]");
+      if (plRb) {
+        const ver = Number(plRb.dataset.plRb);
+        if (pState.plannerVersion === null) {
+          const curP = await hostRpc("read", "planner", {});
+          if (curP?.success) pState.plannerVersion = curP.manual?.version ?? 0;
         }
+        const r = await hostRpc("write", "rollback", {
+          kind: "planner",
+          version: ver,
+          expected_version: pState.plannerVersion ?? 0,
+        });
+        if (!r?.success) { say(r?.error || "回滚调度手册失败", true); return; }
+        pState.plannerDirty = false;
+        say(`调度手册已回滚至版本 v${ver}`);
+        await loadPlannerDetail(true);
+        renderRoster();
+        return;
+      }
+
+      const plPropConfirm = ev.target.closest("[data-pl-prop-confirm]");
+      if (plPropConfirm) {
+        const propId = plPropConfirm.dataset.plPropConfirm || "";
+        const r = await hostRpc("write", "confirm_skill_proposal", { proposal_id: propId });
+        if (!r?.success) { say(r?.error || "采纳调度草稿失败", true); return; }
+        pState.plannerDirty = false;
+        say("已采纳调度经验并写入 PLANNER.md");
+        await loadPlannerDetail(true);
+        renderRoster();
+        return;
+      }
+
+      const plPropDismiss = ev.target.closest("[data-pl-prop-dismiss]");
+      if (plPropDismiss) {
+        const propId = plPropDismiss.dataset.plPropDismiss || "";
+        const r = await hostRpc("write", "dismiss_skill_proposal", { proposal_id: propId });
+        if (!r?.success) { say(r?.error || "忽略调度草稿失败", true); return; }
+        say("已忽略该调度草稿");
+        await loadPlannerDetail(false);
+        renderRoster();
         return;
       }
 
       const stepBtn = ev.target.closest("[data-mob-step]");
-      if (stepBtn && pState.profiles.length) {
+      if (stepBtn) {
         const delta = Number(stepBtn.dataset.mobStep || 0);
-        const curIdx = Math.max(0, pState.profiles.findIndex((p) => p.id === pState.selectedId));
-        const nextIdx = (curIdx + delta + pState.profiles.length) % pState.profiles.length;
-        const np = pState.profiles[nextIdx];
-        pState.selectedId = np.id;
-        pState.creating = false;
-        renderRoster();
-        fillEditorFromProfile(np, false);
-        loadProfileDetail(np.id);
+        const ids = ["__planner__", ...pState.profiles.map((p) => p.id)];
+        if (ids.length) {
+          const curIdx = Math.max(0, ids.indexOf(pState.selectedId));
+          const nextId = ids[(curIdx + delta + ids.length) % ids.length];
+          selectRoleById(nextId);
+        }
         return;
       }
 
       const jumpRow = ev.target.closest("[data-mob-role-jump]");
       if (jumpRow) {
+        if (isPlannerSelected()) {
+          $("#pr-planner-panel")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+          return;
+        }
         openMobSheet(jumpRow.dataset.mobRoleJump);
         return;
       }
@@ -2036,6 +2265,25 @@
       }
 
       if (ev.target.closest("#pr-btn-save")) {
+        if (!pState.creating && pState.selectedId === "__planner__") {
+          const content = $("#pl-md")?.value || "";
+          if (content.length > 6000) { say("调度手册正文不能超过 6000 字", true); return; }
+          if (pState.plannerVersion === null) {
+            const curP = await hostRpc("read", "planner", {});
+            if (curP?.success) pState.plannerVersion = curP.manual?.version ?? 0;
+          }
+          const pr = await hostRpc("write", "asset", {
+            kind: "planner",
+            content,
+            expected_version: pState.plannerVersion ?? 0,
+          });
+          if (!pr?.success) { say(pr?.error || "调度手册保存失败", true); return; }
+          pState.plannerDirty = false;
+          say("已保存调度手册");
+          await loadPlannerDetail(true);
+          renderRoster();
+          return;
+        }
         const id = ($("#pr-id")?.value || "").trim();
         const name = ($("#pr-name")?.value || "").trim();
         const md = $("#pr-md")?.value || "";
@@ -2105,6 +2353,7 @@
       }
 
       if (ev.target.closest("#pr-btn-delete")) {
+        if (isPlannerSelected()) { say("MaiBot（调度）为主脑常驻手册，不可删除", true); return; }
         const cur = getCur();
         if (!cur || BUILTIN_PROFILE_IDS.has(cur.id)) { say("内置角色受保护，不可删除（可停用或克隆修改）", true); return; }
         const res = await hostRpc("write", "profile_delete", { profile_id: cur.id, id: cur.id });
@@ -2117,6 +2366,7 @@
       }
 
       if (ev.target.closest("#pr-btn-export")) {
+        if (isPlannerSelected()) { say("调度手册为本地主脑配置，暂不单独打包导出", true); return; }
         const cur = getCur();
         if (!cur) return;
         openPkgModal("export");
@@ -2284,6 +2534,7 @@
       if (ev.target.id === "pr-search") { pState.rosterQuery = ev.target.value || ""; renderRoster(); }
       else if (ev.target.id === "pr-ab-search") { pState.abSearch = ev.target.value || ""; renderAbilityCards(); }
       else if (ev.target.id === "pr-md") { pState.mdTouched = true; updateMdCounter(); }
+      else if (ev.target.id === "pl-md") { pState.plannerDirty = true; updatePlannerLenBadge(); }
       else if (ev.target.id === "pr-notes-md") { pState.notesDirty = true; }
       else if (ev.target.id === "pr-role-mem-md") { pState.roleMemDirty = true; }
       else if (ev.target.id === "pr-allow-cand-search") { pState.allowQuery = ev.target.value || ""; renderProfileAllowChats(); }
@@ -2337,11 +2588,7 @@
           if (dist < bestDist) { bestDist = dist; bestId = el.dataset.mobRole || ""; }
         });
         if (bestId && bestId !== pState.selectedId) {
-          pState.selectedId = bestId;
-          pState.creating = false;
-          renderRoster();
-          fillEditorFromProfile(getCur(), false);
-          loadProfileDetail(bestId);
+          selectRoleById(bestId);
         }
       }, 140);
     }, { passive: true, signal: sig });
@@ -3616,15 +3863,18 @@
       const bar = $("#mem-proactive-bar");
       if (!bar) return;
       const st = mState.proactiveStatus || {};
-      const used = Number(st.used ?? 0);
-      const limit = Number(st.limit ?? 1);
+      const gUsed = Number(st.global_used ?? st.used ?? 0);
+      const gLimit = Number(st.global_limit ?? st.limit ?? 3);
+      const perChat = Number(st.per_chat_limit ?? st.chat_limit ?? 1);
       const sw = String(st.sleep_window || "").trim();
-      const hbOn = st.heartbeat_enabled !== false;
+      const hbMode = String(st.heartbeat_mode || (st.heartbeat_enabled === false ? "off" : "gentle"));
+      const hbModeLabel = hbMode === "lively" ? "活泼" : hbMode === "gentle" ? "克制" : "关";
       const hbPlan = Boolean(st.heartbeat_has_plan);
+      const hbEff = String(st.heartbeat_effective || (hbMode === "off" ? "关闭" : hbPlan ? "想念 + 逛逛" : "只会想念（未填逛逛方向）"));
       const locks = Array.isArray(st.unreplied_chats) ? st.unreplied_chats : [];
       bar.innerHTML = [
-        `<span class="mil-tag mil-tag--ok">今日主动搭话：已用 ${used} / ${limit} 次</span>`,
-        `<span class="mil-tag ${!hbOn ? "mil-tag--off" : hbPlan ? "mil-tag--ok" : "mil-tag--warn"}">${!hbOn ? "闲暇心跳：已暂停" : hbPlan ? "闲暇心跳：已配方向" : "闲暇心跳：待填写探索方向"}</span>`,
+        `<span class="mil-tag mil-tag--ok">今日主动：全局 ${gUsed} / ${gLimit} 次 · 单会话上限 ${perChat} 次</span>`,
+        `<span class="mil-tag ${hbMode === "off" ? "mil-tag--off" : hbPlan ? "mil-tag--ok" : "mil-tag--warn"}">闲暇心跳：${esc(hbModeLabel)} · ${esc(hbEff)}</span>`,
         `<span class="mil-tag">${sw ? `免打扰时段：${esc(sw)}` : "全天候可响应"}</span>`,
         locks.length
           ? `<span class="mil-tag mil-tag--warn">未回不连戳锁定：${locks.length} 个会话</span>`
@@ -4668,32 +4918,41 @@
       }
     }
 
+    function formatHeartbeatEffective(mode, hbHasPlan) {
+      if (mode === "off") return "关闭 · 不发起后台探索与久违想念（事后惦记不受影响）";
+      if (mode === "lively") {
+        return hbHasPlan ? "想念 + 逛逛 · 约每 90 分钟 · 24 小时静默想念" : "只会想念（未填逛逛方向） · 约每 90 分钟 · 24 小时静默想念";
+      }
+      return hbHasPlan ? "想念 + 逛逛 · 约每 180 分钟 · 72 小时静默想念" : "只会想念（未填逛逛方向） · 约每 180 分钟 · 72 小时静默想念";
+    }
+
     function renderRuntime() {
       const set = sState.data?.settings || sState.data || {};
       const curModel = $("#set-default-model")?.value || set.default_model || sState.models[0]?.name || "utils";
       syncSetModelDisplay(set.default_model || curModel);
       $("#set-perm-mode").value = sState.data?.permission_mode || set.permission_mode || "ask_risky";
-      const hbOn = set.heartbeat_enabled !== false;
+      const hbMode = String(set.heartbeat_mode || sState.data?.heartbeat_mode || (set.heartbeat_enabled ? "gentle" : "off"));
       const hbHasPlan = Boolean(sState.data?.heartbeat_has_plan);
-      if ($("#set-hb-enabled")) $("#set-hb-enabled").checked = hbOn;
-      if ($("#set-hb-enabled-txt")) {
-        $("#set-hb-enabled-txt").textContent = !hbOn
-          ? "已暂停"
-          : (hbHasPlan ? "已开启 · 按心跳说明定期探索" : "开关已开 · 尚未填写想逛的话题（点右侧编辑或直接告诉 MaiBot）");
+      $$("#set-hb-mode-seg [data-hb-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.hbMode === hbMode)));
+      if ($("#set-hb-effective-txt")) {
+        $("#set-hb-effective-txt").textContent = formatHeartbeatEffective(hbMode, hbHasPlan);
       }
-      const hbIntSel = $("#set-hb-interval");
-      const hbMin = Number(set.heartbeat_interval_minutes || 120);
-      if (hbIntSel) {
-        if (![...hbIntSel.options].some((o) => Number(o.value) === hbMin)) {
-          const opt = document.createElement("option");
-          opt.value = String(hbMin);
-          opt.textContent = `每 ${hbMin} 分钟（对话设定）`;
-          hbIntSel.appendChild(opt);
-        }
-        hbIntSel.value = String(hbMin);
+      const hbIntVal = Number(set.heartbeat_interval_minutes ?? 0);
+      const longingVal = Number(set.longing_quiet_hours ?? 0);
+      if (!sState.dirtyInputs.has("set-hb-interval") && $("#set-hb-interval")) {
+        $("#set-hb-interval").value = String(hbIntVal);
+      }
+      if (!sState.dirtyInputs.has("set-longing") && $("#set-longing")) {
+        $("#set-longing").value = String(longingVal);
+      }
+      if ((hbIntVal > 0 || longingVal > 0) && $("#set-hb-adv")) {
+        $("#set-hb-adv").open = true;
       }
       if (!sState.dirtyInputs.has("set-daily-limit")) {
-        $("#set-daily-limit").value = String(set.daily_proactive_limit ?? set.pulse?.daily_proactive_limit ?? 1);
+        $("#set-daily-limit").value = String(set.daily_proactive_limit ?? set.pulse?.daily_proactive_limit ?? 3);
+      }
+      if (!sState.dirtyInputs.has("set-per-chat-limit") && $("#set-per-chat-limit")) {
+        $("#set-per-chat-limit").value = String(set.per_chat_daily_proactive_limit ?? 1);
       }
       const sw = String(set.sleep_window || set.pulse?.sleep_window || "23:30-08:00");
       const parts = sw.split(/[-~]/);
@@ -4944,19 +5203,39 @@
         switchWorkspaceTab("heartbeat");
         return;
       }
+      const hbModeBtn = ev.target.closest("#set-hb-mode-seg [data-hb-mode]");
+      if (hbModeBtn) {
+        const hbMode = hbModeBtn.dataset.hbMode || "off";
+        const hbHasPlan = Boolean(sState.data?.heartbeat_has_plan);
+        $$("#set-hb-mode-seg [data-hb-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b === hbModeBtn)));
+        if ($("#set-hb-effective-txt")) {
+          $("#set-hb-effective-txt").textContent = formatHeartbeatEffective(hbMode, hbHasPlan);
+        }
+        const r = await savePartialSettings({ heartbeat_mode: hbMode });
+        if (r?.success) await loadSettings();
+        return;
+      }
       if (ev.target.closest("#set-save-runtime")) {
         sState.dirtyInputs.clear();
         const swStart = ($("#set-sleep-start")?.value || "23:30").trim();
         const swEnd = ($("#set-sleep-end")?.value || "08:00").trim();
-        const limit = Math.max(0, Math.min(50, Number($("#set-daily-limit")?.value || 1)));
+        const rawDaily = $("#set-daily-limit")?.value;
+        const limit = Math.max(0, Math.min(50, Math.round(Number(rawDaily === "" || rawDaily == null ? 3 : rawDaily))));
+        const rawPerChat = $("#set-per-chat-limit")?.value;
+        const perChatLimit = Math.max(0, Math.min(10, Math.round(Number(rawPerChat === "" || rawPerChat == null ? 1 : rawPerChat))));
         const sbOn = Boolean($("#set-sandbox-enabled")?.checked);
-        const hbOn = Boolean($("#set-hb-enabled")?.checked);
-        const hbInt = Math.max(15, Math.min(1440, Number($("#set-hb-interval")?.value || 120)));
+        const hbMode = $("#set-hb-mode-seg [data-hb-mode][aria-pressed='true']")?.dataset.hbMode || "off";
+        const rawHbInt = $("#set-hb-interval")?.value;
+        const hbInt = Math.max(0, Math.min(1440, Math.round(Number(rawHbInt === "" || rawHbInt == null ? 0 : rawHbInt))));
+        const rawLonging = $("#set-longing")?.value;
+        const longingHours = Math.max(0, Math.min(720, Math.round(Number(rawLonging === "" || rawLonging == null ? 0 : rawLonging))));
         await savePartialSettings({
           default_model: $("#set-default-model")?.value || "",
-          heartbeat_enabled: hbOn,
+          heartbeat_mode: hbMode,
           heartbeat_interval_minutes: hbInt,
+          longing_quiet_hours: longingHours,
           daily_proactive_limit: limit,
+          per_chat_daily_proactive_limit: perChatLimit,
           sleep_window: `${swStart}-${swEnd}`,
           sandbox_enabled: sbOn,
           sandbox: { enabled: sbOn },
@@ -5004,16 +5283,6 @@
         const r = await savePartialSettings({ plugin_enabled: plgOn, plugin: { enabled: plgOn } });
         if (r?.success) await loadSettings();
         else renderChats();
-      } else if (ev.target.id === "set-hb-enabled") {
-        const hbOn = Boolean(ev.target.checked);
-        const hbHasPlan = Boolean(sState.data?.heartbeat_has_plan);
-        if ($("#set-hb-enabled-txt")) {
-          $("#set-hb-enabled-txt").textContent = !hbOn ? "已暂停" : (hbHasPlan ? "已开启 · 按心跳说明定期探索" : "开关已开 · 尚未填写想逛的话题（点右侧编辑或直接告诉 MaiBot）");
-        }
-        await savePartialSettings({ heartbeat_enabled: hbOn });
-      } else if (ev.target.id === "set-hb-interval") {
-        const hbInt = Math.max(15, Math.min(1440, Number(ev.target.value || 120)));
-        await savePartialSettings({ heartbeat_interval_minutes: hbInt });
       } else if (ev.target.id === "set-perm-mode") {
         await savePartialSettings({ permission_mode: ev.target.value });
       } else if (ev.target.id === "set-sandbox-enabled") {
@@ -5028,7 +5297,7 @@
     }, { signal: sig });
 
     view.addEventListener("input", (ev) => {
-      if (["set-daily-limit", "set-sleep-start", "set-sleep-end"].includes(ev.target.id)) {
+      if (["set-daily-limit", "set-per-chat-limit", "set-sleep-start", "set-sleep-end", "set-hb-interval", "set-longing"].includes(ev.target.id)) {
         sState.dirtyInputs.add(ev.target.id);
       } else if (ev.target.id === "set-chat-cand-search") {
         sState.candQuery = ev.target.value || "";
@@ -5048,7 +5317,7 @@
     }, { signal: sig });
 
     view.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && ["set-daily-limit", "set-sleep-start", "set-sleep-end"].includes(ev.target.id)) {
+      if (ev.key === "Enter" && ["set-daily-limit", "set-per-chat-limit", "set-sleep-start", "set-sleep-end", "set-hb-interval", "set-longing"].includes(ev.target.id)) {
         ev.preventDefault();
         $("#set-save-runtime")?.click();
       }

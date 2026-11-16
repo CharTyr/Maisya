@@ -20,6 +20,8 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
 
     async def capability(name, **arguments):
         llm_calls.append((name, arguments))
+        if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(arguments.get("prompt", "")):
+            return {"success": True, "response": '{"action":"explore","topic":"好玩的工具库"}', "tool_calls": []}
         return {"success": True, "response": "公开探索近况。", "tool_calls": []}
 
     plugin.ctx.call_capability = capability
@@ -51,17 +53,24 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
             assert "她" not in content
             plugin.memory._guard(kind, content, "")
 
-        # Fresh install HEARTBEAT.md has temperament + commented empty topics -> zero unsolicited LLM calls
+        # Fresh install HEARTBEAT.md (heartbeat_mode=off, and even when enabled with commented empty topics) -> zero LLM calls
+        await plugin.pulse.tick()
+        assert llm_calls == []
+        plugin.pulse.heartbeat_enabled = lambda: True
+        plugin.pulse.heartbeat_interval = 3600
+        plugin.pulse.rng = lambda: 0.5
+        plugin.pulse.invalidate_caches()
         await plugin.pulse.tick()
         assert llm_calls == []
         assert plugin.memory.context("chat")["journal"] == ""
 
-        # Writing plain HEARTBEAT.md produces version 1 and activates _heartbeat()
+        # Writing plain HEARTBEAT.md produces version 1 and activates _heartbeat() (1 decision + 1 explore step)
         saved = plugin.memory.write("heartbeat", "看看今天社区有什么好玩的工具库")
         assert saved["version"] == 1
+        plugin.pulse.invalidate_caches()
         await plugin.pulse.tick()
         await plugin.engine.drain()
-        assert len(llm_calls) == 1
+        assert len(llm_calls) == 2
         # Custom edits via MemoryLayers are preserved across reloads
         custom_skill = (
             "---\nname: source-checking\ndescription: custom\n---\n自定义核验规范。\n"
@@ -651,6 +660,8 @@ async def test_longing_triggers_once_for_quiet_familiar_chat_and_obeys_cooldown(
         if name == "maisaka.proactive.trigger":
             wakes.append(arguments)
             return {"success": True}
+        if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(arguments.get("prompt", "")):
+            return {"success": True, "response": '{"action":"miss","ref":"c1","reason":"好久没聊，问候近况"}', "tool_calls": []}
         raise AssertionError(name)
 
     plugin.ctx.call_capability = capability
@@ -674,8 +685,13 @@ async def test_longing_triggers_once_for_quiet_familiar_chat_and_obeys_cooldown(
         await plugin.pulse.tick()
         assert wakes == []
 
-        # Enabling longing_quiet_hours=72 triggers once after 73 quiet hours
+        # Enabling heartbeat + longing_quiet_hours=72 schedules longing intent on 1st tick and wakes on 2nd tick
+        plugin.pulse.heartbeat_enabled = lambda: True
+        plugin.pulse.heartbeat_interval = 3600
         plugin.pulse.longing_quiet_hours = 72
+        plugin.pulse.rng = lambda: 0.5
+        plugin.pulse.invalidate_caches()
+        await plugin.pulse.tick()
         await plugin.pulse.tick()
         assert len(wakes) == 1
         assert wakes[0]["metadata"]["source"] == "longing"
@@ -684,6 +700,8 @@ async def test_longing_triggers_once_for_quiet_familiar_chat_and_obeys_cooldown(
         # Re-open lock by human message 2 days later -> still in 7-day cooldown
         now[0] += 2 * 86400
         plugin.intents.note_received("chat")
+        plugin.pulse.invalidate_caches()
+        await plugin.pulse.tick()
         await plugin.pulse.tick()
         assert len(wakes) == 1
     finally:

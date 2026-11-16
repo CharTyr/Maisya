@@ -28,7 +28,7 @@ from .abilities import (
     _serialize_profile_dict,
     _validate_instructions,
 )
-from .config import Settings, canonical_ui_style
+from .config import Settings, apply_heartbeat_compat, canonical_ui_style
 from .console import snapshot
 from .digest import DigestWorkspace
 from .memory import PRESETS_DIR, SKILL_ID_RE, MemoryLayers, parse_skill_meta
@@ -41,7 +41,14 @@ from .packages import (
 )
 from .pathsafe import is_absolute_program_path, path_is_link_like
 from .shaping import collect_known_chats, resolve_chat_target, resolve_stream_spec
-from .shaping_setup import handle_digest_sources
+from .shaping_setup import (
+    apply_planner_proposal,
+    build_planner_preview,
+    handle_digest_sources,
+    heartbeat_effective_label,
+    is_planner_proposal,
+    planner_manual_check,
+)
 from .scout import call_capability
 from .share import links_in
 from .services import (
@@ -1209,46 +1216,15 @@ class Management:
         return sid
 
     def _proactive_quota(self) -> dict[str, int]:
-        limit = max(0, int(self.plugin.settings.daily_proactive_limit))
-        used = 0
         intents = getattr(self.plugin, "intents", None)
-        if intents is not None:
-            now = intents.clock()
-            start, end = intents._day_bounds(now)
-            counts = {"group": 0, "private": 0}
-            with intents.store.connect() as db:
-                rows = db.execute(
-                    "SELECT target, payload FROM intents WHERE kind='proactive' "
-                    "AND source IN ('afterglow','serendipity','longing','later') "
-                    "AND COALESCE(handled, due_at, created)>=? "
-                    "AND COALESCE(handled, due_at, created)<? "
-                    "AND status NOT IN ('cancelled','failed')",
-                    (start, end),
-                ).fetchall()
-                arena_fn = getattr(intents, "_target_arena", None)
-                for row in rows:
-                    target = str(row["target"] if hasattr(row, "keys") else row[0])
-                    raw_payload = row["payload"] if hasattr(row, "keys") else row[1]
-                    try:
-                        parsed_payload = (
-                            json.loads(raw_payload) if raw_payload else None
-                        )
-                    except (TypeError, ValueError):
-                        parsed_payload = None
-                    if callable(arena_fn):
-                        arena = arena_fn(
-                            db,
-                            target,
-                            parsed_payload if isinstance(parsed_payload, dict) else None,
-                        )
-                    else:
-                        arena = "private" if ":private:" in target else "group"
-                    counts[arena if arena in counts else "group"] += 1
-            used = max(counts.values())
+        limit = max(0, int(self.plugin.settings.daily_proactive_limit))
+        if intents is None:
+            return {"used": 0, "limit": limit, "remaining": limit}
+        state = intents.proactive_quota_state()
         return {
-            "used": used,
-            "limit": limit,
-            "remaining": max(0, limit - used),
+            "used": state["used"],
+            "limit": state["limit"],
+            "remaining": state["remaining"],
         }
 
     @staticmethod
@@ -1313,6 +1289,8 @@ class Management:
     def _settings(self):
         settings = self.plugin.settings.model_dump()
         settings["ui_style"] = canonical_ui_style(settings.get("ui_style"))
+        # 派生只读字段：旧前端按 heartbeat_enabled 判断开关，写回时由 apply_heartbeat_compat 让位于档位
+        settings["heartbeat_enabled"] = self.plugin.settings.heartbeat_enabled
         admins_info = self._admins_info()
         grants_store = getattr(self.plugin, "grants", None) or getattr(
             getattr(self.plugin, "runtime", None), "grants", None
@@ -1324,15 +1302,19 @@ class Management:
         plugin_enabled = bool(
             getattr(getattr(self.plugin.settings, "plugin", None), "enabled", False)
         )
-        hb_has_plan = False
+        hb_text = ""
         if getattr(self.plugin, "memory", None) is not None:
             try:
-                hb_path = self.plugin.memory.root / "memory/self/HEARTBEAT.md"
-                hb_raw = hb_path.read_text(encoding="utf-8") if hb_path.is_file() else ""
-                _, hb_plan = MemoryLayers.heartbeat_parts(hb_raw)
-                hb_has_plan = bool(hb_plan.strip())
-            except OSError:
-                hb_has_plan = False
+                hb_path = self.plugin.memory._locate("heartbeat")[1]
+                if hb_path.is_file() and not path_is_link_like(hb_path):
+                    hb_text = MemoryLayers._bytes(hb_path).decode(
+                        "utf-8", errors="replace"
+                    )
+            except (ValueError, OSError):
+                hb_text = ""
+        hb_mode, hb_has_plan, hb_effective = heartbeat_effective_label(
+            self.plugin, hb_text
+        )
         return {
             "settings": settings,
             "version": self._version(settings),
@@ -1342,6 +1324,8 @@ class Management:
             "ui_style": settings["ui_style"],
             "plugin_enabled": plugin_enabled,
             "heartbeat_has_plan": hb_has_plan,
+            "heartbeat_mode": hb_mode,
+            "heartbeat_effective": hb_effective,
             "sandbox_enabled": bool(docker.get("enabled", False)),
             "handles": handles,
             "vault_handles": handles,
@@ -1364,6 +1348,13 @@ class Management:
                 == getattr(plugin.threads, "path", None)
             )
         )
+        raw_chat_id = str(options.get("chat_id", "") or "").strip()
+        chat_id = self._resolve_memory_chat_id(raw_chat_id)
+        per_chat_limit = max(
+            0, int(getattr(plugin.settings, "per_chat_daily_proactive_limit", 1))
+        )
+        quota_target = f"chat:{chat_id}" if (chat_id and chat_id != "self") else ""
+        same_db_quota = None
         with plugin.threads.connect() as db:
             chats = {
                 row[0]
@@ -1383,9 +1374,13 @@ class Management:
                     "SELECT workspace_id,owner,chat_id,name,profile,thread_id FROM agent_workspaces ORDER BY rowid DESC LIMIT 60"
                 )
             ]
-            pending_props = plugin.memory.list_skill_proposals(
-                status="pending", limit=10, db=db
-            )
+            pending_props = [
+                p
+                for p in plugin.memory.list_skill_proposals(
+                    status="pending", limit=10, db=db
+                )
+                if not is_planner_proposal(p)
+            ]
             if same_intents_db:
                 try:
                     s_rows = db.execute(
@@ -1397,6 +1392,7 @@ class Management:
                             unreplied_raw.append(rcid)
                 except sqlite3.Error:
                     unreplied_raw = []
+                same_db_quota = intents_mgr.proactive_quota_state(quota_target, db=db)
         chats.update(plugin.settings.enabled_chats)
         raw_nonempty = {str(c).strip() for c in chats if str(c or "").strip()}
         deduped = {
@@ -1404,9 +1400,25 @@ class Management:
             for c in raw_nonempty
         }
         source_ids = sorted(deduped | raw_nonempty)
-        raw_chat_id = str(options.get("chat_id", "") or "").strip()
-        chat_id = self._resolve_memory_chat_id(raw_chat_id)
-        proactive_quota = self._proactive_quota()
+        if same_db_quota is not None:
+            chat_quota = same_db_quota
+        elif intents_mgr is not None:
+            chat_quota = intents_mgr.proactive_quota_state(quota_target)
+        else:
+            global_limit = max(0, int(plugin.settings.daily_proactive_limit))
+            chat_quota = {
+                "used": 0,
+                "limit": global_limit,
+                "remaining": global_limit,
+                "chat_used": 0,
+                "chat_limit": per_chat_limit,
+                "chat_remaining": per_chat_limit,
+            }
+        proactive_quota = {
+            "used": chat_quota["used"],
+            "limit": chat_quota["limit"],
+            "remaining": chat_quota["remaining"],
+        }
         if not same_intents_db and intents_mgr is not None and getattr(intents_mgr, "store", None) is not None:
             try:
                 with intents_mgr.store.connect() as sdb:
@@ -1425,12 +1437,21 @@ class Management:
             if canon not in unreplied_chats:
                 unreplied_chats.append(canon)
         mem_ctx = plugin.memory.context(chat_id)
-        _, hb_plan = MemoryLayers.heartbeat_parts(str((mem_ctx or {}).get("heartbeat") or ""))
+        hb_mode, hb_has_plan, hb_effective = heartbeat_effective_label(
+            plugin, str((mem_ctx or {}).get("heartbeat") or "")
+        )
         proactive_status = {
             **proactive_quota,
             "unreplied_chats": unreplied_chats,
-            "heartbeat_enabled": bool(getattr(plugin.settings, "heartbeat_enabled", True)),
-            "heartbeat_has_plan": bool(hb_plan.strip()),
+            "heartbeat_enabled": plugin.settings.heartbeat_enabled,
+            "heartbeat_mode": hb_mode,
+            "heartbeat_has_plan": hb_has_plan,
+            "heartbeat_effective": hb_effective,
+            "global_used": proactive_quota["used"],
+            "global_limit": proactive_quota["limit"],
+            "per_chat_limit": per_chat_limit,
+            "chat_used": chat_quota.get("chat_used", 0),
+            "chat_limit": chat_quota.get("chat_limit", per_chat_limit),
             "sleep_window": str(getattr(plugin.settings, "sleep_window", "") or ""),
         }
         return {
@@ -2549,6 +2570,7 @@ class Management:
             "now_detail",
             "abilities",
             "profiles",
+            "planner",
             "profile_detail",
             "skills",
             "connectors",
@@ -3190,6 +3212,24 @@ class Management:
         result["admins_info"] = await completed_thread(self._admins_info)
         result["permission_mode"] = str(self.plugin.settings.permission_mode or "ask_risky")
         result["digest_overview"] = await completed_thread(self._digest_overview_sync)
+        def _planner_summary():
+            mem = getattr(self.plugin, "memory", None)
+            if mem is None:
+                return {}
+            pids = [p["id"] for p in (result.get("profiles") or ())]
+            with mem._lock(), mem.store.connect() as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                chk = planner_manual_check(self.plugin, pids, db=db)
+                planner_props = [
+                    p
+                    for p in mem.list_skill_proposals(
+                        status="pending", limit=20, db=db
+                    )
+                    if is_planner_proposal(p)
+                ]
+            return {**chk, "pending_proposals_count": len(planner_props)}
+
+        result["planner_summary"] = await completed_thread(_planner_summary)
         if include_chat_sources:
             src_ids = list(
                 dict.fromkeys(
@@ -3393,6 +3433,8 @@ class Management:
             result = await self._read_profiles_payload(
                 include_chat_sources=(section == "profiles")
             )
+        elif section == "planner":
+            result = await completed_thread(build_planner_preview, self.plugin)
         elif section == "profile_detail":
             pid = str(
                 options.get("profile_id")
@@ -3476,9 +3518,10 @@ class Management:
                 if cand_cids
                 else {}
             )
-            pending_proposals = await completed_thread(
+            raw_pending = await completed_thread(
                 self.plugin.memory.list_skill_proposals, status="pending"
             )
+            pending_proposals = [p for p in raw_pending if not is_planner_proposal(p)]
             result = {
                 "skills": enriched_skills,
                 "skill_map": assets["skills"],
@@ -4462,6 +4505,7 @@ class Management:
             raise ValueError("设置已变化，请刷新后再保存")
         if not isinstance(raw_settings, dict):
             raise ValueError("settings 必须是对象")
+        raw_settings = apply_heartbeat_compat(raw_settings, self.plugin.settings.heartbeat_mode)
         base_dump = self.plugin.settings.model_dump()
         merged = {**base_dump, **raw_settings}
         if isinstance(raw_settings.get("plugin"), dict) or "plugin_enabled" in raw_settings:
@@ -4778,7 +4822,7 @@ class Management:
                 function,
                 kind,
                 options["content"] if action == "asset" else options["version"],
-                allow_custom=True,
+                allow_custom=(kind != "planner"),
                 **allowed,
             )
         elif action == "thread_stop":
@@ -5064,48 +5108,57 @@ class Management:
             prop_id = str(options.get("proposal_id") or "").strip()
             prop = await completed_thread(plugin.memory.get_skill_proposal, prop_id)
             if not prop:
-                raise ValueError("未找到待确认的技能草稿")
-            sk_id = str(options.get("skill_id") or prop["skill_id"]).strip()
-            sk_title = str(options.get("title") or prop["title"]).strip()
-            sk_desc = str(options.get("description") or prop["description"]).strip()
-            sk_md = str(options.get("content") or prop["content"])
-            if sk_id in await completed_thread(plugin.memory.skills):
-                cur_sk = await completed_thread(plugin.memory.read, "skill", target=sk_id)
-                saved = await completed_thread(
-                    plugin.memory.write,
-                    "skill",
-                    sk_md,
-                    target=sk_id,
-                    expected_version=cur_sk["version"],
-                    allow_custom=True,
+                raise ValueError("未找到待确认的草稿")
+            if is_planner_proposal(prop):
+                result = await completed_thread(
+                    apply_planner_proposal,
+                    plugin,
+                    prop,
+                    content_override=str(options.get("content") or ""),
+                    author="webui",
                 )
             else:
-                saved = await completed_thread(
-                    lambda: plugin.memory.create_skill(
-                        sk_id,
-                        title=sk_title,
-                        description=sk_desc,
-                        content=sk_md,
+                sk_id = str(options.get("skill_id") or prop["skill_id"]).strip()
+                sk_title = str(options.get("title") or prop["title"]).strip()
+                sk_desc = str(options.get("description") or prop["description"]).strip()
+                sk_md = str(options.get("content") or prop["content"])
+                if sk_id in await completed_thread(plugin.memory.skills):
+                    cur_sk = await completed_thread(plugin.memory.read, "skill", target=sk_id)
+                    saved = await completed_thread(
+                        plugin.memory.write,
+                        "skill",
+                        sk_md,
+                        target=sk_id,
+                        expected_version=cur_sk["version"],
                         allow_custom=True,
                     )
-                )
-            bind_profiles = options.get("bind_profiles")
-            if bind_profiles is None and prop.get("profile_id"):
-                bind_profiles = [prop["profile_id"]]
-            if isinstance(bind_profiles, list):
-                for pid in bind_profiles:
-                    p_str = str(pid or "").strip()
-                    if p_str:
-                        await completed_thread(
-                            self._set_profile_skill_binding, p_str, sk_id, True
+                else:
+                    saved = await completed_thread(
+                        lambda: plugin.memory.create_skill(
+                            sk_id,
+                            title=sk_title,
+                            description=sk_desc,
+                            content=sk_md,
+                            allow_custom=True,
                         )
-            await completed_thread(plugin.memory.resolve_skill_proposal, prop_id, "created")
-            result = {
-                "proposal_id": prop_id,
-                "skill_id": sk_id,
-                "version": saved.get("version", 1),
-                "bound_profiles": list(bind_profiles or []),
-            }
+                    )
+                bind_profiles = options.get("bind_profiles")
+                if bind_profiles is None and prop.get("profile_id"):
+                    bind_profiles = [prop["profile_id"]]
+                if isinstance(bind_profiles, list):
+                    for pid in bind_profiles:
+                        p_str = str(pid or "").strip()
+                        if p_str:
+                            await completed_thread(
+                                self._set_profile_skill_binding, p_str, sk_id, True
+                            )
+                await completed_thread(plugin.memory.resolve_skill_proposal, prop_id, "created")
+                result = {
+                    "proposal_id": prop_id,
+                    "skill_id": sk_id,
+                    "version": saved.get("version", 1),
+                    "bound_profiles": list(bind_profiles or []),
+                }
         elif action == "dismiss_skill_proposal":
             prop_id = str(options.get("proposal_id") or "").strip()
             ok = await completed_thread(

@@ -413,6 +413,7 @@ async def test_daily_at_trigger_day_quota_and_runtime_gate_recheck(tmp_path):
         day2_noon = _utc8_ts(2026, 11, 17, 12, 0)
         clock = [day1]
         plugin.intents.clock = lambda: clock[0]
+        plugin.intents.daily_proactive_limit = 1  # 本用例验证全局总量按触发日计数
 
         await plugin.after_receive(
             message=event("早上好", user="Bob", group=True, platform="qq")
@@ -540,6 +541,7 @@ async def test_heartbeat_ability_gate_before_cooldown_and_silent_continuation_sc
         clock = [_utc8_ts(2026, 11, 16, 14, 0)]
         plugin.intents.clock = lambda: clock[0]
         plugin.pulse.proactive_level = "care"
+        plugin.pulse.heartbeat_enabled = lambda: True  # 默认档位为关（docs/08），本用例需开启心跳
         plugin.pulse.heartbeat_interval = 3600
 
         # Seed a clean HEARTBEAT plan
@@ -590,8 +592,19 @@ async def test_heartbeat_ability_gate_before_cooldown_and_silent_continuation_sc
                 is None
             )
 
-        # Immediately restoring default to enabled+autonomous runs heartbeat without waiting interval
+        # 无由头时按原设计记一次静默心跳（docs/08），不占用冷却
+        assert [t["outcome"] for t in plugin.intents.heartbeat_ticks()] == ["ok:no_reason"]
+
+        # 档案恢复后，配置更新路径会清空心跳缓存，下一次心跳即可起探索线程
         mode[0] = "ok"
+        plugin.pulse.invalidate_caches()
+
+        async def explore_decision(name, **kwargs):
+            if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(kwargs.get("prompt")):
+                return {"response": '{"action":"explore","topic":"开源工具"}'}
+            return {"success": True}
+
+        plugin.ctx.call_capability = explore_decision
         await asyncio.wait_for(plugin.pulse._heartbeat(), timeout=3.0)
         await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
         assert started == ["default"]

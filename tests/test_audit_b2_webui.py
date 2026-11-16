@@ -494,7 +494,7 @@ async def test_b2_management_backend_p1_fixes(tmp_path):
             not in plugin.memory.read("notes", target="custom_default")["content"]
         )
 
-        # 2. _proactive_quota matches dual-arena bucketing, trigger-day & excludes 'failed'
+        # 2. _proactive_quota 按全局总量计（docs/08 第四节）、按触发日计数并排除 'failed'
         settings_dump = plugin.settings.model_dump()
         settings_dump["daily_proactive_limit"] = 3
         await plugin.on_config_update("self", settings_dump, 0)
@@ -521,8 +521,8 @@ async def test_b2_management_backend_p1_fixes(tmp_path):
                 )
 
         s_res = await plugin.manage_read("settings", "{}")
-        assert s_res["proactive_quota"] == {"used": 2, "limit": 3, "remaining": 1}
-        assert plugin.intents.proactive_quota_available("qq:private:2001") is True
+        assert s_res["proactive_quota"] == {"used": 3, "limit": 3, "remaining": 0}
+        assert plugin.intents.proactive_quota_available("qq:private:2001") is False
 
         # 3. _collect_host_models finishes well below 8s WebUI budget when host probes stall
         async def slow_cap(name, **_kwargs):

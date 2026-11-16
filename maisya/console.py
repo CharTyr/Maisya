@@ -909,6 +909,20 @@ def snapshot(
             }
             for r in prop_rows[:5]
         ]
+        try:
+            tick_rows = db.execute(
+                "SELECT at, outcome, detail FROM heartbeat_ticks ORDER BY seq DESC LIMIT 5"
+            ).fetchall()
+            heartbeat_ticks = [
+                {
+                    "at": r["at"],
+                    "outcome": str(r["outcome"] or ""),
+                    "detail": str(redact(r["detail"] or ""))[:120],
+                }
+                for r in tick_rows
+            ]
+        except sqlite3.Error:
+            heartbeat_ticks = []
     return {
         "success": True,
         "threads": threads,
@@ -920,6 +934,7 @@ def snapshot(
         "watches": watches,
         "deliveries": deliveries,
         "stats": stats,
+        "heartbeat_ticks": heartbeat_ticks,
         "pending_skill_proposals": pending_skill_proposals,
         "pending_skill_proposals_count": int(pending_proposals_total),
     }

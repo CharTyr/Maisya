@@ -5,6 +5,7 @@ import html
 import inspect
 import json
 import logging
+import random
 import re
 import sqlite3
 import time
@@ -22,6 +23,9 @@ from .scout import call_capability
 from .trust import parse_stream_spec
 
 logger = logging.getLogger(__name__)
+
+# 心跳间隔的随机抖动范围（基准间隔的倍数），见 docs/08 第二节
+HEARTBEAT_JITTER = (0.7, 1.4)
 
 _SERENDIPITY_FILLERS = (
     "刚发现",
@@ -113,8 +117,7 @@ class Pulse:
         self._heartbeat_cached_parts = ("", "")
         self._heartbeat_interval_used = heartbeat_interval
         self._queued_heartbeat_tid = ""
-        self._longing_next_bg_at = 0.0
-        self._longing_last_clock = 0.0
+        self.rng = random.random
         self._tick_lock = None
         self._tick_lock_loop = None
 
@@ -133,8 +136,6 @@ class Pulse:
         self._heartbeat_cached_size = None
         self._heartbeat_cached_parts = ("", "")
         self._heartbeat_interval_used = self.heartbeat_interval
-        self._longing_next_bg_at = 0.0
-        self._longing_last_clock = 0.0
 
     async def _engine_call(self, method_name, *args, **kwargs):
         if self.engine is None:
@@ -395,18 +396,6 @@ class Pulse:
                 return
             await self._returns()
             if self.intents is not None:
-                run_longing = True
-                if background_tick:
-                    now = self.intents.clock()
-                    if now < self._longing_last_clock:
-                        self._longing_next_bg_at = 0.0
-                    self._longing_last_clock = now
-                    if now < self._longing_next_bg_at:
-                        run_longing = False
-                    else:
-                        self._longing_next_bg_at = now + 30.0
-                if run_longing:
-                    await self._longing()
                 await self._intents()
             await self._heartbeat()
 
@@ -1744,75 +1733,115 @@ class Pulse:
             return {"scheduled": False}
         return {"scheduled": True, "intent_id": row["intent_id"], "due_at": row["due_at"]}
 
-    async def _longing(self):
-        if (
-            self.closing
-            or not self.plugin_enabled()
-            or self.intents is None
-            or not callable(self.activity)
-            or self.longing_quiet_hours <= 0
-            or self._in_sleep_window()
-        ):
-            return
-        now = self.intents.clock()
+    def _longing_candidates(self, now) -> list[dict]:
+        """心跳第 1 步的想念候选：只用代码判断，见 docs/08 第三节。"""
+        if self.longing_quiet_hours <= 0 or not self._proactive_quota_available("", now=now):
+            return []
         threshold = self.longing_quiet_hours * 3600
         admins = self._admins()
-        seen_sids = set()
+        seen_sids, found = set(), []
         for raw_chat_id in list(self.enabled_chats()):
-            chat_id = await asyncio.to_thread(
-                self._runtime_chat_id, raw_chat_id, allow_unresolved=False
-            )
+            chat_id = self._runtime_chat_id(raw_chat_id, allow_unresolved=False)
             if not chat_id or chat_id in seen_sids:
                 continue
             seen_sids.add(chat_id)
             if self.level_for(chat_id) == "quiet":
                 continue
-            if not await asyncio.to_thread(
-                self._proactive_quota_available, "chat:" + chat_id
-            ):
-                continue
-            platform = (
-                await asyncio.to_thread(self.platform_for, chat_id)
-                if callable(self.platform_for)
-                else ""
-            )
+            platform = self.platform_for(chat_id) if callable(self.platform_for) else ""
             if not self.enabled(chat_id, platform):
                 continue
-            act = await asyncio.to_thread(self.activity, chat_id)
+            act = self.activity(chat_id) if callable(self.activity) else {}
+            silent = now - float(act.get("last_human_at") or 0.0)
             if (
-                act["human_count"] < 3
-                or act["last_human_at"] <= 0
-                or now - act["last_human_at"] < threshold
+                int(act.get("human_count") or 0) < 3
+                or float(act.get("last_human_at") or 0.0) <= 0
+                or silent < threshold
             ):
                 continue
-            allowed = await asyncio.to_thread(
-                self.intents.acquaintance_allowed,
+            if not self.intents.acquaintance_allowed(
                 chat_id,
                 admins=admins,
                 acquaintances=self.acquaintance_users,
                 payload={"platform": platform},
-            )
-            if not allowed:
+            ):
                 continue
-            ready = await asyncio.to_thread(
-                self.intents.longing_ready, chat_id, now=now
-            )
-            if not ready:
+            target = "chat:" + chat_id
+            if not self._social_gate(target, sleep_window="")[0]:
                 continue
-            hours = int((now - act["last_human_at"]) // 3600)
-            try:
-                await asyncio.to_thread(
-                    self.intents.schedule,
-                    kind="proactive",
-                    source="longing",
-                    target="chat:" + chat_id,
-                    due_at=now,
-                    reason=f"这个熟识会话已经安静了约 {hours} 小时，看看是否自然问候一句。",
-                    payload={"platform": platform},
+            if not self.intents.longing_ready(chat_id, now=now):
+                continue
+            if not self._proactive_quota_available(target, now=now, payload={"platform": platform}):
+                continue
+            found.append(
+                {
+                    "chat_id": chat_id,
+                    "platform": platform,
+                    "type": self._chat_arena(chat_id) or "group",
+                    "silent_hours": int(silent // 3600),
+                }
+            )
+        found.sort(key=lambda item: -item["silent_hours"])
+        for index, item in enumerate(found[:5], start=1):
+            item["ref"] = f"c{index}"
+        return found[:5]
+
+    async def _heartbeat_decide(self, temperament, plan, journal_tail, candidates):
+        """心跳第 2 步：一次便宜判断，返回 (action, 参数, outcome)。任何异常都按静默处理。"""
+        public = [
+            {"ref": c["ref"], "type": c["type"], "silent_hours": c["silent_hours"]}
+            for c in candidates
+        ]
+        system = (
+            "你是 MaiBot 的心跳：隔一段时间醒来一次，决定这次要不要做点什么。默认静默：拿不准、没有自然由头或最近做过类似的事，就选 ok。\n"
+            '只能三选一，只输出 JSON：{"action":"ok"}；'
+            '{"action":"miss","ref":"候选 ref","reason":"一句话由头"}（想起一个久未聊天的熟人会话，之后由那个会话里的 MaiBot 自己决定说不说）；'
+            '{"action":"explore","topic":"一句话方向"}（按探索方向去公开冲浪，只围绕公开主题）。'
+            "没有候选就不能选 miss，没有探索方向就不能选 explore。"
+        )
+        if temperament:
+            system += "\n<maisya_temperament>" + html.escape(temperament) + "</maisya_temperament>"
+        user = json.dumps(
+            {"candidates": public, "explore_directions": plan, "recent_journal": journal_tail},
+            ensure_ascii=False,
+        )
+        try:
+            async with asyncio.timeout(20):
+                response = await call_capability(
+                    self.host,
+                    "llm.generate_with_tools",
+                    timeout_ms=20000,
+                    prompt=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    tools=[],
+                    task_name="utils",
+                    model_name="",
+                    max_tokens=200,
                 )
-            except ValueError:
-                pass
-            break
+            raw = str((response or {}).get("response") or "")
+            match = re.search(r"\{[\s\S]*\}", raw)
+            decision = json.loads(match.group(0)) if match else None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return "ok", None, "ok:fallback", type(exc).__name__
+        if not isinstance(decision, dict):
+            return "ok", None, "ok:fallback", "invalid_json"
+        action = str(decision.get("action") or "").strip().lower()
+        if action == "miss":
+            ref = str(decision.get("ref") or "").strip()
+            hit = next((c for c in candidates if c["ref"] == ref), None)
+            reason = str(decision.get("reason") or "").strip()[:200]
+            if hit is None or not reason:
+                return "ok", None, "ok:fallback", "invalid_miss"
+            return "miss", (hit, reason), "miss", reason
+        if action == "explore":
+            topic = str(decision.get("topic") or "").strip()[:200]
+            if not plan or not topic:
+                return "ok", None, "ok:fallback", "invalid_explore"
+            return "explore", topic, "explore", topic
+        return "ok", None, "ok:model", ""
 
     async def _wake(self, chat_id, intent, *, reason, metadata):
         try:
@@ -1967,8 +1996,9 @@ class Pulse:
                 "SELECT last_proactive FROM social_state WHERE chat_id='__self_heartbeat__'"
             ).fetchone()
             last_run = row["last_proactive"] if row else 0.0
-            if now - last_run < self.heartbeat_interval:
-                self._heartbeat_next_at = float(last_run) + self.heartbeat_interval
+            min_gap = self.heartbeat_interval * HEARTBEAT_JITTER[0]
+            if now - last_run < min_gap:
+                self._heartbeat_next_at = float(last_run) + min_gap
                 return False
             db.execute(
                 "INSERT INTO social_state (chat_id, locked, last_proactive) "
@@ -1976,8 +2006,13 @@ class Pulse:
                 "last_proactive=excluded.last_proactive",
                 (now,),
             )
-        self._heartbeat_next_at = float(now) + self.heartbeat_interval
+        self._schedule_next_heartbeat(now)
         return True
+
+    def _schedule_next_heartbeat(self, now):
+        low, high = HEARTBEAT_JITTER
+        factor = low + (high - low) * min(1.0, max(0.0, float(self.rng())))
+        self._heartbeat_next_at = float(now) + self.heartbeat_interval * factor
 
     def _find_queued_heartbeat_tid(self) -> str:
         if self._queued_heartbeat_tid:
@@ -2106,32 +2141,71 @@ class Pulse:
                 temperament, plan = MemoryLayers.heartbeat_parts(
                     heartbeat.get("content") or ""
                 )
-            if not plan:
-                return
-            ability = await asyncio.to_thread(
-                self.profiles.get, self.heartbeat_profile
-            )
-            if not ability.enabled or not ability.autonomous:
-                return
-            queued_tid = await asyncio.to_thread(self._find_queued_heartbeat_tid)
-            if queued_tid and await self._handle_queued_heartbeat(queued_tid):
+            ability = None
+            if plan:
+                try:
+                    ability = await asyncio.to_thread(
+                        self.profiles.get, self.heartbeat_profile
+                    )
+                except (ValueError, PermissionError, OSError) as exc:
+                    logger.warning(
+                        "自主探索档案不可用 profile=%s: %s", self.heartbeat_profile, exc
+                    )
+                if ability is not None and (not ability.enabled or not ability.autonomous):
+                    ability = None
+            if ability is not None:
+                queued_tid = await asyncio.to_thread(self._find_queued_heartbeat_tid)
+                if queued_tid and await self._handle_queued_heartbeat(queued_tid):
+                    return
+            # 第 1 步：代码收集由头，没有由头就原地静默、不调模型
+            candidates = await asyncio.to_thread(self._longing_candidates, now)
+            if ability is None and not candidates:
+                self._schedule_next_heartbeat(now)
+                await asyncio.to_thread(
+                    self.intents.record_heartbeat_tick, "ok:no_reason", "", at=now
+                )
                 return
             if not await asyncio.to_thread(self._claim_heartbeat, now):
-                if self._heartbeat_next_at <= now:
-                    self._heartbeat_next_at = float(now) + self.heartbeat_interval
                 return
-            if self._heartbeat_next_at <= now:
-                self._heartbeat_next_at = float(now) + self.heartbeat_interval
             journal_obj = await asyncio.to_thread(self.memory.read, "journal")
             journal_text = str((journal_obj or {}).get("content") or "").strip()
+            recent_journal = self.redact(journal_text)[-600:] if journal_text else ""
+            # 第 2 步：一次便宜判断
+            action, arg, outcome, detail = await self._heartbeat_decide(
+                temperament,
+                plan if ability is not None else "",
+                recent_journal[-400:],
+                candidates,
+            )
+            # 第 3 步：落地
+            if action == "miss":
+                hit, reason = arg
+                try:
+                    await asyncio.to_thread(
+                        self.intents.schedule,
+                        kind="proactive",
+                        source="longing",
+                        target="chat:" + hit["chat_id"],
+                        due_at=now,
+                        reason=reason,
+                        payload={"platform": hit["platform"]},
+                    )
+                except ValueError as exc:
+                    outcome, detail = "skip:schedule", str(exc)
+            await asyncio.to_thread(
+                self.intents.record_heartbeat_tick, outcome, detail, at=now
+            )
+            if action != "explore":
+                return
             prompt = (
                 "按自身节奏做一次轻量公开探索并记录近况（不涉及任何具体会话私有信息）：\n"
                 + plan
+                + "\n本次方向："
+                + arg
             )
             if temperament:
                 prompt += "\n<maisya_temperament>" + html.escape(temperament) + "</maisya_temperament>"
-            if journal_text:
-                recent_journal = self.redact(journal_text)[-600:]
+            if recent_journal:
                 prompt += (
                     "\n以下为近期已记录的手账，请避开与最近手账重复的主题，不要重复写进 JOURNAL.md 或再次汇报：\n"
                     "<recent_journal>"

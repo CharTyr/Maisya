@@ -20,7 +20,11 @@ ui_style = "millennium"
 # 主动节律与免打扰设置
 sleep_window = ""
 proactive_level = "care"
-heartbeat_interval_minutes = 60
+# 心跳档位: "off"（默认关，仅保留事后惦记）| "gentle"（克制）| "lively"（活泼）
+heartbeat_mode = "off"
+# 每日主动总量（全局）与单会话每日上限
+daily_proactive_limit = 3
+per_chat_daily_proactive_limit = 1
 
 [chat_proactive_levels]
 

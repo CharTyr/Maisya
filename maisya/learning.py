@@ -138,6 +138,127 @@ class Learning:
         self.tasks[key] = task
         task.add_done_callback(lambda finished: self.tasks.pop(key, None))
 
+    async def schedule_planner_signal(
+        self,
+        *,
+        dedup_key: str,
+        signal: str,
+        actions: list[dict],
+        profiles: list[dict],
+    ):
+        """从抽象调度轨迹（零聊天原文）提炼一条待确认的 PLANNER.md 调度经验草稿。"""
+        if self.closed or len(self.tasks) >= 8 or not dedup_key:
+            return
+        row = {"thread_id": f"planner:{dedup_key}", "completed_revision": 1}
+        if not await completed_thread(self._receipt, row, "pending", reserve=True):
+            return
+        key = (row["thread_id"], 1)
+        safe_profiles = [
+            {
+                "id": str(p.get("id") or "")[:40],
+                "description": str(p.get("description") or "")[:120],
+            }
+            for p in profiles[:24]
+            if isinstance(p, dict) and p.get("id")
+        ]
+        safe_actions = [
+            {str(k): str(v)[:80] if isinstance(v, str) else v for k, v in a.items()}
+            for a in actions[:8]
+            if isinstance(a, dict)
+        ]
+        task = asyncio.create_task(
+            self._learn_planner(row, str(signal), safe_actions, safe_profiles)
+        )
+        self.tasks[key] = task
+        task.add_done_callback(lambda finished: self.tasks.pop(key, None))
+
+    async def _learn_planner(
+        self, row: dict, signal: str, actions: list[dict], profiles: list[dict]
+    ):
+        try:
+            async with self.slot, asyncio.timeout(45):
+                cur_manual = await completed_thread(self.memory.read, "planner")
+                user_payload = json.dumps(
+                    {
+                        "signal": signal,
+                        "actions": actions,
+                        "available_profiles": profiles,
+                        "manual_headings": [
+                            ln.strip()
+                            for ln in str(cur_manual.get("content") or "").splitlines()
+                            if ln.strip().startswith("## ")
+                        ][:12],
+                    },
+                    ensure_ascii=False,
+                )
+                response = checked(
+                    await call_capability(
+                        self.host,
+                        "llm.generate_with_tools",
+                        timeout_ms=40000,
+                        prompt=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "你是 MaiBot 调度手册复盘提炼器。仅根据给定的抽象调度轨迹与可用角色描述，"
+                                    "提炼一条跨会话通用的调度经验草稿。严禁猜测或包含任何聊天原文、群号、人名、路径、具体数值或凭据。\n"
+                                    '仅输出 JSON：{"title":"4到12字短标题","lesson":"一句祈使句通用调度方法（无值得沉淀之处则留空字符串）","rationale":"一句话说明原因"}。'
+                                ),
+                            },
+                            {"role": "user", "content": user_payload},
+                        ],
+                        tools=[],
+                        task_name="utils",
+                        model_name="",
+                        max_tokens=500,
+                    )
+                )
+                candidate = _parse_json_object(response["response"])
+                lesson = str(candidate.get("lesson") or "").strip()
+                if not 1 <= len(lesson) <= 400:
+                    await completed_thread(self._receipt, row, "empty")
+                    return
+                bullet = lesson if lesson.startswith("-") else f"- {lesson}"
+                await completed_thread(
+                    self.memory._guard, "planner", bullet, "", allow_custom=False
+                )
+                title = str(candidate.get("title") or "调度经验草稿").strip()[:60]
+                rationale = str(
+                    candidate.get("rationale") or f"调度信号：{signal}"
+                ).strip()[:200]
+                await completed_thread(
+                    lambda: self.memory.save_skill_proposal(
+                        thread_id=row["thread_id"],
+                        revision=1,
+                        profile_id="planner",
+                        skill_id="planner-manual",
+                        title=title,
+                        description="MaiBot 调度手册经验草稿",
+                        content=bullet,
+                        signals=[signal],
+                        rationale=rationale,
+                    )
+                )
+                await completed_thread(self._receipt, row, "applied")
+        except asyncio.CancelledError:
+            await completed_thread(self._receipt, row, "interrupted")
+            raise
+        except (
+            TimeoutError,
+            asyncio.TimeoutError,
+            RuntimeError,
+            sqlite3.Error,
+            OSError,
+        ) as exc:
+            logger.warning("调度经验提炼瞬态失败 %s: %s", row["thread_id"], exc)
+            await completed_thread(self._receipt, row, "interrupted")
+        except (ValueError, json.JSONDecodeError, TypeError, KeyError) as exc:
+            logger.warning("调度经验提炼被拒绝 %s: %s", row["thread_id"], exc)
+            await completed_thread(self._receipt, row, "rejected")
+        except Exception as exc:
+            logger.warning("调度经验提炼异常 %s: %s", row["thread_id"], exc)
+            await completed_thread(self._receipt, row, "interrupted")
+
     async def _learn(self, row, trace):
         try:
             async with self.slot, asyncio.timeout(45):

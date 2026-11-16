@@ -114,11 +114,13 @@ class Intents:
         store,
         *,
         clock=time.time,
-        daily_proactive_limit=1,
+        daily_proactive_limit=3,
+        per_chat_daily_proactive_limit=1,
         tz_offset_minutes=480,
     ):
         self.store, self.clock = store, clock
         self.daily_proactive_limit = int(daily_proactive_limit)
+        self.per_chat_daily_proactive_limit = int(per_chat_daily_proactive_limit)
         if tz_offset_minutes is None:
             self.tz_offset_minutes = 480
         elif callable(tz_offset_minutes):
@@ -162,6 +164,10 @@ class Intents:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS social_state (chat_id TEXT PRIMARY KEY, "
                 "locked INTEGER DEFAULT 0, last_proactive REAL DEFAULT 0)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS heartbeat_ticks (seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "at REAL NOT NULL, outcome TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '')"
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS session_routes ("
@@ -321,12 +327,14 @@ class Intents:
                 source, payload_dict
             )
             if kind == "proactive" and not effective_bypass and norm_mode != "watch":
-                limit = int(self.daily_proactive_limit)
                 start, end = self._day_bounds(due_at)
-                arena = self._target_arena(db, target, payload_dict or None)
-                counts = self._proactive_counts(db, start, end)
-                if limit <= 0 or counts[arena] >= limit:
+                counts = self._proactive_counts(
+                    db, start, end, target=target, payload=payload_dict or None
+                )
+                if counts["total"] >= int(self.daily_proactive_limit):
                     raise ValueError("普通惦记已达到每日上限")
+                if counts["chat"] >= int(self.per_chat_daily_proactive_limit):
+                    raise ValueError("该会话今日主动次数已达上限")
             db.execute(
                 "INSERT INTO intents (intent_id, kind, source, target, due_at, reason, thread_id, payload, status, wake_status, created, handled, bypass_limits, mode, condition, last_checked_at, last_triggered_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL, ?, ?, ?, ?, ?)",
@@ -689,16 +697,37 @@ class Intents:
             return str(payload["chat_type"])
         return "group"
 
+    @staticmethod
+    def _payload_aliases(payload: dict | None) -> tuple[str, ...]:
+        if not isinstance(payload, dict):
+            return ()
+        return tuple(
+            str(payload[key]) for key in ("stream_spec", "chat_id") if payload.get(key)
+        )
+
     def _proactive_counts(
-        self, db, start: float, end: float, *, exclude_intent_id: str = ""
+        self,
+        db,
+        start: float,
+        end: float,
+        *,
+        exclude_intent_id: str = "",
+        target: str = "",
+        payload: dict | None = None,
     ) -> dict[str, int]:
+        """当日占额的主动意图：total 为全局总量，chat 为 target 所在会话（按别名合并），group/private 仅供展示。"""
         rows = db.execute(
             "SELECT intent_id, target, payload FROM intents WHERE kind='proactive' "
             "AND source IN ('afterglow','serendipity','longing','later') "
             "AND due_at>=? AND due_at<? AND status NOT IN ('cancelled','failed')",
             (start, end),
         ).fetchall()
-        counts = {"group": 0, "private": 0}
+        chat_aliases = (
+            set(self._social_aliases(db, target, self._payload_aliases(payload)))
+            if target
+            else set()
+        )
+        counts = {"total": 0, "chat": 0, "group": 0, "private": 0}
         for row in rows:
             if exclude_intent_id and row["intent_id"] == exclude_intent_id:
                 continue
@@ -708,8 +737,39 @@ class Intents:
                 row["target"],
                 parsed_payload or None,
             )
+            counts["total"] += 1
             counts[arena] = counts.get(arena, 0) + 1
+            if chat_aliases and chat_aliases & set(
+                self._social_aliases(
+                    db, row["target"], self._payload_aliases(parsed_payload)
+                )
+            ):
+                counts["chat"] += 1
         return counts
+
+    HEARTBEAT_TICKS_KEPT = 50
+
+    def record_heartbeat_tick(self, outcome: str, detail: str = "", *, at=None) -> None:
+        at = self.clock() if at is None else float(at)
+        with self.store.connect() as db, db:
+            db.execute(
+                "INSERT INTO heartbeat_ticks (at, outcome, detail) VALUES (?, ?, ?)",
+                (at, str(outcome)[:40], str(detail or "")[:200]),
+            )
+            db.execute(
+                "DELETE FROM heartbeat_ticks WHERE seq NOT IN "
+                "(SELECT seq FROM heartbeat_ticks ORDER BY seq DESC LIMIT ?)",
+                (self.HEARTBEAT_TICKS_KEPT,),
+            )
+
+    def heartbeat_ticks(self, limit: int = 20) -> list[dict]:
+        cap = max(1, min(int(limit), self.HEARTBEAT_TICKS_KEPT))
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT at, outcome, detail FROM heartbeat_ticks ORDER BY seq DESC LIMIT ?",
+                (cap,),
+            ).fetchall()
+        return [{"at": r["at"], "outcome": r["outcome"], "detail": r["detail"]} for r in rows]
 
     def proactive_quota_available(
         self,
@@ -720,21 +780,59 @@ class Intents:
         payload: dict | None = None,
         tz_offset_minutes=None,
     ) -> bool:
-        limit = int(self.daily_proactive_limit)
-        if limit <= 0:
+        state = self.proactive_quota_state(
+            target,
+            now=now,
+            exclude_intent_id=exclude_intent_id,
+            payload=payload,
+            tz_offset_minutes=tz_offset_minutes,
+        )
+        if state["remaining"] <= 0:
             return False
+        return not target or state["chat_remaining"] > 0
+
+    def proactive_quota_state(
+        self,
+        target: str = "",
+        *,
+        now=None,
+        exclude_intent_id: str = "",
+        payload: dict | None = None,
+        tz_offset_minutes=None,
+        db=None,
+    ) -> dict[str, int]:
+        limit = max(0, int(self.daily_proactive_limit))
+        chat_limit = max(0, int(self.per_chat_daily_proactive_limit))
         now = self.clock() if now is None else now
         start, end = self._day_bounds(now, tz_offset_minutes=tz_offset_minutes)
-        with self.store.connect() as db:
+        payload_arg = payload if isinstance(payload, dict) else None
+        if db is not None:
             counts = self._proactive_counts(
-                db, start, end, exclude_intent_id=exclude_intent_id
+                db,
+                start,
+                end,
+                exclude_intent_id=exclude_intent_id,
+                target=target,
+                payload=payload_arg,
             )
-            if target:
-                arena = self._target_arena(
-                    db, target, payload if isinstance(payload, dict) else None
+        else:
+            with self.store.connect() as conn:
+                counts = self._proactive_counts(
+                    conn,
+                    start,
+                    end,
+                    exclude_intent_id=exclude_intent_id,
+                    target=target,
+                    payload=payload_arg,
                 )
-                return counts[arena] < limit
-            return counts["group"] < limit or counts["private"] < limit
+        return {
+            "used": counts["total"],
+            "limit": limit,
+            "remaining": max(0, limit - counts["total"]),
+            "chat_used": counts["chat"],
+            "chat_limit": chat_limit,
+            "chat_remaining": max(0, chat_limit - counts["chat"]),
+        }
 
     def longing_ready(
         self, chat_id, *, now=None, cooldown=7 * 86400, aliases=()

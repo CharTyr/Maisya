@@ -225,7 +225,7 @@ async def test_settings_and_file_prevalidate_and_rollback(tmp_path):
                     admin_verified=True,
                 )
         assert plugin.settings.sleep_window == ""
-        assert plugin.settings.daily_proactive_limit == 1
+        assert plugin.settings.daily_proactive_limit == 3
         assert (await read_settings_state(plugin))["version"] == base_ver
 
         # 2) Valid patch + version conflict check + rollback restores prior snapshot
@@ -257,7 +257,7 @@ async def test_settings_and_file_prevalidate_and_rollback(tmp_path):
             admin_verified=True,
         )
         assert rolled["settings"]["sleep_window"] == ""
-        assert rolled["settings"]["daily_proactive_limit"] == 1
+        assert rolled["settings"]["daily_proactive_limit"] == 3
 
         # 3) File writes reject plain secrets and support rollback by expected_version
         mem_cur = await execute_shape(

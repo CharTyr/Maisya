@@ -112,15 +112,15 @@ async def test_private_chat_never_auto_enabled_by_acquaintance_users(tmp_path):
     await plugin.on_unload()
 
 
-def test_proactive_quota_splits_group_and_private_arenas_and_ignores_failed(tmp_path):
+def test_proactive_quota_global_total_per_chat_cap_and_ignores_failed(tmp_path):
+    """docs/08 第四节：全局每日总量 + 单会话上限，取代原群聊 / 私聊分舞台计数。"""
     db_path = tmp_path / "maisya.db"
     MessageStore(db_path)
     threads = ThreadStore(db_path)
-    intents = Intents(threads, daily_proactive_limit=1)
+    intents = Intents(threads, daily_proactive_limit=2, per_chat_daily_proactive_limit=1)
     now = 1795250000.0
     intents.clock = lambda: now
 
-    # Group arena takes 1 slot
     g1 = intents.schedule(
         kind="proactive",
         source="afterglow",
@@ -128,17 +128,17 @@ def test_proactive_quota_splits_group_and_private_arenas_and_ignores_failed(tmp_
         due_at=now + 60,
         reason="群里刚才的话题",
     )
+    # 单会话上限：同一个群当天第二条被拦
     assert not intents.proactive_quota_available("chat:qq:group:100246809", now=now)
-    with pytest.raises(ValueError, match="每日上限"):
+    with pytest.raises(ValueError, match="会话"):
         intents.schedule(
             kind="proactive",
             source="serendipity",
-            target="chat:qq:group:999888777",
+            target="chat:qq:group:100246809",
             due_at=now + 120,
-            reason="同在群 arena 应受限",
+            reason="同群第二条",
         )
-
-    # Private arena still has its own independent bucket
+    # 其他会话仍可用，群聊与私聊共享全局总量
     assert intents.proactive_quota_available("chat:qq:private:Alice", now=now)
     assert intents.proactive_quota_available("", now=now)
     p1 = intents.schedule(
@@ -146,55 +146,43 @@ def test_proactive_quota_splits_group_and_private_arenas_and_ignores_failed(tmp_
         source="longing",
         target="chat:qq:private:Alice",
         due_at=now + 90,
-        reason="私聊独立配额",
+        reason="私聊问候",
     )
-    assert not intents.proactive_quota_available("chat:qq:private:Alice", now=now)
     assert not intents.proactive_quota_available("", now=now)
+    assert not intents.proactive_quota_available("chat:qq:group:999888777", now=now)
     with pytest.raises(ValueError, match="每日上限"):
         intents.schedule(
             kind="proactive",
             source="afterglow",
-            target="chat:qq:private:Bob",
+            target="chat:qq:group:999888777",
             due_at=now + 150,
-            reason="私聊 arena 满额",
+            reason="全局总量已满",
         )
 
-    # Failed intent must NOT consume arena quota
+    # 失败的意图不占额度
     intents.clock = lambda: now + 100
     claimed = intents.due(enabled=lambda cid, plat: True)
     assert any(item["intent_id"] == g1["intent_id"] for item in claimed)
     intents.finish(g1["intent_id"], status="failed", wake_status="unreplied_lock")
     assert intents.proactive_quota_available("chat:qq:group:100246809", now=now)
     assert intents.proactive_quota_available("", now=now)
-    g2 = intents.schedule(
-        kind="proactive",
-        source="afterglow",
-        target="chat:qq:group:100246809",
-        due_at=now + 180,
-        reason="失败后不占配额",
-    )
-    assert g2["intent_id"].startswith("in_")
 
-    # Opaque session_id resolves arena via session_routes
-    intents.clock = lambda: now + 120
-    claimed_priv = intents.due(enabled=lambda cid, plat: True)
-    if any(item["intent_id"] == p1["intent_id"] for item in claimed_priv):
-        intents.finish(p1["intent_id"], status="failed", wake_status="sleep_deferred")
-    else:
-        with threads.connect() as db, db:
-            db.execute("UPDATE intents SET status='failed' WHERE intent_id=?", (p1["intent_id"],))
+    # 不透明 session_id 与流标识按别名合并计数
     MessageStore(db_path).record(
         Message.from_event(
             _make_event("hi", msg_id="m_opaque", user="Alice", session_id="opaque_priv_sid")
         )
     )
+    assert not intents.proactive_quota_available("chat:opaque_priv_sid", now=now)
+    with threads.connect() as db, db:
+        db.execute("UPDATE intents SET status='failed' WHERE intent_id=?", (p1["intent_id"],))
     assert intents.proactive_quota_available("chat:opaque_priv_sid", now=now)
     intents.schedule(
         kind="proactive",
         source="later",
         target="chat:opaque_priv_sid",
         due_at=now + 200,
-        reason="路由私聊槽位",
+        reason="经别名落到同一私聊",
     )
     assert not intents.proactive_quota_available("chat:qq:private:Alice", now=now)
 
@@ -302,7 +290,8 @@ async def test_group_vs_private_unreplied_lock_and_longing_fallback_zero(tmp_pat
     assert plugin._chat_arena(grp, "qq") == "group"
     assert plugin._chat_arena(priv, "qq") == "private"
     assert plugin._chat_arena("unknown_chat_id", "qq") == ""
-    assert '"longing_quiet_hours", 0' in Path("plugin.py").read_text(encoding="utf-8")
+    # 久违阈值由心跳档位决定（docs/08），默认档位关闭时为 0
+    assert plugin.pulse.longing_quiet_hours == 0
 
     # 1. Private chat unlocks on after_receive of real human message
     plugin.intents.mark_proactive(f"chat:{priv}")

@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 from maibot_sdk.config import PluginConfigBase
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .pathsafe import path_is_link_like, safe_chmod
 from .sandbox import SandboxSettings
@@ -11,8 +11,70 @@ from .trust import normalize_admin_id
 from .vault import VaultError
 
 PROACTIVE_LEVELS = frozenset({"quiet", "care", "lively"})
+HEARTBEAT_MODES = ("off", "gentle", "lively")
+HEARTBEAT_MODE_ALIASES = {
+    "off": "off",
+    "关": "off",
+    "关闭": "off",
+    "gentle": "gentle",
+    "on": "gentle",
+    "克制": "gentle",
+    "lively": "lively",
+    "活泼": "lively",
+}
+# 档位 → (基准间隔分钟, 想念阈值小时)，见 docs/08 第二节
+HEARTBEAT_RHYTHM = {"off": (0, 0), "gentle": (180, 72), "lively": (90, 24)}
+LEGACY_DAILY_PROACTIVE_DEFAULT = 1
 UI_STYLES = frozenset({"maiwork", "millennium", "modern", "auto"})
 USER_ID_RE = re.compile(r"^([a-z][a-z0-9_-]{0,31}):([^\s:]{1,200})$")
+
+
+def canonical_heartbeat_mode(value: object) -> str:
+    mode = HEARTBEAT_MODE_ALIASES.get(str(value or "").strip().lower())
+    if mode is None:
+        raise ValueError("心跳档位只能是 off（关）/ gentle（克制）/ lively（活泼）")
+    return mode
+
+
+def apply_heartbeat_compat(raw: dict, current_mode: str) -> dict:
+    """把旧接口写入的 heartbeat_enabled 映射为档位；同时给出 heartbeat_mode 时以档位为准。"""
+    out = dict(raw)
+    if "heartbeat_enabled" not in out:
+        return out
+    enabled = bool(out.pop("heartbeat_enabled"))
+    if "heartbeat_mode" not in out:
+        if not enabled:
+            out["heartbeat_mode"] = "off"
+        else:
+            out["heartbeat_mode"] = current_mode if current_mode != "off" else "gentle"
+    return out
+
+
+def _migrate_legacy_heartbeat(data):
+    """旧版 settings.json / config.toml 完整落盘（无 heartbeat_mode），按 docs/08 第七节迁移。"""
+    if not isinstance(data, dict) or "heartbeat_mode" in data:
+        return data
+    if "heartbeat_enabled" not in data and not (
+        "plugin" in data and "heartbeat_profile" in data
+    ):
+        return data
+    out = dict(data)
+    out.pop("heartbeat_enabled", None)
+    try:
+        longing = int(out.get("longing_quiet_hours") or 0)
+    except (TypeError, ValueError):
+        longing = 0
+    out["heartbeat_mode"] = "gentle" if longing > 0 else "off"
+    out["heartbeat_interval_minutes"] = 0
+    if out.get("daily_proactive_limit") == LEGACY_DAILY_PROACTIVE_DEFAULT:
+        out["daily_proactive_limit"] = 3
+    return out
+
+
+def _validate_interval_override(value: int) -> int:
+    if value != 0 and not (30 <= value <= 1440):
+        raise ValueError("心跳间隔覆盖须为 0（跟随档位）或 30 到 1440 分钟")
+    return value
 
 
 def canonical_ui_style(value: str | None) -> str:
@@ -34,9 +96,10 @@ class ProactiveSettings(BaseModel):
 
     sleep_window: str = ""
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
-    daily_proactive_limit: int = Field(default=1, ge=0, le=50)
-    heartbeat_enabled: bool = True
-    heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
+    daily_proactive_limit: int = Field(default=3, ge=0, le=50)
+    per_chat_daily_proactive_limit: int = Field(default=1, ge=0, le=10)
+    heartbeat_mode: Literal["off", "gentle", "lively"] = "off"
+    heartbeat_interval_minutes: int = Field(default=0, ge=0, le=1440)
     heartbeat_profile: str = Field(
         default="default",
         pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
@@ -82,9 +145,10 @@ class Settings(PluginConfigBase):
         pattern=r"^$|^\d{1,2}(?::\d{2})?-\d{1,2}(?::\d{2})?$",
     )
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
-    daily_proactive_limit: int = Field(default=1, ge=0, le=50)
-    heartbeat_enabled: bool = True
-    heartbeat_interval_minutes: int = Field(default=60, ge=5, le=1440)
+    daily_proactive_limit: int = Field(default=3, ge=0, le=50)
+    per_chat_daily_proactive_limit: int = Field(default=1, ge=0, le=10)
+    heartbeat_mode: Literal["off", "gentle", "lively"] = "off"
+    heartbeat_interval_minutes: int = Field(default=0, ge=0, le=1440)
     heartbeat_profile: str = Field(
         default="default",
         pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$",
@@ -94,6 +158,35 @@ class Settings(PluginConfigBase):
     longing_quiet_hours: int = Field(default=0, ge=0, le=720)
     tz_offset_minutes: int = Field(default=480, ge=-720, le=840)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy(cls, data):
+        return _migrate_legacy_heartbeat(data)
+
+    @field_validator("heartbeat_mode", mode="before")
+    @classmethod
+    def _canonical_mode(cls, value):
+        return canonical_heartbeat_mode(value)
+
+    @field_validator("heartbeat_interval_minutes")
+    @classmethod
+    def _validate_interval(cls, value: int) -> int:
+        return _validate_interval_override(value)
+
+    @property
+    def heartbeat_enabled(self) -> bool:
+        return self.heartbeat_mode != "off"
+
+    def heartbeat_base_minutes(self) -> int:
+        if self.heartbeat_mode == "off":
+            return 0
+        return self.heartbeat_interval_minutes or HEARTBEAT_RHYTHM[self.heartbeat_mode][0]
+
+    def longing_threshold_hours(self) -> int:
+        if self.heartbeat_mode == "off":
+            return 0
+        return self.longing_quiet_hours or HEARTBEAT_RHYTHM[self.heartbeat_mode][1]
 
     @field_validator("admins")
     @classmethod
@@ -124,6 +217,8 @@ class Settings(PluginConfigBase):
             sleep_window=self.sleep_window,
             proactive_level=self.proactive_level,
             daily_proactive_limit=self.daily_proactive_limit,
+            per_chat_daily_proactive_limit=self.per_chat_daily_proactive_limit,
+            heartbeat_mode=self.heartbeat_mode,
             heartbeat_interval_minutes=self.heartbeat_interval_minutes,
             heartbeat_profile=self.heartbeat_profile,
             chat_proactive_levels=dict(self.chat_proactive_levels),

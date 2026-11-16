@@ -218,6 +218,7 @@ async def test_zero_leakage_admin_bootstrap_and_private_vault(tmp_path):
         assert "maisya_shape" in boot_text
         assert "priv_admin_md5" in boot_text
         assert "<maisya_profiles>" in boot_text and "default" in boot_text
+        assert "<maisya_planner_manual>" in boot_text
     finally:
         await plugin.on_unload()
 

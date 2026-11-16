@@ -656,8 +656,8 @@ def test_mobile_narrow_viewport_fish_carousel_and_4col_dock():
         page.locator('[data-mob-nav="abilities"]').click()
         page.locator("#ab-mob-head").wait_for(state="visible")
         page.locator("#mob-role-carousel .mob-role-item").first.wait_for(state="visible")
-        assert page.locator("#mob-role-carousel .mob-role-item").count() == 2
-        assert page.locator("#mob-role-carousel svg.fish").count() == 2
+        assert page.locator("#mob-role-carousel .mob-role-item").count() == 3
+        assert page.locator("#mob-role-carousel svg.fish").count() == 3
         assert page.locator(".m-ab-roster").is_hidden()
 
         first_title = page.locator("#ab-mob-role-title").inner_text()

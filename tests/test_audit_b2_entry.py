@@ -649,9 +649,9 @@ async def test_b2_item4_entry_routes_console_locks_and_quota(tmp_path):
             asyncio.gather(_writer(), _reader(), _reader()), timeout=3.0
         )
 
-        # 4e) console_query proactive quota aligns with runtime arena buckets & ignores failed/cancelled
+        # 4e) console_query 的今日主动额度按全局总量计（docs/08 第四节），分舞台桶仅作展示；忽略 failed/cancelled
         await plugin.on_config_update(
-            "self", {**base_cfg, "daily_proactive_limit": 5}, 0
+            "self", {**base_cfg, "daily_proactive_limit": 5, "per_chat_daily_proactive_limit": 5}, 0
         )
         now = plugin.intents.clock()
         plugin.messages.upsert_route("priv_quota_sid", platform="qq", chat_type="private", user_id="UserQ")
@@ -682,15 +682,15 @@ async def test_b2_item4_entry_routes_console_locks_and_quota(tmp_path):
             plugin.intents.finish(iid, st, ws)
 
         q_all = await plugin.console_query()
-        assert q_all["pulse"]["daily_used"] == 2
+        assert q_all["pulse"]["daily_used"] == 3
         assert q_all["pulse"]["daily_buckets"] == {"group": 1, "private": 2}
 
         q_grp = await plugin.console_query(chat_id=group_sid)
-        assert q_grp["pulse"]["daily_used"] == 1
+        assert q_grp["pulse"]["daily_used"] == 3
         assert q_grp["pulse"]["daily_buckets"] == {"group": 1, "private": 2}
 
         q_priv = await plugin.console_query(chat_id="priv_quota_sid")
-        assert q_priv["pulse"]["daily_used"] == 2
+        assert q_priv["pulse"]["daily_used"] == 3
         assert q_priv["pulse"]["daily_buckets"] == {"group": 1, "private": 2}
 
         plugin._record_relayed_bootstrap_source(

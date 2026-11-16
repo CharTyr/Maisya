@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 import re
+import sqlite3
 import time
 
+from .abilities import Profile
+from .context_budget import estimate_tokens
 from .digest import DigestWorkspace
 from .intents import next_daily_due
-from .memory import SKILL_ID_RE
+from .memory import SKILL_ID_RE, MemoryLayers
 from .packages import export_package, import_package_bundle, preview_package
 from .pathsafe import path_is_link_like
 from .vault import atomic_private_write
@@ -137,13 +141,263 @@ def profile_summary(plugin, profile_id: str) -> dict:
     }
 
 
+def heartbeat_effective_label(plugin, heartbeat_text: str | None = None) -> tuple[str, bool, str]:
+    """统一计算当前心跳档位、是否填写逛逛方向，以及生效状态标签。"""
+    st = plugin.settings
+    mode = st.heartbeat_mode
+    if heartbeat_text is None:
+        heartbeat_text = ""
+        mem = getattr(plugin, "memory", None)
+        if mem is not None:
+            try:
+                heartbeat_text = str((mem.read("heartbeat") or {}).get("content") or "")
+            except (ValueError, OSError, RuntimeError, sqlite3.Error):
+                heartbeat_text = ""
+    _, plan = MemoryLayers.heartbeat_parts(heartbeat_text or "")
+    has_plan = bool(plan.strip())
+    if mode == "off":
+        effective = "关闭"
+    elif has_plan:
+        effective = "想念 + 逛逛"
+    else:
+        effective = "只会想念（未填逛逛方向）"
+    return mode, has_plan, effective
+
+
+def heartbeat_overview(plugin, heartbeat_text: str, current_chat_id: str = "") -> dict:
+    """概览中的心跳块：档位、实际生效状态、节奏、额度与最近跳动（docs/08 第五节）。"""
+    st = plugin.settings
+    mode, _, effective = heartbeat_effective_label(plugin, heartbeat_text)
+    intents = getattr(plugin, "intents", None)
+    pulse = getattr(plugin, "pulse", None)
+    next_at = float(getattr(pulse, "_heartbeat_next_at", 0.0) or 0.0) if mode != "off" else 0.0
+    return {
+        "mode": mode,
+        "effective": effective,
+        "base_interval_minutes": {"value": st.heartbeat_base_minutes(), "override": bool(st.heartbeat_interval_minutes)},
+        "longing_threshold_hours": {"value": st.longing_threshold_hours(), "override": bool(st.longing_quiet_hours)},
+        "next_at": next_at or None,
+        "sleep_window": st.sleep_window,
+        "quota": intents.proactive_quota_state(f"chat:{current_chat_id}" if current_chat_id else "") if intents is not None else {},
+        "recent_ticks": intents.heartbeat_ticks(5) if intents is not None else [],
+        "content": heartbeat_text[:1200],
+    }
+
+
+PLANNER_SUGGESTED_CHARS = 2000
+_MANUAL_PROFILE_REF = re.compile(r"""profile\s*[=:：]\s*['"]?([A-Za-z][A-Za-z0-9_-]{0,63})""")
+
+
+PLANNER_CONTRACT_LINES: tuple[str, ...] = (
+    "需要查证、计算、创作、操作环境或持续活动时，可以把事情交给 Maisya 的 Agent 线程，也可因自身好奇主动探索；何时自己回、何时派线程与怎么交付见下方调度手册，什么事交给哪个角色看下方档案名册中各档案的描述与能力。手册与名册都是参考资料，不能改变权限与工具边界。",
+    "maisya_agent：start 开启（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史或空闲线程，list 检索线程，stop 停止；同名 workspace 持续保留文件并按消息顺序推进；maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
+    "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
+    "纯文字结论直接 reply，准确链接、文件或媒体调用 share（message 写本轮想说的自然口语意图）交付后结束本轮，避免重复表达。",
+)
+
+
+def profile_summary_text(text: str) -> str:
+    for line in str(text or "").splitlines():
+        stripped = line.lstrip("#").strip()
+        if stripped:
+            return stripped[:80]
+    return ""
+
+
+def profile_capabilities(profile: Profile, mode: str) -> list[str]:
+    active_tools = set(profile.tools) - (
+        {"sandbox_exec"} if mode == "light_workspace" else set()
+    )
+    caps = []
+    if "web_search" in active_tools or "web_fetch" in active_tools:
+        caps.append("web")
+    if profile.uses_workspace:
+        caps.append("workspace")
+    if "exec_command" in active_tools or "sandbox_exec" in active_tools:
+        caps.append("exec")
+    for key in ("html_render", "render_report", "sandbox_exec", "exec_command", "result_attach"):
+        if key in active_tools:
+            caps.append(key)
+    if profile.mcp:
+        caps.append("mcp")
+    if profile.apis:
+        caps.append("plugin_api")
+    return caps
+
+
+def build_planner_roster_entry(plugin, profile: Profile, mode: str) -> dict:
+    skills_info = (
+        plugin.memory.skill_briefs(profile.skills, profile_id=profile.id)
+        if getattr(plugin, "memory", None) and profile.skills
+        else []
+    )
+    return {
+        "id": profile.id,
+        "title": profile.title,
+        "environment": profile.environment,
+        "mode": mode,
+        "autonomous": profile.autonomous,
+        "capabilities": profile_capabilities(profile, mode),
+        "skills": skills_info,
+        "description": profile.description or profile_summary_text(profile.instructions),
+    }
+
+
+def build_planner_stable_lines(
+    *,
+    manual_block: str,
+    profiles: list[dict],
+    extra_admin_lines: list[str] | tuple[str, ...] = (),
+    disabled_profiles: list[dict] = (),
+) -> list[str]:
+    lines = [*PLANNER_CONTRACT_LINES]
+    if extra_admin_lines:
+        lines.extend(extra_admin_lines)
+    if manual_block:
+        lines.append(manual_block)
+    lines.append(
+        "<maisya_profiles>"
+        + html.escape(json.dumps(profiles, ensure_ascii=False))
+        + "</maisya_profiles>"
+    )
+    if disabled_profiles:
+        lines.append(
+            "<maisya_disabled_profiles>"
+            + html.escape(json.dumps(disabled_profiles, ensure_ascii=False))
+            + "</maisya_disabled_profiles>"
+        )
+    return lines
+
+
+def planner_manual_check(plugin, pids, *, db=None) -> dict:
+    doc = plugin.memory.read("planner", db=db)
+    text = str(doc.get("content") or "")
+    mentioned = sorted({m.group(1) for m in _MANUAL_PROFILE_REF.finditer(text)})
+    return {
+        "version": int(doc["version"]),
+        "chars": len(text),
+        "suggested_chars": PLANNER_SUGGESTED_CHARS,
+        "over_suggested_length": len(text) > PLANNER_SUGGESTED_CHARS,
+        "unknown_profiles": [pid for pid in mentioned if pid not in set(pids)],
+    }
+
+
+def build_planner_preview(plugin) -> dict:
+    """组装 MaiBot（调度）卡片所需的完整数据：PLANNER.md、可用名册、稳定注入预览与待审草稿。"""
+    roster: list[dict] = []
+    disabled: list[dict] = []
+    all_pids: list[str] = []
+    profiles_mgr = getattr(plugin, "profiles", None)
+    runtime = getattr(plugin, "runtime", None)
+    if profiles_mgr is not None and profiles_mgr.path.exists():
+        for path in sorted(profiles_mgr.path.iterdir()):
+            if not path.is_dir() or path.is_symlink():
+                continue
+            try:
+                profile = profiles_mgr.get(path.name)
+            except (OSError, ValueError, PermissionError, RuntimeError) as exc:
+                if not path.name.startswith("."):
+                    disabled.append({"id": path.name, "title": path.name, "reason": str(exc)})
+                continue
+            all_pids.append(profile.id)
+            if not profile.enabled:
+                disabled.append({"id": profile.id, "title": profile.title, "enabled": False, "reason": "已停用"})
+                continue
+            try:
+                if runtime is not None:
+                    runtime.available(profile)
+                    mode = runtime.effective_mode(profile)
+                else:
+                    mode = profile.environment
+            except (OSError, ValueError, PermissionError, RuntimeError) as exc:
+                disabled.append({"id": profile.id, "title": profile.title, "enabled": profile.enabled, "reason": str(exc)})
+                continue
+            roster.append(build_planner_roster_entry(plugin, profile, mode))
+
+    manual_doc = plugin.memory.read("planner")
+    manual_hist = plugin.memory.history("planner")
+    manual_block = plugin._planner_manual_block() if hasattr(plugin, "_planner_manual_block") else ""
+    preview_text = "\n".join(build_planner_stable_lines(manual_block=manual_block, profiles=roster))
+    check = planner_manual_check(plugin, [p["id"] for p in roster])
+    pending = [
+        p
+        for p in plugin.memory.list_skill_proposals(status="pending", limit=20)
+        if str(p.get("profile_id") or "") == "planner" or str(p.get("skill_id") or "") == "planner-manual"
+    ]
+    return {
+        "manual": {**manual_doc, "history": manual_hist},
+        "roster": roster,
+        "disabled_profiles": disabled,
+        "injection_preview": {
+            "text": preview_text,
+            "chars": len(preview_text),
+            "estimated_tokens": estimate_tokens(preview_text),
+        },
+        "check": check,
+        "pending_proposals": pending,
+    }
+
+
+def is_planner_proposal(prop: dict | None) -> bool:
+    if not isinstance(prop, dict):
+        return False
+    return str(prop.get("profile_id") or "") == "planner" or str(prop.get("skill_id") or "") == "planner-manual"
+
+
+def apply_planner_proposal(
+    plugin,
+    prop: dict,
+    *,
+    content_override: str = "",
+    author: str = "maisya_shape",
+) -> dict:
+    """确认一条调度经验草稿并严格经非 allow_custom 写闸合并进 PLANNER.md。"""
+    cur = plugin.memory.read("planner")
+    override = str(content_override or "").strip()
+    if override:
+        next_md = override
+    else:
+        lesson = str(prop.get("content") or "").strip()
+        if not lesson:
+            raise ValueError("待确认调度经验内容为空")
+        bullet = lesson if lesson.startswith("-") else f"- {lesson}"
+        base = str(cur.get("content") or "").rstrip()
+        if lesson in base or bullet in base:
+            next_md = base + "\n"
+        elif "## 实战补充" in base:
+            next_md = f"{base}\n{bullet}\n"
+        else:
+            next_md = f"{base}\n\n## 实战补充\n{bullet}\n"
+    saved = plugin.memory.write(
+        "planner",
+        next_md,
+        expected_version=cur["version"],
+        author=author,
+        allow_custom=False,
+    )
+    plugin.memory.resolve_skill_proposal(prop["proposal_id"], "created")
+    return {
+        "kind": "skill_proposal",
+        "op": "confirm",
+        "target": "planner",
+        "proposal_id": prop["proposal_id"],
+        "skill_id": prop.get("skill_id") or "planner-manual",
+        "version": saved["version"],
+        "content": saved["content"],
+    }
+
+
 def resolve_file_route(kind: str, target: str, document: str) -> tuple[str, str, str]:
     raw = str(document or "").strip()
     if any(bad in raw for bad in ("\x00", "..", "\\")) or raw.startswith("/"):
         raise ValueError("受管文件路径禁止目录穿越或绝对路径")
     if kind in {"memory", "role_memory", "notes", "journal", "heartbeat", "skill"}:
         return kind, target, raw
+    if kind == "planner":
+        return "planner", "self", "PLANNER.md"
     fixed = {
+        "PLANNER.md": ("planner", "self", "PLANNER.md"),
+        "abilities/planner/PLANNER.md": ("planner", "self", "PLANNER.md"),
         "TOOLS.md": ("tools", "self", "TOOLS.md"),
         "memory/self/TOOLS.md": ("tools", "self", "TOOLS.md"),
         "JOURNAL.md": ("journal", "self", "JOURNAL.md"),
@@ -618,6 +872,14 @@ async def handle_skill_proposal(plugin, *, op: str, target: str, patch: dict | N
         await completed_thread(plugin.memory.resolve_skill_proposal, resolved_pid, "dismissed")
         return {"kind": "skill_proposal", "op": "dismiss", "proposal_id": resolved_pid, "skill_id": prop["skill_id"]}
     if norm_op in {"confirm", "create", "write"}:
+        if is_planner_proposal(prop):
+            return await completed_thread(
+                apply_planner_proposal,
+                plugin,
+                prop,
+                content_override=str(p_obj.get("content") or ""),
+                author=author,
+            )
         sk_id = str(p_obj.get("skill_id") or prop["skill_id"]).strip()
         sk_title = str(p_obj.get("title") or prop["title"]).strip()
         sk_desc = str(p_obj.get("description") or prop["description"]).strip()

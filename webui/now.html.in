@@ -346,6 +346,7 @@
             <button type="submit" class="mil-key mil-key--sm mil-key--hot" id="now-new-int-save">保存安排</button>
           </div>
         </form>
+        <div class="mil-row" id="now-hb-ticks" hidden style="gap:6px;flex-wrap:wrap;margin-bottom:8px" aria-label="近期心跳节律"></div>
         <div class="now-intent-list" id="now-intents">
           <div class="mil-hint">暂无预定或盯梢项</div>
         </div>
@@ -1323,6 +1324,37 @@
     return [...map.values()];
   }
 
+  const HB_OUTCOME_LABEL = {
+    miss: "想念",
+    explore: "逛逛",
+    "ok:no_reason": "无由头",
+    "ok:model": "静默",
+    "ok:fallback": "跳过",
+    "skip:schedule": "略过",
+  };
+  function renderHeartbeatTicks(snap) {
+    const box = $("#now-hb-ticks");
+    if (!box) return;
+    const ticks = Array.isArray(snap?.heartbeat_ticks) ? snap.heartbeat_ticks : [];
+    const mode = snap?.pulse?.heartbeat_mode || (snap?.pulse?.heartbeat_enabled ? "gentle" : "off");
+    const modeName = mode === "lively" ? "活泼" : mode === "gentle" ? "克制" : "关";
+    if (!ticks.length && mode === "off") {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    const eff = snap?.pulse?.heartbeat_effective || (mode === "off" ? "关闭" : "想念");
+    const tags = [`<span class="mil-tag ${mode === "off" ? "mil-tag--off" : "mil-tag--ok"}">心跳：${esc(modeName)} · ${esc(eff)}</span>`];
+    ticks.slice(0, 3).forEach((t) => {
+      const lbl = HB_OUTCOME_LABEL[t.outcome] || t.outcome || "跳动";
+      const det = String(t.detail || "").trim();
+      const cls = t.outcome === "miss" || t.outcome === "explore" ? "mil-tag--hot" : "";
+      tags.push(`<span class="mil-tag ${cls}" title="${esc(det)}">${esc(fmtTime(t.at))} ${esc(lbl)}${det ? ` · ${esc(det.slice(0, 22))}` : ""}</span>`);
+    });
+    box.innerHTML = tags.join("");
+  }
+
   function renderIntents(snap) {
     const box = $("#now-intents");
     const cnt = $("#now-intent-count");
@@ -1374,8 +1406,13 @@
     if (bar && txt) {
       bar.hidden = cnt <= 0;
       if (cnt > 0) {
+        const allPlanner = props.length > 0 && props.every((p) => p.profile_id === "planner" || p.skill_id === "planner-manual");
         const names = props.slice(0, 2).map((p) => p.title || p.skill_id).filter(Boolean).join("、");
-        txt.textContent = cnt > 1 ? `最近复盘整理出 ${cnt} 个新技能草稿（${names}），预览保存后即可自动沿用。` : `最近复盘整理出新技能「${names || props[0]?.skill_id || "新技能"}」，点击预览保存后即可复用。`;
+        if (allPlanner) {
+          txt.textContent = cnt > 1 ? `最近沉淀出 ${cnt} 条调度经验草稿（${names}），前往确认写入调度手册。` : `最近沉淀出调度经验「${names || "调度规则"}」，点击前往确认写入。`;
+        } else {
+          txt.textContent = cnt > 1 ? `最近复盘整理出 ${cnt} 个新技能草稿（${names}），预览保存后即可自动沿用。` : `最近复盘整理出新技能「${names || props[0]?.skill_id || "新技能"}」，点击预览保存后即可复用。`;
+        }
       }
     }
   }
@@ -1710,6 +1747,7 @@
     }
 
     renderPendingProposalBar(snap);
+    renderHeartbeatTicks(snap);
     renderIntents(snap);
     renderThreads(snap);
     renderSelectedStage(snap);
@@ -2338,7 +2376,14 @@
     if (activePage !== "now") return;
 
     if (ev.target.closest("#now-goto-proposals")) {
-      switchWorkspaceTab("abilities", { abSub: "skills" });
+      const props = Array.isArray(state.lastSnap?.pending_skill_proposals) ? state.lastSnap.pending_skill_proposals : [];
+      const allPlanner = props.length > 0 && props.every((p) => p.profile_id === "planner" || p.skill_id === "planner-manual");
+      if (allPlanner) {
+        pendingProfileTarget = "__planner__";
+        switchWorkspaceTab("abilities", { abSub: "profiles" });
+      } else {
+        switchWorkspaceTab("abilities", { abSub: "skills" });
+      }
       return;
     }
     if (ev.target.closest("#now-add-intent-btn")) {
@@ -2816,6 +2861,7 @@
     if (targetPage === "now") {
       applyTheme();
       if (state.lastSnap) {
+        renderHeartbeatTicks(state.lastSnap);
         renderIntents(state.lastSnap);
         renderThreads(state.lastSnap);
         renderSelectedStage(state.lastSnap);

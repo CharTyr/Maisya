@@ -41,6 +41,13 @@ if __package__:
     from .maisya.sandbox import DockerRunner
     from .maisya.scout import call_capability
     from .maisya.shaping import execute_shape, resolve_chat_target
+    from .maisya.shaping_setup import (
+        PLANNER_CONTRACT_LINES,
+        build_planner_roster_entry,
+        heartbeat_effective_label,
+        profile_capabilities as _profile_capabilities,
+        profile_summary_text as _profile_summary,
+    )
     from .maisya.share import Share
     from .maisya.threads import ThreadEngine, ThreadStore
     from .maisya.trust import (
@@ -85,6 +92,13 @@ else:
     from maisya.sandbox import DockerRunner
     from maisya.scout import call_capability
     from maisya.shaping import execute_shape, resolve_chat_target
+    from maisya.shaping_setup import (
+        PLANNER_CONTRACT_LINES,
+        build_planner_roster_entry,
+        heartbeat_effective_label,
+        profile_capabilities as _profile_capabilities,
+        profile_summary_text as _profile_summary,
+    )
     from maisya.share import Share
     from maisya.threads import ThreadEngine, ThreadStore
     from maisya.trust import (
@@ -120,35 +134,6 @@ _SENSITIVE_PROBE_RE = re.compile(
     r"https?://[^\s'\"]+|(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]+",
     re.IGNORECASE,
 )
-
-
-def _profile_summary(text: str) -> str:
-    for line in str(text or "").splitlines():
-        stripped = line.lstrip("#").strip()
-        if stripped:
-            return stripped[:80]
-    return ""
-
-
-def _profile_capabilities(profile: Profile, mode: str) -> list[str]:
-    active_tools = set(profile.tools) - (
-        {"sandbox_exec"} if mode == "light_workspace" else set()
-    )
-    caps = []
-    if "web_search" in active_tools or "web_fetch" in active_tools:
-        caps.append("web")
-    if profile.uses_workspace:
-        caps.append("workspace")
-    if "exec_command" in active_tools or "sandbox_exec" in active_tools:
-        caps.append("exec")
-    for key in ("html_render", "render_report", "sandbox_exec", "exec_command", "result_attach"):
-        if key in active_tools:
-            caps.append(key)
-    if profile.mcp:
-        caps.append("mcp")
-    if profile.apis:
-        caps.append("plugin_api")
-    return caps
 
 
 def _merge_settings_dict(base: dict, saved: dict, file_cfg: dict) -> dict:
@@ -294,6 +279,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self._recent_dm_memory: dict[str, dict] = {}
         self._ephemeral_turn_secrets: dict[str, list[dict]] = {}
         self._vault_command_outcomes: dict[tuple[str, str, str], tuple[bool, str, int]] = {}
+        self._planner_events: dict[str, list[dict]] = {}
+        self._planner_steers: dict[str, int] = {}
         self._stream_cache = {
             "expires": 0.0,
             "streams": {},
@@ -388,7 +375,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self.intents = await asyncio.to_thread(
             Intents,
             self.threads,
-            daily_proactive_limit=getattr(self.settings, "daily_proactive_limit", 1),
+            daily_proactive_limit=self.settings.daily_proactive_limit,
+            per_chat_daily_proactive_limit=self.settings.per_chat_daily_proactive_limit,
             **self._tz_init_kwargs(Intents, tz_offset),
         )
         self.host_runner = HostWorkspaceRunner(vault=self.vault, grants=self.grants)
@@ -442,7 +430,7 @@ class MaisyaPlugin(MaiBotPlugin):
             ),
             admins=lambda: self.admins,
             enabled_chats=lambda: self.settings.enabled_chats,
-            longing_quiet_hours=getattr(self.settings, "longing_quiet_hours", 0),
+            longing_quiet_hours=self.settings.longing_threshold_hours(),
             activity=self.messages.activity_for,
             platform_for=self.messages.platform_for,
             redact=self.vault.redact,
@@ -450,13 +438,8 @@ class MaisyaPlugin(MaiBotPlugin):
             memory=self.memory,
             profiles=self.profiles,
             plugin_enabled=lambda: self.settings.plugin.enabled,
-            heartbeat_enabled=lambda: bool(
-                getattr(self.settings, "heartbeat_enabled", True)
-            ),
-            heartbeat_interval=getattr(
-                self.settings, "heartbeat_interval_minutes", 60
-            )
-            * 60,
+            heartbeat_enabled=lambda: self.settings.heartbeat_enabled,
+            heartbeat_interval=self.settings.heartbeat_base_minutes() * 60,
             heartbeat_profile=self._resolve_heartbeat_profile(),
             chat_aliases=self.chat_aliases_for,
             resolve_session=self.resolve_known_session_id,
@@ -524,6 +507,8 @@ class MaisyaPlugin(MaiBotPlugin):
         self._turn_ops_receipts.clear()
         self._ephemeral_turn_secrets.clear()
         self._vault_command_outcomes.clear()
+        self._planner_events.clear()
+        self._planner_steers.clear()
         self._clear_bootstrap_caches()
         self.messages = None
         self.vault = None
@@ -548,6 +533,21 @@ class MaisyaPlugin(MaiBotPlugin):
             "effective_admins": sorted(merged),
         }
         return self.admins_info
+
+    def _planner_manual_block(self) -> str:
+        if self.memory is None:
+            return ""
+        try:
+            content = self.memory.read("planner")["content"]
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
+            self.ctx.logger.warning("Maisya 调度手册暂不可读，本轮按工具契约调度。")
+            return ""
+        text = re.sub(r"<!--[\s\S]*?-->", "", content).strip()
+        if not text:
+            return ""
+        if self.vault:
+            text = self.vault.redact(text)
+        return "<maisya_planner_manual>" + html.escape(text) + "</maisya_planner_manual>"
 
     def _resolve_heartbeat_profile(self) -> str:
         configured = str(getattr(self.settings, "heartbeat_profile", "") or "").strip()
@@ -1417,6 +1417,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 self._clear_bootstrap_caches()
                 self._turn_ops_receipts.clear()
                 self._vault_command_outcomes.clear()
+                self._planner_events.clear()
+                self._planner_steers.clear()
             if self.engine:
                 self.engine.idle_seconds = settings.thread_idle_seconds
                 self.engine.max_steps = settings.agent_max_steps
@@ -1426,6 +1428,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 self.engine.context_tokens = settings.thread_context_tokens
                 if self.intents:
                     self.intents.daily_proactive_limit = settings.daily_proactive_limit
+                    self.intents.per_chat_daily_proactive_limit = (
+                        settings.per_chat_daily_proactive_limit
+                    )
                 if self.pulse:
                     self.pulse.sleep_window = settings.sleep_window
                     self.pulse.proactive_level = settings.proactive_level
@@ -1433,10 +1438,8 @@ class MaisyaPlugin(MaiBotPlugin):
                         settings.chat_proactive_levels
                     )
                     self.pulse.acquaintance_users = list(settings.acquaintance_users)
-                    self.pulse.longing_quiet_hours = settings.longing_quiet_hours
-                    self.pulse.heartbeat_interval = (
-                        settings.heartbeat_interval_minutes * 60
-                    )
+                    self.pulse.longing_quiet_hours = settings.longing_threshold_hours()
+                    self.pulse.heartbeat_interval = settings.heartbeat_base_minutes() * 60
                     self.pulse.heartbeat_profile = self._resolve_heartbeat_profile()
                     if hasattr(self.pulse, "invalidate_caches"):
                         self.pulse.invalidate_caches()
@@ -2577,6 +2580,146 @@ class MaisyaPlugin(MaiBotPlugin):
             is_admin_caller=is_admin_caller,
         )
 
+    def _planner_brief_profiles_sync(self) -> list[dict]:
+        if self.profiles is None or not self.profiles.path.exists():
+            return []
+        briefs: list[dict] = []
+        for path in sorted(self.profiles.path.iterdir()):
+            if not path.is_dir() or path.is_symlink():
+                continue
+            try:
+                prof = self.profiles.get(path.name)
+            except (OSError, ValueError, PermissionError, RuntimeError):
+                continue
+            if not prof.enabled:
+                continue
+            briefs.append(
+                {
+                    "id": prof.id,
+                    "description": prof.description or _profile_summary(prof.instructions),
+                }
+            )
+            if len(briefs) >= 24:
+                break
+        return briefs
+
+    async def _record_planner_signal(
+        self,
+        *,
+        chat_id: str,
+        op: str,
+        profile: str = "",
+        thread_id: str = "",
+        source_key: str = "",
+        wait_zero: bool = False,
+        state: str = "",
+        steer: bool = False,
+        from_threads: list | None = None,
+    ) -> None:
+        if self.runtime is None or self.engine is None or not chat_id or chat_id == "self":
+            return
+        learning = self.runtime.ensure_learning()
+        if learning is None:
+            return
+        now = self.intents.clock() if self.intents is not None else time.time()
+        history = self._planner_events.setdefault(chat_id, [])
+        # 只保留 30 分钟内的抽象调度轨迹，不保存任何聊天文本
+        history[:] = [ev for ev in history if now - ev["ts"] <= 1800.0][-15:]
+
+        async def _emit(dedup_key: str, signal: str, actions: list[dict]) -> None:
+            profiles_brief = await asyncio.to_thread(self._planner_brief_profiles_sync)
+            await learning.schedule_planner_signal(
+                dedup_key=dedup_key,
+                signal=signal,
+                actions=actions,
+                profiles=profiles_brief,
+            )
+
+        if op == "send" and steer and thread_id:
+            count = self._planner_steers.get(thread_id, 0) + 1
+            self._planner_steers[thread_id] = count
+            if len(self._planner_steers) > 256:
+                for old_tid in list(self._planner_steers)[:64]:
+                    if old_tid != thread_id:
+                        self._planner_steers.pop(old_tid, None)
+            if count >= 2:
+                await _emit(
+                    f"steer:{thread_id}",
+                    "steer_twice",
+                    [
+                        {"op": "start", "profile": profile or "default"},
+                        {"op": "steer", "profile": profile or "default", "count": count},
+                    ],
+                )
+        elif op == "stop" and thread_id:
+            history.append(
+                {
+                    "ts": now,
+                    "op": "stop",
+                    "profile": profile or "",
+                    "thread_id": thread_id,
+                    "source_key": source_key,
+                    "wait_zero": False,
+                    "state": "stopped",
+                }
+            )
+            return
+        elif op == "start" and thread_id:
+            # 信号 B：stop 后 10 分钟内同会话改换另一个档案重新 start
+            for prev in reversed(history):
+                if (
+                    prev["op"] == "stop"
+                    and now - prev["ts"] <= 600.0
+                    and prev["profile"]
+                    and profile
+                    and prev["profile"] != profile
+                    and not prev.get("switch_reported")
+                ):
+                    prev["switch_reported"] = True
+                    await _emit(
+                        f"switch:{prev['thread_id']}:{thread_id}",
+                        "stop_and_switch_profile",
+                        [
+                            {"op": "stop", "profile": prev["profile"]},
+                            {"op": "start", "profile": profile},
+                        ],
+                    )
+                    break
+
+            # 信号 C：同一请求先派线程，在未并行挂起的情况下又补派同一请求的线程
+            if not from_threads and source_key:
+                for prev in reversed(history):
+                    if (
+                        prev["op"] == "start"
+                        and not prev.get("followup_reported")
+                        and prev.get("source_key") == source_key
+                    ):
+                        prev_still_active = prev["thread_id"] in self.engine.tasks
+                        if wait_zero and prev_still_active:
+                            continue
+                        prev["followup_reported"] = True
+                        await _emit(
+                            f"followup:{prev['thread_id']}:{thread_id}",
+                            "same_turn_followup_dispatch",
+                            [
+                                {"op": "start", "profile": prev["profile"]},
+                                {"op": "followup_start", "profile": profile},
+                            ],
+                        )
+                        break
+
+            history.append(
+                {
+                    "ts": now,
+                    "op": "start",
+                    "profile": profile or "default",
+                    "thread_id": thread_id,
+                    "source_key": source_key,
+                    "wait_zero": bool(wait_zero),
+                    "state": str(state or ""),
+                }
+            )
+
     @Tool(
         "maisya_agent",
         description="按需要调度 Agent 探索、计算、创作与持续活动，也可因 MaiBot 自身好奇主动调用。普通聊天和常识直接 reply。start 开始（默认 profile='default'；同轮并行开启多线程传 wait_seconds=0，跨角色接力传 from_threads；持久档案传 fresh=True 归档重开），send 补充或转向，stop 停止为空闲（idle），reopen 从历史/空闲/归档线程续聊，list 检索历史与活跃线程，approve 审批确认等待中的高风险操作（grant_tier=once|session|always|deny）并续跑；share 用原生表达交付准确链接、文件或媒体，之后结束本轮。",
@@ -3114,6 +3257,19 @@ class MaisyaPlugin(MaiBotPlugin):
                     references=ref_msg_ids,
                     from_threads=from_threads,
                 )
+                if owner == "chat":
+                    await self._record_planner_signal(
+                        chat_id=effective_chat_id,
+                        op="start",
+                        profile=ability.id,
+                        thread_id=str(result.get("thread_id") or ""),
+                        source_key=str(
+                            planned_source or (self._turn_sources.get(chat_id) or [""])[-1]
+                        ),
+                        wait_zero=(effective_wait == 0),
+                        state=str(result.get("state") or ""),
+                        from_threads=from_threads,
+                    )
                 if (
                     cross_chat
                     and owner == "chat"
@@ -3238,6 +3394,13 @@ class MaisyaPlugin(MaiBotPlugin):
                     ):
                         raise PermissionError("停止该线程需要发起人或管理员身份")
                     result = await self.engine.stop(thread_id, chat_id=row_chat)
+                    if row["owner"] == "chat":
+                        await self._record_planner_signal(
+                            chat_id=row_chat,
+                            op="stop",
+                            profile=str(row.get("profile") or ""),
+                            thread_id=thread_id,
+                        )
                 elif action == "approve":
                     if not is_admin_caller:
                         raise PermissionError("审批放行高风险操作需要真实管理员消息授权")
@@ -3426,6 +3589,14 @@ class MaisyaPlugin(MaiBotPlugin):
                                 "from_threads": from_threads or [],
                             },
                         )
+                        if row["owner"] == "chat" and steer:
+                            await self._record_planner_signal(
+                                chat_id=row_chat,
+                                op="send",
+                                profile=str(row.get("profile") or ""),
+                                thread_id=thread_id,
+                                steer=True,
+                            )
                         if (
                             cross_chat
                             and row["owner"] == "chat"
@@ -3868,7 +4039,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
     @Tool(
         "maisya_shape",
-        description="管理员对话管家入口：统一查看、一站式配置（setup）、微调单一心跳（heartbeat / settings）、读写各角色独立记忆（role_memory / notes）、管理简报资讯源（digest_sources）、外部工具连接（services）、确认或忽略新技能草稿（skill_proposal）、会话备忘与回滚（rollback）。流标识统一使用 平台:类型:id（如 qq:group:100246809）。",
+        description="管理员对话管家入口：统一查看、一站式配置（setup）、微调单一心跳（heartbeat / settings）、读写各角色独立记忆（role_memory / notes）、修改调度手册（planner）、管理简报资讯源（digest_sources）、外部工具连接（services）、确认或忽略新技能草稿（skill_proposal）、会话备忘与回滚（rollback）。流标识统一使用 平台:类型:id（如 qq:group:100246809）。",
         parameters={
             "type": "object",
             "properties": {
@@ -3885,6 +4056,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         "memory",
                         "journal",
                         "heartbeat",
+                        "planner",
                         "digest_sources",
                         "services",
                         "skill_proposal",
@@ -3915,6 +4087,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         "skill_proposal",
                         "tools",
                         "skill",
+                        "planner",
                     ],
                 },
                 "op": {
@@ -3955,7 +4128,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 "document": {
                     "type": "string",
                     "maxLength": 64,
-                    "description": "profile 文档可填 PROFILE.md 或 profile.toml；file 类型可指定 MEMORY.md、JOURNAL.md、HEARTBEAT.md 或技能文件路径。",
+                    "description": "profile 文档可填 PROFILE.md 或 profile.toml；file 类型可指定 PLANNER.md、MEMORY.md、JOURNAL.md、HEARTBEAT.md 或技能文件路径。",
                 },
                 "content": {"type": "string", "maxLength": 65536},
                 "topics": {
@@ -4007,7 +4180,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 },
                 "patch": {
                     "type": "object",
-                    "description": "局部更新对象：setup 支持 topics/digest_topics/digest_feeds/urls/daily_at/run_now/deliver_to/memory/sleep_window/profile/chat_proactive_levels；settings 支持 enabled_chats/admins/permission_mode/default_model/proactive_level/chat_proactive_levels/daily_proactive_limit/sleep_window/heartbeat_enabled/heartbeat_interval_minutes/longing_quiet_hours/acquaintance_users/ui_style/sandbox；services 支持直接附带 command/url/env/headers/readonly 增删 MCP；skill_proposal 支持 bind_profiles；profile 支持 title/enabled/autonomous/permission_mode/execution_mode/model_name/fallback_models/tools/toolsets/skills/mcp/apis/sandbox_targets/secrets/instructions。",
+                    "description": "局部更新对象：setup 支持 topics/digest_topics/digest_feeds/urls/daily_at/run_now/deliver_to/memory/sleep_window/profile/chat_proactive_levels；settings 支持 enabled_chats/admins/permission_mode/default_model/proactive_level/chat_proactive_levels/daily_proactive_limit/per_chat_daily_proactive_limit/sleep_window/heartbeat_mode/heartbeat_interval_minutes/longing_quiet_hours/acquaintance_users/ui_style/sandbox；services 支持直接附带 command/url/env/headers/readonly 增删 MCP；skill_proposal 支持 bind_profiles；profile 支持 title/enabled/autonomous/permission_mode/execution_mode/model_name/fallback_models/tools/toolsets/skills/mcp/apis/sandbox_targets/secrets/instructions。",
                 },
                 "source_msg_id": {"type": "string"},
                 "expected_version": {"type": "integer", "minimum": 0},
@@ -4861,23 +5034,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         continue
                     self.runtime.available(profile)
                     mode = self.runtime.effective_mode(profile)
-                    skills_info = (
-                        self.memory.skill_briefs(profile.skills, profile_id=profile.id)
-                        if self.memory and profile.skills
-                        else []
-                    )
-                    profiles.append(
-                        {
-                            "id": profile.id,
-                            "title": profile.title,
-                            "environment": profile.environment,
-                            "mode": mode,
-                            "autonomous": profile.autonomous,
-                            "capabilities": _profile_capabilities(profile, mode),
-                            "skills": skills_info,
-                            "summary": _profile_summary(profile.instructions),
-                        }
-                    )
+                    profiles.append(build_planner_roster_entry(self, profile, mode))
                 except (OSError, ValueError, PermissionError, RuntimeError) as exc:
                     if is_admin:
                         disabled.append(
@@ -4894,6 +5051,7 @@ class MaisyaPlugin(MaiBotPlugin):
             return profiles, disabled
 
         profiles, disabled_profiles = await asyncio.to_thread(scan_profiles)
+        manual_block = await asyncio.to_thread(self._planner_manual_block)
         available = bool(profiles)
         filtered = filter_tools(tools, is_admin=is_admin)
         if (available or is_admin) and any(
@@ -4913,13 +5071,16 @@ class MaisyaPlugin(MaiBotPlugin):
             admin_lines.append(
                 "管理员在任意会话（含未加白名单私聊）均可用 maisya_shape（传入真实 source_msg_id）跨会话读取与配置全部能力。"
             )
+            admin_lines.append(
+                "管理员指正调度或交付方式（何时自己回、何时派线程、怎么拆分与交付）时，用 maisya_shape(action='planner', op='patch', patch={'append'|'old_string'/'new_string': ...}) 修改调度手册 PLANNER.md；只针对本会话的约定写本会话 MEMORY.md，什么事交给哪个角色改对应档案的描述。"
+            )
             if not has_shape:
                 admin_lines.append(
                     '当前上下文尚未展开 maisya_shape（默认延迟加载），如需配置请先调一次 tool_search(query="maisya_shape")。'
                 )
             admin_lines.extend(
                 [
-                    "管理员可通过 maisya_shape(action='overview'|'setup'|'settings'|'profile'|'file'|'digest_sources'|'services'|'skill_proposal', op=..., target_chat=..., source_msg_id=...) 读取与调整全部能力：setup 支持一句开启群、配置简报主题/定时/各群主动分寸(chat_proactive_levels)并用 run_now=True, deliver_to='current' 立即在私聊试跑预览；settings 支持 enabled_chats、sleep_window、heartbeat_enabled、heartbeat_interval_minutes、daily_proactive_limit、chat_proactive_levels、longing_quiet_hours；file 支持 HEARTBEAT.md、MEMORY.md、profiles/<id>/MEMORY.md、JOURNAL.md 与 skills/<id>/SKILL.md；services 支持直接附带 env/url 登记 MCP；profile(op='export') 生成脱敏 .maisya.zip（聊天发压缩包走 package_export + share），profile(op='import') 支持公开 https:// .zip 直链导入（重名时先问用户更新还是另存新名）。尽量合并修改，避免碎片调用。",
+                    "管理员可通过 maisya_shape(action='overview'|'setup'|'settings'|'profile'|'file'|'digest_sources'|'services'|'skill_proposal', op=..., target_chat=..., source_msg_id=...) 读取与调整全部能力：setup 支持一句开启群、配置简报主题/定时/各群主动分寸(chat_proactive_levels)并用 run_now=True, deliver_to='current' 立即在私聊试跑预览；settings 支持 enabled_chats、sleep_window 等核心设置；主动性按说法对应旋钮：「更主动 / 安静点 / 别主动找人」→ heartbeat_mode（off 关、gentle 克制、lively 活泼，默认关，事后惦记不受影响），「闲着去逛什么」→ 写 HEARTBEAT.md 的「## 自主探索方向」，「某个群别打扰」→ chat_proactive_levels（quiet / care / lively），「一天最多几次」→ daily_proactive_limit（全局总量）与 per_chat_daily_proactive_limit（单会话上限），心跳间隔与久违阈值的精确覆盖用 heartbeat_interval_minutes / longing_quiet_hours（0 = 跟随档位），调整后用 overview 的 heartbeat.effective 确认实际生效状态；file 支持 HEARTBEAT.md、MEMORY.md、profiles/<id>/MEMORY.md、JOURNAL.md 与 skills/<id>/SKILL.md；services 支持直接附带 env/url 登记 MCP；profile(op='export') 生成脱敏 .maisya.zip（聊天发压缩包走 package_export + share），profile(op='import') 支持公开 https:// .zip 直链导入（重名时先问用户更新还是另存新名）。尽量合并修改，避免碎片调用。",
                     "所有流标识统一用 平台:类型:id（如 qq:group:100246809，target_chat 也兼容群号/群名/current）；密码保险箱仅作用户主动存别名之用，若用户直接在对话里给出临时密码、Token 或私钥委托执行任务，直接通过 maisya_agent 传给线程完成即可，绝不拒单或强制要求先存保险箱；在私聊中宿主 search_chat_history 只能搜当前私聊，要摸清目标群近期聊什么与口味，应交给目标会话开启的线程用 chat_read 了解。",
                     "两段式自然反馈规则（重要）：只要 maisya_agent(start/send/reopen/approve) 返回 state='active'（后台线程已跑起），请在本轮**立即调用 reply**（reply_style=\"长回复\"）自然简短地交代已完成的配置/调整以及后台正在按新要求跑，等系统通过 <maisya_returns> 自动唤醒后再交付成图或结论；若返回 state='waiting' 且含 pending_approval，先向管理员确认风险详情，得到同意后调 maisya_agent(action='approve', thread_id=..., grant_tier='once'|'session'|'always'|'deny', source_msg_id=...)；**绝对不要调用 wait 或反复调用 maisya_recall 轮询等待，也不要对运行中的同一线程重复发指令**。",
                     "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(action='schedule'|'list'|'pause'|'resume'|'run_now'|'cancel', mode='once'|'recurring'|'watch', daily_at=..., condition=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
@@ -4938,7 +5099,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     for p in pending_props
                 )
                 admin_lines.append(
-                    f"当前有 {len(pending_props)} 个自动提炼的新技能草稿等待预览确认（{prop_desc}）；若管理员询问或同意保存，可调 maisya_shape(action='skill_proposal', op='confirm'|'dismiss', target=..., source_msg_id=...)。"
+                    f"当前有 {len(pending_props)} 个自动提炼的新技能或调度手册经验草稿等待预览确认（{prop_desc}）；若管理员询问或同意保存，可调 maisya_shape(action='skill_proposal', op='confirm'|'dismiss', target=..., source_msg_id=...)。"
                 )
 
         if not enabled and is_admin:
@@ -4951,6 +5112,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 "<maisya_admin_bootstrap>",
                 f"当前管理员会话（chat_id={chat_id}, stream_spec={current_spec}, platform={platform}, latest_source_msg_id={latest_source}）尚未加入 enabled_chats，仅对当前已核验管理员开放跨会话管理、私聊试跑预览与个人提醒引导。",
                 *admin_lines,
+                *([manual_block] if manual_block else []),
                 "<maisya_profiles>"
                 + html.escape(json.dumps(profiles, ensure_ascii=False))
                 + "</maisya_profiles>",
@@ -5008,61 +5170,34 @@ class MaisyaPlugin(MaiBotPlugin):
             for key in ("memory", "journal")
             if str(memory.get(key) or "").strip()
         }
-        idle_session = not index and not returned and not active_memory
-        if idle_session:
-            parts = [
-                "日常闲聊、接梗与常识直接调用 reply；纯查事实、核实出处、读图或并行快查优先调轻快的 profile='scout'，需做图卡/写网页报告/改工作区/跑脚本调 profile='default'（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads），安排提醒或周期工作流调 maisya_later。",
-                "查群友印象用宿主长期记忆（如 query_memory），查过往线程与备忘用 maisya_recall；含准确链接或附件的结果用 share 交付后结束本轮。",
-                *(
-                    [
-                        "管理员明确指正方法、角色或本会话约定时可用 maisya_shape。",
-                        *admin_lines,
-                    ]
-                    if is_admin
-                    else []
-                ),
-                "<maisya_profiles>"
-                + html.escape(json.dumps(profiles, ensure_ascii=False))
-                + "</maisya_profiles>",
-                *(
-                    [
-                        "<maisya_disabled_profiles>"
-                        + html.escape(json.dumps(disabled_profiles, ensure_ascii=False))
-                        + "</maisya_disabled_profiles>"
-                    ]
-                    if is_admin and disabled_profiles
-                    else []
-                ),
-            ]
-        else:
-            parts = [
-                "普通闲聊、常识和接梗直接调用 reply；需要独立查证、计算创作或因自身好奇探索时可调用 maisya_agent（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads）。",
-                "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
-                "同名 workspace 持续保留文件并按消息顺序推进；start 开启（纯只读核实快查优先选 profile='scout'，创作出图/跑脚本/综合任务选 profile='default'，周期资讯选 'digest'，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史/空闲线程，list 检索线程，stop 停止，maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
-                *(
-                    [
-                        "管理员明确指正方法、档案或本会话办事约定时，可用 maisya_shape 读取、修改或回滚（日常聊天事实不必手动写入）。",
-                        *admin_lines,
-                    ]
-                    if is_admin
-                    else []
-                ),
-                "active 表示后台推进中（见 latest_step）；用户触发线程的后台结果会回接本会话，是否开口由你决定。",
-                "纯文字结论直接 reply，准确链接、文件或媒体调用 share（message 写本轮想说的自然口语意图）交付后结束本轮，避免重复表达。",
-                "<maisya_profiles>"
-                + html.escape(json.dumps(profiles, ensure_ascii=False))
-                + "</maisya_profiles>",
-                *(
-                    [
-                        "<maisya_disabled_profiles>"
-                        + html.escape(json.dumps(disabled_profiles, ensure_ascii=False))
-                        + "</maisya_disabled_profiles>"
-                    ]
-                    if is_admin and disabled_profiles
-                    else []
-                ),
-            ]
+        parts = [
+            *PLANNER_CONTRACT_LINES,
+            *(
+                [
+                    "管理员明确指正方法、档案或本会话办事约定时，可用 maisya_shape 读取、修改或回滚（日常聊天事实不必手动写入）。",
+                    *admin_lines,
+                ]
+                if is_admin
+                else []
+            ),
+            *([manual_block] if manual_block else []),
+            "<maisya_profiles>"
+            + html.escape(json.dumps(profiles, ensure_ascii=False))
+            + "</maisya_profiles>",
+            *(
+                [
+                    "<maisya_disabled_profiles>"
+                    + html.escape(json.dumps(disabled_profiles, ensure_ascii=False))
+                    + "</maisya_disabled_profiles>"
+                ]
+                if is_admin and disabled_profiles
+                else []
+            ),
+        ]
         if index:
+            parts.append(
+                "active 表示后台推进中（见 latest_step）；用户触发线程的后台结果会回接本会话，是否开口由你决定。"
+            )
             parts.append(
                 "<maisya_threads>"
                 + html.escape(json.dumps(index, ensure_ascii=False))[:5000]
@@ -6197,17 +6332,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "group": int(counts.get("group", 0)),
                     "private": int(counts.get("private", 0)),
                 }
-                arena = (
-                    self._chat_arena(filter_chat)
-                    if filter_chat and str(filter_chat).strip() not in {"", "self"}
-                    else ""
-                )
-                used = (
-                    buckets[arena]
-                    if arena in {"group", "private"}
-                    else max(buckets["group"], buckets["private"])
-                )
-                return used, buckets
+                return int(counts.get("total", 0)), buckets
 
             def _named_workspaces_list():
                 if self.threads is None:
@@ -6271,6 +6396,12 @@ class MaisyaPlugin(MaiBotPlugin):
             ob_view["chat_sources"] = sources
             self._apply_sources_to_dms(ob_view.get("recent_dms"), sources)
             daily_used, daily_buckets = await asyncio.to_thread(_daily_proactive_summary)
+            hb_mode, hb_has_plan, hb_effective = await asyncio.to_thread(
+                heartbeat_effective_label, self
+            )
+            if not result.get("heartbeat_ticks") and self.intents is not None:
+                raw_ticks = await asyncio.to_thread(self.intents.heartbeat_ticks, 5)
+                result["heartbeat_ticks"] = self.vault.redact(raw_ticks)
             result["pulse"] = {
                 "enabled": bool(self.settings.plugin.enabled),
                 "proactive_level": self.settings.proactive_level,
@@ -6282,12 +6413,12 @@ class MaisyaPlugin(MaiBotPlugin):
                 "daily_limit": int(self.settings.daily_proactive_limit),
                 "daily_used": daily_used,
                 "daily_buckets": daily_buckets,
-                "heartbeat_enabled": bool(
-                    getattr(self.settings, "heartbeat_enabled", True)
-                ),
-                "heartbeat_interval_minutes": int(
-                    self.settings.heartbeat_interval_minutes
-                ),
+                "heartbeat_enabled": self.settings.heartbeat_enabled,
+                "heartbeat_mode": hb_mode,
+                "heartbeat_has_plan": hb_has_plan,
+                "heartbeat_effective": hb_effective,
+                "heartbeat_interval_minutes": self.settings.heartbeat_base_minutes(),
+                "per_chat_daily_limit": int(self.settings.per_chat_daily_proactive_limit),
                 "heartbeat_profile": self._resolve_heartbeat_profile(),
                 "web_provider": self.settings.web_provider,
             }

@@ -159,6 +159,7 @@ async def test_heartbeat_when_engine_full_does_not_stack_orphans_and_kicks_queue
     plugin.intents.clock = lambda: clock[0]
     plugin.bridge.clock = lambda: clock[0]
     plugin.engine.max_active = 1
+    plugin.pulse.heartbeat_enabled = lambda: True  # 默认档位为关（docs/08）
     plugin.pulse.heartbeat_interval = 60
 
     hb_path = plugin.memory.root / "memory/self/HEARTBEAT.md"
@@ -172,6 +173,8 @@ async def test_heartbeat_when_engine_full_does_not_stack_orphans_and_kicks_queue
     seen_prompts = []
 
     async def capability(name, **arguments):
+        if name == "llm.generate_with_tools" and "MaiBot 的心跳" in str(arguments.get("prompt", "")):
+            return {"response": '{"action":"explore","topic":"站内动态"}'}
         if name == "llm.generate_with_tools":
             seen_prompts.append(str(arguments.get("prompt", "")))
             if len(seen_prompts) == 1:

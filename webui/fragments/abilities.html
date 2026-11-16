@@ -88,6 +88,55 @@
 
           <div class="mil-feedback" id="pr-feedback" role="status" aria-live="polite"></div>
 
+          <!-- 固定第一位：MaiBot（调度）调度手册 + 可用名册 + 稳定注入预览 + 待确认调度经验 -->
+          <div id="pr-planner-panel" hidden>
+            <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+              <div class="mil-row" style="gap:6px;align-items:center;flex-wrap:wrap">
+                <span class="mil-tag">PLANNER.md</span>
+                <span class="mil-tag num" id="pl-ver">v0</span>
+                <span class="mil-tag num" id="pl-len">0 / 2000 字</span>
+                <button type="button" class="mil-help" data-help="跨会话通用的调度与交付方法；某个群聊或私聊自己的称呼、口味和规矩请写进「手账 → 会话备忘（MEMORY.md）」，系统写入闸会自动拦截具体会话信息。" aria-label="调度手册说明">?</button>
+              </div>
+              <button type="button" class="mil-key mil-key--sm" id="pl-reload">重新读取</button>
+            </div>
+
+            <div class="mil-feedback mil-feedback--warn" id="pl-check-warn" role="status" hidden></div>
+
+            <div class="set-subcard" id="pl-proposals-wrap" hidden style="margin-bottom:10px">
+              <div class="mil-row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+                <strong style="font-size:13px">待确认的调度经验草稿</strong>
+                <span class="mil-tag mil-tag--warn" id="pl-prop-count">0 条</span>
+              </div>
+              <div class="ms-entry-list" id="pl-proposals-list"></div>
+            </div>
+
+            <div class="mil-field">
+              <label class="mil-label" for="pl-md">调度与交付手册（跨会话通用，硬上限 6000 字）</label>
+              <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="pl-md" rows="12" placeholder="编写何时自己直接 reply、何时派后台线程、怎么并行与接力，以及交付方式……"></textarea>
+            </div>
+
+            <div class="mil-field" id="pl-hist-wrap" hidden style="margin-top:8px">
+              <span class="mil-label">调度手册历史版本回滚</span>
+              <div class="onb-chip-row" id="pl-hist-list"></div>
+            </div>
+
+            <div class="set-subcard" style="margin-top:10px">
+              <div class="mil-row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+                <strong style="font-size:13px">当前实际可用档案名册</strong>
+                <span class="mil-hint">停用或缺失依赖的角色不会暴露给主脑</span>
+              </div>
+              <div class="ms-entry-list" id="pl-roster-preview"></div>
+            </div>
+
+            <div class="set-subcard" style="margin-top:10px">
+              <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+                <strong style="font-size:13px">完整稳定注入预览</strong>
+                <span class="mil-tag num" id="pl-token-tag">0 tokens</span>
+              </div>
+              <pre class="mil-pre" id="pl-inject-preview" style="max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word"></pre>
+            </div>
+          </div>
+
           <!-- 顶部小鱼与外形切换 -->
           <div class="role-fish-box" id="pr-fish-box">
             <div class="role-fish-head">

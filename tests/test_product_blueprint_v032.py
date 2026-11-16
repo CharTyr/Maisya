@@ -515,9 +515,12 @@ async def test_five_page_webui_abilities_memory_vault_and_heartbeat_playwright(t
                 assert "保存" in detail_txt
                 assert "SecretVal_NeverShow_12345" not in detail_txt
 
-                # 单一心跳直观设置
-                await expect(page.locator("#set-hb-enabled")).to_be_visible()
+                # 单一心跳直观设置（三档选择 + 高级覆盖）
+                await expect(page.locator("#set-hb-mode-seg")).to_be_visible()
+                await expect(page.locator("#set-per-chat-limit")).to_be_visible()
+                await page.locator("#set-hb-adv summary").click()
                 await expect(page.locator("#set-hb-interval")).to_be_visible()
+                await expect(page.locator("#set-longing")).to_be_visible()
                 assert await page.locator("img, iframe").count() == 0
                 assert not errors and get_peak() <= 2
             finally:

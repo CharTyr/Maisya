@@ -1470,16 +1470,21 @@ class AgentRuntime(Scout):
         attachments = self.attachments.get(thread_id)
         return {**result, **({"attachments": attachments} if attachments else {})}
 
+    def ensure_learning(self):
+        if self.learning is None and self.memory is not None:
+            from .learning import Learning
+
+            self.learning = Learning(self.host, self.memory)
+        return self.learning
+
     async def finished(self, row):
         if not self.memory:
             return
         try:
             await completed_thread(self.memory.experience, row)
-            if self.learning is None:
-                from .learning import Learning
-
-                self.learning = Learning(self.host, self.memory)
-            await self.learning.schedule(row)
+            learning = self.ensure_learning()
+            if learning is not None:
+                await learning.schedule(row)
         except (ValueError, RuntimeError, TypeError, OSError, sqlite3.Error):
             return
 

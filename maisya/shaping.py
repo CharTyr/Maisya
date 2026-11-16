@@ -11,7 +11,7 @@ import tomllib
 from pathlib import Path
 
 from .abilities import BUILTIN_PROFILES
-from .config import Settings
+from .config import Settings, apply_heartbeat_compat
 from .pathsafe import path_is_link_like
 from .shaping_setup import (
     export_profile_bundle,
@@ -20,7 +20,9 @@ from .shaping_setup import (
     handle_services,
     handle_setup,
     handle_skill_proposal,
+    heartbeat_overview,
     import_profile_bundle,
+    planner_manual_check,
     profile_summary as _profile_summary,
     resolve_file_route as _resolve_file_route,
     tools_file_op as _tools_file_op,
@@ -360,6 +362,7 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
     if not isinstance(patch, dict) or not patch:
         raise ValueError("settings patch 必须是非空对象")
     cand, changes = copy.deepcopy(plugin.settings.model_dump()), []
+    patch = apply_heartbeat_compat(patch, plugin.settings.heartbeat_mode)
     if "enabled" in patch or (isinstance(patch.get("plugin"), dict) and "enabled" in patch["plugin"]):
         flag = patch["plugin"]["enabled"] if isinstance(patch.get("plugin"), dict) and "enabled" in patch["plugin"] else patch["enabled"]
         if not (flag is True or (isinstance(flag, str) and flag.strip().lower() in {"true", "1", "yes", "on"})):
@@ -382,14 +385,11 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
         if "add_admins" in patch or "remove_admins" in patch:
             cand["admins"] = _apply_list_delta(list(cand.get("admins") or []), add_items=_clean_str_list(patch.get("add_admins", []), label="add_admins"), remove_items=_clean_str_list(patch.get("remove_admins", []), label="remove_admins"))
             changes.append("admins")
-    for simple in ("permission_mode", "default_model", "proactive_level", "ui_style", "heartbeat_profile", "web_provider"):
+    for simple in ("permission_mode", "default_model", "proactive_level", "ui_style", "heartbeat_profile", "web_provider", "heartbeat_mode"):
         if simple in patch and simple in Settings.model_fields:
             cand[simple] = str(patch[simple] or "").strip()
             changes.append(simple)
-    if "heartbeat_enabled" in patch and "heartbeat_enabled" in Settings.model_fields:
-        cand["heartbeat_enabled"] = bool(patch["heartbeat_enabled"])
-        changes.append("heartbeat_enabled")
-    for int_field in ("heartbeat_interval_minutes", "longing_quiet_hours", "tz_offset_minutes"):
+    for int_field in ("heartbeat_interval_minutes", "longing_quiet_hours", "tz_offset_minutes", "daily_proactive_limit", "per_chat_daily_proactive_limit"):
         if int_field in patch and int_field in Settings.model_fields:
             cand[int_field] = int(patch[int_field])
             changes.append(int_field)
@@ -406,9 +406,6 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
     if "sleep_window" in patch:
         cand["sleep_window"] = normalize_sleep_window(patch["sleep_window"])
         changes.append("sleep_window")
-    if "daily_proactive_limit" in patch and "daily_proactive_limit" in Settings.model_fields:
-        cand["daily_proactive_limit"] = int(patch["daily_proactive_limit"])
-        changes.append("daily_proactive_limit")
     if not changes:
         raise ValueError("未提供可修改的核心设置字段")
     return await _commit_settings(plugin, cand, expected_version=expected_version, author=author, changes=changes, caller_ident=caller_ident)
@@ -475,7 +472,7 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
     if op == "list":
         skills = [s["skill_id"] if isinstance(s, dict) else str(s) for s in await completed_thread(plugin.memory.skills)]
         pids = sorted(p.name for p in plugin.profiles.path.iterdir() if p.is_dir() and not path_is_link_like(p))
-        return {"kind": "file", "files": ["JOURNAL.md", "HEARTBEAT.md", "TOOLS.md", "MEMORY.md", *(f"profiles/{p}/MEMORY.md" for p in pids), *(f"profiles/{p}/NOTES.md" for p in pids), *(f"skills/{s}/SKILL.md" for s in skills)]}
+        return {"kind": "file", "files": ["PLANNER.md", "JOURNAL.md", "HEARTBEAT.md", "TOOLS.md", "MEMORY.md", *(f"profiles/{p}/MEMORY.md" for p in pids), *(f"profiles/{p}/NOTES.md" for p in pids), *(f"skills/{s}/SKILL.md" for s in skills)]}
     f_kind, f_target, f_doc = _resolve_file_route(kind, target, document)
     if f_kind == "tools":
         return await completed_thread(_tools_file_op, plugin, op, content, version, expected_version, author, _assert_no_secret)
@@ -507,13 +504,13 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
         else:
             raise ValueError("patch 需要提供 append、old_string/new_string 或 content")
         _assert_no_secret(plugin, next_text, f_doc or f_kind)
-        res = await completed_thread(plugin.memory.write, f_kind, next_text, expected_version=cur_ver, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=True)
+        res = await completed_thread(plugin.memory.write, f_kind, next_text, expected_version=cur_ver, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=f_kind != "planner")
         return {**res, "previous_version": cur_ver, "rollback_hint": f"maisya_shape(action='{f_kind}', op='rollback', target='{f_target}', version={cur_ver}, expected_version={res['version']})"}
     if op == "write":
         if expected_version is None:
             raise ValueError("覆写文档必须提供 expected_version")
         _assert_no_secret(plugin, content, f_doc or f_kind)
-        res = await completed_thread(plugin.memory.write, f_kind, content, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=True)
+        res = await completed_thread(plugin.memory.write, f_kind, content, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=f_kind != "planner")
         return {**res, "previous_version": int(expected_version), "rollback_hint": f"maisya_shape(action='file', op='rollback', document='{document or f_doc}', version={expected_version}, expected_version={res['version']})"}
     if op == "rollback":
         if version is None or expected_version is None:
@@ -532,13 +529,8 @@ async def build_overview(plugin, *, current_chat_id: str = "", current_platform:
     return {
         "kind": "overview", "plugin_enabled": bool(plugin.settings.plugin.enabled), "known_chats": known_chats, "admins": eff_admins,
         "vault_aliases": vault_aliases,
-        "heartbeat": {
-            "enabled": bool(getattr(plugin.settings, "heartbeat_enabled", True)),
-            "interval_minutes": int(getattr(plugin.settings, "heartbeat_interval_minutes", 60)),
-            "sleep_window": str(getattr(plugin.settings, "sleep_window", "")),
-            "daily_proactive_limit": int(getattr(plugin.settings, "daily_proactive_limit", 1)),
-            "content": str(hb_doc.get("content") or "")[:1200],
-        },
+        "heartbeat": heartbeat_overview(plugin, str(hb_doc.get("content") or ""), current_chat_id),
+        "planner_manual": await completed_thread(planner_manual_check, plugin, pids) if getattr(plugin, "memory", None) is not None else {},
         "profiles": [await completed_thread(_profile_summary, plugin, pid) for pid in pids],
         "pending_skill_proposals": [{"proposal_id": p["proposal_id"], "skill_id": p["skill_id"], "title": p["title"]} for p in (await completed_thread(plugin.memory.list_skill_proposals, status="pending", limit=10) if getattr(plugin, "memory", None) is not None else [])],
         "intents": [{"intent_id": r["intent_id"], "mode": r.get("mode", "schedule"), "condition": r.get("condition", ""), "due_at": r["due_at"], "last_checked_at": r.get("last_checked_at"), "last_triggered_at": r.get("last_triggered_at")} for r in pending],
@@ -553,7 +545,7 @@ async def execute_shape(
 ) -> dict:
     del url, preview_token
     act, knd = str(action or "").strip().lower(), str(kind or "").strip().lower()
-    file_areas = {"file", "memory", "role_memory", "notes", "journal", "heartbeat", "tools", "skill"}
+    file_areas = {"file", "memory", "role_memory", "notes", "journal", "heartbeat", "tools", "skill", "planner"}
     top_areas = {"overview", "setup", "settings", "profile", "digest_sources", "services", "skill_proposal", *file_areas}
     if act in top_areas and (not knd or knd == act):
         area = act

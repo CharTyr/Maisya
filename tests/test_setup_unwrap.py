@@ -115,7 +115,7 @@ async def test_shape_settings_write_via_json_content_and_rollback(tmp_path):
         base_ver = state["version"]
         candidate = dict(state["settings"])
         candidate["sleep_window"] = "01-08"
-        candidate["daily_proactive_limit"] = 3
+        candidate["daily_proactive_limit"] = 5
 
         written = await plugin.shape_tool(
             action="settings",
@@ -128,7 +128,7 @@ async def test_shape_settings_write_via_json_content_and_rollback(tmp_path):
         )
         assert written["success"] is True, written
         assert plugin.settings.sleep_window == "01-08"
-        assert plugin.settings.daily_proactive_limit == 3
+        assert plugin.settings.daily_proactive_limit == 5
 
         rolled = await plugin.shape_tool(
             action="settings",
@@ -141,6 +141,6 @@ async def test_shape_settings_write_via_json_content_and_rollback(tmp_path):
         )
         assert rolled["success"] is True, rolled
         assert plugin.settings.sleep_window == ""
-        assert plugin.settings.daily_proactive_limit == 1
+        assert plugin.settings.daily_proactive_limit == 3
     finally:
         await plugin.on_unload()

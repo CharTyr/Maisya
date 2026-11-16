@@ -134,6 +134,8 @@ async def test_multiple_explicit_revisions_trigger_one_bounded_generic_note(tmp_
         if name == "web.search":
             return {"success": True, "result": {"text": "verified"}}
         if arguments["max_tokens"] == 500:
+            if "调度手册" in str(arguments.get("prompt", "")):
+                return {"response": '{"title":"","lesson":"","rationale":""}'}
             extracted.append(arguments)
             return {"response": '{"note":"反复调整方向时，先确认目标再选择工具。"}'}
         turns += 1

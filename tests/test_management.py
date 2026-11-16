@@ -527,8 +527,8 @@ async def test_management_proactive_quota_and_intent_metadata(tmp_path):
     try:
         settings_res = await plugin.manage_read("settings")
         memory_res = await plugin.manage_read("memory")
-        assert settings_res["proactive_quota"] == {"used": 0, "limit": 1, "remaining": 1}
-        assert memory_res["proactive_quota"] == {"used": 0, "limit": 1, "remaining": 1}
+        assert settings_res["proactive_quota"] == {"used": 0, "limit": 3, "remaining": 3}
+        assert memory_res["proactive_quota"] == {"used": 0, "limit": 3, "remaining": 3}
 
         now = plugin.intents.clock()
         active_intent = plugin.intents.schedule(
@@ -550,17 +550,17 @@ async def test_management_proactive_quota_and_intent_metadata(tmp_path):
 
         settings_after = await plugin.manage_read("settings")
         memory_after = await plugin.manage_read("memory")
-        assert settings_after["proactive_quota"] == {"used": 1, "limit": 1, "remaining": 0}
-        assert memory_after["proactive_quota"] == {"used": 1, "limit": 1, "remaining": 0}
+        assert settings_after["proactive_quota"] == {"used": 1, "limit": 3, "remaining": 2}
+        assert memory_after["proactive_quota"] == {"used": 1, "limit": 3, "remaining": 2}
 
         new_cfg = dict(settings_after["settings"])
-        new_cfg["daily_proactive_limit"] = 3
+        new_cfg["daily_proactive_limit"] = 5
         saved_cfg = await plugin.manage_write(
             "settings",
             json.dumps({"settings": new_cfg, "expected_version": settings_after["version"]}),
         )
         assert saved_cfg["success"]
-        assert saved_cfg["proactive_quota"] == {"used": 1, "limit": 3, "remaining": 2}
+        assert saved_cfg["proactive_quota"] == {"used": 1, "limit": 5, "remaining": 4}
 
         zero_cfg = dict(saved_cfg["settings"])
         zero_cfg["daily_proactive_limit"] = 0

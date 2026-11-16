@@ -350,6 +350,7 @@ class MemoryLayers:
         _HISTORICAL_HEARTBEAT_HASHES = frozenset(
             {
                 "135cfc4e35db5f453945125b1c2cea5ff596c73937d57e24b41d6cd4ec8b6ffd",
+                "d85dfbc3ee5cafec2901707b45c588f9e6cd07c0d642f0f631059e567eb5bd74",
             }
         )
 
@@ -408,6 +409,44 @@ class MemoryLayers:
                 heartbeat_preset.read_bytes(),
                 known_hashes=_HISTORICAL_HEARTBEAT_HASHES,
             )
+
+        planner_preset = PRESETS_DIR / "planner/PLANNER.md"
+        if planner_preset.is_file() and not path_is_link_like(planner_preset):
+            planner_asset, planner_path, planner_doc, planner_target = self._locate(
+                "planner"
+            )
+            preset_bytes = planner_preset.read_bytes()
+            if not planner_path.exists() and not path_is_link_like(planner_path):
+                atomic_private_write(planner_path, preset_bytes)
+            else:
+                _sync_unedited_preset(
+                    planner_asset,
+                    planner_path,
+                    preset_bytes,
+                )
+            with store.connect() as db, db:
+                has_planner_ver = db.execute(
+                    "SELECT 1 FROM memory_versions WHERE asset=? LIMIT 1",
+                    (planner_asset,),
+                ).fetchone()
+                if (
+                    has_planner_ver is None
+                    and planner_path.is_file()
+                    and not path_is_link_like(planner_path)
+                ):
+                    cur_bytes = self._bytes(planner_path, max_bytes=131072)
+                    if cur_bytes == preset_bytes:
+                        self._record(
+                            db,
+                            planner_asset,
+                            0,
+                            "planner",
+                            planner_target,
+                            "",
+                            planner_doc,
+                            cur_bytes.decode("utf-8"),
+                            "preset",
+                        )
 
         skills_presets = PRESETS_DIR / "skills"
         if skills_presets.is_dir() and not path_is_link_like(skills_presets):
@@ -636,6 +675,9 @@ class MemoryLayers:
                 "JOURNAL.md" if kind == "journal" else "HEARTBEAT.md",
             )
             directory = self.root / "memory/self"
+        elif kind == "planner":
+            target, document = "self", "PLANNER.md"
+            directory = self.root / "abilities/planner"
         else:
             raise ValueError("未知记忆层")
         base_root = (
@@ -685,6 +727,7 @@ class MemoryLayers:
         "journal": 8000,
         "notes": 16000,
         "heartbeat": 16000,
+        "planner": 6000,
     }
 
     def _guard(self, kind, content, chat_id, document="", *, allow_custom=False):
@@ -868,14 +911,14 @@ class MemoryLayers:
         document="",
         version=None,
         allow_custom=False,
+        db=None,
     ):
-        with self._lock(), self.store.connect() as db, db:
-            db.execute("BEGIN IMMEDIATE")
+        def _read_with_db(conn):
             current, asset, _path = self._sync(
-                db, kind, target, chat_id, document, allow_custom=allow_custom
+                conn, kind, target, chat_id, document, allow_custom=allow_custom
             )
             if version is not None:
-                old = db.execute(
+                old = conn.execute(
                     "SELECT content,version FROM memory_versions WHERE asset=? AND version=?",
                     (asset, version),
                 ).fetchone()
@@ -887,7 +930,7 @@ class MemoryLayers:
                 existing = [
                     cid
                     for cid in self._memory_alias_ids(chat_id)
-                    if self._has_memory_data(cid, db=db)
+                    if self._has_memory_data(cid, db=conn)
                 ]
                 if len(existing) > 1:
                     other_entries: list[tuple[tuple[float, int], str]] = []
@@ -897,7 +940,7 @@ class MemoryLayers:
                         if other_asset == asset:
                             continue
                         other_doc, synced_asset, _ = self._sync(
-                            db,
+                            conn,
                             "memory",
                             "",
                             cid,
@@ -908,7 +951,7 @@ class MemoryLayers:
                         if other_doc.get("content"):
                             other_entries.append(
                                 (
-                                    self._alias_recency_key(db, cid, synced_asset),
+                                    self._alias_recency_key(conn, cid, synced_asset),
                                     other_doc["content"],
                                 )
                             )
@@ -920,6 +963,12 @@ class MemoryLayers:
                         )
                         current = {**current, "content": merged}
             return current
+
+        if db is not None:
+            return _read_with_db(db)
+        with self._lock(), self.store.connect() as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return _read_with_db(conn)
 
     def preset_skills(self) -> set[str]:
         skills_presets = PRESETS_DIR / "skills"
@@ -1643,7 +1692,13 @@ class MemoryLayers:
         rationale: str = "",
     ) -> dict:
         clean_id = _slug_skill_id(skill_id) or f"workflow-{hashlib.sha1(str(thread_id).encode()).hexdigest()[:8]}"
-        self._guard("skill", content, "", allow_custom=True)
+        is_planner = str(profile_id or "").strip() == "planner" or clean_id == "planner-manual"
+        self._guard(
+            "planner" if is_planner else "skill",
+            content,
+            "",
+            allow_custom=not is_planner,
+        )
         now = float(self.clock())
         prop_id = f"sp_{hashlib.sha1(f'{thread_id}:{revision}:{clean_id}'.encode('utf-8')).hexdigest()[:12]}"
         sig_json = json.dumps(list(signals or []), ensure_ascii=False)
@@ -1970,8 +2025,15 @@ class MemoryLayers:
         return _render(days)[:limit]
 
     def context(self, chat_id):
-        memory = self.read("memory", chat_id=chat_id)["content"] if chat_id else ""
-        journal = self.read("journal")
+        with self._lock(), self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            memory = (
+                self.read("memory", chat_id=chat_id, db=db)["content"]
+                if chat_id
+                else ""
+            )
+            journal = self.read("journal", db=db)
+            heartbeat = self.read("heartbeat", db=db)["content"]
         recent = self._recent_journal(journal["content"])
         if recent != journal["content"]:
             try:
@@ -1986,7 +2048,7 @@ class MemoryLayers:
         return {
             "memory": memory,
             "journal": recent,
-            "heartbeat": self.read("heartbeat")["content"],
+            "heartbeat": heartbeat,
         }
 
     def methods(self, profile):

@@ -172,32 +172,31 @@
         <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <div class="ms-entry-meta">
             <strong class="ms-entry-title">自主闲暇心跳</strong>
-            <span class="mil-hint" id="set-hb-enabled-txt">已开启</span>
+            <span class="mil-hint" id="set-hb-effective-txt">关闭</span>
           </div>
-          <div class="mil-row" style="gap:8px;align-items:center">
+          <div class="mil-row" style="gap:8px;align-items:center;flex-wrap:wrap">
+            <div class="mil-seg" id="set-hb-mode-seg" role="group" aria-label="闲暇心跳档位">
+              <button type="button" class="mil-key mil-key--sm" data-hb-mode="off" aria-pressed="true">关</button>
+              <button type="button" class="mil-key mil-key--sm" data-hb-mode="gentle" aria-pressed="false">克制</button>
+              <button type="button" class="mil-key mil-key--sm" data-hb-mode="lively" aria-pressed="false">活泼</button>
+            </div>
             <button type="button" class="mil-key mil-key--sm" id="set-goto-heartbeat">编辑心跳说明</button>
-            <label class="mil-switch">
-              <input type="checkbox" id="set-hb-enabled" checked aria-label="开启自主闲暇心跳" />
-              <span class="mil-switch-track"></span>
-            </label>
           </div>
         </div>
         <div class="mil-grid-2">
           <div class="mil-field">
-            <label class="mil-label" for="set-hb-interval">心跳间隔</label>
-            <select class="mil-select" id="set-hb-interval">
-              <option value="30">每 30 分钟</option>
-              <option value="60">每 1 小时</option>
-              <option value="120" selected>每 2 小时（默认）</option>
-              <option value="240">每 4 小时</option>
-            </select>
+            <div class="mil-row" style="gap:6px;align-items:center">
+              <label class="mil-label" for="set-daily-limit">全局每日主动上限</label>
+              <button type="button" class="mil-help" data-help="所有会话每天主动发起搭话的全局总上限（0~50），填 0 表示平时不主动搭话，仅按计划任务响应。" aria-label="全局每日主动上限说明">?</button>
+            </div>
+            <input type="number" class="mil-input num" id="set-daily-limit" min="0" max="50" step="1" value="3" />
           </div>
           <div class="mil-field">
             <div class="mil-row" style="gap:6px;align-items:center">
-              <label class="mil-label" for="set-daily-limit">每日主动搭话上限</label>
-              <button type="button" class="mil-help" data-help="普通闲聊每天主动惦记搭话的次数上限（0~50），填 0 表示平时不主动搭话，仅按计划任务响应。" aria-label="每日主动搭话上限说明">?</button>
+              <label class="mil-label" for="set-per-chat-limit">单会话每日主动上限</label>
+              <button type="button" class="mil-help" data-help="单个群聊或私聊每天最多收到的主动搭话次数（0~10，同一好友跨标识合并计算）。" aria-label="单会话每日主动上限说明">?</button>
             </div>
-            <input type="number" class="mil-input num" id="set-daily-limit" min="0" max="50" step="1" value="1" />
+            <input type="number" class="mil-input num" id="set-per-chat-limit" min="0" max="10" step="1" value="1" />
           </div>
         </div>
         <div class="mil-field">
@@ -211,6 +210,25 @@
             <input type="text" class="mil-input mono" id="set-sleep-end" placeholder="08:00" maxlength="5" aria-label="免打扰结束时间" style="flex:1 1 0;min-width:0" autocorrect="off" autocapitalize="none" spellcheck="false" />
           </div>
         </div>
+        <details class="mil-field" id="set-hb-adv">
+          <summary class="mil-label" style="cursor:pointer">高级覆盖（0 = 跟随档位）</summary>
+          <div class="mil-grid-2" style="margin-top:8px">
+            <div class="mil-field">
+              <div class="mil-row" style="gap:6px;align-items:center">
+                <label class="mil-label" for="set-hb-interval">高级：间隔覆盖（分钟）</label>
+                <button type="button" class="mil-help" data-help="0 = 跟随档位（克制 180 分钟 / 活泼 90 分钟）；也可填入 30~1440 分钟覆盖基准间隔。" aria-label="心跳间隔覆盖说明">?</button>
+              </div>
+              <input type="number" class="mil-input num" id="set-hb-interval" min="0" max="1440" step="5" value="0" />
+            </div>
+            <div class="mil-field">
+              <div class="mil-row" style="gap:6px;align-items:center">
+                <label class="mil-label" for="set-longing">高级：久违问候安静阈值（小时）</label>
+                <button type="button" class="mil-help" data-help="0 = 跟随档位（克制 72 小时 / 活泼 24 小时）；设为 12-720 时，熟人会话安静超过设定小时数后才可能温柔打招呼。" aria-label="久违问候阈值说明">?</button>
+              </div>
+              <input type="number" class="mil-input num" id="set-longing" min="0" max="720" step="1" value="0" />
+            </div>
+          </div>
+        </details>
       </div>
 
       <div class="mil-grid-2">
