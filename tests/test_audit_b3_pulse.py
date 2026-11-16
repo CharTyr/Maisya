@@ -364,7 +364,7 @@ def test_all_bundled_presets_auto_upgrade_and_preserve_manual_edits(
     # Part 1: Unique default preset loads complete toolsets and preserves manual profile.toml edits
     profiles_dir = tmp_path / "abilities/profiles"
     upgraded_profiles = Profiles(profiles_dir)
-    assert [p.id for p in upgraded_profiles.list_profiles()] == ["default"]
+    assert [p.id for p in upgraded_profiles.list_profiles()] == ["default", "digest", "scout"]
     default_prof = upgraded_profiles.get("default")
     assert "person_read" in default_prof.tools and "recall_read" in default_prof.tools
     assert "render_report" in default_prof.tools and "workspace_file" in default_prof.tools

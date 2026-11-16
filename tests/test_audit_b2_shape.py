@@ -215,7 +215,7 @@ async def test_b2_skill_file_read_delete_frontmatter_and_secret(tmp_path):
 async def test_b2_shaping_rejects_removed_areas_and_enforces_file_optimistic_lock(tmp_path):
     plugin = await loaded(tmp_path, ["qq:group:100246809"])
     try:
-        for removed in ("setup", "webhooks", "services", "recipe", "digest_sources"):
+        for removed in ("webhooks", "recipe"):
             with pytest.raises(ValueError, match="已收敛移除"):
                 await execute_shape(plugin, action=removed, admin_verified=True)
 

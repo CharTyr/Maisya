@@ -17,7 +17,7 @@ from test_foundation import loaded
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = REPO_ROOT / "webui"
 COMPILED_PAGES = ("now",)
-ALL_TABS = ("now", "profiles", "library", "settings")
+ALL_TABS = ("now", "profiles", "skills", "library", "settings")
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 
 HOST_CSP_META = (
@@ -448,7 +448,7 @@ async def test_webui_v26_theme_toggle_icons_and_flow_isolation(tmp_path):
 
                         if viewport_name == "mobile":
                             await expect(page.locator("#ms-mob-dock")).to_be_visible()
-                            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+                            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 5
 
                         # 1) Millennium + Light
                         await _audit_rendered_page(page, tab_name, "millennium", "light", viewport_name)
@@ -584,14 +584,15 @@ api_provider = "DemoProvider"
                 await page.locator("#lib-copy").click()
                 await page.locator("#lib-drawer-close").click()
 
-                # --- 2) Desktop 1440x900: Profiles Hermes primary & model selector ---
-                await page.locator('[data-nav="profiles"]').click()
+                # --- 2) Desktop 1440x900: Abilities -> Profiles Hermes primary & model selector ---
+                await page.locator('[data-nav="abilities"]').click()
                 await page.locator('#pr-roster [data-pick-profile-id="default"]').click()
                 await page.locator("#pr-adv-toggle").click()
-                await expect(page.locator("select#pr-model")).to_be_visible()
-                await expect(page.locator("select#pr-model")).to_contain_text("demo-reasoner-v2")
-                await expect(page.locator("select#pr-model")).to_contain_text("demo-fast-v3")
-                await page.locator("select#pr-model").select_option("demo-reasoner-v2")
+                await page.locator("#pr-model-add-btn").click()
+                await expect(page.locator("#pr-model-groups")).to_be_visible()
+                await expect(page.locator("#pr-model-groups")).to_contain_text("demo-reasoner-v2")
+                await expect(page.locator("#pr-model-groups")).to_contain_text("demo-fast-v3")
+                await page.locator('#pr-model-groups [data-pick-model="demo-reasoner-v2"]').click()
                 await page.locator('[data-pr-tab="abilities"]').click()
                 await expect(page.locator("#pr-ability-cards")).to_be_visible()
                 await page.locator("#pr-btn-save").click()

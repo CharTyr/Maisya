@@ -200,12 +200,12 @@ async def test_playwright_fish_avatars_4_pages_and_mobile_carousel(tmp_path):
             # 1) 现场页：线程列表与选中标题旁显示像素鱼，标题内无 svg，全局无 <img>
             await page.wait_for_selector("#now-threads svg.fish")
             await page.wait_for_selector("#now-sel-fish svg.fish")
-            await expect(page.locator("#now-sel-title")).to_have_text(row["thread_id"])
+            await expect(page.locator("#now-sel-title")).to_have_text("小鱼头像联合验证")
             assert await page.locator("#now-sel-title svg").count() == 0
             assert await page.locator("img").count() == 0
 
             # 2) 能力页：桌面列表、锁外形定制（12 物种 + 18 配色）、随机与自动恢复
-            await page.click('[data-nav="profiles"]')
+            await page.click('[data-nav="abilities"]')
             await page.wait_for_selector(
                 '#pr-roster [data-pick-profile-id="default"] svg.fish'
             )
@@ -233,8 +233,11 @@ async def test_playwright_fish_avatars_4_pages_and_mobile_carousel(tmp_path):
             saved_seed = plugin.profiles.get("default").fish_seed
             assert re.match(r"^c-disc-5-", saved_seed)
 
+            await expect(page.locator("#pr-fish-box")).not_to_contain_text("形象标识小鱼")
+            await expect(page.locator("#pr-fish-box")).not_to_contain_text("自动按档案名稳定生成像素鱼")
             await page.click('#pr-fish-mode [data-fish-mode="random"]')
-            await expect(page.locator("#pr-fish-summary")).to_contain_text("随机种子")
+            help_random = await page.locator("#pr-fish-help").get_attribute("data-help")
+            assert help_random and "随机" in help_random
             saves_before = len(profile_saves)
             details_before = len(profile_reads)
             await page.click("#pr-btn-save")
@@ -244,9 +247,8 @@ async def test_playwright_fish_avatars_4_pages_and_mobile_carousel(tmp_path):
             assert rerolled and not rerolled.startswith("c-")
 
             await page.click('#pr-fish-mode [data-fish-mode="auto"]')
-            await expect(page.locator("#pr-fish-summary")).to_contain_text(
-                "自动按档案名稳定生成像素鱼"
-            )
+            help_auto = await page.locator("#pr-fish-help").get_attribute("data-help")
+            assert help_auto and "自动" in help_auto
             saves_before = len(profile_saves)
             details_before = len(profile_reads)
             await page.click("#pr-btn-save")
@@ -265,7 +267,7 @@ async def test_playwright_fish_avatars_4_pages_and_mobile_carousel(tmp_path):
 
             # 4) 窄屏移动端：#mob-role-carousel 像素鱼轮播 + #ab-mob-role-card1 回归检查
             await page.set_viewport_size({"width": 390, "height": 844})
-            await page.click('.ms-mob-dock [data-mob-nav="profiles"]')
+            await page.click('.ms-mob-dock [data-mob-nav="abilities"]')
             await page.wait_for_selector("#mob-role-carousel svg.fish")
             await expect(page.locator("#mob-role-carousel")).to_be_visible()
             await expect(page.locator("#ab-mob-role-card1")).to_be_visible()

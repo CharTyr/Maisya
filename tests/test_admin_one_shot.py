@@ -489,8 +489,8 @@ async def test_wall_clock_drift_free_reschedule_and_admin_workflow_guard(tmp_pat
     try:
         alice_ev = _group_msg("m-alice-wf", "每天早上八点半发简报", user_id="Alice")
         await plugin.after_receive(message=alice_ev)
-        # Create digest role from default
-        plugin.profiles.clone("default", "digest")
+        # Enable built-in digest role
+        plugin.profiles.update("digest", enabled=True)
 
         res = await plugin.later_tool(
             action="schedule",

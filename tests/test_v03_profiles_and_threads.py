@@ -56,14 +56,14 @@ def _make_zip(entries: dict[str, bytes | str]) -> bytes:
 
 def test_presets_converged_to_single_default_and_legacy_aliases(tmp_path):
     presets_dir = _repo_root() / "presets" / "profiles"
-    assert (presets_dir / "default" / "profile.toml").is_file()
-    assert (presets_dir / "default" / "PROFILE.md").is_file()
-    for removed in ("scout", "maker", "digest"):
-        assert not (presets_dir / removed).exists()
+    for builtin_id in ("default", "scout", "digest"):
+        assert (presets_dir / builtin_id / "profile.toml").is_file()
+        assert (presets_dir / builtin_id / "PROFILE.md").is_file()
+    assert not (presets_dir / "maker").exists()
 
     profiles = Profiles(tmp_path / "profiles")
     listed_ids = [p.id for p in profiles.list_profiles()]
-    assert listed_ids == ["default"]
+    assert listed_ids == ["default", "digest", "scout"]
 
     default = profiles.get("default")
     assert default.id == "default"
@@ -72,15 +72,15 @@ def test_presets_converged_to_single_default_and_legacy_aliases(tmp_path):
     assert default.session_mode in {"ephemeral", "task"}
     assert set(default.toolsets) == {"context", "web", "workspace", "exec", "schedule"}
 
-    # Clean cutover fallback for deleted legacy preset IDs without exposing them in list
-    for legacy_id in ("scout", "maker", "digest"):
-        aliased = profiles.get(legacy_id)
-        assert aliased.id == "default"
-        assert aliased.toolsets == default.toolsets
-    assert [p.id for p in profiles.list_profiles()] == ["default"]
+    # maker redundant preset aliases cleanly to default
+    aliased = profiles.get("maker")
+    assert aliased.id == "default"
+    assert aliased.toolsets == default.toolsets
+    assert [p.id for p in profiles.list_profiles()] == ["default", "digest", "scout"]
 
-    with pytest.raises(ValueError):
-        profiles.delete("default")
+    for protected_id in ("default", "scout", "digest"):
+        with pytest.raises(ValueError):
+            profiles.delete(protected_id)
 
 
 def test_toolsets_definition_and_validation(tmp_path):
@@ -144,8 +144,8 @@ def test_hermes_profile_crud_autogen_and_150_line_limit(tmp_path):
     assert "context" in keeper.instructions or "workspace" in keeper.instructions
     assert len(keeper.instructions.splitlines()) <= 150
 
-    # List includes default + custom
-    assert sorted(p.id for p in profiles.list_profiles()) == ["coc-keeper", "default"]
+    # List includes built-in presets + custom
+    assert sorted(p.id for p in profiles.list_profiles()) == ["coc-keeper", "default", "digest", "scout"]
 
     # Boundary: exactly 150 lines succeeds, 151 lines fails
     exact_150 = "\n".join(f"规则条目 {i}" for i in range(150))

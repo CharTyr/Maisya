@@ -127,8 +127,9 @@ async def test_planner_keeps_native_and_third_party_and_does_not_start_for_chat(
 async def test_admin_profile_hidden_and_execution_rechecks_source(tmp_path):
     plugin = await loaded(tmp_path, ["qq:Alice"])
     plugin.ctx.call_capability = llm_rpc
-    config = plugin.profiles.path / "default/profile.toml"
-    config.write_text('access="admins"\nenvironment="readonly"', encoding="utf-8")
+    for pid in ("default", "scout"):
+        config = plugin.profiles.path / f"{pid}/profile.toml"
+        config.write_text('access="admins"\nenvironment="readonly"', encoding="utf-8")
     msg_id = await source(plugin, user="Mallory")
     tools = [
         {"name": "reply"},

@@ -120,7 +120,7 @@ class HostContract(unittest.TestCase):
                     catalog = await plugin.manage_read("abilities")
                     self.assertEqual(
                         {p["id"] for p in catalog["profiles"]},
-                        {"default"},
+                        {"default", "scout", "digest"},
                     )
                     cloned = await plugin.manage_write(
                         "clone", '{"base":"default","target":"traveler"}'

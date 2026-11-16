@@ -192,10 +192,8 @@ async def test_scout_step_injects_beijing_date_and_schemas_have_no_unions(tmp_pa
         assert isinstance(comp_info.parameters_raw, dict)
         action_enum = set(comp_info.parameters_raw["properties"]["action"]["enum"])
         kind_enum = set(comp_info.parameters_raw["properties"]["kind"]["enum"])
-        assert {"overview", "settings", "profile", "file"}.issubset(action_enum)
-        assert {"overview", "settings", "profile", "file"}.issubset(kind_enum)
-        assert "setup" not in action_enum
-        assert "setup" not in kind_enum
+        assert {"overview", "setup", "settings", "profile", "file"}.issubset(action_enum)
+        assert {"overview", "setup", "settings", "profile", "file"}.issubset(kind_enum)
         assert _find_schema_union_types(comp_info.parameters_raw) == []
 
         rejected = await plugin.shape_tool(
@@ -215,7 +213,7 @@ async def test_scout_step_injects_beijing_date_and_schemas_have_no_unions(tmp_pa
         )
         assert res_overview["success"] is True
         assert res_overview["kind"] == "overview"
-        assert [p["profile_id"] for p in res_overview["profiles"]] == ["default"]
+        assert [p["profile_id"] for p in res_overview["profiles"]] == ["default", "digest", "scout"]
     finally:
         await plugin.on_unload()
 

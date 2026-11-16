@@ -161,7 +161,8 @@ def test_compact_never_drops_latest_oversized_tool_block(tmp_path, max_chars):
 async def test_digest_collect_bounds_payload_and_concurrent_add_feed_no_clobber(tmp_path):
     plugin = await loaded(tmp_path / "digest_bounds")
     try:
-        plugin.profiles.clone("default", "digest")
+        if not (plugin.profiles.path / "digest").is_dir():
+            plugin.profiles.clone("default", "digest")
         cur = plugin.memory.read("profile", target="digest", document="profile.toml")
         plugin.memory.write(
             "profile",

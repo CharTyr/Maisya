@@ -600,7 +600,7 @@ async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
                 """() => {
                   document.querySelector('[data-nav="library"]')?.click();
                   setTimeout(() => document.querySelector('[data-nav="settings"]')?.click(), 10);
-                  setTimeout(() => document.querySelector('[data-nav="profiles"]')?.click(), 20);
+                  setTimeout(() => document.querySelector('[data-nav="abilities"]')?.click(), 20);
                   setTimeout(() => document.querySelector('[data-nav="now"]')?.click(), 30);
                 }"""
             )

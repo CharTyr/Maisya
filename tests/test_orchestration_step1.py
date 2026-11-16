@@ -50,7 +50,7 @@ def test_presets_complete_builtin_tools_and_silent_out_of_box_heartbeat(tmp_path
     from maisya.vault import Vault
 
     profiles = Profiles(tmp_path / "profiles")
-    assert [p.id for p in profiles.list()] == ["default"]
+    assert [p.id for p in profiles.list()] == ["default", "digest", "scout"]
     default_prof = profiles.get("default")
     assert "person_read" in default_prof.tools
     assert "recall_read" in default_prof.tools

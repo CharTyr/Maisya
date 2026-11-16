@@ -118,7 +118,7 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                     '<head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; connect-src \'none\'; img-src data: blob:">',
                 )
                 await page.set_content(document, wait_until="domcontentloaded")
-                await expect(page.locator("#now-sel-title")).to_have_text(second["thread_id"])
+                await expect(page.locator("#now-sel-title")).to_have_text("另一个探索")
                 await expect(
                     page.locator(f'#now-threads [data-thread-id="{second["thread_id"]}"]')
                 ).to_contain_text("另一个探索")
@@ -136,7 +136,7 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
 
                 # 切换至第一个线程并校验 XSS 转义、Muse 步骤链与单步详情
                 await page.locator(f'#now-threads [data-thread-id="{first["thread_id"]}"]').click()
-                await expect(page.locator("#now-sel-title")).to_have_text(first["thread_id"])
+                await expect(page.locator("#now-sel-title")).to_contain_text("探索 <img")
                 await expect(
                     page.locator(f'#now-threads [data-thread-id="{first["thread_id"]}"]')
                 ).to_contain_text("探索 <img")
@@ -172,27 +172,41 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 )
                 await expect(page.locator("#now-note-input")).to_have_value("")
 
-                # 从现场直接发起新线程并在运行中点击停止按钮（进入 idle 可续态）
+                # 从现场富选项框直接发起新线程并在运行中停止，随后直接发补充说明自动唤醒（无多余「恢复继续」按钮）
                 cap_hold = True
                 await page.locator("#launch-wrap > summary").click()
-                await page.locator("#launch-profile").fill("default")
-                await page.locator("#launch-chat").fill("chat")
+                await page.locator("#launch-profile-trigger").click()
+                await page.locator('[data-launch-pick-profile="default"]').click()
+                await page.locator("#launch-chat-trigger").click()
+                await page.locator('[data-launch-pick-chat="chat"]').click()
                 await page.locator("#launch-prompt").fill("从现场直接发起的新工作流")
                 await page.locator("#launch-run").click()
                 await expect(page.locator("#launch-feedback")).to_have_text("已提交发起")
                 await asyncio.wait_for(cap_entered.wait(), 5)
-                await page.locator("#now-threads [data-thread-id]").filter(
+                launched_card = page.locator("#now-threads [data-thread-id]").filter(
                     has_text="从现场直接发起的新工作流"
-                ).first.click()
+                ).first
+                launched_tid = await launched_card.get_attribute("data-thread-id")
+                await launched_card.click()
                 await expect(page.locator("#now-stop-btn")).to_be_visible()
                 await page.locator("#now-stop-btn").click()
                 await expect(page.locator('#feedback[data-feedback-slot="now"]')).to_contain_text(
                     "已请求停止"
                 )
-                await expect(page.locator("#now-reopen-btn")).to_be_visible()
+                assert await page.locator("#now-reopen-btn").count() == 0
+                assert await page.locator("[data-thread-reopen]").count() == 0
                 cap_hold = False
                 cap_gate.set()
                 await plugin.engine.drain()
+                await page.locator("#now-note-input").fill("已停止线程直接发消息自动继续")
+                await page.locator("#now-note-send").click()
+                await expect(page.locator('#feedback[data-feedback-slot="now"]')).to_have_text(
+                    "补充说明已送入线程"
+                )
+                await plugin.engine.drain()
+                assert "已停止线程直接发消息自动继续" in str(
+                    plugin.threads.get(launched_tid, "chat")["history"]
+                )
 
                 # v0.3 不再存在旧 01->04 FLOW 或页面副标题，帮助气泡可键盘关闭
                 assert not errors
@@ -216,13 +230,13 @@ async def test_now_page_real_backend_actions_drafts_theme_and_two_slot_budget(tm
                 await page.locator("#ui-style-toggle").click()
                 assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
 
-                # 窄屏暗色与 4 列移动底栏
+                # 窄屏暗色与 5 列移动底栏
                 await page.set_viewport_size({"width": 390, "height": 844})
                 await page.evaluate(
                     "window.dispatchEvent(new CustomEvent('maibot:context',{detail:{theme:'dark'}}))"
                 )
                 assert "dark" in (await page.locator("html").get_attribute("class") or "").split()
-                assert await page.locator(".ms-mob-dock [data-mob-nav]").count() == 4
+                assert await page.locator(".ms-mob-dock [data-mob-nav]").count() == 5
                 assert await page.evaluate(
                     "document.documentElement.scrollWidth <= window.innerWidth"
                 )
@@ -304,27 +318,33 @@ async def test_now_unified_single_page_in_place_tabs_and_state_boot(tmp_path):
                 )
                 await page.set_content(csp_doc, wait_until="domcontentloaded")
 
-                # 4 页顶栏导航 + 4 列移动底栏
-                assert await page.locator("[data-nav]").count() == 4
-                assert await page.locator(".ms-mob-dock [data-mob-nav]").count() == 4
+                # 5 页顶栏导航 + 5 列移动底栏
+                assert await page.locator("[data-nav]").count() == 5
+                assert await page.locator(".ms-mob-dock [data-mob-nav]").count() == 5
                 await expect(page.locator("#ms-page-title")).to_have_text("现场")
                 await expect(page.locator("#now-threads")).to_contain_text("探索单页四标签页联调")
                 assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
                 await page.locator("#ui-style-toggle").click()
                 assert await page.locator("html").get_attribute("data-ui-style") == "modern"
 
-                # 现场 -> 档案
-                await page.locator('[data-nav="profiles"]').click()
-                await expect(page.locator("#ms-page-title")).to_have_text("档案")
+                # 现场 -> 能力
+                await page.locator('[data-nav="abilities"]').click()
+                await expect(page.locator("#ms-page-title")).to_have_text("能力")
                 await expect(page.locator("#ms-now-view")).to_be_hidden()
                 await expect(page.locator("#pr-roster")).to_be_visible()
                 assert await page.locator("html").get_attribute("data-ui-style") == "modern"
 
-                # 档案 -> 资料库（资料空间 + 系统文件）
+                # 能力 -> 手账
+                await page.locator('[data-nav="memory"]').click()
+                await expect(page.locator("#ms-page-title")).to_have_text("手账")
+                await expect(page.locator("#mem-editor")).to_be_visible()
+
+                # 手账 -> 产物（纯粹产物画廊，不含旧文件系统树）
                 await page.locator('[data-nav="library"]').click()
-                await expect(page.locator("#ms-page-title")).to_have_text("资料库")
+                await expect(page.locator("#ms-page-title")).to_have_text("产物")
                 await expect(page.locator("#lib-gallery-pane")).to_be_visible()
-                await expect(page.locator("#lib-fs-entry")).to_be_visible()
+                await expect(page.locator("#lib-filters")).to_be_visible()
+                assert await page.locator("#lib-fs-entry").count() == 0
                 assert await page.locator("#pr-roster").count() == 0
                 assert await page.locator("html").get_attribute("data-ui-style") == "modern"
 
@@ -363,7 +383,7 @@ async def test_now_unified_single_page_in_place_tabs_and_state_boot(tmp_path):
                     }"""
                 )
                 await state_page.set_content(csp_doc, wait_until="domcontentloaded")
-                await expect(state_page.locator("#ms-page-title")).to_have_text("资料库")
+                await expect(state_page.locator("#ms-page-title")).to_have_text("产物")
                 await expect(state_page.locator("#lib-gallery-pane")).to_be_visible()
                 await expect(state_page.locator("#ms-now-view")).to_be_hidden()
 

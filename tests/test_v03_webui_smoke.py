@@ -36,21 +36,22 @@ def test_build_check_and_static_redlines():
     assert "她" not in html, "发现禁用代词「她」"
     assert "/Users/" not in html, "发现本地路径泄露 /Users/"
 
-    # 默认千禧机械主题 + 4 栏结构 + 移动端鱼轮播标识保留
+    # 默认千禧机械主题 + 5 栏结构 + 移动端鱼轮播标识保留
     assert 'data-theme="millennium"' in html
     assert 'data-ui-style="millennium"' in html
-    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in html
-    for nav_id in ('data-nav="now"', 'data-nav="profiles"', 'data-nav="library"', 'data-nav="settings"'):
+    assert "grid-template-columns: repeat(5, minmax(0, 1fr))" in html
+    for nav_id in ('data-nav="now"', 'data-nav="library"', 'data-nav="abilities"', 'data-nav="memory"', 'data-nav="settings"'):
         assert nav_id in html, f"缺少顶栏导航 {nav_id}"
-    for dock_id in ('data-mob-nav="now"', 'data-mob-nav="profiles"', 'data-mob-nav="library"', 'data-mob-nav="settings"'):
+    for dock_id in ('data-mob-nav="now"', 'data-mob-nav="library"', 'data-mob-nav="abilities"', 'data-mob-nav="memory"', 'data-mob-nav="settings"'):
         assert dock_id in html, f"缺少移动底栏 {dock_id}"
     for fish_sel in ("ab-mob-head", "mob-role-carousel", "mob-role-dots", "ab-mob-role-card1", "data-mob-role-jump"):
         assert fish_sel in html, f"缺少移动端鱼轮播关键标识 {fish_sel}"
 
-    assert (WEBUI / "fragments" / "profiles.html").exists()
     assert (WEBUI / "fragments" / "library.html").exists()
+    assert (WEBUI / "fragments" / "abilities.html").exists()
+    assert (WEBUI / "fragments" / "memory.html").exists()
     assert (WEBUI / "fragments" / "settings.html").exists()
-    for legacy in ("abilities.html", "memory.html", "outputs.html"):
+    for legacy in ("profiles.html", "skills.html", "outputs.html"):
         assert not (WEBUI / "fragments" / legacy).exists(), f"废旧 fragment 未清理: {legacy}"
 
 
@@ -523,8 +524,8 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         )
         assert appr_call and json.loads(appr_call["arg"]["payload"])["decision"] == "session"
 
-        # 4. 档案页：Hermes 渐进式披露 + 150 行计数 + default 删除保护 + 新建/导出/删除
-        page.locator('[data-nav="profiles"]').click()
+        # 4. 能力页：Hermes 渐进式披露 + 150 行计数 + default 删除保护 + 新建/导出/删除
+        page.locator('[data-nav="abilities"]').click()
         page.locator("#pr-id").wait_for(state="visible")
         assert page.locator("#pr-adv-body").is_hidden()
         assert page.locator("#pr-btn-delete").is_disabled()
@@ -534,7 +535,7 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         assert "3 / 150 行" in page.locator("#pr-md-count").inner_text()
         page.locator('[data-pr-tab="abilities"]').click()
         ab_text = page.locator("#pr-pane-abilities").inner_text()
-        assert "5 大工具集" in ab_text
+        assert "系统工具" in ab_text
         assert "github_ro" in ab_text and "search_api" in ab_text
 
         # 新建并删除自定义档案，校验对齐后端字段枚举（无 connectors/chats/thread）
@@ -556,12 +557,16 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         assert isinstance(create_payload["apis"], list)
 
         page.locator("#pr-btn-export").click()
+        page.locator("#pkg-export-download").wait_for(state="visible")
+        page.locator("#pkg-export-download").click()
         page.wait_for_timeout(50)
         page.locator("#pr-btn-delete").click()
         page.wait_for_timeout(80)
 
-        # 5. 资料库页：无 <img>/<iframe> + CSS 图片舞台 + workspace_out -> workspace_file + 系统文件编辑删除
+        # 5. 产物页：无 <img>/<iframe> + CSS 图片舞台 + Markdown 阅读/源码双态切换（无冗余文件系统树）
         page.locator('[data-nav="library"]').click()
+        assert page.locator("#ms-page-title").inner_text() == "产物"
+        assert page.locator("#lib-fs-tree").count() == 0
         page.locator("#lib-gallery .lib-card").first.wait_for(state="visible")
         page.locator("#lib-gallery .lib-card").first.click()
         page.locator("#lib-drawer .lib-img-stage").wait_for(state="visible")
@@ -570,29 +575,26 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         assert "data:image/png;base64," in bg
         assert page.locator("img, iframe").count() == 0
 
-        # 点击工作区产物 -> 验证传给 read("artifact") 的 kind == "workspace_file"
+        # 点击工作区 Markdown 产物 -> 先默认富文本阅读，再切到源码 <pre>
         page.locator("#lib-gallery .lib-card").nth(1).click()
+        page.locator("#lib-stage .lib-md-doc").wait_for(state="visible")
+        assert "工作区文件分块读取" in page.locator("#lib-stage .lib-md-doc").inner_text()
+        page.locator('#lib-view-seg [data-lib-view="raw"]').click()
         page.locator("#lib-stage pre").wait_for(state="visible")
-        assert "工作区文件分块读取" in page.locator("#lib-stage pre").inner_text()
+        assert "# 报告正文" in page.locator("#lib-stage pre").inner_text()
 
-        page.locator('#lib-fs-tree [data-fs-path="MEMORY.md"]').click()
-        page.locator("#lib-fs-editor").wait_for(state="visible")
-        assert page.locator("#lib-fs-delete").is_hidden()
-        page.locator("#lib-fs-editor").fill("# 更新记忆")
-        page.locator("#lib-fs-save").click()
-        page.wait_for_timeout(50)
-        page.locator('#lib-fs-tree [data-fs-path="profiles/custom_probe/note.txt"]').click()
-        page.locator("#lib-fs-delete").wait_for(state="visible")
-        page.locator("#lib-fs-delete").click()
-        page.wait_for_timeout(50)
-
-        # 6. 设置页：4 块结构 + known_chat_specs/list[dict] 会话不显 [object Object] + 防自锁死报错 + Vault 只存不显
+        # 6. 设置页：仅展示已开启聊天流 + 候选器按需展开 + 防自锁死报错 + Vault 只存不显
         page.locator('[data-nav="settings"]').click()
         for blk in ("#set-block-chats", "#set-block-auth", "#set-block-vault", "#set-block-runtime"):
             page.locator(blk).wait_for(state="visible")
         chat_list_txt = page.locator("#set-chat-list").inner_text()
-        assert "qq:group:100246809" in chat_list_txt and "qq:group:200112233" in chat_list_txt
+        assert "100246809" in chat_list_txt
+        assert "200112233" not in chat_list_txt
         assert "object Object" not in chat_list_txt
+        page.locator("#set-open-chat-picker").click()
+        page.locator("#set-chat-cand-list").wait_for(state="visible")
+        cand_txt = page.locator("#set-chat-cand-list").inner_text()
+        assert "200112233" in cand_txt and "object Object" not in cand_txt
         assert page.locator("#set-plugin-enabled").is_checked()
         page.locator("#set-plugin-enabled").uncheck()
         page.wait_for_timeout(60)
@@ -605,10 +607,8 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         page.locator('[data-set-del-admin="qq:private:10001"]').click()
         assert "管理员" in page.locator("#set-admin-err").inner_text()
 
-        # 写入 Vault -> 秘密输入框立即清空、不回显且 fields 仅为字段名数组
+        # 写入密码保险箱 -> 秘密输入框立即清空、不回显
         page.locator("#set-vault-handle").fill("demo_pat")
-        page.locator("#set-vault-label").fill("演示凭据")
-        page.locator("#set-vault-domain").fill("api.example.com")
         page.locator("#set-vault-secret").fill("TOKEN=secret-xyz-999")
         page.locator("#set-vault-save").click()
         page.wait_for_timeout(80)
@@ -620,7 +620,7 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         )
         assert vault_call
         vault_payload = json.loads(vault_call["arg"]["payload"])
-        assert vault_payload["fields"] == ["TOKEN"]
+        assert vault_payload["handle"] == "demo_pat"
 
         assert page.evaluate("() => window.__getPeakInflight()") <= 2
         browser.close()
@@ -643,17 +643,17 @@ def test_mobile_narrow_viewport_fish_carousel_and_4col_dock():
         page.goto(NOW_HTML.as_uri(), wait_until="domcontentloaded")
         page.locator("#now-intents").wait_for(state="visible")
 
-        # 移动底部 4 栏导航可见且无横向溢出
+        # 移动底部 5 栏导航可见且无横向溢出
         dock = page.locator("#ms-mob-dock")
         dock.wait_for(state="visible")
-        assert dock.locator(".ms-mob-dock-btn").count() == 4
+        assert dock.locator(".ms-mob-dock-btn").count() == 5
         cols = dock.evaluate("el => getComputedStyle(el).gridTemplateColumns.trim().split(/\\s+/).length")
-        assert cols == 4, f"移动端底栏列数应为 4，实测 {cols}"
+        assert cols == 5, f"移动端底栏列数应为 5，实测 {cols}"
         overflow = page.evaluate("() => document.documentElement.scrollWidth > window.innerWidth")
         assert not overflow, "现场页窄屏出现横向溢出"
 
-        # 切换到档案页 -> 校验保留的像素鱼横向轮播器 + 概览卡 + 底部弹层
-        page.locator('[data-mob-nav="profiles"]').click()
+        # 切换到能力页 -> 校验保留的像素鱼横向轮播器 + 概览卡 + 底部弹层
+        page.locator('[data-mob-nav="abilities"]').click()
         page.locator("#ab-mob-head").wait_for(state="visible")
         page.locator("#mob-role-carousel .mob-role-item").first.wait_for(state="visible")
         assert page.locator("#mob-role-carousel .mob-role-item").count() == 2

@@ -296,3 +296,49 @@ async def test_console_and_memory_resolve_chat_sources_with_avatars_and_cache(tm
         assert after_count == before_count
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_console_snapshot_stays_within_host_512kib_budget(tmp_path):
+    plugin = await loaded(tmp_path)
+    try:
+        from maisya.abilities import Profile
+
+        row = plugin.threads.create(
+            Profile(), "Long thread", chat_id="chat", platform="qq", user_id=""
+        )
+        big_text = "x" * 120000
+        with plugin.threads.connect() as db, db:
+            for i in range(6):
+                plugin.threads.event(
+                    db,
+                    row["thread_id"],
+                    "context_archive",
+                    i + 1,
+                    {"summary": f"archive {i}", "text": big_text},
+                )
+            plugin.threads.event(
+                db,
+                row["thread_id"],
+                "tools",
+                7,
+                {
+                    "calls": [
+                        {
+                            "id": "c1",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps({"path": "a.txt", "content": big_text}),
+                            },
+                        }
+                    ],
+                    "results": [{"call_id": "c1", "value": {"ok": True, "output": big_text}}],
+                },
+            )
+        snap = await plugin.console_query(thread_id=row["thread_id"])
+        assert snap["success"] is True
+        raw_bytes = len(json.dumps(snap, ensure_ascii=False).encode("utf-8"))
+        assert raw_bytes < 524288, f"snapshot exceeded 512 KiB host limit: {raw_bytes}"
+        assert snap["selected"]["steps"]
+    finally:
+        await plugin.on_unload()

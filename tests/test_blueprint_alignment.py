@@ -39,7 +39,7 @@ async def test_presets_seed_without_overwriting_and_fresh_pulse_is_idle(tmp_path
         assert "ongoing-workspace" in abilities["skills"]
         assert "news-digest" in abilities["skills"]
         assert plugin.profiles.get("default").enabled is True
-        assert [p["id"] for p in abilities["profiles"]] == ["default"]
+        assert [p["id"] for p in abilities["profiles"]] == ["default", "digest", "scout"]
 
         for kind, content in [
             ("profile", (plugin.profiles.path / "default/PROFILE.md").read_text(encoding="utf-8")),

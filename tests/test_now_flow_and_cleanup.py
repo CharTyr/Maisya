@@ -359,7 +359,7 @@ async def test_now_flow_role_filter_clean_top_and_cleanup_ui(tmp_path):
                 await plugin.manage_write(
                     "delete_thread", json.dumps({"thread_id": d1["thread_id"]})
                 )
-                await page.click('[data-nav="profiles"]')
+                await page.click('[data-nav="abilities"]')
                 await expect(page.locator("#pr-roster")).to_be_visible()
                 await page.click('[data-nav="now"]')
                 await expect(page.locator("#now-threads [data-thread-id]")).to_have_count(1)

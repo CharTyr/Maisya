@@ -197,7 +197,8 @@ async def test_b2_item2_later_tool_ops_receipt_replace_aliases_and_daily_limit(t
 
         # 2b) replace=True must cancel prior scheduled_admin workflows across chat_aliases_for
         await plugin.resolve_chat_id("100246809", current_chat_id=priv_sid, current_platform="qq")
-        plugin.profiles.clone("default", "digest")
+        if not (plugin.profiles.path / "digest").is_dir():
+            plugin.profiles.clone("default", "digest")
         digest_doc = plugin.memory.read("profile", target="digest", document="profile.toml")
         plugin.memory.write(
             "profile",

@@ -18,7 +18,7 @@ from maisya.trust import Message, MessageStore, strip_mention_all
 def test_profile_task_slot_validation_and_preset_defaults(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
     assert profiles.get("default").task == "utils"
-    assert profiles.get("scout").id == "default"
+    assert profiles.get("scout").id == "scout"
     assert profiles.get("maker").id == "default"
 
     cfg = profiles.path / "default/profile.toml"

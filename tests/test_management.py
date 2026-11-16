@@ -12,6 +12,8 @@ async def test_management_assets_versions_and_credentials_are_private(tmp_path):
         catalog = await plugin.manage_read("abilities")
         assert catalog["success"] and {p["id"] for p in catalog["profiles"]} == {
             "default",
+            "digest",
+            "scout",
         }
         current = await plugin.manage_read(
             "asset", json.dumps({"kind": "notes", "target": "default"})
@@ -230,9 +232,9 @@ async def test_skill_catalog_lifecycle_preset_reset_and_role_binding(tmp_path):
             assert items[sid]["description"]
             assert items[sid]["title"]
             assert items[sid]["version"] >= 0
-        assert items["source-checking"]["used_by"] == []
+        assert items["source-checking"]["used_by"] == ["scout"]
         assert items["ongoing-workspace"]["used_by"] == []
-        assert items["news-digest"]["used_by"] == []
+        assert items["news-digest"]["used_by"] == ["digest"]
 
         # Create a new starter skill
         created = await plugin.manage_write(

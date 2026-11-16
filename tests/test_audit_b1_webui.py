@@ -211,7 +211,7 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
         assert {r["status"] for r in rows} == {"reverted"}
 
         async with _open_spa(plugin, "profiles") as (page, errors):
-            await expect(page.locator("#ms-page-title")).to_have_text("档案")
+            await expect(page.locator("#ms-page-title")).to_have_text("能力")
             await expect(
                 page.locator('#pr-roster [data-pick-profile-id="custom_writer"]')
             ).to_be_visible()
@@ -219,7 +219,7 @@ async def test_audit_b1_undo_learning_receipts_on_memory_and_settings(tmp_path):
                 page.locator('#pr-roster [data-pick-profile-id="custom_maker"]')
             ).to_be_visible()
             await page.locator('[data-nav="library"]').click()
-            await expect(page.locator("#ms-page-title")).to_have_text("资料库")
+            await expect(page.locator("#ms-page-title")).to_have_text("产物")
             assert errors == []
     finally:
         await plugin.on_unload()
@@ -291,7 +291,7 @@ async def test_audit_b1_scheduled_admin_cancel_on_memory_and_settings(tmp_path):
             plugin, "now", viewport={"width": 390, "height": 844}
         ) as (page, errors):
             await expect(page.locator("#ms-mob-dock")).to_be_visible()
-            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 5
             cancel_btn2 = page.locator(
                 f'#now-intents [data-intent-act="intent_delete"][data-intent-id="{i2}"]'
             )
@@ -347,8 +347,6 @@ async def test_audit_b1_settings_and_vault_controls_desktop_and_mobile(tmp_path)
             assert plugin.settings.sleep_window == "00:30-07:30"
 
             await page.locator("#set-vault-handle").fill("ci_deploy_token")
-            await page.locator("#set-vault-label").fill("CI 只读凭据")
-            await page.locator("#set-vault-domain").fill("api.example.org")
             await page.locator("#set-vault-secret").fill("TOKEN=secret-xyz-999")
             await page.locator("#set-vault-save").click()
             await expect(page.locator("#set-feedback")).to_contain_text("ci_deploy_token")
@@ -361,7 +359,7 @@ async def test_audit_b1_settings_and_vault_controls_desktop_and_mobile(tmp_path)
             plugin, "settings", viewport={"width": 390, "height": 844}
         ) as (page, errors):
             await expect(page.locator("#ms-mob-dock")).to_be_visible()
-            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 5
             for block in (
                 "#set-block-chats",
                 "#set-block-auth",
@@ -369,7 +367,9 @@ async def test_audit_b1_settings_and_vault_controls_desktop_and_mobile(tmp_path)
                 "#set-block-runtime",
             ):
                 await expect(page.locator(block)).to_be_visible()
-            await page.locator("#set-chat-input").fill("qq:group:100246809")
+            await page.locator("#set-chat-plat").select_option("qq")
+            await page.locator("#set-chat-type").select_option("group")
+            await page.locator("#set-chat-id").fill("100246809")
             await page.locator("#set-chat-add").click()
             await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
             assert "qq:group:100246809" in plugin.settings.enabled_chats
@@ -461,20 +461,21 @@ model_identifier = "demo/replyer"
             )
 
         async with _open_spa(plugin, "profiles") as (page, errors):
-            await expect(page.locator("#pr-model")).to_contain_text("demo-planner")
             await _wait_reads_settled(page)
             await page.locator('#pr-roster [data-pick-profile-id="custom_maker"]').click()
             await _wait_reads_settled(page)
             await page.locator("#pr-adv-toggle").click()
             await expect(page.locator("#pr-adv-body")).to_be_visible()
-            await page.locator("#pr-model").select_option("demo-planner")
+            await page.locator("#pr-model-add-btn").click()
+            await expect(page.locator("#pr-model-groups")).to_contain_text("demo-planner")
+            await page.locator('#pr-model-groups [data-pick-model="demo-planner"]').click()
             await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
             await page.locator("#pr-btn-save").click()
             await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
             await _wait_reads_settled(page)
             assert plugin.profiles.get("custom_maker").model_name == "demo-planner"
 
-            await page.locator("#pr-model").select_option("")
+            await page.locator('[data-pr-model-del="demo-planner"]').click()
             await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
             await page.locator("#pr-btn-save").click()
             await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
@@ -485,13 +486,14 @@ model_identifier = "demo/replyer"
             await page.locator('#pr-roster [data-pick-profile-id="default"]').click()
             await _wait_reads_settled(page)
             await expect(page.locator("#pr-btn-delete")).to_be_disabled()
-            await page.locator("#pr-model").select_option("demo-replyer")
+            await page.locator("#pr-model-add-btn").click()
+            await page.locator('#pr-model-groups [data-pick-model="demo-replyer"]').click()
             await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
             await page.locator("#pr-btn-save").click()
             await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
             await _wait_reads_settled(page)
             assert plugin.profiles.get("default").model_name == "demo-replyer"
-            await page.locator("#pr-model").select_option("")
+            await page.locator('[data-pr-model-del="demo-replyer"]').click()
             await page.evaluate("document.getElementById('pr-feedback').textContent = ''")
             await page.locator("#pr-btn-save").click()
             await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")

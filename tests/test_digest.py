@@ -26,7 +26,8 @@ def _signed(secret: str, **event) -> str:
 async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
     assert profiles.get("default").enabled is True
-    profiles.clone("default", "digest")
+    if not (profiles.path / "digest").is_dir():
+        profiles.clone("default", "digest")
     (profiles.path / "digest/profile.toml").write_text(
         'title = "资讯简报"\nenabled = false\nbound = true\naccess = "everyone"\nenvironment = "readonly"\ntools = ["workspace_file", "digest_feed"]\n',
         encoding="utf-8",
@@ -46,7 +47,8 @@ async def test_profile_enabled_toggle_and_runtime_enforcement(tmp_path):
 
     plugin = await loaded(tmp_path, ["qq:Alice"])
     try:
-        plugin.profiles.clone("default", "digest")
+        if not (plugin.profiles.path / "digest").is_dir():
+            plugin.profiles.clone("default", "digest")
         cur_p = plugin.memory.read("profile", target="digest", document="profile.toml", allow_custom=True)
         plugin.memory.write(
             "profile",
@@ -437,7 +439,8 @@ async def test_rss_xml_xxe_ssrf_and_auto_trial_unsubscribe_state_machine(tmp_pat
 
 
 def _seed_enabled_digest(plugin):
-    plugin.profiles.clone("default", "digest")
+    if not (plugin.profiles.path / "digest").is_dir():
+        plugin.profiles.clone("default", "digest")
     cur = plugin.memory.read("profile", target="digest", document="profile.toml", allow_custom=True)
     plugin.memory.write(
         "profile",

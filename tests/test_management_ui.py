@@ -106,9 +106,10 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 )
                 await page.set_content(csp_doc, wait_until="domcontentloaded")
 
-                # 1) 资料库页（产物画廊 + 系统文件树 + CSP/XSS 隔离 + 帮助气泡）
-                await expect(page.locator("#ms-page-title")).to_have_text("资料库")
+                # 1) 产物页（分类计数画廊 + HTML 安全富渲染/源码切换 + 图片舞台 + CSP/XSS 隔离 + 帮助气泡）
+                await expect(page.locator("#ms-page-title")).to_have_text("产物")
                 assert await page.locator(".ms-page-sub").count() == 0
+                assert await page.locator("#lib-fs-tree").count() == 0
                 if await page.locator("#ms-mgmt-view .mil-help").count() > 0:
                     await page.locator("#ms-mgmt-view .mil-help").first.click()
                     await expect(page.locator("#mil-help-pop")).to_be_visible()
@@ -124,8 +125,10 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await expect(page.locator("#lib-gallery [data-lib-idx]").first).to_be_visible()
                 await page.locator("#lib-gallery [data-lib-idx]").first.click()
                 await expect(page.locator("#lib-drawer")).to_be_visible()
-                await expect(page.locator("#lib-stage")).to_contain_text("周报摘要")
+                await expect(page.locator("#lib-stage .lib-html-doc")).to_contain_text("周报摘要")
                 assert await page.evaluate("Boolean(window.pwned)") is False
+                await page.locator('#lib-view-seg [data-lib-view="raw"]').click()
+                await expect(page.locator("#lib-stage pre")).to_contain_text("周报摘要")
 
                 await page.locator('#lib-filters [data-lib-filter="image"]').click()
                 await expect(page.locator("#lib-gallery [data-lib-idx]").first).to_be_visible()
@@ -136,23 +139,9 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 assert await page.locator("img").count() == 0
                 assert await page.locator("iframe").count() == 0
 
-                # 系统文件树：打开 JOURNAL.md 并保存
-                journal_node = page.locator('#lib-fs-tree [data-fs-path*="JOURNAL.md"]').first
-                await expect(journal_node).to_be_visible()
-                await journal_node.click()
-                await expect(page.locator("#lib-fs-pane")).to_be_visible()
-                old_journal = await page.locator("#lib-fs-editor").input_value()
-                await page.locator("#lib-fs-editor").fill(
-                    (old_journal + "\n\n## 测试补充\n保持简洁。").strip()
-                )
-                await page.locator("#lib-fs-save").click()
-                await expect(page.locator("#lib-fs-feedback")).to_contain_text("已保存")
-                await page.locator("#lib-fs-close-pane").click()
-                await expect(page.locator("#lib-gallery-pane")).to_be_visible()
-
-                # 2) 档案页（仅 default 预设 + 新建 + Hermes 高级开关/能力卡片 + .zip + 删除）
-                await page.locator('[data-nav="profiles"]').click()
-                await expect(page.locator("#ms-page-title")).to_have_text("档案")
+                # 2) 能力页角色子栏（预设角色 + 新建 + 结构化会话白名单 + 高级开关/经验笔记 + 打包分享 + 删除）
+                await page.locator('[data-nav="abilities"]').click()
+                await expect(page.locator("#ms-page-title")).to_have_text("能力")
                 await expect(page.locator('#pr-roster [data-pick-profile-id="default"]')).to_be_visible()
                 await expect(page.locator("#pr-btn-delete")).to_be_disabled()
 
@@ -162,7 +151,9 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await page.locator("#pr-desc").fill("仅在指定群聊运行")
                 await page.locator("#pr-access").select_option("listed")
                 await expect(page.locator("#pr-chats-wrap")).to_be_visible()
-                await page.locator("#pr-allowed-chats").fill("qq:group:100246809")
+                await page.locator("#pr-alw-id").fill("100246809")
+                await page.locator("#pr-allow-struct-add").click()
+                await expect(page.locator("#pr-allow-chat-list")).to_contain_text("100246809")
 
                 await page.locator("#pr-adv-toggle").click()
                 await expect(page.locator("#pr-adv-body")).to_be_visible()
@@ -176,13 +167,14 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 assert "qq:group:100246809" in plugin.profiles.get("ui_temp").allow_chats
 
                 await page.locator("#pr-btn-export").click()
+                await page.locator("#pkg-export-download").click()
                 await expect(page.locator("#pr-feedback")).to_contain_text("已导出档案包")
 
                 await page.locator("#pr-btn-delete").click()
                 await expect(page.locator("#pr-feedback")).to_contain_text("已删除自定义档案")
                 assert await page.locator('#pr-roster [data-pick-profile-id="ui_temp"]').count() == 0
 
-                # 3) 设置页（4 模块 + 总开关 + 白名单 + 双源管理员防自锁死 + 安全存储 + 双主题）
+                # 3) 设置页（4 模块 + 总开关 + 白名单 + 结构化添加 + 双源管理员防自锁死 + 安全存储 + 双主题）
                 await page.locator('[data-nav="settings"]').click()
                 await expect(page.locator("#ms-page-title")).to_have_text("设置")
                 assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
@@ -192,7 +184,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await expect(page.locator("#set-block-runtime")).to_be_visible()
                 await expect(page.locator("#ms-mgmt-view")).not_to_contain_text("A_Memorix")
 
-                # 总开关与会话白名单条目控件
+                # 总开关与结构化会话白名单条目控件
                 prev_enabled = plugin.settings.plugin.enabled
                 await page.locator("label.mil-switch", has=page.locator("#set-plugin-enabled")).click()
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
@@ -201,17 +193,21 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
                 assert plugin.settings.plugin.enabled is prev_enabled
 
-                await page.locator("#set-chat-input").fill("qq:group:12345678")
+                await page.locator("#set-chat-plat").select_option("qq")
+                await page.locator("#set-chat-type").select_option("group")
+                await page.locator("#set-chat-id").fill("12345678")
                 await page.locator("#set-chat-add").click()
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
                 assert "qq:group:12345678" in plugin.settings.enabled_chats
-                await page.locator('input[data-set-chat="qq:group:12345678"]').uncheck()
+                await page.locator('[data-set-del-chat="qq:group:12345678"]').click()
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
                 assert "qq:group:12345678" not in plugin.settings.enabled_chats
 
-                # 管理员添加与双源防自锁死提示
+                # 管理员结构化添加与双源防自锁死提示
                 await expect(page.locator("#set-host-admins")).to_contain_text("qq:Alice")
-                await page.locator("#set-admin-input").fill("qq:private:10001")
+                await page.locator("#set-adm-plat").select_option("qq")
+                await page.locator("#set-adm-type").select_option("private")
+                await page.locator("#set-adm-id").fill("10001")
                 await page.locator("#set-admin-add").click()
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
                 assert "qq:10001" in plugin.settings.admins
@@ -219,7 +215,9 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
                 assert "qq:10001" not in plugin.settings.admins
 
-                await page.locator("#set-admin-input").fill("qq:private:10001")
+                await page.locator("#set-adm-plat").select_option("qq")
+                await page.locator("#set-adm-type").select_option("private")
+                await page.locator("#set-adm-id").fill("10001")
                 await page.locator("#set-admin-add").click()
                 await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
                 orig_cfg_get = plugin._ctx.config.get
@@ -261,10 +259,8 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 assert await page.locator("html").get_attribute("data-ui-style") == "millennium"
                 assert plugin.settings.ui_style == "millennium"
 
-                # 安全存储只进不出与页面脱敏
+                # 密码保险箱只进不出与页面脱敏
                 await page.locator("#set-vault-handle").fill("drawing")
-                await page.locator("#set-vault-label").fill("画图密钥")
-                await page.locator("#set-vault-domain").fill("api.example.com")
                 await page.locator("#set-vault-secret").fill("TOKEN=ui-private-secret-value")
                 await page.locator("#set-vault-save").click()
                 await expect(page.locator("#set-feedback")).to_contain_text("drawing")
@@ -275,7 +271,7 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 # 4) 390x844 窄屏深色切换与无横向溢出校验
                 await page.set_viewport_size({"width": 390, "height": 844})
                 await expect(page.locator("#ms-mob-dock")).to_be_visible()
-                assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+                assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 5
                 await page.evaluate(
                     "window.dispatchEvent(new CustomEvent('maibot:context',{detail:{theme:'dark'}}))"
                 )
@@ -375,10 +371,11 @@ model_list = ["tavily"]
                 await page.set_content(doc, wait_until="domcontentloaded")
                 await expect(page.locator("#pr-roster")).to_be_visible()
                 await page.locator("#pr-adv-toggle").click()
-                await expect(page.locator("#pr-model")).to_be_visible()
+                await page.locator("#pr-model-add-btn").click()
+                await expect(page.locator("#pr-model-groups")).to_be_visible()
 
-                await expect(page.locator("#pr-model")).to_contain_text("deepseek-r1-standby")
-                await expect(page.locator("#pr-model")).not_to_contain_text("tavily")
+                await expect(page.locator("#pr-model-groups")).to_contain_text("deepseek-r1-standby")
+                await expect(page.locator("#pr-model-groups")).not_to_contain_text("tavily")
 
                 # 更新 model_config.toml 并切页重载档案后验证新模型自动同步
                 model_cfg.write_text(
@@ -388,11 +385,12 @@ model_list = ["tavily"]
                 )
                 await page.locator('[data-nav="settings"]').click()
                 await expect(page.locator("#set-block-chats")).to_be_visible()
-                await page.locator('[data-nav="profiles"]').click()
+                await page.locator('[data-nav="abilities"]').click()
                 await page.locator("#pr-adv-toggle").click()
-                await expect(page.locator("#pr-model")).to_contain_text("qwen-coder-unused")
+                await page.locator("#pr-model-add-btn").click()
+                await expect(page.locator("#pr-model-groups")).to_contain_text("qwen-coder-unused")
 
-                await page.locator("#pr-model").select_option("deepseek-r1-standby")
+                await page.locator('#pr-model-groups [data-pick-model="deepseek-r1-standby"]').click()
                 await page.locator("#pr-btn-save").click()
                 await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
                 assert plugin.profiles.get("default").model_name == "deepseek-r1-standby"
@@ -603,9 +601,9 @@ async def test_outputs_preview_multichunk_card_and_styled_svg_html_under_concurr
                 await expect(jump_btn).to_be_visible()
                 await expect(jump_btn).to_contain_text("digest-card.png")
 
-                # 从现场产物按钮跳转资料库并自动应对首轮 429 重试打开图片抽屉
+                # 从现场产物按钮跳转产物页并自动应对首轮 429 重试打开图片抽屉
                 await jump_btn.click()
-                await expect(frame.locator("#ms-page-title")).to_have_text("资料库")
+                await expect(frame.locator("#ms-page-title")).to_have_text("产物")
                 assert first_library_rejected is True
                 img_stage = frame.locator("#lib-stage .lib-img-stage")
                 await expect(img_stage).to_be_visible()

@@ -145,7 +145,7 @@ async def test_b2_settings_runtime_mobile_and_rail(tmp_path):
             plugin, "settings", viewport={"width": 390, "height": 844}
         ) as (page, errors, _rpc_log, get_peak):
             await expect(page.locator("#ms-mob-dock")).to_be_visible()
-            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 4
+            assert await page.locator("#ms-mob-dock [data-mob-nav]").count() == 5
             for block in (
                 "#set-block-chats",
                 "#set-block-auth",
@@ -297,6 +297,8 @@ async def test_b2_hidden_shortcuts_and_recipe_include_profile(tmp_path):
             )
 
             await page.locator("#pr-btn-export").click()
+            await expect(page.locator("#pkg-scrim")).to_be_visible()
+            await page.locator("#pkg-export-download").click()
             await expect(page.locator("#pr-feedback")).to_contain_text("已导出档案包")
             assert not errors and get_peak() <= 2
 
