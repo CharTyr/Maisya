@@ -273,8 +273,9 @@
                   <div class="mil-field">
                     <label class="mil-label" for="pr-exec-mode">执行环境</label>
                     <select class="mil-select" id="pr-exec-mode">
-                      <option value="host">宿主机线程（默认）</option>
-                      <option value="sandbox">轻量沙箱环境</option>
+                      <option value="auto">智能（沙箱就绪优先隔离）</option>
+                      <option value="host">宿主机高信任直通（cwd 不隔离工作区外文件）</option>
+                      <option value="sandbox">轻量沙箱环境（强制隔离）</option>
                     </select>
                   </div>
                   <div class="mil-field">

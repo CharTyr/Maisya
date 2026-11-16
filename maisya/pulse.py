@@ -83,10 +83,12 @@ class Pulse:
         resolve_session=None,
         tz_offset_minutes=None,
         watch_evaluator=None,
+        authority_check=None,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
         self.watch_evaluator = watch_evaluator
+        self.authority_check = authority_check
         self.sleep_window, self.redact = sleep_window, redact
         if tz_offset_minutes is not None and not callable(tz_offset_minutes):
             tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
@@ -646,7 +648,34 @@ class Pulse:
             next_payload["recent_runs"] = runs
         return next_payload
 
+    @staticmethod
+    def _delegated_grant(payload: dict | None, *, base: dict | None = None) -> dict:
+        src = payload if isinstance(payload, dict) else {}
+        grant = dict(base or {})
+        if src.get("scheduled_admin"):
+            grant["scheduled_admin"] = True
+        if src.get("admin_direct"):
+            grant["admin_direct"] = True
+        if src.get("issuer_admin"):
+            grant["issuer_admin"] = str(src["issuer_admin"])
+        if isinstance(src.get("envelope"), dict):
+            grant["envelope"] = dict(src["envelope"])
+        return grant
+
+    async def _check_intent_authority(self, row: dict) -> bool:
+        if not callable(self.authority_check):
+            return True
+        ok, auth_err = await asyncio.to_thread(self.authority_check, row)
+        if not ok:
+            await asyncio.to_thread(
+                self.intents.pause_for_authority, row["intent_id"], auth_err
+            )
+            return False
+        return True
+
     async def _handle_watch(self, row):
+        if not await self._check_intent_authority(row):
+            return
         target = row["target"]
         raw_chat_id = target.split(":", 1)[1]
         payload = dict(row.get("payload") or {})
@@ -769,11 +798,7 @@ class Pulse:
                 workspace = str(
                     payload.get("workspace") or f"watch_{row['intent_id']}"
                 ).strip()
-                grant = {}
-                if payload.get("scheduled_admin"):
-                    grant["scheduled_admin"] = True
-                if payload.get("admin_direct"):
-                    grant["admin_direct"] = True
+                grant = self._delegated_grant(payload)
                 started = await self._engine_call(
                     "start",
                     ability,
@@ -941,6 +966,8 @@ class Pulse:
         )
 
     async def _dispatch(self, row):
+        if not await self._check_intent_authority(row):
+            return
         if str(row.get("mode") or "") == "watch" or row.get("source") == "watch":
             await self._handle_watch(row)
             return
@@ -1072,13 +1099,16 @@ class Pulse:
                         wait_seconds=0,
                         return_route=route,
                         workspace=row["payload"].get("workspace", ""),
-                        grant={
-                            "scheduled_admin": True,
-                            "admin_direct": True,
-                            "source_chat_id": chat_id,
-                            "source_platform": platform or "qq",
-                            "source_msg_id": source_msg_id,
-                        },
+                        grant=self._delegated_grant(
+                            row["payload"],
+                            base={
+                                "scheduled_admin": True,
+                                "admin_direct": True,
+                                "source_chat_id": chat_id,
+                                "source_platform": platform or "qq",
+                                "source_msg_id": source_msg_id,
+                            },
+                        ),
                         background=True,
                         defer_if_full=True,
                     )
@@ -1124,18 +1154,7 @@ class Pulse:
                 owner="self" if chat_id == "self" else "chat",
                 wait_seconds=0,
                 workspace=row["payload"].get("workspace", ""),
-                grant={
-                    **(
-                        {"scheduled_admin": True}
-                        if row["payload"].get("scheduled_admin")
-                        else {}
-                    ),
-                    **(
-                        {"admin_direct": True}
-                        if row["payload"].get("admin_direct")
-                        else {}
-                    ),
-                },
+                grant=self._delegated_grant(row["payload"]),
                 background=True,
                 defer_if_full=True,
             )
@@ -1390,9 +1409,7 @@ class Pulse:
                 owner="self" if target_chat == "self" else "chat",
                 wait_seconds=0,
                 workspace=row["payload"].get("workspace", ""),
-                grant={"scheduled_admin": True}
-                if row["payload"].get("scheduled_admin")
-                else {},
+                grant=self._delegated_grant(row["payload"]),
                 background=True,
                 defer_if_full=True,
             )
@@ -1531,9 +1548,7 @@ class Pulse:
                 chat_id=chat_id,
                 wait_seconds=0,
                 input_context={
-                    "grant": {"scheduled_admin": True}
-                    if row["payload"].get("scheduled_admin")
-                    else {}
+                    "grant": self._delegated_grant(row.get("payload")),
                 },
                 background=True,
                 defer_if_full=True,

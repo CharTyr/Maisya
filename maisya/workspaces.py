@@ -381,6 +381,11 @@ class Workspaces:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS attachments (handle TEXT PRIMARY KEY, chat_id TEXT, thread_id TEXT, revision INTEGER, name TEXT, kind TEXT, size INTEGER, digest TEXT, created REAL)"
             )
+            cols = {r[1] for r in db.execute("PRAGMA table_info(attachments)").fetchall()}
+            if "visibility_scope" not in cols:
+                db.execute(
+                    "ALTER TABLE attachments ADD COLUMN visibility_scope TEXT NOT NULL DEFAULT ''"
+                )
 
     def inventory(self, path, *, roots=("project", "in", "out")):
         return inventory(
@@ -553,7 +558,7 @@ class Workspaces:
                 try:
                     with self.store.connect() as db, db:
                         db.execute(
-                            "INSERT INTO attachments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO attachments (handle, chat_id, thread_id, revision, name, kind, size, digest, created, visibility_scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 handle,
                                 row["chat_id"],
@@ -564,6 +569,7 @@ class Workspaces:
                                 size,
                                 digest,
                                 time.time(),
+                                str(row.get("visibility_scope") or ""),
                             ),
                         )
                 except BaseException:
@@ -572,7 +578,7 @@ class Workspaces:
             result.append({"handle": handle, "name": name, "kind": kind, "bytes": size})
         return result
 
-    def resolve(self, handle, chat_id):
+    def resolve(self, handle, chat_id, *, allow_published: bool = True):
         if (
             not isinstance(handle, str)
             or not handle.startswith("att_")
@@ -583,8 +589,20 @@ class Workspaces:
             row = db.execute(
                 "SELECT * FROM attachments WHERE handle=?", (handle,)
             ).fetchone()
-        if not row or row["chat_id"] != chat_id:
+        if not row:
             raise PermissionError("附件不属于本会话")
+        if row["chat_id"] != chat_id:
+            published = bool(
+                allow_published
+                and hasattr(self.store, "has_publication_grant")
+                and self.store.has_publication_grant(
+                    str(row["thread_id"] or ""),
+                    int(row["revision"] or 0),
+                    chat_id,
+                )
+            )
+            if not published:
+                raise PermissionError("附件不属于本会话")
         path = self.artifacts / handle
         if (
             path_is_link_like(path)

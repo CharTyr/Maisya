@@ -49,7 +49,7 @@ ICON_SHAPES = frozenset(
         "scroll",
     }
 )
-EXECUTION_MODES = frozenset({"host", "sandbox"})
+EXECUTION_MODES = frozenset({"auto", "host", "sandbox"})
 PERMISSION_MODES = frozenset({"", "ask_risky", "autonomous", "always_ask"})
 SESSION_MODES = frozenset({"persistent", "ephemeral", "task"})
 

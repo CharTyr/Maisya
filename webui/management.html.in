@@ -1415,7 +1415,7 @@
         const cur = getCur();
         if (cur) {
           $("#ab-mob-role-title").textContent = cur.name || cur.title || cur.id;
-          $("#ab-mob-role-env").textContent = cur.access === "admins" ? "仅管理员" : cur.execution_mode === "sandbox" ? "沙箱" : "常规";
+          $("#ab-mob-role-env").textContent = cur.access === "admins" ? "仅管理员" : cur.execution_mode === "sandbox" ? "沙箱" : cur.execution_mode === "auto" ? "智能" : "宿主机";
           $("#mob-val-overview").textContent = cur.id;
           $("#mob-val-models").textContent = pState.modelChain[0] || cur.model_name || "跟随默认";
           const connCount = (Array.isArray(cur.mcp) ? cur.mcp.length : (cur.mcp_servers?.length || 0))
@@ -1471,7 +1471,7 @@
         pState.mdTouched = false;
       }
       pState.creating = isNew;
-      const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "host", session_mode: "persistent", fish_seed: "" };
+      const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "auto", session_mode: "persistent", fish_seed: "" };
       $("#pr-head-title").textContent = isNew ? "新建能力档案" : `编辑档案 · ${obj.name || obj.title || obj.id}`;
       $("#pr-id").value = obj.id || "";
       $("#pr-id").readOnly = !isNew;
@@ -1543,7 +1543,7 @@
       }
       renderProfileModelChain();
 
-      $("#pr-exec-mode").value = obj.execution_mode || obj.environment || "host";
+      $("#pr-exec-mode").value = obj.execution_mode || (obj.environment === "sandbox" ? "sandbox" : "auto");
       const rawSess = obj.session_mode || "persistent";
       $("#pr-session-mode").value = rawSess === "thread" ? "persistent" : rawSess === "task" ? "ephemeral" : rawSess;
       $("#pr-shared-secrets").checked = obj.shared_secrets !== false && obj.share_credentials !== false;
@@ -2312,7 +2312,7 @@
           clone_from: $("#pr-clone")?.value || "",
           model_name: primaryModel,
           fallback_models: pState.modelChain.slice(1),
-          execution_mode: $("#pr-exec-mode")?.value || "host",
+          execution_mode: $("#pr-exec-mode")?.value || "auto",
           session_mode: $("#pr-session-mode")?.value || "persistent",
           shared_secrets: Boolean($("#pr-shared-secrets")?.checked),
           instructions: md,

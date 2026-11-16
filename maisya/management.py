@@ -28,6 +28,7 @@ from .abilities import (
     _serialize_profile_dict,
     _validate_instructions,
 )
+from .authz import approved_envelope, record_delegation
 from .config import Settings, apply_heartbeat_compat, canonical_ui_style
 from .console import snapshot
 from .digest import DigestWorkspace
@@ -5276,6 +5277,17 @@ class Management:
             grant_key = str(options.get("grant_key") or "").strip()
             scope = str(options.get("scope") or "").strip()
             action_key = str(options.get("action_key") or "").strip()
+            existing_grants = await completed_thread(grants_store.list_grants)
+            matched_rows = [
+                g
+                for g in (existing_grants or [])
+                if isinstance(g, dict)
+                and (
+                    (grant_key and g.get("grant_key") == grant_key)
+                    or (scope and action_key and g.get("scope") == scope and g.get("action_key") == action_key)
+                    or (scope and not action_key and g.get("scope") == scope)
+                )
+            ]
             if grant_key:
                 await completed_thread(grants_store.revoke, grant_key)
             elif scope and action_key:
@@ -5287,6 +5299,13 @@ class Management:
                 await completed_thread(grants_store.revoke_scope, scope)
             else:
                 raise ValueError("grant_revoke 需要提供 grant_key 或 scope")
+            host_runner = getattr(plugin, "host_runner", None)
+            if host_runner is not None and hasattr(host_runner, "terminate_for"):
+                for g in matched_rows:
+                    host_runner.terminate_for(
+                        session_id=str(g.get("session_id") or ""),
+                        actor=str(g.get("actor") or ""),
+                    )
             result = {"items": await completed_thread(grants_store.list_grants)}
         elif action in {"settings_update", "settings"}:
             raw_settings = (
@@ -5335,9 +5354,32 @@ class Management:
             result = {"intent_id": row["intent_id"], "status": "paused"}
         elif action == "intent_resume":
             row = await completed_thread(plugin.intents.get, options["intent_id"])
-            await completed_thread(
-                plugin.intents.resume, row["intent_id"], row["target"], is_admin=True
+            ep = row.get("payload") or {}
+            patch = (
+                {"issuer_admin": "console"}
+                if ep.get("scheduled_admin") or ep.get("admin_direct")
+                else None
             )
+            await completed_thread(
+                plugin.intents.resume,
+                row["intent_id"],
+                row["target"],
+                is_admin=True,
+                payload_patch=patch,
+            )
+            if patch and getattr(plugin, "grants", None) is not None:
+                await completed_thread(
+                    record_delegation,
+                    plugin.grants,
+                    subject_kind="intent",
+                    subject_id=row["intent_id"],
+                    issuer="console",
+                    chat_id=row["target"].split(":", 1)[-1],
+                    target_chat=row["target"].split(":", 1)[-1],
+                    profile_id=str(ep.get("profile") or ""),
+                    envelope=ep.get("envelope") if isinstance(ep.get("envelope"), dict) else None,
+                    clock=plugin.intents.clock,
+                )
             result = {"intent_id": row["intent_id"], "status": "pending"}
         elif action == "intent_run_now":
             iid = str(options.get("intent_id") or "").strip()
@@ -5345,9 +5387,32 @@ class Management:
             if row["status"] not in {"pending", "paused"}:
                 raise ValueError("意图不存在或已处理")
             if row["status"] == "paused":
-                await completed_thread(
-                    plugin.intents.resume, iid, row["target"], is_admin=True
+                ep = row.get("payload") or {}
+                patch = (
+                    {"issuer_admin": "console"}
+                    if ep.get("scheduled_admin") or ep.get("admin_direct")
+                    else None
                 )
+                await completed_thread(
+                    plugin.intents.resume,
+                    iid,
+                    row["target"],
+                    is_admin=True,
+                    payload_patch=patch,
+                )
+                if patch and getattr(plugin, "grants", None) is not None:
+                    await completed_thread(
+                        record_delegation,
+                        plugin.grants,
+                        subject_kind="intent",
+                        subject_id=iid,
+                        issuer="console",
+                        chat_id=row["target"].split(":", 1)[-1],
+                        target_chat=row["target"].split(":", 1)[-1],
+                        profile_id=str(ep.get("profile") or ""),
+                        envelope=ep.get("envelope") if isinstance(ep.get("envelope"), dict) else None,
+                        clock=plugin.intents.clock,
+                    )
 
             has_pulse = getattr(plugin, "pulse", None) is not None
 
@@ -5412,13 +5477,23 @@ class Management:
             mode = str(options.get("mode") or ("watch" if options.get("condition") else "")).strip()
             condition = str(options.get("condition") or "").strip()
             kind = str(options.get("kind") or "return").strip() or "return"
+            sched_pid = profile_name or str(plugin.settings.heartbeat_profile or "default")
+            sched_prof = await completed_thread(plugin.profiles.get, sched_pid)
+            svc_cfg = (
+                plugin.runtime.services.load()
+                if (getattr(plugin, "runtime", None) and getattr(plugin.runtime, "services", None))
+                else {}
+            )
+            sched_env = approved_envelope(sched_prof, svc_cfg, target_chat=chat_id)
             payload = {
                 "platform": explicit_platform or resolved_platform or "qq",
-                "profile": profile_name or str(plugin.settings.heartbeat_profile or "default"),
+                "profile": sched_pid,
                 "workspace": str(options.get("workspace") or "").strip(),
                 "prompt": prompt or reason,
                 "every_seconds": every_seconds,
                 "scheduled_admin": True,
+                "issuer_admin": "console",
+                "envelope": sched_env,
             }
             due_at = plugin.intents.clock() + in_seconds
             row = await completed_thread(
@@ -5433,6 +5508,19 @@ class Management:
                 mode=mode,
                 condition=condition,
             )
+            if getattr(plugin, "grants", None) is not None and row.get("intent_id"):
+                await completed_thread(
+                    record_delegation,
+                    plugin.grants,
+                    subject_kind="intent",
+                    subject_id=row["intent_id"],
+                    issuer="console",
+                    chat_id=chat_id,
+                    target_chat=chat_id,
+                    profile_id=sched_pid,
+                    envelope=sched_env,
+                    clock=plugin.intents.clock,
+                )
             result = {"intent": row}
         elif action == "toggle_profile":
             target = str(options.get("target") or "").strip()

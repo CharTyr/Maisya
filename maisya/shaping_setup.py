@@ -10,6 +10,7 @@ import sqlite3
 import time
 
 from .abilities import Profile
+from .authz import approved_envelope, record_delegation
 from .context_budget import estimate_tokens
 from .digest import DigestWorkspace
 from .intents import next_daily_due
@@ -793,6 +794,13 @@ async def handle_setup(
         for old_it in plugin.intents.list_all(status="pending", limit=60):
             if old_it.get("target") == target_key and (old_it.get("payload") or {}).get("profile") == sched_prof_obj.id:
                 plugin.intents.cancel(old_it["intent_id"], target_key, is_admin=True)
+        svc_cfg = (
+            plugin.runtime.services.load()
+            if (getattr(plugin, "runtime", None) and getattr(plugin.runtime, "services", None))
+            else {}
+        )
+        sched_env = approved_envelope(sched_prof_obj, svc_cfg, target_chat=resolved_cid)
+        issuer_actor = str(caller_ident or "").strip() or "console"
         row_it = await completed_thread(
             plugin.intents.schedule,
             kind="return",
@@ -809,9 +817,24 @@ async def handle_setup(
                 "daily_at": daily_at,
                 "tz_offset_minutes": tz_min,
                 "scheduled_admin": True,
+                "issuer_admin": issuer_actor,
+                "envelope": sched_env,
             },
             bypass_limits=True,
         )
+        if getattr(plugin, "grants", None) is not None and row_it.get("intent_id"):
+            await completed_thread(
+                record_delegation,
+                plugin.grants,
+                subject_kind="intent",
+                subject_id=row_it["intent_id"],
+                issuer=issuer_actor,
+                chat_id=current_chat_id,
+                target_chat=resolved_cid,
+                profile_id=sched_prof_obj.id,
+                envelope=sched_env,
+                clock=plugin.intents.clock,
+            )
         applied.append(f"schedule:{row_it['intent_id']}")
 
     trial_res = None

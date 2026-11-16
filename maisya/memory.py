@@ -16,6 +16,12 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 from .abilities import _ensure_managed_dir, _has_relative_link, is_autonomous_snapshot
+from .data_scope import (
+    ensure_scope_tables,
+    get_asset_scope,
+    initial_thread_scope,
+    set_asset_scope,
+)
 from .pathsafe import (
     check_part,
     ensure_dirs,
@@ -336,6 +342,31 @@ class MemoryLayers:
                     updated_at REAL NOT NULL
                 )"""
             )
+            ensure_scope_tables(db)
+            if getattr(self.profiles, "path", None) and self.profiles.path.is_dir():
+                for prof_dir in sorted(self.profiles.path.iterdir()):
+                    if not prof_dir.is_dir() or path_is_link_like(prof_dir):
+                        continue
+                    rm_path = prof_dir / "MEMORY.md"
+                    if not rm_path.is_file() or path_is_link_like(rm_path):
+                        continue
+                    asset_key = f"role_memory:{prof_dir.name}:MEMORY.md"
+                    if get_asset_scope(db, asset_key) is not None:
+                        continue
+                    try:
+                        rm_text = self._bytes(rm_path).decode("utf-8")
+                    except (ValueError, UnicodeDecodeError):
+                        set_asset_scope(db, asset_key, "admin_only", provenance="legacy_quarantine", now=self.clock())
+                        continue
+                    if not rm_text.strip():
+                        set_asset_scope(db, asset_key, "public", provenance="empty", now=self.clock())
+                        continue
+                    try:
+                        self._guard("role_memory", rm_text, "", allow_custom=False)
+                    except ValueError:
+                        set_asset_scope(db, asset_key, "admin_only", provenance="legacy_quarantine", now=self.clock())
+                    else:
+                        set_asset_scope(db, asset_key, "public", provenance="verified", now=self.clock())
         _ensure_managed_dir(root, root / "memory/self")
         heartbeat_preset = PRESETS_DIR / "memory/HEARTBEAT.md"
         for kind in ("journal", "heartbeat"):
@@ -656,6 +687,36 @@ class MemoryLayers:
                 directory, document = self.profiles.path / target, "NOTES.md"
             elif kind == "role_memory":
                 self.profiles.get(target)
+                cid = str(chat_id or "").strip()
+                if cid and cid not in {"global", "self"}:
+                    if len(cid) > 256:
+                        raise ValueError("会话记忆标识过长")
+                    if resolve_alias:
+                        resolved_cid = self._resolve_memory_chat_id(cid, db=db)
+                        if resolved_cid == cid and callable(self.chat_aliases):
+                            for cand in self._memory_alias_ids(cid):
+                                ch = hashlib.sha256(cand.encode("utf-8")).hexdigest()[:32]
+                                if (
+                                    self.root
+                                    / "memory/chats"
+                                    / ch
+                                    / "roles"
+                                    / target
+                                    / "MEMORY.md"
+                                ).is_file():
+                                    resolved_cid = cand
+                                    break
+                        cid = resolved_cid
+                    chat_hash = hashlib.sha256(cid.encode("utf-8")).hexdigest()[:32]
+                    directory = self.root / "memory/chats" / chat_hash / "roles" / target
+                    document = "MEMORY.md"
+                    _ensure_managed_dir(self.root, directory)
+                    return (
+                        f"role_memory:{chat_hash}:{target}:MEMORY.md",
+                        directory / document,
+                        document,
+                        target,
+                    )
                 directory, document = self.profiles.path / target, "MEMORY.md"
             else:
                 directory, document = (
@@ -682,7 +743,13 @@ class MemoryLayers:
             raise ValueError("未知记忆层")
         base_root = (
             self.profiles.path
-            if kind in {"profile", "notes", "role_memory"}
+            if (
+                kind in {"profile", "notes"}
+                or (
+                    kind == "role_memory"
+                    and str(chat_id or "").strip() in {"", "global", "self"}
+                )
+            )
             else self.root
         )
         _ensure_managed_dir(base_root, directory)
@@ -741,11 +808,15 @@ class MemoryLayers:
             content,
         ):
             raise ValueError("内容包含凭据，已拒绝保存")
+        is_scoped_role_memory = (
+            kind == "role_memory"
+            and str(chat_id or "").strip() not in {"", "global", "self"}
+        )
         if (
             allow_custom
-            or kind in {"memory", "role_memory"}
-            or kind == "profile"
-            and document == "profile.toml"
+            or kind == "memory"
+            or is_scoped_role_memory
+            or (kind == "profile" and document == "profile.toml")
         ):
             return
         if re.search(
@@ -787,6 +858,17 @@ class MemoryLayers:
     def _record(
         self, db, asset, version, kind, target, chat_id, document, content, author
     ):
+        scoped_cid = (
+            chat_id
+            if (
+                kind == "memory"
+                or (
+                    kind == "role_memory"
+                    and str(chat_id or "").strip() not in {"", "global", "self"}
+                )
+            )
+            else ""
+        )
         db.execute(
             "INSERT INTO memory_versions VALUES (?,?,?,?,?,?,?,?,?)",
             (
@@ -794,7 +876,7 @@ class MemoryLayers:
                 version,
                 kind,
                 target,
-                chat_id if kind == "memory" else "",
+                scoped_cid,
                 document,
                 content,
                 author,
@@ -1677,6 +1759,7 @@ class MemoryLayers:
             for asset in assets:
                 db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
                 db.execute("DELETE FROM memory_versions WHERE asset=?", (asset,))
+                db.execute("DELETE FROM asset_scopes WHERE asset_key=?", (asset,))
 
     def save_skill_proposal(
         self,
@@ -1868,6 +1951,25 @@ class MemoryLayers:
                     content,
                     author,
                 )
+                if kind == "role_memory":
+                    cid_str = str(chat_id or "").strip()
+                    if cid_str and cid_str not in {"global", "self"}:
+                        set_asset_scope(
+                            db,
+                            asset,
+                            initial_thread_scope(chat_id=cid_str),
+                            source_chat_id=cid_str,
+                            provenance="chat_write",
+                            now=self.clock(),
+                        )
+                    else:
+                        set_asset_scope(
+                            db,
+                            asset,
+                            "public",
+                            provenance="admin_write",
+                            now=self.clock(),
+                        )
                 return {**current, "content": content, "version": version}
         except BaseException:
             if previous is not None and path is not None:
@@ -2051,11 +2153,42 @@ class MemoryLayers:
             "heartbeat": heartbeat,
         }
 
-    def methods(self, profile):
+    def methods(self, profile, *, chat_id: str = "", is_admin: bool = False):
         pieces: list[str] = []
-        role_mem = self.read("role_memory", target=profile.id)["content"].strip()
-        if role_mem:
-            pieces.append(f"### 角色长期记忆\n{role_mem}")
+        global_asset = f"role_memory:{profile.id}:MEMORY.md"
+        with self.store.connect() as db:
+            scope_row = get_asset_scope(db, global_asset)
+        global_blocked = bool(
+            scope_row
+            and scope_row.get("visibility_scope") == "admin_only"
+            and not is_admin
+        )
+        if not global_blocked and (self.profiles.path / profile.id / "MEMORY.md").is_file():
+            role_mem = self.read(
+                "role_memory", target=profile.id, chat_id="", allow_custom=True
+            )["content"].strip()
+            if role_mem:
+                pieces.append(f"### 角色长期记忆\n{role_mem}")
+        cid = str(chat_id or "").strip()
+        if cid and cid not in {"global", "self"}:
+            candidates = self._memory_alias_ids(cid) or [cid]
+            has_chat_rm = any(
+                (
+                    self.root
+                    / "memory/chats"
+                    / hashlib.sha256(alias.encode("utf-8")).hexdigest()[:32]
+                    / "roles"
+                    / profile.id
+                    / "MEMORY.md"
+                ).is_file()
+                for alias in candidates
+            )
+            if has_chat_rm:
+                chat_rm = self.read(
+                    "role_memory", target=profile.id, chat_id=cid, allow_custom=True
+                )["content"].strip()
+                if chat_rm:
+                    pieces.append(f"### 当前会话角色记忆\n{chat_rm}")
         notes_txt = self.read("notes", target=profile.id)["content"]
         pieces.append(notes_txt)
         for skill in profile.skills:

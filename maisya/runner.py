@@ -11,6 +11,7 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 from typing import Literal, Protocol
 
 from .pathsafe import minimal_subprocess_env, path_is_link_like, rmtree_safe, safe_chmod
@@ -133,6 +134,7 @@ class ExecutionRequest:
     risk_hint: str = ""
     targets: tuple[str, ...] = ()
     mount_secret_files: bool = False
+    unisolated_host: bool = False
 
 
 @dataclass(frozen=True)
@@ -320,7 +322,24 @@ def evaluate_permission_gate(
     if request.permission_mode == "autonomous":
         return None
     if request.permission_mode == "ask_risky" and risk_level == "low":
-        return None
+        if not request.unisolated_host:
+            return None
+        scope = request.scope or "*"
+        if grants is not None and grants.check_or_consume(
+            scope=scope,
+            action_key="host_exec:unisolated",
+            session_id=request.session_id,
+        ):
+            return None
+        return ApprovalRequired(
+            reason="宿主机直通模式不隔离本机文件系统（cwd 不限制脚本访问工作区外路径），请确认授予宿主机高信任执行权限",
+            action_key="host_exec:unisolated",
+            risk_level="risky",
+            command=request.command,
+            scope=scope,
+            category="host_unisolated",
+            targets=request.targets,
+        )
 
     scope = request.scope or "*"
     if grants is not None and grants.check_or_consume(
@@ -393,6 +412,107 @@ class HostWorkspaceRunner:
     ):
         self.vault = vault
         self.grants = grants
+        self._active_lock = threading.Lock()
+        self._active_procs: list[tuple[str, str, object]] = []
+        self._terminated_procs: set[int] = set()
+
+    def _register_proc(self, session_id: str, actor: str, proc: object) -> tuple[str, str, object]:
+        entry = (str(session_id or ""), str(actor or ""), proc)
+        with self._active_lock:
+            self._active_procs.append(entry)
+        return entry
+
+    def _unregister_proc(self, entry: tuple[str, str, object] | None) -> None:
+        if entry is None:
+            return
+        proc = entry[2]
+        with self._active_lock:
+            if entry in self._active_procs:
+                self._active_procs.remove(entry)
+            self._terminated_procs.discard(id(proc))
+
+    def _consume_terminated(self, proc: object | None) -> bool:
+        if proc is None:
+            return False
+        with self._active_lock:
+            pid_key = id(proc)
+            if pid_key in self._terminated_procs:
+                self._terminated_procs.discard(pid_key)
+                return True
+            return False
+
+    def active_count(self, *, session_id: str = "", actor: str = "") -> int:
+        sid = str(session_id or "")
+        act = str(actor or "")
+        with self._active_lock:
+            return sum(
+                1
+                for s, a, proc in self._active_procs
+                if getattr(proc, "returncode", None) is None
+                and (not sid or s == sid)
+                and (not act or a == act)
+            )
+
+    def terminate_for(self, *, session_id: str = "", actor: str = "") -> int:
+        sid = str(session_id or "")
+        act = str(actor or "")
+        with self._active_lock:
+            targets = [
+                proc
+                for s, a, proc in self._active_procs
+                if getattr(proc, "returncode", None) is None
+                and (not sid or s == sid)
+                and (not act or a == act)
+            ]
+            for proc in targets:
+                self._terminated_procs.add(id(proc))
+        killed = 0
+        for proc in targets:
+            _kill_process_tree(proc)
+            killed += 1
+        return killed
+
+    def _finish_result(
+        self,
+        proc: object,
+        out_raw: bytes,
+        err_raw: bytes,
+        *,
+        output_limit: int,
+        secret_values: list[str],
+    ) -> ExecutionResult:
+        stdout, trunc_out = _decode_and_redact(
+            out_raw,
+            limit=output_limit,
+            vault=self.vault,
+            secret_values=secret_values,
+        )
+        stderr, trunc_err = _decode_and_redact(
+            err_raw,
+            limit=output_limit,
+            vault=self.vault,
+            secret_values=secret_values,
+        )
+        rc = int(getattr(proc, "returncode", 0) or 0)
+        if self._consume_terminated(proc):
+            return ExecutionResult(
+                status="denied",
+                exit_code=rc or -9,
+                stdout=stdout,
+                stderr=stderr or "授权已撤销，本地子进程已终止",
+                truncated=trunc_out or trunc_err,
+                error="授权已撤销，本地子进程已终止",
+                runner_name=self.name,
+            )
+        return ExecutionResult(
+            status="ok" if rc == 0 else "error",
+            exit_code=rc,
+            stdout=stdout,
+            stderr=stderr,
+            truncated=trunc_out or trunc_err,
+            error="" if rc == 0 else f"进程退出码 {rc}",
+            runner_name=self.name,
+        )
 
     def _prepare(
         self, request: ExecutionRequest
@@ -520,8 +640,10 @@ class HostWorkspaceRunner:
             popen_kwargs["start_new_session"] = True
 
         proc: subprocess.Popen[bytes] | None = None
+        entry: tuple[str, str, object] | None = None
         try:
             proc = subprocess.Popen(cmd, **popen_kwargs)
+            entry = self._register_proc(request.session_id, request.actor, proc)
             try:
                 out_raw, err_raw = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -551,27 +673,12 @@ class HostWorkspaceRunner:
                     error=f"命令执行超时（>{timeout}s）",
                     runner_name=self.name,
                 )
-            stdout, trunc_out = _decode_and_redact(
+            return self._finish_result(
+                proc,
                 out_raw,
-                limit=output_limit,
-                vault=self.vault,
-                secret_values=secret_values,
-            )
-            stderr, trunc_err = _decode_and_redact(
                 err_raw,
-                limit=output_limit,
-                vault=self.vault,
+                output_limit=output_limit,
                 secret_values=secret_values,
-            )
-            rc = int(proc.returncode or 0)
-            return ExecutionResult(
-                status="ok" if rc == 0 else "error",
-                exit_code=rc,
-                stdout=stdout,
-                stderr=stderr,
-                truncated=trunc_out or trunc_err,
-                error="" if rc == 0 else f"进程退出码 {rc}",
-                runner_name=self.name,
             )
         except OSError as exc:
             return ExecutionResult(
@@ -580,6 +687,7 @@ class HostWorkspaceRunner:
                 runner_name=self.name,
             )
         finally:
+            self._unregister_proc(entry)
             if secrets_dir is not None:
                 rmtree_safe(secrets_dir)
 
@@ -607,6 +715,7 @@ class HostWorkspaceRunner:
             spawn_kwargs["start_new_session"] = True
 
         proc = None
+        entry: tuple[str, str, object] | None = None
         try:
             if use_shell:
                 cmd_str = _command_preview(request.command)
@@ -615,6 +724,7 @@ class HostWorkspaceRunner:
                 proc = await asyncio.create_subprocess_exec(
                     *[str(part) for part in request.command], **spawn_kwargs
                 )
+            entry = self._register_proc(request.session_id, request.actor, proc)
             try:
                 out_raw, err_raw = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout
@@ -655,27 +765,12 @@ class HostWorkspaceRunner:
                 except Exception:
                     pass
                 raise
-            stdout, trunc_out = _decode_and_redact(
+            return self._finish_result(
+                proc,
                 out_raw,
-                limit=output_limit,
-                vault=self.vault,
-                secret_values=secret_values,
-            )
-            stderr, trunc_err = _decode_and_redact(
                 err_raw,
-                limit=output_limit,
-                vault=self.vault,
+                output_limit=output_limit,
                 secret_values=secret_values,
-            )
-            rc = int(proc.returncode or 0)
-            return ExecutionResult(
-                status="ok" if rc == 0 else "error",
-                exit_code=rc,
-                stdout=stdout,
-                stderr=stderr,
-                truncated=trunc_out or trunc_err,
-                error="" if rc == 0 else f"进程退出码 {rc}",
-                runner_name=self.name,
             )
         except OSError as exc:
             return ExecutionResult(
@@ -684,6 +779,7 @@ class HostWorkspaceRunner:
                 runner_name=self.name,
             )
         finally:
+            self._unregister_proc(entry)
             if secrets_dir is not None:
                 rmtree_safe(secrets_dir)
 

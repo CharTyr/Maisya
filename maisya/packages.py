@@ -30,6 +30,7 @@ from .abilities import (
     _serialize_profile_dict,
     _validate_instructions,
 )
+from .authz import approved_envelope, record_delegation
 from .memory import SKILL_ID_RE, MemoryLayers, parse_skill_meta
 from .pathsafe import ensure_dirs, path_is_link_like
 from .trust import format_stream_spec, parse_stream_spec
@@ -949,6 +950,13 @@ def _apply_imported_schedules(
     target_key = "self" if resolved_cid == "self" else f"chat:{resolved_cid}"
     count = 0
     now_ts = plugin.intents.clock()
+    svc_cfg = (
+        plugin.runtime.services.load()
+        if (getattr(plugin, "runtime", None) and getattr(plugin.runtime, "services", None))
+        else {}
+    )
+    sched_prof = plugin.profiles.get(profile_id)
+    sched_env = approved_envelope(sched_prof, svc_cfg, target_chat=resolved_cid)
     for item in schedules[:12]:
         if not isinstance(item, dict):
             continue
@@ -961,7 +969,7 @@ def _apply_imported_schedules(
         prompt = str(item.get("prompt") or item.get("reason") or "执行推荐定时任务").strip()
         reason = str(item.get("reason") or prompt[:120]).strip()
         cond = str(item.get("condition") or "").strip()
-        plugin.intents.schedule(
+        created = plugin.intents.schedule(
             kind="proactive",
             source="workflow",
             target=target_key,
@@ -975,9 +983,23 @@ def _apply_imported_schedules(
                 "prompt": prompt[:2000],
                 **({"every_seconds": every_sec} if every_sec else {}),
                 "scheduled_admin": True,
+                "issuer_admin": "console",
+                "envelope": sched_env,
             },
             bypass_limits=True,
         )
+        if getattr(plugin, "grants", None) is not None and created.get("intent_id"):
+            record_delegation(
+                plugin.grants,
+                subject_kind="intent",
+                subject_id=created["intent_id"],
+                issuer="console",
+                chat_id=resolved_cid,
+                target_chat=resolved_cid,
+                profile_id=profile_id,
+                envelope=sched_env,
+                clock=plugin.intents.clock,
+            )
         count += 1
     return count
 

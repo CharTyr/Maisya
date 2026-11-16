@@ -20,6 +20,8 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
 
+from .abilities import Profile
+from .authz import check_hot_edit_expansion
 from .pathsafe import (
     is_absolute_program_path,
     minimal_subprocess_env,
@@ -627,6 +629,24 @@ class Services:
         spec = apis_cfg.get(api_id)
         if not api_id or api_id not in profile.apis or not isinstance(spec, dict):
             raise PermissionError("本档案未授权该跨插件 API")
+        if (
+            context.get("profile_snapshot")
+            and runtime is not None
+            and getattr(runtime, "memory", None) is not None
+            and getattr(runtime.memory, "profiles", None) is not None
+        ):
+            prof_id = str(context.get("profile") or profile.id)
+            if (runtime.memory.profiles.path / prof_id / "profile.toml").is_file():
+                live_prof = await completed_thread(runtime.memory.profiles.get, prof_id)
+                err = check_hot_edit_expansion(
+                    Profile(**context["profile_snapshot"]),
+                    live_prof,
+                    services_cfg={"apis": apis_cfg},
+                    envelope=(context.get("grant") or {}).get("envelope"),
+                    requested_api=api_id,
+                )
+                if err:
+                    raise PermissionError(err)
         if spec.get("access", "everyone") == "admins" and not is_admin:
             raise PermissionError("该跨插件 API 需要当前管理员授权")
         if (
@@ -968,6 +988,24 @@ class Services:
             or (not wildcard and tool not in allowed_tools)
         ):
             raise PermissionError("本档案未授权该 MCP 服务或工具")
+        if (
+            context.get("profile_snapshot")
+            and runtime is not None
+            and getattr(runtime, "memory", None) is not None
+            and getattr(runtime.memory, "profiles", None) is not None
+        ):
+            prof_id = str(context.get("profile") or profile.id)
+            if (runtime.memory.profiles.path / prof_id / "profile.toml").is_file():
+                live_prof = await completed_thread(runtime.memory.profiles.get, prof_id)
+                err = check_hot_edit_expansion(
+                    Profile(**context["profile_snapshot"]),
+                    live_prof,
+                    services_cfg=configuration,
+                    envelope=(context.get("grant") or {}).get("envelope"),
+                    requested_mcp=service,
+                )
+                if err:
+                    raise PermissionError(err)
         if config.get("access", "everyone") == "admins" and not await completed_thread(
             runtime.authorized, context
         ):

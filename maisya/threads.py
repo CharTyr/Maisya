@@ -15,6 +15,16 @@ from pathlib import Path
 
 from .abilities import Profile
 from .bridge import record_return
+from .data_scope import (
+    STEP_METHODS_CONTEXT,
+    can_read_scope,
+    ensure_scope_tables,
+    has_publication_grant as _has_publication_grant_db,
+    initial_thread_scope,
+    is_tainted_scope,
+    merge_scopes,
+    record_publication_grant as _record_publication_grant_db,
+)
 from .context_budget import (
     DEFAULT_CONTEXT_TOKENS,
     DEFAULT_MIN_PRUNE_CHARS,
@@ -345,7 +355,89 @@ class ThreadStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS primary_threads (owner TEXT, chat_id TEXT, profile TEXT, thread_id TEXT, updated REAL, PRIMARY KEY (owner, chat_id, profile))"
             )
+            for tbl in ("agent_threads", "agent_workspaces"):
+                cols = {r[1] for r in db.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                if "visibility_scope" not in cols:
+                    db.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN visibility_scope TEXT NOT NULL DEFAULT ''"
+                    )
+            ensure_scope_tables(db)
         safe_chmod(path, 0o600)
+
+    def narrow_scope(self, thread_id: str, *extra_scopes: str) -> str:
+        clean = [str(s or "").strip() for s in extra_scopes if str(s or "").strip()]
+        with self.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT owner, chat_id, visibility_scope FROM agent_threads WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                return ""
+            cur = str(row["visibility_scope"] or "").strip() or initial_thread_scope(
+                owner=row["owner"] or "chat",
+                chat_id=row["chat_id"] or "",
+            )
+            merged = merge_scopes([cur, *clean])
+            db.execute(
+                "UPDATE agent_threads SET visibility_scope=? WHERE thread_id=?",
+                (merged, thread_id),
+            )
+            ctx_row = db.execute(
+                "SELECT workspace_id FROM thread_context WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            ws_id = str(ctx_row["workspace_id"] or "").strip() if ctx_row else ""
+            if ws_id:
+                ws_row = db.execute(
+                    "SELECT visibility_scope FROM agent_workspaces WHERE workspace_id=?",
+                    (ws_id,),
+                ).fetchone()
+                ws_cur = str(ws_row["visibility_scope"] or "").strip() if ws_row else ""
+                ws_merged = merge_scopes([ws_cur, merged]) if ws_cur else merged
+                db.execute(
+                    "UPDATE agent_workspaces SET visibility_scope=? WHERE workspace_id=?",
+                    (ws_merged, ws_id),
+                )
+            return merged
+
+    def record_publication_grant(
+        self, thread_id: str, revision: int, target_chat: str, *, actor: str = ""
+    ) -> None:
+        targets = {str(target_chat or "").strip()}
+        if target_chat and callable(getattr(self, "chat_aliases", None)):
+            try:
+                targets.update(
+                    str(a).strip() for a in self.chat_aliases(target_chat, "") if a
+                )
+            except (TypeError, ValueError):
+                pass
+        for cand in sorted(t for t in targets if t):
+            _record_publication_grant_db(
+                self,
+                thread_id=thread_id,
+                revision=int(revision or 0),
+                target_chat=cand,
+                actor=actor,
+            )
+
+    def has_publication_grant(
+        self, thread_id: str, revision: int, target_chat: str
+    ) -> bool:
+        targets = [str(target_chat or "").strip()]
+        if target_chat and callable(getattr(self, "chat_aliases", None)):
+            try:
+                for alias in sorted(set(self.chat_aliases(target_chat, ""))):
+                    if isinstance(alias, str) and alias and alias not in targets:
+                        targets.append(alias)
+            except (TypeError, ValueError):
+                pass
+        return _has_publication_grant_db(
+            self,
+            thread_id=thread_id,
+            revision=int(revision or 0),
+            target_chats=targets,
+        )
 
     def connect(self):
         connection = sqlite3.connect(self.path, timeout=3)
@@ -374,9 +466,31 @@ class ThreadStore:
         ):
             raise ValueError("工作区名称只能含文字、数字、下划线或横线")
         thread_id = "th_" + uuid.uuid4().hex[:16]
+        grant_dict = grant if isinstance(grant, dict) else {}
+        base_vis = initial_thread_scope(owner=owner, chat_id=chat_id)
+        vis_scope = merge_scopes(
+            [
+                base_vis,
+                "admin_only"
+                if (
+                    getattr(profile, "access", "everyone") == "admins"
+                    or bool(getattr(profile, "secrets", ()))
+                )
+                else "public",
+                grant_dict.get("visibility_scope"),
+            ]
+        )
+        is_admin_caller = bool(
+            grant_dict.get("admin_verified")
+            or grant_dict.get("scheduled_admin")
+            or grant_dict.get("console_admin")
+            or grant_dict.get("admin_direct")
+            or grant_dict.get("issuer_admin")
+        )
         with self.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             workspace_id = ""
+            ws_name_to_bind = workspace
             if workspace:
                 binding = db.execute(
                     "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
@@ -402,6 +516,20 @@ class ThreadStore:
                         ).fetchone()
                         if binding is not None:
                             break
+                if binding and not is_admin_caller:
+                    b_vis = str(
+                        (binding["visibility_scope"] if "visibility_scope" in binding.keys() else "")
+                        or initial_thread_scope(owner=binding["owner"], chat_id=binding["chat_id"])
+                    )
+                    ws_aliases = [chat_id]
+                    if callable(getattr(self, "chat_aliases", None)):
+                        try:
+                            ws_aliases = list(self.chat_aliases(chat_id, platform))
+                        except (TypeError, ValueError):
+                            pass
+                    if is_tainted_scope(b_vis, current_chat_id=chat_id, aliases=ws_aliases):
+                        binding = None
+                        ws_name_to_bind = f"{workspace}_clean_{uuid.uuid4().hex[:6]}"
                 if binding and fresh_workspace:
                     archived_name = f"{binding['name']}#archived_{str(binding['thread_id'])[-6:]}"
                     db.execute(
@@ -413,7 +541,7 @@ class ThreadStore:
                     if binding["profile"] != profile.id:
                         raise ValueError("该工作区已绑定另一个角色")
                     previous = db.execute(
-                        "SELECT state,profile_snapshot FROM agent_threads WHERE thread_id=?",
+                        "SELECT state,profile_snapshot,visibility_scope FROM agent_threads WHERE thread_id=?",
                         (binding["thread_id"],),
                     ).fetchone()
                     if previous:
@@ -436,6 +564,11 @@ class ThreadStore:
                         db, binding["thread_id"], str(previous["state"] or "")
                     ):
                         updated = json.loads(encode(asdict(profile)))
+                        prev_vis = str(
+                            (previous["visibility_scope"] if "visibility_scope" in previous.keys() else "")
+                            or base_vis
+                        )
+                        next_vis = merge_scopes([prev_vis, vis_scope])
                         if (
                             binding["chat_id"] != chat_id
                             and previous["state"] == "active"
@@ -470,8 +603,12 @@ class ThreadStore:
                                     ),
                                 )
                         db.execute(
-                            "UPDATE agent_threads SET profile_snapshot=? WHERE thread_id=?",
-                            (encode(updated), binding["thread_id"]),
+                            "UPDATE agent_threads SET profile_snapshot=?, visibility_scope=? WHERE thread_id=?",
+                            (encode(updated), next_vis, binding["thread_id"]),
+                        )
+                        db.execute(
+                            "UPDATE agent_workspaces SET visibility_scope=? WHERE workspace_id=?",
+                            (next_vis, binding["workspace_id"]),
                         )
                         db.execute(
                             "UPDATE thread_context SET grant=? WHERE thread_id=?",
@@ -488,7 +625,7 @@ class ThreadStore:
                     workspace_id = (
                         "ws_"
                         + hashlib.sha256(
-                            encode([owner, chat_id, workspace]).encode()
+                            encode([owner, chat_id, ws_name_to_bind]).encode()
                         ).hexdigest()[:24]
                     )
                     while db.execute(
@@ -498,15 +635,24 @@ class ThreadStore:
                         workspace_id = (
                             "ws_"
                             + hashlib.sha256(
-                                encode([owner, chat_id, workspace, uuid.uuid4().hex]).encode()
+                                encode([owner, chat_id, ws_name_to_bind, uuid.uuid4().hex]).encode()
                             ).hexdigest()[:24]
                         )
+                b_vis_old = str(
+                    (binding["visibility_scope"] if binding and "visibility_scope" in binding.keys() else "")
+                    or vis_scope
+                )
+                ws_vis = merge_scopes([b_vis_old, vis_scope]) if binding else vis_scope
                 db.execute(
-                    "INSERT INTO agent_workspaces VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET chat_id=excluded.chat_id, thread_id=excluded.thread_id",
-                    (workspace_id, owner, chat_id, workspace, profile.id, thread_id),
+                    "INSERT INTO agent_workspaces (workspace_id, owner, chat_id, name, profile, thread_id, visibility_scope) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(workspace_id) DO UPDATE SET chat_id=excluded.chat_id, thread_id=excluded.thread_id, visibility_scope=excluded.visibility_scope",
+                    (workspace_id, owner, chat_id, ws_name_to_bind, profile.id, thread_id, ws_vis),
                 )
             db.execute(
-                "INSERT INTO agent_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agent_threads "
+                "(thread_id, profile, profile_snapshot, chat_id, platform, user_id, owner, state, result, history, summary, revision, processed_revision, completed_revision, questions, updated, visibility_scope) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     profile.id,
@@ -524,6 +670,7 @@ class ThreadStore:
                     0,
                     0,
                     time.time(),
+                    vis_scope,
                 ),
             )
             db.execute("INSERT INTO thread_search VALUES (?, ?)", (thread_id, message))
@@ -554,6 +701,11 @@ class ThreadStore:
         result = dict(row)
         result["workspace_id"] = context["workspace_id"] if context else ""
         result["grant"] = json.loads(context["grant"]) if context else {}
+        if not str(result.get("visibility_scope") or "").strip():
+            result["visibility_scope"] = initial_thread_scope(
+                owner=result.get("owner") or "chat",
+                chat_id=result.get("chat_id") or "",
+            )
         if (
             not allow_any_chat
             and result["chat_id"] != chat_id
@@ -881,7 +1033,7 @@ class ThreadStore:
             allow_self=(row["owner"] == "self"),
         )
 
-    def find_primary_thread(self, profile_id, chat_id, *, owner="chat"):
+    def find_primary_thread(self, profile_id, chat_id, *, owner="chat", is_admin: bool = True):
         target_chat = "self" if owner == "self" else chat_id
         with self.connect() as db:
             primary = db.execute(
@@ -913,12 +1065,26 @@ class ThreadStore:
             ).fetchone()
             if row is None or row["state"] in {"archived", "closed", "done"}:
                 return None
-            return self.get(
+            resolved = self.get(
                 tid,
                 row["chat_id"],
                 allow_self=(row["owner"] == "self"),
                 allow_any_chat=(row["chat_id"] != chat_id and callable(getattr(self, "chat_aliases", None))),
             )
+            if not is_admin:
+                check_aliases = [chat_id]
+                if callable(getattr(self, "chat_aliases", None)):
+                    try:
+                        check_aliases = list(self.chat_aliases(chat_id, ""))
+                    except (TypeError, ValueError):
+                        pass
+                if is_tainted_scope(
+                    resolved.get("visibility_scope"),
+                    current_chat_id=chat_id,
+                    aliases=check_aliases,
+                ):
+                    return None
+            return resolved
 
     def bind_primary_thread(self, profile_id, chat_id, thread_id, *, owner="chat"):
         target_chat = "self" if owner == "self" else chat_id
@@ -1786,8 +1952,17 @@ class ThreadStore:
         ):
             raise ValueError("检索参数无效")
         limit = max(1, min(int(limit), 10))
+        fetch_limit = min(50, limit * 5)
         tokens = re.findall(r"\w+", query, flags=re.UNICODE)[:12]
         match = " AND ".join('"' + token + '"*' for token in tokens)
+        viewer_aliases = [c for c in {chat_id, *(chat_ids or ())} if isinstance(c, str) and c]
+        if not all_chats and chat_id and callable(getattr(self, "chat_aliases", None)):
+            try:
+                for alias in self.chat_aliases(chat_id, ""):
+                    if isinstance(alias, str) and alias and alias not in viewer_aliases:
+                        viewer_aliases.append(alias)
+            except (TypeError, ValueError):
+                pass
         if all_chats:
             scopes = {
                 "chat": 't.owner="chat"',
@@ -1830,7 +2005,7 @@ class ThreadStore:
                     "SELECT t.* FROM agent_threads t WHERE t.thread_id=? AND "
                     + scopes[scope]
                     + " LIMIT ?",
-                    [query, *parameters, limit],
+                    [query, *parameters, fetch_limit],
                 ).fetchall()
             elif re.search(r"[\u3400-\u9fff]", query):
                 conditions = " AND ".join("f.text LIKE ?" for _ in tokens)
@@ -1840,7 +2015,7 @@ class ThreadStore:
                     + " AND "
                     + scopes[scope]
                     + " ORDER BY t.updated DESC LIMIT ?",
-                    [*["%" + token + "%" for token in tokens], *parameters, limit],
+                    [*["%" + token + "%" for token in tokens], *parameters, fetch_limit],
                 ).fetchall()
             elif match:
                 rows = db.execute(
@@ -1848,17 +2023,30 @@ class ThreadStore:
                     "WHERE thread_search MATCH ? AND "
                     + scopes[scope]
                     + " ORDER BY t.updated DESC LIMIT ?",
-                    [match, *parameters, limit],
+                    [match, *parameters, fetch_limit],
                 ).fetchall()
             else:
                 rows = db.execute(
                     "SELECT t.* FROM agent_threads t WHERE "
                     + scopes[scope]
                     + " ORDER BY t.updated DESC LIMIT ?",
-                    [*parameters, limit],
+                    [*parameters, fetch_limit],
                 ).fetchall()
             found = []
             for row in rows:
+                r_vis = str(
+                    (row["visibility_scope"] if "visibility_scope" in row.keys() else "")
+                    or initial_thread_scope(owner=row["owner"], chat_id=row["chat_id"])
+                )
+                if not can_read_scope(
+                    r_vis,
+                    viewer_chat=chat_id,
+                    is_admin=all_chats,
+                    aliases=viewer_aliases,
+                ):
+                    continue
+                if len(found) >= limit:
+                    break
                 tid = row["thread_id"]
                 ws_row = db.execute(
                     "SELECT w.name FROM thread_context c JOIN agent_workspaces w "
@@ -2353,9 +2541,58 @@ class ThreadEngine:
             if reuse_primary is not None
             else getattr(profile, "session_mode", "ephemeral") == "persistent"
         )
+        grant_dict = grant if isinstance(grant, dict) else {}
+        is_admin_caller = bool(
+            grant_dict.get("admin_verified")
+            or grant_dict.get("scheduled_admin")
+            or grant_dict.get("console_admin")
+            or grant_dict.get("admin_direct")
+            or grant_dict.get("issuer_admin")
+        )
+        effective_grant = dict(grant_dict)
+        if from_threads:
+            inherited_scopes = []
+            allow_cross = bool(
+                effective_grant.get("scheduled_admin")
+                or effective_grant.get("admin_direct")
+                or effective_grant.get("console_admin")
+                or (owner == "self" and effective_grant.get("admin_verified"))
+            )
+            for prev_id in from_threads:
+                try:
+                    prev_row = await asyncio.to_thread(
+                        self.store.get,
+                        prev_id,
+                        chat_id,
+                        allow_self=True,
+                        allow_any_chat=allow_cross,
+                    )
+                except (KeyError, PermissionError, ValueError):
+                    continue
+                inherited_scopes.append(
+                    str(
+                        prev_row.get("visibility_scope")
+                        or initial_thread_scope(
+                            owner=prev_row.get("owner") or "chat",
+                            chat_id=prev_row.get("chat_id") or "",
+                        )
+                    )
+                )
+            if inherited_scopes:
+                base_scope = str(
+                    effective_grant.get("visibility_scope")
+                    or initial_thread_scope(owner=owner, chat_id=chat_id)
+                )
+                effective_grant["visibility_scope"] = merge_scopes(
+                    [base_scope, *inherited_scopes]
+                )
         if is_persistent and fresh:
             existing_pre = await asyncio.to_thread(
-                self.store.find_primary_thread, profile.id, chat_id, owner=owner
+                self.store.find_primary_thread,
+                profile.id,
+                chat_id,
+                owner=owner,
+                is_admin=is_admin_caller,
             )
             if existing_pre is not None and existing_pre["thread_id"] in self.tasks:
                 await self.stop(
@@ -2371,7 +2608,11 @@ class ThreadEngine:
                 raise ValueError("当前 Agent 线程已满，请稍后再试")
             existing = (
                 await asyncio.to_thread(
-                    self.store.find_primary_thread, profile.id, chat_id, owner=owner
+                    self.store.find_primary_thread,
+                    profile.id,
+                    chat_id,
+                    owner=owner,
+                    is_admin=is_admin_caller,
                 )
                 if is_persistent
                 else None
@@ -2392,6 +2633,12 @@ class ThreadEngine:
                 await asyncio.to_thread(
                     self.store.update_profile_snapshot, tid, profile, row["chat_id"]
                 )
+                if effective_grant.get("visibility_scope"):
+                    await asyncio.to_thread(
+                        self.store.narrow_scope,
+                        tid,
+                        effective_grant["visibility_scope"],
+                    )
                 try:
                     async with self.locks.setdefault(tid, asyncio.Lock()):
                         result, future = await self._send_locked(
@@ -2401,7 +2648,7 @@ class ThreadEngine:
                             create_waiter=bool(wait_seconds),
                             return_route=return_route,
                             input_context={
-                                "grant": grant or {},
+                                "grant": effective_grant,
                                 "references": references or [],
                                 "from_threads": from_threads or [],
                             },
@@ -2426,7 +2673,7 @@ class ThreadEngine:
                     user_id=user_id,
                     owner=owner,
                     workspace=target_workspace,
-                    grant=grant,
+                    grant=effective_grant,
                     fresh_workspace=bool(is_persistent and fresh),
                 )
                 tid = row["thread_id"]
@@ -2447,7 +2694,7 @@ class ThreadEngine:
                             create_waiter=bool(wait_seconds),
                             return_route=return_route,
                             input_context={
-                                "grant": grant or {},
+                                "grant": effective_grant,
                                 "references": references or [],
                                 "from_threads": from_threads or [],
                             },
@@ -2938,10 +3185,43 @@ class ThreadEngine:
                             ) or ""
                         memory_obj = getattr(self.runtime, "memory", None)
                         methods_fn = getattr(memory_obj, "methods", None)
+                        step_ctx_meta = {
+                            "chat_id": row["chat_id"] if row.get("owner") != "self" else "",
+                            "is_admin": False,
+                        }
+                        cur_grant = (metadata.get("grant") if isinstance(locals().get("metadata"), dict) else None) or row.get("grant") or {}
+                        if (
+                            cur_grant.get("admin_verified")
+                            or cur_grant.get("scheduled_admin")
+                            or cur_grant.get("console_admin")
+                            or cur_grant.get("admin_direct")
+                        ):
+                            step_ctx_meta["is_admin"] = True
+                        elif callable(getattr(self.runtime, "authorized", None)):
+                            try:
+                                step_ctx_meta["is_admin"] = bool(
+                                    await completed_thread(
+                                        self.runtime.authorized,
+                                        {**row, "grant": cur_grant},
+                                    )
+                                )
+                            except (AttributeError, KeyError, TypeError, ValueError):
+                                pass
                         if callable(methods_fn):
-                            methods_text = (
-                                await completed_thread(methods_fn, profile)
-                            ) or ""
+                            m_params = inspect.signature(methods_fn).parameters
+                            if "chat_id" in m_params or "is_admin" in m_params:
+                                methods_text = (
+                                    await completed_thread(
+                                        methods_fn,
+                                        profile,
+                                        chat_id=step_ctx_meta["chat_id"],
+                                        is_admin=step_ctx_meta["is_admin"],
+                                    )
+                                ) or ""
+                            else:
+                                methods_text = (
+                                    await completed_thread(methods_fn, profile)
+                                ) or ""
                         budget = resolve_context_budget(
                             profile,
                             default_context_tokens=self.context_tokens,
@@ -3004,6 +3284,19 @@ class ThreadEngine:
                         memory_context=memory_context,
                         legacy_escape=(self._legacy_char_budget is not None),
                     )
+                    step_grant_cur = (
+                        metadata.get("grant") if isinstance(locals().get("metadata"), dict) else None
+                    ) or row.get("grant") or {}
+                    step_meta = {
+                        "chat_id": row["chat_id"] if row.get("owner") != "self" else "",
+                        "is_admin": bool(
+                            step_grant_cur.get("admin_verified")
+                            or step_grant_cur.get("scheduled_admin")
+                            or step_grant_cur.get("console_admin")
+                            or step_grant_cur.get("admin_direct")
+                        ),
+                    }
+                    tok_step = STEP_METHODS_CONTEXT.set(step_meta)
                     try:
                         response = await self.runtime.step(profile, request_history)
                     except (
@@ -3053,6 +3346,8 @@ class ThreadEngine:
                             )
                         else:
                             raise
+                    finally:
+                        STEP_METHODS_CONTEXT.reset(tok_step)
                     alive, changed = await self._boundary(
                         thread_id, processed, deadline
                     )

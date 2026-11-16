@@ -478,7 +478,11 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
         return await completed_thread(_tools_file_op, plugin, op, content, version, expected_version, author, _assert_no_secret)
     chat_id = current_chat_id
     if target_chat and str(target_chat).strip():
-        chat_id, _ = await resolve_chat_target(plugin, target_chat, current_chat_id=current_chat_id, current_platform=current_platform, allow_unknown_ascii=True)
+        if f_kind == "role_memory" and str(target_chat).strip().lower() == "global":
+            chat_id = ""
+        else:
+            chat_id, _ = await resolve_chat_target(plugin, target_chat, current_chat_id=current_chat_id, current_platform=current_platform, allow_unknown_ascii=True)
+    allow_raw = f_kind not in {"planner", "role_memory"} or (f_kind == "role_memory" and bool(chat_id))
     if op == "read":
         return await completed_thread(plugin.memory.read, f_kind, target=f_target, chat_id=chat_id, document=f_doc, version=version, allow_custom=True)
     if op == "history":
@@ -504,13 +508,13 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
         else:
             raise ValueError("patch 需要提供 append、old_string/new_string 或 content")
         _assert_no_secret(plugin, next_text, f_doc or f_kind)
-        res = await completed_thread(plugin.memory.write, f_kind, next_text, expected_version=cur_ver, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=f_kind != "planner")
+        res = await completed_thread(plugin.memory.write, f_kind, next_text, expected_version=cur_ver, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=allow_raw)
         return {**res, "previous_version": cur_ver, "rollback_hint": f"maisya_shape(action='{f_kind}', op='rollback', target='{f_target}', version={cur_ver}, expected_version={res['version']})"}
     if op == "write":
         if expected_version is None:
             raise ValueError("覆写文档必须提供 expected_version")
         _assert_no_secret(plugin, content, f_doc or f_kind)
-        res = await completed_thread(plugin.memory.write, f_kind, content, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=f_kind != "planner")
+        res = await completed_thread(plugin.memory.write, f_kind, content, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=allow_raw)
         return {**res, "previous_version": int(expected_version), "rollback_hint": f"maisya_shape(action='file', op='rollback', document='{document or f_doc}', version={expected_version}, expected_version={res['version']})"}
     if op == "rollback":
         if version is None or expected_version is None:

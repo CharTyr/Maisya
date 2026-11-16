@@ -206,6 +206,9 @@ class Intents:
         result["condition"] = str(result.get("condition") or "")
         result.setdefault("last_checked_at", None)
         result.setdefault("last_triggered_at", None)
+        pause_err = str(result["payload"].get("pause_error") or "").strip()
+        if pause_err:
+            result["error"] = pause_err
         return result
 
     def get(self, intent_id):
@@ -395,16 +398,46 @@ class Intents:
             )
         return self.get(intent_id)
 
-    def resume(self, intent_id, target, *, is_admin: bool | None = None):
+    def pause_for_authority(self, intent_id: str, reason: str = ""):
+        clean_reason = str(reason or "原授权管理员已失效，需现任管理员接管")[:240]
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM intents WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("意图不存在")
+            payload = _parse_payload(row["payload"])
+            payload["pause_error"] = clean_reason
+            db.execute(
+                "UPDATE intents SET status='paused', wake_status='authority_paused', payload=? "
+                "WHERE intent_id=? AND status IN ('pending', 'claimed', 'paused')",
+                (encode(payload), intent_id),
+            )
+        return self.get(intent_id)
+
+    def resume(
+        self,
+        intent_id,
+        target,
+        *,
+        is_admin: bool | None = None,
+        payload_patch: dict | None = None,
+    ):
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = self._require_modifiable_intent(
                 db, intent_id, target, statuses=("paused",), is_admin=is_admin
             )
+            payload = _parse_payload(row["payload"])
+            payload.pop("pause_error", None)
+            if isinstance(payload_patch, dict):
+                payload.update(payload_patch)
             due_at = max(float(row["due_at"] or 0.0), self.clock())
             db.execute(
-                "UPDATE intents SET status='pending', due_at=? WHERE intent_id=? AND target=? AND status='paused'",
-                (due_at, intent_id, target),
+                "UPDATE intents SET status='pending', wake_status='', due_at=?, payload=? "
+                "WHERE intent_id=? AND target=? AND status='paused'",
+                (due_at, encode(payload), intent_id, target),
             )
         return self.get(intent_id)
 

@@ -16,7 +16,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from .abilities import Profile
+from .authz import check_hot_edit_expansion
+from .data_scope import STEP_METHODS_CONTEXT, initial_thread_scope
 from .pathsafe import minimal_subprocess_env, path_is_link_like
+from .vault import redact_secrets
 from .runner import (
     ApprovalRequired,
     ExecutionRequest,
@@ -45,7 +48,7 @@ _PLAYWRIGHT_ERROR_MARKERS = (
 
 _ACCESS_RANK = {"everyone": 0, "listed": 1, "admins": 2}
 _ENVIRONMENT_RANK = {"sandbox": 0, "readonly": 1}
-_EXECUTION_RANK = {"host": 0, "sandbox": 1}
+_EXECUTION_RANK = {"host": 0, "auto": 1, "sandbox": 2}
 _PERMISSION_RANK = {"autonomous": 0, "ask_risky": 1, "always_ask": 2}
 _NETWORK_RANK = {"public": 0, "restricted": 1, "none": 2}
 _SHELL_META_RE = re.compile(r"[\n\r|&;><$`\\]")
@@ -62,6 +65,14 @@ def _tighten_allowlist(snapshot_items: tuple[str, ...], live_items: tuple[str, .
         narrowed = tuple(item for item in snapshot_items if item in live_set)
         return narrowed if narrowed else ("__disjoint__",)
     return live_items or snapshot_items
+
+
+def _intersect_bound(snapshot_items: tuple[str, ...], live_items: tuple[str, ...]) -> tuple[str, ...]:
+    """强能力绑定（mcp/apis/secrets）取原快照与实时配置的严格交集，空集即禁止，防止热改静默扩权。"""
+    if not snapshot_items or not live_items:
+        return ()
+    live_set = set(live_items)
+    return tuple(item for item in snapshot_items if item in live_set)
 
 
 def _step_service_context(context: dict) -> dict:
@@ -246,11 +257,19 @@ class AgentRuntime(Scout):
         approval: ApprovalRequired,
         scope: str,
         session_id: str,
+        extra_redactions: tuple[str, ...] = (),
     ) -> dict:
         request_id = "apr_" + uuid.uuid4().hex[:12]
-        cmd_preview = self.redact(_command_preview(approval.command))
-        reason = self.redact(approval.reason)
+        raw_cmd = self.redact(_command_preview(approval.command))
+        raw_reason = self.redact(approval.reason)
+        if extra_redactions:
+            raw_cmd = redact_secrets(raw_cmd, extra_redactions)
+            raw_reason = redact_secrets(raw_reason, extra_redactions)
+        cmd_preview = raw_cmd
+        reason = raw_reason
         summary = self.redact(f"{reason}：{cmd_preview[:180]}" if cmd_preview else reason)
+        if extra_redactions:
+            summary = redact_secrets(summary, extra_redactions)
         now = time.time()
         targets_list = [str(t) for t in (approval.targets or ())]
         item = {
@@ -435,9 +454,9 @@ class AgentRuntime(Scout):
             sandbox_targets=live.sandbox_targets,
             shared_secrets=bool(profile.shared_secrets and live.shared_secrets),
             skills=live.skills,
-            mcp=live.mcp,
-            apis=live.apis,
-            secrets=live.secrets,
+            mcp=_intersect_bound(tuple(profile.mcp), tuple(live.mcp)),
+            apis=_intersect_bound(tuple(profile.apis), tuple(live.apis)),
+            secrets=_intersect_bound(tuple(profile.secrets), tuple(live.secrets)),
             fish_seed=live.fish_seed,
         )
 
@@ -530,7 +549,17 @@ class AgentRuntime(Scout):
         profile = await completed_thread(self.resolve_profile, profile)
         await completed_thread(self.available, profile)
         if self.memory:
-            methods = await completed_thread(self.memory.methods, profile)
+            step_ctx = STEP_METHODS_CONTEXT.get() or {}
+            methods_sig = inspect.signature(self.memory.methods).parameters
+            if "chat_id" in methods_sig or "is_admin" in methods_sig:
+                methods = await completed_thread(
+                    self.memory.methods,
+                    profile,
+                    chat_id=str(step_ctx.get("chat_id") or ""),
+                    is_admin=bool(step_ctx.get("is_admin")),
+                )
+            else:
+                methods = await completed_thread(self.memory.methods, profile)
             profile = replace(
                 profile,
                 instructions=profile.instructions
@@ -734,9 +763,12 @@ class AgentRuntime(Scout):
                 imported.append(
                     {"path": relative, "message_id": message_id, "bytes": len(content)}
                 )
+        grant_obj = row.get("grant") or {}
         allow_any_chat = bool(
-            (row.get("grant") or {}).get("scheduled_admin")
-            or (row.get("grant") or {}).get("admin_direct")
+            grant_obj.get("scheduled_admin")
+            or grant_obj.get("admin_direct")
+            or grant_obj.get("console_admin")
+            or (row.get("owner") == "self" and grant_obj.get("admin_verified"))
         )
         target_arena = (
             await completed_thread(
@@ -754,14 +786,50 @@ class AgentRuntime(Scout):
                 allow_self=True,
                 allow_any_chat=allow_any_chat,
             )
-            if target_arena == "group" and previous.get("owner") == "chat":
-                prev_arena = await completed_thread(
-                    self._chat_arena,
-                    previous["chat_id"],
-                    previous.get("platform", ""),
+            prev_vis = str(
+                previous.get("visibility_scope")
+                or initial_thread_scope(
+                    owner=previous.get("owner") or "chat",
+                    chat_id=previous.get("chat_id") or "",
                 )
-                if prev_arena == "private":
+            )
+            if target_arena == "group" and (
+                (
+                    previous.get("owner") == "chat"
+                    and await completed_thread(
+                        self._chat_arena,
+                        previous["chat_id"],
+                        previous.get("platform", ""),
+                    )
+                    == "private"
+                )
+                or prev_vis.startswith("private:")
+            ):
+                if admin_checked is None:
+                    admin_checked = bool(await completed_thread(self.authorized, row))
+                prev_rev = int(
+                    previous.get("completed_revision") or previous.get("revision") or 0
+                )
+                published = bool(
+                    hasattr(self.store, "has_publication_grant")
+                    and await completed_thread(
+                        self.store.has_publication_grant,
+                        previous["thread_id"],
+                        prev_rev,
+                        row["chat_id"],
+                    )
+                )
+                if not (admin_checked and published):
                     raise PermissionError("私聊线程结果默认不可直接注入群聊线程")
+            if prev_vis == "admin_only":
+                if admin_checked is None:
+                    admin_checked = bool(await completed_thread(self.authorized, row))
+                if not admin_checked:
+                    raise PermissionError("引用受限线程需要当前管理员授权")
+            if hasattr(self.store, "narrow_scope"):
+                await completed_thread(
+                    self.store.narrow_scope, row["thread_id"], prev_vis
+                )
             prev_profiles = [Profile(**previous["profile_snapshot"])]
             if self.memory:
                 try:
@@ -1354,11 +1422,14 @@ class AgentRuntime(Scout):
             )
             exec_res = await self.docker_runner.execute(req)
         else:
-            use_sandbox = name == "sandbox_exec" or profile.execution_mode == "sandbox"
-            if use_sandbox and not docker_ok:
+            strict_sandbox = name == "sandbox_exec" or profile.execution_mode == "sandbox"
+            if strict_sandbox and not docker_ok:
                 raise RuntimeError(
-                    "当前档案或工具指定 Docker 沙箱执行，但 Docker 沙箱未启用或未就绪"
+                    "当前档案要求容器沙箱隔离执行，但 Docker 沙箱未启用或未就绪（拒绝降级为宿主机执行）"
                 )
+            use_sandbox = strict_sandbox or (
+                profile.execution_mode == "auto" and docker_ok
+            )
             requested_secrets: list[str] = []
             if getattr(profile, "shared_secrets", True):
                 for h in profile.secrets or ():
@@ -1383,6 +1454,24 @@ class AgentRuntime(Scout):
                             env_name in cmd_str or f"/run/secrets/{h}" in cmd_str
                         ) and h not in requested_secrets:
                             requested_secrets.append(h)
+            if (
+                context.get("profile_snapshot")
+                and self.memory is not None
+                and getattr(self.memory, "profiles", None) is not None
+            ):
+                prof_id = str(context.get("profile") or profile.id)
+                if (self.memory.profiles.path / prof_id / "profile.toml").is_file():
+                    live_prof = await completed_thread(self.memory.profiles.get, prof_id)
+                    services_cfg = self.services.load() if self.services else {}
+                    err = check_hot_edit_expansion(
+                        Profile(**context["profile_snapshot"]),
+                        live_prof,
+                        services_cfg=services_cfg,
+                        envelope=(context.get("grant") or {}).get("envelope"),
+                        requested_secrets=requested_secrets,
+                    )
+                    if err:
+                        raise PermissionError(err)
             secrets_tuple = tuple(requested_secrets)
             clean_env: dict[str, str] = {}
             raw_env = arguments.get("env")
@@ -1416,11 +1505,18 @@ class AgentRuntime(Scout):
             extra_redacts = tuple(
                 v for v in clean_env.values() if isinstance(v, str) and len(v) >= 4
             )
+            raw_uid = str(context.get("user_id") or "").strip()
+            plat = str(context.get("platform") or "").strip().lower()
+            actor_id = (
+                raw_uid
+                if (":" in raw_uid or not plat or not raw_uid)
+                else f"{plat}:{raw_uid}"
+            ) or str((context.get("grant") or {}).get("issuer_admin") or "admin")
             req = ExecutionRequest(
                 command=command,
                 workspace=work.path,
                 is_admin=True,
-                actor=str(context.get("user_id") or "admin"),
+                actor=actor_id,
                 scope=scope,
                 session_id=thread_id,
                 permission_mode=eff_perm,
@@ -1432,7 +1528,10 @@ class AgentRuntime(Scout):
                 risk_hint=risk_hint,
                 targets=targets,
                 mount_secret_files=bool(secrets_tuple),
+                unisolated_host=not use_sandbox,
             )
+            if secrets_tuple and thread_id and hasattr(self.store, "narrow_scope"):
+                await completed_thread(self.store.narrow_scope, thread_id, "admin_only")
             runner = self.docker_runner if use_sandbox else self.host_runner
             exec_res = await runner.execute(req)
 
@@ -1448,6 +1547,7 @@ class AgentRuntime(Scout):
                 approval=exec_res.approval_required,
                 scope=scope,
                 session_id=thread_id,
+                extra_redactions=extra_redacts if is_admin else (),
             )
             return self.redact(
                 {

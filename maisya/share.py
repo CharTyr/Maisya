@@ -7,6 +7,7 @@ import json
 from pathlib import PurePosixPath
 import re
 
+from .data_scope import initial_thread_scope, is_tainted_scope
 from .scout import call_capability, checked, safe_url
 from .trust import parse_stream_spec, strip_mention_all
 
@@ -275,14 +276,35 @@ class Share:
     ):
         thread_id, chat_id = row["thread_id"], row["chat_id"]
         source_chat_id = chat_id
+        row_vis = str(
+            row.get("visibility_scope")
+            or initial_thread_scope(owner=row["owner"], chat_id=source_chat_id)
+        )
         if target_chat_id and target_chat_id != source_chat_id:
             if row["owner"] != "self" and not is_admin:
                 raise PermissionError("会话线程只能在原会话分享")
+            if (
+                row["owner"] == "self"
+                and is_tainted_scope(row_vis, current_chat_id=target_chat_id)
+                and not is_admin
+            ):
+                raise PermissionError("受限衍生线程不能直接跨会话分享")
             if ref_msg_ids:
                 raise PermissionError("跨会话分享不能引用原会话消息")
             chat_id = target_chat_id
         elif target_chat_id:
             chat_id = target_chat_id
+        att_resolve_chat = (
+            chat_id
+            if (
+                chat_id != source_chat_id
+                and (
+                    row["owner"] != "self"
+                    or is_tainted_scope(row_vis, current_chat_id=chat_id)
+                )
+            )
+            else source_chat_id
+        )
         revision = row["completed_revision"]
         stopped = (
             await asyncio.to_thread(self.store.is_stopped, thread_id, state=row["state"])
@@ -369,7 +391,9 @@ class Share:
             refs or any(not handle.startswith("att_") for handle in handles)
         ):
             raise PermissionError("自身结果只分享已声明的公开附件")
-        media, references = await self._segments(source_chat_id, handles, refs)
+        media, references = await self._segments(
+            source_chat_id, handles, refs, att_chat_id=att_resolve_chat
+        )
         claimed = await asyncio.to_thread(
             self.bridge.claim_delivery,
             {**row, "delivery_chat_id": chat_id},
@@ -624,7 +648,7 @@ class Share:
             result["error"] = last_send_error
         return result
 
-    async def _segments(self, chat_id, handles, refs):
+    async def _segments(self, chat_id, handles, refs, *, att_chat_id: str = ""):
         messages = {}
 
         async def read(message_id):
@@ -660,14 +684,14 @@ class Share:
                     raise ValueError("附件存储尚未就绪")
 
                 def _load_att():
-                    path = self.files.resolve(handle, chat_id)
+                    path = self.files.resolve(handle, att_chat_id or chat_id)
                     size = path.stat().st_size
                     if size > 5 * 1024**2:
                         raise ValueError("本次直接分享附件超过 5 MiB，请使用预览链接")
                     with self.store.connect() as db:
                         attachment = db.execute(
-                            "SELECT name,kind FROM attachments WHERE handle=? AND chat_id=?",
-                            (handle, chat_id),
+                            "SELECT name,kind FROM attachments WHERE handle=?",
+                            (handle,),
                         ).fetchone()
                     encoded = base64.b64encode(path.read_bytes()).decode()
                     return (
