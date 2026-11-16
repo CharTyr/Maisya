@@ -249,7 +249,7 @@
 <body data-page="{{PAGE_ID}}" data-default-page="{{PAGE_ID}}">
 <div class="mil-shell">
 
-  <!-- 顶部导航条（4 页 + 安静主题切换 + 新手引导快捷入口） -->
+  <!-- 顶部导航条（5 页 + 主题切换 + 引导入口） -->
   <header class="mil-topbar">
     <div class="mil-brand">
       <div class="ms-wordmark">
@@ -257,10 +257,11 @@
         <span class="mil-nameplate">MAISYA</span>
       </div>
       <h1 class="mil-page-title" id="ms-page-title">{{TITLE}}</h1>
-      <nav class="mil-nav" aria-label="Maisya 工作区页面">
+      <nav class="mil-nav ms-nav" aria-label="Maisya 工作区页面">
         <button type="button" class="mil-key mil-key--sm"{{NAV_NOW_CURRENT}} data-nav="now">现场</button>
-        <button type="button" class="mil-key mil-key--sm"{{NAV_PROFILES_CURRENT}} data-nav="profiles">档案</button>
-        <button type="button" class="mil-key mil-key--sm"{{NAV_LIBRARY_CURRENT}} data-nav="library">资料库</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_LIBRARY_CURRENT}} data-nav="library">产物</button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_ABILITIES_CURRENT}} data-nav="abilities">能力<span class="ms-nav-dot" id="nav-ab-prop-badge" aria-hidden="true" hidden></span></button>
+        <button type="button" class="mil-key mil-key--sm"{{NAV_MEMORY_CURRENT}} data-nav="memory">手账</button>
         <button type="button" class="mil-key mil-key--sm"{{NAV_SETTINGS_CURRENT}} data-nav="settings">设置</button>
       </nav>
     </div>
@@ -284,6 +285,13 @@
   <div id="ms-now-view" class="ms-view"{{NOW_HIDDEN}}>
 <!-- ==NOW_BODY_START== -->
   <div class="mil-feedback" id="feedback" data-feedback-slot="now" aria-live="polite"></div>
+  <div class="mil-row" id="now-skill-draft-bar" hidden style="justify-content:space-between;align-items:center;padding:8px 12px;border:1px solid var(--mil-rule);border-radius:var(--mil-r);background:var(--mil-panel-soft);gap:8px;flex-wrap:wrap">
+    <div class="mil-row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <span class="mil-tag mil-tag--warn">新技能待确认</span>
+      <span id="now-skill-draft-txt" style="font-size:12.5px"></span>
+    </div>
+    <button type="button" class="mil-key mil-key--sm mil-key--hot" id="now-goto-proposals">前往预览保存</button>
+  </div>
 
   <div class="now-v3-grid">
     <!-- 左栏：预定与盯梢 + 活动时间线 -->
@@ -292,15 +300,52 @@
         <div class="mil-head">
           <div class="mil-head-l">
             <span data-icon-slot="routines"></span>
-            <div>
-              <div class="mil-silk">预定与盯梢</div>
-              <div class="mil-silk-en">SCHEDULES &amp; WATCHES</div>
-            </div>
+            <div class="mil-silk">预定与盯梢</div>
+            <button type="button" class="mil-help" data-help="由会话或管理员安排的定期提醒与条件触发检查，到期时自动唤醒对应角色" aria-label="查看说明" aria-expanded="false">?</button>
           </div>
           <div class="mil-head-r">
             <span class="mil-tag" id="now-intent-count">0 项</span>
+            <button type="button" class="mil-key mil-key--sm" id="now-add-intent-btn">+ 新建</button>
           </div>
         </div>
+        <form id="now-intent-form" class="set-subcard" hidden style="margin-bottom:10px;display:flex;flex-direction:column;gap:8px">
+          <div class="mil-grid-2">
+            <div class="mil-field">
+              <label class="mil-label" for="now-new-int-mode">安排类型</label>
+              <select class="mil-select" id="now-new-int-mode">
+                <option value="once">单次预定提醒</option>
+                <option value="recurring">周期定时执行</option>
+                <option value="watch">条件盯梢（满足再汇报）</option>
+              </select>
+            </div>
+            <div class="mil-field">
+              <label class="mil-label" for="now-new-int-mins">延迟或周期（分钟）</label>
+              <input type="number" class="mil-input num" id="now-new-int-mins" min="1" max="43200" value="60" />
+            </div>
+          </div>
+          <div class="mil-grid-2">
+            <div class="mil-field">
+              <label class="mil-label" for="now-new-int-chat">目标会话</label>
+              <select class="mil-select" id="now-new-int-chat"></select>
+            </div>
+            <div class="mil-field">
+              <label class="mil-label" for="now-new-int-profile">执行角色</label>
+              <select class="mil-select" id="now-new-int-profile"></select>
+            </div>
+          </div>
+          <div class="mil-field">
+            <label class="mil-label" for="now-new-int-reason">事项说明</label>
+            <input type="text" class="mil-input" id="now-new-int-reason" placeholder="例如：每周五晚汇总独立游戏精选" />
+          </div>
+          <div class="mil-field" id="now-new-int-cond-wrap" hidden>
+            <label class="mil-label" for="now-new-int-cond">盯梢触发条件</label>
+            <input type="text" class="mil-input" id="now-new-int-cond" placeholder="满足什么变化时才发消息汇报？" />
+          </div>
+          <div class="mil-row" style="justify-content:flex-end;gap:6px">
+            <button type="button" class="mil-key mil-key--sm" id="now-new-int-cancel">取消</button>
+            <button type="submit" class="mil-key mil-key--sm mil-key--hot" id="now-new-int-save">保存安排</button>
+          </div>
+        </form>
         <div class="now-intent-list" id="now-intents">
           <div class="mil-hint">暂无预定或盯梢项</div>
         </div>
@@ -310,18 +355,20 @@
         <div class="mil-head">
           <div class="mil-head-l">
             <span data-icon-slot="heartbeat"></span>
-            <div>
-              <div class="mil-silk">活动时间线</div>
-              <div class="mil-silk-en">ACTIVITY TIMELINE</div>
-            </div>
+            <div class="mil-silk">活动时间线</div>
+            <button type="button" class="mil-help" data-help="按最新活动排序展示各聊天流开启的后台线程，点选即可查看步骤与上下文占用" aria-label="查看说明" aria-expanded="false">?</button>
           </div>
           <div class="mil-head-r">
             <span class="mil-tag" id="now-thread-count">0 条</span>
+            <button type="button" class="mil-key mil-key--sm" id="now-prune-btn" title="清理已结束且无保留产物的旧记录">清理废记录</button>
           </div>
         </div>
 
         <div class="now-filter-row" style="margin-bottom:10px">
-          <input type="search" class="mil-input" id="now-thread-search" placeholder="搜索线程标题、会话或档案…" aria-label="筛选活动时间线" />
+          <input type="search" class="mil-input" id="now-thread-search" placeholder="搜索线程标题、会话或角色…" aria-label="筛选活动时间线" />
+          <select class="mil-select" id="now-thread-chat" aria-label="按会话筛选活动" style="max-width:170px">
+            <option value="">全部会话</option>
+          </select>
           <div class="mil-seg" id="now-thread-filters" role="group" aria-label="线程状态筛选">
             <button type="button" class="mil-key mil-key--sm" data-th-filter="all" aria-pressed="true">全部</button>
             <button type="button" class="mil-key mil-key--sm" data-th-filter="running" aria-pressed="false">进行中</button>
@@ -341,14 +388,14 @@
       <div class="mil-head">
         <div class="mil-head-l">
           <span id="now-sel-fish"></span>
-          <div>
+          <div style="min-width:0;flex:1 1 0">
             <div class="mil-silk" id="now-sel-title">尚未选中线程</div>
-            <div class="mil-silk-en" id="now-sel-meta">在左侧点选活动，查看步骤链与上下文方块图</div>
+            <div class="now-card-meta" id="now-sel-meta">在左侧点选活动，查看步骤与详情</div>
           </div>
         </div>
         <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm mil-key--danger" id="now-del-thread-btn" hidden>删除记录</button>
           <span class="mil-tag" id="now-sel-state">待命</span>
-          <button type="button" class="mil-key mil-key--sm" id="now-reopen-btn" hidden>恢复继续</button>
         </div>
       </div>
 
@@ -368,10 +415,11 @@
         </div>
       </div>
 
-      <!-- 运行控制：补充说明 + 停止 -->
+      <!-- 运行控制：补充说明 + 立即转向 + 停止 -->
       <div class="now-note-bar" id="now-controls-bar" hidden>
-        <input type="text" class="mil-input" id="now-note-input" placeholder="给当前活动补充一条提示或转向说明…" aria-label="补充说明" />
+        <input type="text" class="mil-input" id="now-note-input" placeholder="输入补充要求；运行中可点「立即转向」改按新方向执行…" aria-label="补充说明" />
         <button type="button" class="mil-key mil-key--sm mil-key--hot" id="now-note-send">补充说明</button>
+        <button type="button" class="mil-key mil-key--sm" id="now-steer-btn" title="打断当前偏离的步骤，保留已有成果并立即按新要求转向" hidden>立即转向</button>
         <button type="button" class="mil-key mil-key--sm mil-key--danger" id="now-stop-btn" hidden>停止</button>
       </div>
 
@@ -399,7 +447,7 @@
             <div class="mil-panel mil-panel--soft" id="ctx-panel" style="padding:12px">
               <div class="mil-head" style="margin-bottom:8px">
                 <div class="mil-head-l">
-                  <span class="mil-silk">上下文与 Token 消耗</span>
+                  <span class="mil-silk">上下文空间</span>
                   <span class="mil-tag" id="ctx-health">待命</span>
                 </div>
                 <div class="mil-head-r">
@@ -448,26 +496,50 @@
   <details class="mil-panel" id="launch-wrap">
     <summary class="mil-head" style="cursor:pointer;margin-bottom:0">
       <div class="mil-head-l">
-        <span class="mil-silk"><span class="mil-silk-en">WAKE · </span>▸ 临时发起一个线程</span>
-        <button type="button" class="mil-help" data-help="日常由 MaiBot 主脑按语境调度；管理员也可在这里手动按档案触发验证" aria-label="查看说明" aria-expanded="false">?</button>
+        <span class="mil-silk">临时发起线程</span>
+        <button type="button" class="mil-help" data-help="日常由 MaiBot 主脑按语境调度；管理员也可在这里选择角色与会话手动触发验证" aria-label="查看说明" aria-expanded="false">?</button>
       </div>
       <div class="mil-head-r"><span class="mil-vent" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
     </summary>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--mil-rule)">
       <div class="launch-grid" style="margin-bottom:10px">
         <div class="mil-field">
-          <label class="mil-label" for="launch-profile">能力档案</label>
-          <input id="launch-profile" class="mil-input mono" list="launch-profile-list" value="default" placeholder="default" />
-          <datalist id="launch-profile-list"></datalist>
+          <label class="mil-label" for="launch-profile-trigger">执行角色</label>
+          <div class="ms-model-box" id="launch-profile-box">
+            <input type="hidden" id="launch-profile" value="default" />
+            <button type="button" class="mil-key ms-model-trigger" id="launch-profile-trigger" aria-expanded="false" aria-controls="launch-profile-drop">
+              <span class="mil-row" id="launch-profile-label" style="gap:6px;min-width:0">全能默认助手</span>
+              <span class="mil-inline-ic" id="launch-profile-chev"></span>
+            </button>
+            <div class="ms-model-dropdown" id="launch-profile-drop" hidden>
+              <div class="ms-model-groups" role="listbox" id="launch-profile-options"></div>
+            </div>
+          </div>
         </div>
         <div class="mil-field">
-          <label class="mil-label" for="launch-chat">关联会话</label>
-          <input id="launch-chat" class="mil-input mono" list="launch-chat-list" placeholder="qq:group:100246809 或 self" />
-          <datalist id="launch-chat-list"></datalist>
+          <label class="mil-label" for="launch-chat-trigger">关联会话</label>
+          <div class="ms-model-box" id="launch-chat-box">
+            <input type="hidden" id="launch-chat" value="" />
+            <button type="button" class="mil-key ms-model-trigger" id="launch-chat-trigger" aria-expanded="false" aria-controls="launch-chat-drop">
+              <span class="mil-row" id="launch-chat-label" style="gap:6px;min-width:0">选择目标会话</span>
+              <span class="mil-inline-ic" id="launch-chat-chev"></span>
+            </button>
+            <div class="ms-model-dropdown" id="launch-chat-drop" hidden>
+              <div class="ms-model-search-wrap">
+                <span class="mil-inline-ic" id="launch-chat-search-ic"></span>
+                <input type="search" id="launch-chat-search" placeholder="搜索会话名称或 ID..." aria-label="搜索关联会话" />
+              </div>
+              <div class="ms-model-groups" role="listbox" id="launch-chat-options"></div>
+            </div>
+          </div>
         </div>
         <div class="mil-field">
-          <label class="mil-label" for="launch-workspace">持久工作区（可选）</label>
-          <input id="launch-workspace" class="mil-input mono" placeholder="digest_daily" />
+          <label class="mil-label" for="launch-ws-select">持久工作区（可选）</label>
+          <select id="launch-ws-select" class="mil-select" aria-label="选择持久工作区">
+            <option value="">不绑定（单次临时任务）</option>
+            <option value="__new__">+ 新建持久工作区…</option>
+          </select>
+          <input id="launch-workspace" class="mil-input mono" placeholder="输入新工作区名称，如 indie-weekly" style="margin-top:6px" hidden />
         </div>
       </div>
       <div class="mil-field" style="margin-bottom:10px">
@@ -483,19 +555,23 @@
 <!-- ==NOW_BODY_END== -->
   </div>
 
-  <!-- 移动端底部 4 栏固定导航（<= 720px 在所有页面展示） -->
+  <!-- 移动端底部 5 栏固定导航（<= 720px 在所有页面展示） -->
   <nav id="ms-mob-dock" class="ms-mob-dock" aria-label="移动端导航">
     <button type="button" class="ms-mob-dock-btn"{{NAV_NOW_CURRENT}} data-mob-nav="now">
       <span class="ms-mob-dock-ic" data-dock-icon="cpu"></span>
       <span class="ms-mob-dock-lbl">现场</span>
     </button>
-    <button type="button" class="ms-mob-dock-btn"{{NAV_PROFILES_CURRENT}} data-mob-nav="profiles">
-      <span class="ms-mob-dock-ic" data-dock-icon="roles"></span>
-      <span class="ms-mob-dock-lbl">档案</span>
-    </button>
     <button type="button" class="ms-mob-dock-btn"{{NAV_LIBRARY_CURRENT}} data-mob-nav="library">
       <span class="ms-mob-dock-ic" data-dock-icon="grid"></span>
-      <span class="ms-mob-dock-lbl">资料库</span>
+      <span class="ms-mob-dock-lbl">产物</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_ABILITIES_CURRENT}} data-mob-nav="abilities">
+      <span class="ms-mob-dock-ic" data-dock-icon="sparkle"></span>
+      <span class="ms-mob-dock-lbl">能力</span>
+    </button>
+    <button type="button" class="ms-mob-dock-btn"{{NAV_MEMORY_CURRENT}} data-mob-nav="memory">
+      <span class="ms-mob-dock-ic" data-dock-icon="book"></span>
+      <span class="ms-mob-dock-lbl">手账</span>
     </button>
     <button type="button" class="ms-mob-dock-btn"{{NAV_SETTINGS_CURRENT}} data-mob-nav="settings">
       <span class="ms-mob-dock-ic" data-dock-icon="sliders"></span>
@@ -566,10 +642,24 @@
   window.MaisyaIcons?.ensureDefs?.();
   {{FISH_JS}}
 
-  const PAGES = { now: "现场", profiles: "档案", library: "资料库", settings: "设置" };
+  const PAGES = { now: "现场", library: "产物", abilities: "能力", memory: "手账", settings: "设置" };
+  let pendingAbilitiesSubTab = "profiles";
+  let pendingMemoryKind = "";
+  function resolvePageAlias(raw) {
+    const key = String(raw || "").trim().toLowerCase();
+    if (key === "profiles") return { page: "abilities", abSub: "profiles" };
+    if (key === "skills") return { page: "abilities", abSub: "skills" };
+    if (key === "connectors" || key === "services") return { page: "abilities", abSub: "connectors" };
+    if (key === "outputs") return { page: "library", abSub: "" };
+    if (key === "role_memory" || key === "role-memory") return { page: "memory", memKind: "role_memory" };
+    if (key === "journal" || key === "heartbeat") return { page: "memory", memKind: key };
+    return { page: key, abSub: "" };
+  }
   const MGMT_FRAGMENTS = {{MGMT_FRAGMENTS_JSON}};
-  const defaultPage = document.body.dataset.defaultPage || "now";
-  let activePage = Object.prototype.hasOwnProperty.call(PAGES, defaultPage) ? defaultPage : "now";
+  const initAlias = resolvePageAlias(document.body.dataset.defaultPage || "now");
+  if (initAlias.abSub) pendingAbilitiesSubTab = initAlias.abSub;
+  if (initAlias.memKind) pendingMemoryKind = initAlias.memKind;
+  let activePage = Object.prototype.hasOwnProperty.call(PAGES, initAlias.page) ? initAlias.page : "now";
   let mgmtAbort = null;
   let bootStarted = false;
   let userNavigated = false;
@@ -789,6 +879,12 @@
     pending_approval: ["待审批", "mil-tag--warn", "mil-led--run"],
     idle: ["暂停可续", "", "mil-led--off"],
     done: ["已完成", "mil-tag--ok", ""],
+    completed: ["已完成", "mil-tag--ok", ""],
+    finished: ["已完成", "mil-tag--ok", ""],
+    closed: ["已结束", "mil-tag--off", "mil-led--off"],
+    stopped: ["已停止", "mil-tag--off", "mil-led--off"],
+    cancelled: ["已取消", "mil-tag--off", "mil-led--off"],
+    failed: ["执行失败", "mil-tag--bad", "mil-led--bad"],
     error: ["异常", "mil-tag--bad", "mil-led--bad"],
     archived: ["已归档", "mil-tag--off", "mil-led--off"],
   };
@@ -808,6 +904,7 @@
     viewMode: "overview", // "overview" | "step"
     thFilter: "all",
     thQuery: "",
+    thChat: "",
     ctxView: "map",
     ctxCat: "all",
     cursor: 0,
@@ -817,11 +914,218 @@
   let pendingLibraryTarget = null;
   let pendingProfileTarget = null;
 
+  function cleanUiName(raw, fallback = "") {
+    const cleaned = String(raw ?? "")
+      .replace(/[\u0000-\u001f\u007f-\u009f\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u3164\ufeff\uffa0]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return cleaned || String(fallback || "");
+  }
+  function parseStreamParts(cid) {
+    const raw = String(cid || "").trim();
+    if (!raw || raw === "self") return { platform: "self", chatType: "self", rawId: "self", streamSpec: raw };
+    const p = raw.split(":");
+    if (p.length >= 3 && (p[1] === "group" || p[1] === "private")) {
+      return { platform: p[0].toLowerCase(), chatType: p[1], rawId: p.slice(2).join(":"), streamSpec: raw };
+    }
+    if (p.length === 2) {
+      return { platform: p[0].toLowerCase(), chatType: "private", rawId: p[1], streamSpec: `${p[0].toLowerCase()}:private:${p[1]}` };
+    }
+    return { platform: "qq", chatType: "private", rawId: raw, streamSpec: raw };
+  }
+  function hashColorIdx(seed) {
+    const s = String(seed || "");
+    let h = 0;
+    for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h % 6;
+  }
+  const PLAT_LABELS = { qq: "QQ", weixin: "微信", discord: "Discord", feishu: "飞书", telegram: "Telegram", onebot: "OneBot", self: "内部" };
+  function resolveChatMeta(snapOrSources, cidOrObj) {
+    const isObj = cidOrObj && typeof cidOrObj === "object";
+    const cid = isObj ? String(cidOrObj.chat_id || cidOrObj.stream_spec || cidOrObj.user_id || "") : String(cidOrObj || "");
+    if (cid === "self") {
+      return {
+        chatId: "self", streamSpec: "self", platform: "self", chatType: "self",
+        rawId: "self", name: "自身线程", avatarData: "", initial: "主", colorIdx: 2,
+      };
+    }
+    const sourcesMap = snapOrSources && typeof snapOrSources === "object"
+      ? (snapOrSources.chat_sources || snapOrSources.chat_meta || snapOrSources)
+      : {};
+    const fromMap = (sourcesMap && typeof sourcesMap === "object" && cid && sourcesMap[cid] && typeof sourcesMap[cid] === "object")
+      ? sourcesMap[cid]
+      : {};
+    const merged = isObj ? { ...fromMap, ...cidOrObj } : fromMap;
+    const parts = parseStreamParts(merged.stream_spec || fromMap.stream_spec || cid);
+    const plat = String(merged.platform || fromMap.platform || parts.platform || "qq").toLowerCase();
+    const chatType = String(merged.chat_type || merged.type || fromMap.chat_type || parts.chatType || "private").toLowerCase();
+    const rawId = String(merged.raw_id || merged.raw_user_id || fromMap.raw_id || parts.rawId || merged.user_id || cid || "");
+    const name = cleanUiName(merged.name || merged.title || merged.label || fromMap.name || fromMap.title || "", rawId || cid || "未命名会话");
+    const avatarData = isSafeImageDataUri(merged.avatar_data)
+      ? String(merged.avatar_data).trim()
+      : (isSafeImageDataUri(fromMap.avatar_data) ? String(fromMap.avatar_data).trim() : "");
+    const firstCh = cleanUiName(merged.avatar_initial || "", "");
+    const initial = (firstCh ? Array.from(firstCh)[0] : (Array.from(name)[0] || "?")).toUpperCase();
+    const colorIdx = Number.isInteger(merged.color_idx) ? (merged.color_idx % 6) : hashColorIdx(cid || name);
+    return { chatId: cid, streamSpec: parts.streamSpec || cid, platform: plat, chatType, rawId, name, avatarData, initial, colorIdx };
+  }
+  function renderChatAvatarHtml(meta, size = 22) {
+    const ic = window.MaisyaIcons;
+    if (meta.platform === "self") {
+      const svg = ic?.platform ? ic.platform("self", size, false) : esc(meta.initial);
+      return `<span class="ms-chat-av ms-chat-av--c2" style="width:${size}px;height:${size}px" aria-hidden="true">${svg}</span>`;
+    }
+    const fontSize = Math.max(10, Math.round(size * 0.48));
+    const pic = meta.avatarData ? `<span class="ms-chat-av-pic" style="background-image:url('${esc(meta.avatarData)}')"></span>` : "";
+    return `<span class="ms-chat-av ms-chat-av--c${meta.colorIdx}" style="width:${size}px;height:${size}px;font-size:${fontSize}px" aria-hidden="true">${esc(meta.initial)}${pic}</span>`;
+  }
+  function renderChatBadgeHtml(snapOrSources, cidOrObj, opts = {}) {
+    if (!cidOrObj) return `<span class="mil-hint">未指定会话</span>`;
+    const meta = resolveChatMeta(snapOrSources, cidOrObj);
+    const size = opts.size || 20;
+    const ic = window.MaisyaIcons;
+    const platHtml = meta.platform !== "self" && opts.showPlatform !== false && ic?.platform
+      ? `<span class="ms-chat-plat" title="${esc(PLAT_LABELS[meta.platform] || meta.platform)}">${ic.platform(meta.platform, opts.platSize || 13, Boolean(opts.darkGround))}</span>`
+      : "";
+    const typeTag = opts.showType && meta.platform !== "self"
+      ? `<span class="mil-tag">${meta.chatType === "group" ? "群聊" : "私聊"}</span>`
+      : "";
+    const rawHtml = opts.showRawId && meta.rawId && meta.rawId !== meta.name
+      ? `<span class="ms-chat-rawid">${esc(meta.rawId)}</span>`
+      : "";
+    return `<span class="ms-chat-badge" title="${esc(meta.streamSpec || meta.chatId)}">${renderChatAvatarHtml(meta, size)}${platHtml}<span class="ms-chat-name">${esc(meta.name)}</span>${typeTag}${rawHtml}</span>`;
+  }
+  function collectPlatformOptions(sourcesMap, defaults = ["qq", "weixin", "discord", "feishu", "telegram", "onebot"]) {
+    const set = new Set(defaults);
+    if (sourcesMap && typeof sourcesMap === "object") {
+      Object.values(sourcesMap).forEach((v) => {
+        const p = String(v?.platform || "").trim().toLowerCase();
+        if (p && p !== "self") set.add(p);
+      });
+    }
+    return [...set];
+  }
+  function buildStreamSpec(plat, chatType, rawInput) {
+    const raw = String(rawInput || "").trim();
+    if (!raw) return "";
+    const cleanPlat = String(plat || "qq").trim().toLowerCase() || "qq";
+    const cleanType = chatType === "group" ? "group" : "private";
+    const parsed = parseStreamParts(raw);
+    if (raw.includes(":") && raw.split(":").length >= 3 && (parsed.chatType === "group" || parsed.chatType === "private")) {
+      return `${cleanPlat}:${cleanType}:${parsed.rawId}`;
+    }
+    return `${cleanPlat}:${cleanType}:${raw}`;
+  }
+  function renderStructStreamBuilder(prefix, opts = {}) {
+    const plats = collectPlatformOptions(opts.chatSources);
+    const curPlat = opts.platform || "qq";
+    const allowGroup = opts.allowGroup !== false;
+    const allowPrivate = opts.allowPrivate !== false;
+    const curType = opts.chatType || (allowGroup ? "group" : "private");
+    const typeOpts = [
+      allowGroup ? `<option value="group"${curType === "group" ? " selected" : ""}>群聊</option>` : "",
+      allowPrivate ? `<option value="private"${curType === "private" ? " selected" : ""}>${allowGroup ? "私聊" : "私聊账号"}</option>` : "",
+    ].join("");
+    return `<div class="ms-struct-builder" data-struct-prefix="${esc(prefix)}">
+      <select class="mil-select" id="${esc(prefix)}-plat" aria-label="选择平台">${plats.map((p) => `<option value="${esc(p)}"${p === curPlat ? " selected" : ""}>${esc(PLAT_LABELS[p] || p)}</option>`).join("")}</select>
+      <select class="mil-select" id="${esc(prefix)}-type" aria-label="选择类型">${typeOpts}</select>
+      <input type="text" class="mil-input mono" id="${esc(prefix)}-id" placeholder="${esc(opts.placeholder || "输入账号或群号")}" aria-label="${esc(opts.ariaLabel || "输入编号")}" />
+      <button type="button" class="mil-key mil-key--sm" id="${esc(opts.btnId || `${prefix}-add-btn`)}">${esc(opts.btnLabel || "添加")}</button>
+    </div>`;
+  }
+  function readStructStreamBuilder(prefix) {
+    const root = document.getElementById(`${prefix}-id`);
+    const plat = document.getElementById(`${prefix}-plat`)?.value || "qq";
+    const chatType = document.getElementById(`${prefix}-type`)?.value || "private";
+    const rawId = (root?.value || "").trim();
+    return { spec: buildStreamSpec(plat, chatType, rawId), rawId, plat, chatType, inputEl: root };
+  }
+  function normalizeModelCatalog(rawModels, extraNames = []) {
+    const map = new Map();
+    (Array.isArray(rawModels) ? rawModels : []).forEach((m) => {
+      if (typeof m === "string" && m.trim()) {
+        map.set(m.trim(), { name: m.trim(), provider: "默认", visual: false });
+      } else if (m && typeof m === "object" && String(m.name || "").trim()) {
+        const name = String(m.name).trim();
+        map.set(name, {
+          name,
+          provider: String(m.provider || "其他").trim() || "其他",
+          visual: Boolean(m.visual),
+        });
+      }
+    });
+    (Array.isArray(extraNames) ? extraNames : []).forEach((n) => {
+      const name = String(n || "").trim();
+      if (name && !map.has(name)) map.set(name, { name, provider: "当前配置", visual: false });
+    });
+    return [...map.values()];
+  }
+  function renderModelGroupsHtml(models, opts = {}) {
+    const query = String(opts.query || "").trim().toLowerCase();
+    const selectedSet = new Set(opts.selectedNames || []);
+    const ic = window.MaisyaIcons;
+    const filtered = models.filter((m) => {
+      if (opts.excludeSelected && selectedSet.has(m.name)) return false;
+      if (!query) return true;
+      return `${m.name} ${m.provider}`.toLowerCase().includes(query);
+    });
+    if (!filtered.length) return `<div class="mil-hint" style="padding:8px">没有找到匹配的模型</div>`;
+    const byProv = new Map();
+    filtered.forEach((m) => {
+      const k = m.provider || "其他";
+      if (!byProv.has(k)) byProv.set(k, []);
+      byProv.get(k).push(m);
+    });
+    const checkSvg = ic?.ctrl ? ic.ctrl("check", 13, 2) : "";
+    return [...byProv.entries()].map(([prov, items]) => `
+      <div class="ms-model-group-hd">${esc(prov)}</div>
+      ${items.map((m) => {
+        const isSel = selectedSet.has(m.name);
+        return `<button type="button" class="ms-model-opt" role="option" aria-selected="${isSel ? "true" : "false"}" data-pick-model="${esc(m.name)}">
+          <span class="mil-row" style="gap:6px;min-width:0">
+            <span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}</span>
+            ${m.visual ? `<span class="ms-vis-badge">视觉</span>` : ""}
+          </span>
+          ${isSel ? `<span class="mil-inline-ic">${checkSvg}</span>` : ""}
+        </button>`;
+      }).join("")}`).join("");
+  }
+  function renderSingleModelBoxHtml(opts) {
+    const ic = window.MaisyaIcons;
+    const models = normalizeModelCatalog(opts.models, opts.value ? [opts.value] : []);
+    const cur = String(opts.value || models[0]?.name || "");
+    const curObj = models.find((m) => m.name === cur) || { name: cur, provider: "", visual: false };
+    const chevSvg = ic?.ctrl ? ic.ctrl("chevron_d", 14, 1.9) : "";
+    const searchSvg = ic?.ctrl ? ic.ctrl("search", 14, 1.9) : "";
+    return `<div class="ms-model-box" id="${esc(opts.boxId)}">
+      <input type="hidden" id="${esc(opts.inputId)}" value="${esc(cur)}" />
+      <button type="button" class="mil-key ms-model-trigger" id="${esc(opts.triggerId)}" aria-expanded="false" aria-controls="${esc(opts.dropId)}">
+        <span class="mil-row" style="gap:6px;min-width:0">
+          <span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(cur || "选择模型")}</span>
+          ${curObj.provider ? `<span class="mil-hint">${esc(curObj.provider)}</span>` : ""}
+          ${curObj.visual ? `<span class="ms-vis-badge">视觉</span>` : ""}
+        </span>
+        <span class="mil-inline-ic">${chevSvg}</span>
+      </button>
+      <div class="ms-model-dropdown" id="${esc(opts.dropId)}" hidden>
+        <div class="ms-model-search-wrap">
+          <span class="mil-inline-ic">${searchSvg}</span>
+          <input type="search" id="${esc(opts.searchId)}" placeholder="搜索模型名称或厂商..." value="${esc(opts.query || "")}" aria-label="搜索模型名称或厂商" />
+        </div>
+        <div class="ms-model-groups" role="listbox" id="${esc(opts.listId)}">${renderModelGroupsHtml(models, { selectedNames: cur ? [cur] : [], query: opts.query })}</div>
+      </div>
+    </div>`;
+  }
+  window.MaisyaUI = {
+    cleanUiName, parseStreamParts, resolveChatMeta, renderChatAvatarHtml, renderChatBadgeHtml,
+    collectPlatformOptions, buildStreamSpec, renderStructStreamBuilder, readStructStreamBuilder,
+    normalizeModelCatalog, renderModelGroupsHtml, renderSingleModelBoxHtml, PLAT_LABELS,
+  };
+
   function chatDisplayName(snap, cid) {
     if (!cid) return "未知会话";
-    if (cid === "self") return "自身线程 (self)";
-    const meta = snap?.chat_sources?.[cid] || snap?.chat_meta?.[cid] || {};
-    return meta.name || meta.title || meta.label || cid;
+    if (cid === "self") return "自身线程";
+    return resolveChatMeta(snap, cid).name;
   }
   function profileFishSeedFromSnap(snap, pid) {
     const card = (snap?.profile_cards || []).find((c) => c.id === pid);
@@ -1029,6 +1333,7 @@
       box.innerHTML = `<div class="mil-hint">暂无预定或盯梢项</div>`;
       return;
     }
+    const HISTORY_STATES = new Set(["idle", "done", "completed", "finished", "closed", "stopped", "cancelled", "failed", "error", "archived"]);
     box.innerHTML = list.map((it) => {
       const isWatch = it.mode === "watch" || it.kind === "watch" || Boolean(it.condition);
       const isPaused = it.status === "paused";
@@ -1038,13 +1343,13 @@
         <div class="now-card-head">
           <div class="now-card-title">
             <span class="mil-tag ${kindCls}">${isWatch ? "盯梢" : "预定"}</span>
-            <span>${esc(it.reason || it.kind_label || it.intent_id)}</span>
+            <span class="now-card-title-txt">${esc(it.reason || it.kind_label || it.intent_id)}</span>
           </div>
           <span class="mil-tag ${isPaused ? "mil-tag--off" : "mil-tag--ok"}">${isPaused ? "已暂停" : "等待中"}</span>
         </div>
         <div class="now-card-meta">
           <span>下次 ${esc(dueStr)}</span>
-          ${it.chat_id ? `<span>· ${esc(chatDisplayName(snap, it.chat_id))}</span>` : ""}
+          ${it.chat_id ? `<span>·</span>${renderChatBadgeHtml(snap, it.chat_id, { size: 16, platSize: 11 })}` : ""}
           ${it.profile ? `<span class="mono">· ${esc(it.profile)}</span>` : ""}
         </div>
         ${it.condition ? `<div class="now-intent-cond">触发条件：${esc(it.condition)}</div>` : ""}
@@ -1057,16 +1362,46 @@
     }).join("");
   }
 
+  function renderPendingProposalBar(snap) {
+    const props = Array.isArray(snap?.pending_skill_proposals) ? snap.pending_skill_proposals : [];
+    const cnt = Number(snap?.pending_skill_proposals_count ?? props.length);
+    const navBadge = $("#nav-ab-prop-badge");
+    if (navBadge) {
+      navBadge.hidden = cnt <= 0;
+    }
+    const bar = $("#now-skill-draft-bar");
+    const txt = $("#now-skill-draft-txt");
+    if (bar && txt) {
+      bar.hidden = cnt <= 0;
+      if (cnt > 0) {
+        const names = props.slice(0, 2).map((p) => p.title || p.skill_id).filter(Boolean).join("、");
+        txt.textContent = cnt > 1 ? `最近复盘整理出 ${cnt} 个新技能草稿（${names}），预览保存后即可自动沿用。` : `最近复盘整理出新技能「${names || props[0]?.skill_id || "新技能"}」，点击预览保存后即可复用。`;
+      }
+    }
+  }
+
   function renderThreads(snap) {
     const box = $("#now-threads");
     const cnt = $("#now-thread-count");
     if (!box) return;
     const raw = snap?.threads || [];
+    const chatSel = $("#now-thread-chat");
+    if (chatSel) {
+      const chatIds = [...new Set(raw.map((t) => t.chat_id).filter(Boolean))];
+      if (state.thChat && !chatIds.includes(state.thChat)) state.thChat = "";
+      chatSel.innerHTML = `<option value="">全部会话</option>` + chatIds.map((cid) => {
+        const nm = cid === "self" ? "自身探索" : chatDisplayName(snap, cid);
+        return `<option value="${esc(cid)}">${esc(nm)}</option>`;
+      }).join("");
+      chatSel.value = state.thChat || "";
+    }
     const q = state.thQuery.trim().toLowerCase();
+    const HISTORY_STATES = new Set(["idle", "done", "completed", "finished", "closed", "stopped", "cancelled", "failed", "error", "archived"]);
     const list = raw.filter((t) => {
+      if (state.thChat && t.chat_id !== state.thChat) return false;
       if (state.thFilter === "running" && !["active", "running", "waiting"].includes(t.state)) return false;
       if (state.thFilter === "approval" && !t.pending_approval) return false;
-      if (state.thFilter === "history" && !["idle", "done", "error", "archived"].includes(t.state)) return false;
+      if (state.thFilter === "history" && !HISTORY_STATES.has(t.state)) return false;
       if (q) {
         const hay = `${t.title || ""} ${t.excerpt || ""} ${t.profile || ""} ${t.chat_id || ""} ${chatDisplayName(snap, t.chat_id)}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -1079,24 +1414,22 @@
       return;
     }
     box.innerHTML = list.map((t) => {
-      const st = STATE_LABEL[t.pending_approval ? "pending_approval" : t.state] || ["未知", "", ""];
+      const st = STATE_LABEL[t.pending_approval ? "pending_approval" : t.state] || [t.state ? String(t.state) : "已结束", "mil-tag--off", ""];
       const on = t.thread_id === state.threadId;
       const seed = t.fish_seed || profileFishSeedFromSnap(snap, t.profile);
       const fish = roleFishHtml(t.profile || "default", seed, 24, { still: !["active", "running"].includes(t.state) });
       const tok = t.total_tokens ? `${fmtK(t.total_tokens)} tok` : "";
-      const canResume = ["idle", "done", "error", "archived"].includes(t.state);
       return `<div class="now-thread-card${on ? " is-selected" : ""}" role="button" tabindex="0" data-thread-id="${esc(t.thread_id)}">
         <div class="now-card-head">
-          <div class="now-card-title">${fish}<span>${esc(t.title || t.thread_id)}</span></div>
+          <div class="now-card-title">${fish}<span class="now-card-title-txt">${esc(t.title || t.thread_id)}</span></div>
           <span class="mil-tag ${st[1]}">${t.pending_approval ? "等待审批" : st[0]}</span>
         </div>
         <div class="now-card-meta">
-          <span>${esc(chatDisplayName(snap, t.chat_id))}</span>
+          ${renderChatBadgeHtml(snap, t.chat_id, { size: 18, platSize: 12 })}
           <span class="mono">· ${esc(t.profile || "default")}</span>
           ${tok ? `<span class="num">· ${esc(tok)}</span>` : ""}
           <span>· ${fmtTime(t.updated || t.created)}</span>
         </div>
-        ${canResume ? `<div class="mil-row" style="justify-content:flex-end"><button type="button" class="mil-key mil-key--sm" data-thread-reopen="${esc(t.thread_id)}">恢复继续</button></div>` : ""}
       </div>`;
     }).join("");
   }
@@ -1117,10 +1450,13 @@
     const reopenBtn = $("#now-reopen-btn");
     const apprBar = $("#now-approval-bar");
     const ctrlBar = $("#now-controls-bar");
+    const steerBtn = $("#now-steer-btn");
     const stopBtn = $("#now-stop-btn");
     const stepsWrap = $("#now-step-timeline");
 
+    const delThreadBtn = $("#now-del-thread-btn");
     if (!sel) {
+      if (delThreadBtn) delThreadBtn.hidden = true;
       if (fishEl) fishEl.innerHTML = "";
       if (titleEl) titleEl.textContent = "尚未选中线程";
       if (metaEl) metaEl.textContent = "在左侧点选活动，查看步骤链与上下文方块图";
@@ -1128,19 +1464,27 @@
       if (reopenBtn) reopenBtn.hidden = true;
       if (apprBar) apprBar.hidden = true;
       if (ctrlBar) ctrlBar.hidden = true;
+      if (steerBtn) steerBtn.hidden = true;
+      if (stopBtn) stopBtn.hidden = true;
       if (stepsWrap) stepsWrap.innerHTML = `<div class="mil-hint">暂无步骤事件</div>`;
       $("#now-conclusion").textContent = "选中线程后在这里汇总结论与生成产物。";
       $("#now-attachments").innerHTML = "";
       return;
     }
 
-    const stInfo = STATE_LABEL[sel.pending_approval ? "pending_approval" : sel.state] || ["未知", "", ""];
+    const stInfo = STATE_LABEL[sel.pending_approval ? "pending_approval" : sel.state] || [sel.state ? String(sel.state) : "已结束", "mil-tag--off", ""];
     if (fishEl) fishEl.innerHTML = roleFishHtml(sel.profile || "default", sel.fish_seed || profileFishSeedFromSnap(snap, sel.profile), 28, { still: !["active", "running"].includes(sel.state) });
     if (titleEl) titleEl.textContent = sel.title || sel.thread_id;
-    if (metaEl) metaEl.textContent = `${chatDisplayName(snap, sel.chat_id)} · ${sel.profile || "default"}${sel.workspace ? ` · 工作区 ${sel.workspace}` : ""}`;
+    if (metaEl) metaEl.innerHTML = `${renderChatBadgeHtml(snap, sel.chat_id, { size: 18, platSize: 12, showRawId: true })}<span>·</span><span class="mono">${esc(sel.profile || "default")}</span>${sel.workspace ? `<span>· 工作区 ${esc(sel.workspace)}</span>` : ""}`;
     if (stateTag) { stateTag.textContent = sel.pending_approval ? "待审批" : stInfo[0]; stateTag.className = `mil-tag ${stInfo[1]}`; }
-    const isResumable = ["idle", "done", "error", "archived"].includes(sel.state);
-    if (reopenBtn) reopenBtn.hidden = !isResumable;
+    if (reopenBtn) reopenBtn.hidden = true;
+    const noteIn = $("#now-note-input");
+    const isRunningNow = ["active", "running", "waiting"].includes(sel.state) || Boolean(sel.pending_approval);
+    if (noteIn) {
+      noteIn.placeholder = isRunningNow
+        ? "给当前活动补充提示或转向说明…"
+        : "输入后续要求，直接唤醒并顺着当前上下文继续…";
+    }
 
     const appr = sel.pending_approval || null;
     if (apprBar) {
@@ -1156,7 +1500,9 @@
     }
 
     const isRunning = ["active", "running", "waiting"].includes(sel.state) || Boolean(appr);
+    if (delThreadBtn) delThreadBtn.hidden = !sel.can_delete || isRunning;
     if (ctrlBar) ctrlBar.hidden = false;
+    if (steerBtn) steerBtn.hidden = !isRunning;
     if (stopBtn) stopBtn.hidden = !isRunning;
 
     // 垂直步骤时间线
@@ -1175,20 +1521,22 @@
           output_preview: ev.text,
           at: ev.at,
         }));
-    const STEP_KIND_CN = { trigger: "触发", thought: "思考", tool: "工具调用", command: "执行命令", wait: "等待", deliver: "交付", error: "异常" };
+    const STEP_KIND_CN = { trigger: "触发", thought: "思考", tool: "工具调用", command: "执行命令", wait: "等待", deliver: "交付", error: "异常", opened: "启动", input: "输入", output: "输出", finished: "完成", reopened: "唤醒", stopped: "停止", steer: "转向", context_prune: "压缩" };
+    const STEP_STATUS_CN = { ok: "完成", done: "完成", running: "执行中", waiting: "待确认", stopped: "已停止", error: "异常", denied: "已拒绝" };
     stepsWrap.innerHTML = steps.length
       ? steps.map((s, idx) => {
           const sid = String(s.id ?? s.seq ?? idx);
           const active = state.viewMode === "step" && state.selectedStepId === sid;
           const stCls = s.status === "error" || s.status === "denied" ? "is-error" : s.status === "running" ? "is-running" : s.status === "waiting" ? "is-waiting" : "is-done";
           const kLabel = STEP_KIND_CN[s.kind] || s.kind || "步骤";
+          const stLabel = STEP_STATUS_CN[s.status] || s.status || "完成";
           const dur = fmtMs(s.duration_ms);
           return `<button type="button" class="now-step-btn ${stCls}${active ? " is-active" : ""}" data-step-id="${esc(sid)}">
             <div class="now-card-head">
               <strong style="font-size:12.5px">${esc(s.title || s.tool || kLabel)}</strong>
               ${dur ? `<span class="num mil-hint">${esc(dur)}</span>` : ""}
             </div>
-            <div class="now-card-meta"><span>${esc(kLabel)}</span>${s.tool ? `<span class="mono">· ${esc(s.tool)}</span>` : ""}<span>· ${esc(s.status || "done")}</span></div>
+            <div class="now-card-meta"><span>${esc(kLabel)}</span>${s.tool ? `<span class="mono">· ${esc(s.tool)}</span>` : ""}<span>· ${esc(stLabel)}</span></div>
           </button>`;
         }).join("")
       : `<div class="mil-hint">当前线程暂无步骤明细</div>`;
@@ -1220,13 +1568,106 @@
     }
   }
 
+  let launchChatQuery = "";
   function renderLaunchAssist(snap) {
-    const profiles = snap?.profiles || [];
-    const chats = snap?.enabled_chats || [];
-    const plist = $("#launch-profile-list");
-    const clist = $("#launch-chat-list");
-    if (plist) plist.innerHTML = profiles.map((p) => `<option value="${esc(p)}">`).join("");
-    if (clist) clist.innerHTML = ["self", ...chats].map((c) => `<option value="${esc(c)}">`).join("");
+    const ic = window.MaisyaIcons;
+    const chevSvg = ic?.ctrl ? ic.ctrl("chevron_d", 14, 1.9) : "";
+    const searchSvg = ic?.ctrl ? ic.ctrl("search", 14, 1.9) : "";
+    const checkSvg = ic?.ctrl ? ic.ctrl("check", 13, 2) : "";
+
+    const rawCards = Array.isArray(snap?.profile_cards) && snap.profile_cards.length
+      ? snap.profile_cards.filter((c) => c && c.enabled !== false)
+      : (snap?.profiles || ["default"]).map((id) => ({ id, title: id, fish_seed: "" }));
+    const pIn = $("#launch-profile");
+    const pLbl = $("#launch-profile-label");
+    const pChev = $("#launch-profile-chev");
+    const pOpts = $("#launch-profile-options");
+    const curPid = (pIn?.value || "").trim() || rawCards[0]?.id || "default";
+    if (pIn) pIn.value = curPid;
+    if (pChev) pChev.innerHTML = chevSvg;
+    const curCard = rawCards.find((c) => c.id === curPid) || { id: curPid, title: curPid, fish_seed: "" };
+    if (pLbl) {
+      const fish = roleFishHtml(curCard.id, curCard.fish_seed || "", 20, { still: true });
+      pLbl.innerHTML = `${fish}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(curCard.title || curCard.name || curCard.id)}</span><span class="mil-hint mono">${esc(curCard.id)}</span>`;
+    }
+    if (pOpts) {
+      pOpts.innerHTML = rawCards.map((c) => {
+        const isSel = c.id === curPid;
+        const fish = roleFishHtml(c.id, c.fish_seed || "", 20, { still: true });
+        return `<button type="button" class="ms-model-opt" role="option" aria-selected="${isSel ? "true" : "false"}" data-launch-pick-profile="${esc(c.id)}">
+          <span class="mil-row" style="gap:8px;min-width:0">
+            ${fish}
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${esc(c.title || c.name || c.id)}</span>
+            <span class="mil-hint mono">${esc(c.id)}</span>
+          </span>
+          ${isSel ? `<span class="mil-inline-ic">${checkSvg}</span>` : ""}
+        </button>`;
+      }).join("");
+    }
+
+    const enabledChats = Array.isArray(snap?.enabled_chats) ? snap.enabled_chats : [];
+    const recentDms = Array.isArray(snap?.recent_dms) ? snap.recent_dms.map((d) => d?.chat_id).filter(Boolean) : [];
+    const allChatIds = [...new Set([...enabledChats, ...recentDms, "self"])];
+    const cIn = $("#launch-chat");
+    const cLbl = $("#launch-chat-label");
+    const cChev = $("#launch-chat-chev");
+    const cSearchIc = $("#launch-chat-search-ic");
+    const cOpts = $("#launch-chat-options");
+    let curCid = (cIn?.value || "").trim();
+    if (!curCid) {
+      curCid = enabledChats[0] || "self";
+      if (cIn) cIn.value = curCid;
+    }
+    if (cChev) cChev.innerHTML = chevSvg;
+    if (cSearchIc) cSearchIc.innerHTML = searchSvg;
+    if (cLbl) {
+      cLbl.innerHTML = renderChatBadgeHtml(snap, curCid, { size: 18, platSize: 12, showRawId: curCid !== "self" });
+    }
+    if (cOpts) {
+      const q = launchChatQuery.trim().toLowerCase();
+      const filteredCids = allChatIds.filter((cid) => {
+        if (!q) return true;
+        const m = resolveChatMeta(snap, cid);
+        return `${m.name} ${m.rawId} ${cid}`.toLowerCase().includes(q);
+      });
+      cOpts.innerHTML = filteredCids.length
+        ? filteredCids.map((cid) => {
+            const isSel = cid === curCid;
+            return `<button type="button" class="ms-model-opt" role="option" aria-selected="${isSel ? "true" : "false"}" data-launch-pick-chat="${esc(cid)}">
+              <span class="mil-row" style="gap:6px;min-width:0">${renderChatBadgeHtml(snap, cid, { size: 18, platSize: 12, showType: cid !== "self", showRawId: cid !== "self" })}</span>
+              ${isSel ? `<span class="mil-inline-ic">${checkSvg}</span>` : ""}
+            </button>`;
+          }).join("")
+        : `<div class="mil-hint" style="padding:8px">无匹配会话，请先在「设置」开启目标聊天流</div>`;
+    }
+
+    const wsSel = $("#launch-ws-select");
+    const wsIn = $("#launch-workspace");
+    if (wsSel) {
+      const prevVal = wsSel.value;
+      const namedWs = Array.isArray(snap?.named_workspaces) ? snap.named_workspaces : [];
+      wsSel.innerHTML = `<option value="">不绑定（单次临时任务）</option>`
+        + namedWs.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.profile ? ` · ${esc(w.profile)}` : ""}</option>`).join("")
+        + `<option value="__new__">+ 新建持久工作区…</option>`;
+      if ([...wsSel.options].some((o) => o.value === prevVal)) wsSel.value = prevVal;
+      if (wsIn && wsSel.value !== "__new__") {
+        wsIn.hidden = true;
+        wsIn.value = wsSel.value || "";
+      }
+    }
+    const intChatSel = $("#now-new-int-chat");
+    if (intChatSel) {
+      const prevC = intChatSel.value;
+      intChatSel.innerHTML = allChatIds.map((cid) => `<option value="${esc(cid)}">${esc(cid === "self" ? "自身公开探索 (self)" : chatDisplayName(snap, cid))}</option>`).join("");
+      if (prevC && allChatIds.includes(prevC)) intChatSel.value = prevC;
+      else if (enabledChats[0]) intChatSel.value = enabledChats[0];
+    }
+    const intProfSel = $("#now-new-int-profile");
+    if (intProfSel) {
+      const prevP = intProfSel.value;
+      intProfSel.innerHTML = rawCards.map((c) => `<option value="${esc(c.id)}">${esc(c.title || c.name || c.id)} (${esc(c.id)})</option>`).join("");
+      if (prevP && rawCards.some((c) => c.id === prevP)) intProfSel.value = prevP;
+    }
   }
 
   async function loadThreadDetail(tid) {
@@ -1268,6 +1709,7 @@
       state.selectedDetail = snap.selected;
     }
 
+    renderPendingProposalBar(snap);
     renderIntents(snap);
     renderThreads(snap);
     renderSelectedStage(snap);
@@ -1278,6 +1720,21 @@
 
   /* ───────────── 五步启动引导弹窗（严格 run_id + sequence 防竞态 + WAAPI 动效 + Tab 焦点围栏） ───────────── */
   const ONB_STEPS = ["hello", "admins", "chats", "runtime", "done"];
+  const ONB_ICON_MAP = {
+    admin: "shield",
+    admins: "shield",
+    chats: "chat",
+    model: "cpu",
+    default_model: "cpu",
+    profile: "roles",
+    default_profile: "roles",
+    toolsets: "sliders",
+    toolsets_mcp: "sliders",
+    runtime: "exec",
+    sandbox: "exec",
+    safety: "shield",
+    permission: "shield",
+  };
   const onb = {
     open: false,
     sessionDismissed: false,
@@ -1296,6 +1753,10 @@
     draftModel: "",
     draftPerm: "",
     draftSandbox: null,
+    candQuery: "",
+    pickerOpen: false,
+    modelQuery: "",
+    modelOpen: false,
     anims: [],
     prevFocus: null,
   };
@@ -1339,6 +1800,8 @@
     onb.open = true;
     onb.sessionDismissed = false;
     onb.advancing = false;
+    onb.pickerOpen = false;
+    onb.modelOpen = false;
     $("#onb-feedback").textContent = "";
     $("#onb-scrim").hidden = false;
     if (initialView) applyOnbView(initialView);
@@ -1354,9 +1817,41 @@
   function closeOnboardingModal(markDismissed = true) {
     settleOnbAnims();
     onb.open = false;
+    onb.pickerOpen = false;
+    onb.modelOpen = false;
     if (markDismissed) onb.sessionDismissed = true;
     $("#onb-scrim").hidden = true;
     if (onb.prevFocus && typeof onb.prevFocus.focus === "function") onb.prevFocus.focus();
+  }
+
+  function renderOnbItemWithIcon(it, rightHtml) {
+    const ic = window.MaisyaIcons;
+    const key = ONB_ICON_MAP[it.key] || ONB_ICON_MAP[it.step] || "sliders";
+    const icHtml = ic?.mod ? ic.mod(key, 18) : "";
+    return `<div class="onb-item">
+      <div class="onb-item-l">
+        ${icHtml ? `<span class="onb-item-ic" aria-hidden="true">${icHtml}</span>` : ""}
+        <div class="onb-item-text">
+          <strong style="font-size:12.5px">${esc(it.title || it.key)}</strong>
+          <div class="mil-hint">${esc(it.detail || "")}</div>
+        </div>
+      </div>
+      ${rightHtml}
+    </div>`;
+  }
+
+  function renderOnbCandRows(candChats, sources, query) {
+    const q = String(query || "").trim().toLowerCase();
+    const filtered = candChats.filter((cid) => {
+      if (!q) return true;
+      const m = resolveChatMeta(sources, cid);
+      return `${m.name} ${m.rawId} ${cid}`.toLowerCase().includes(q);
+    });
+    if (!filtered.length) return `<div class="mil-hint">没有匹配的未开启会话，可用下方手动添加</div>`;
+    return filtered.slice(0, 80).map((cid) => `<div class="ms-stream-row">
+      <div class="ms-stream-info">${renderChatBadgeHtml(sources, cid, { size: 20, platSize: 12, showType: true, showRawId: true })}</div>
+      <button type="button" class="mil-key mil-key--sm" data-onb-add-chat="${esc(cid)}">添加</button>
+    </div>`).join("");
   }
 
   function renderOnbStep(dir = 0) {
@@ -1375,23 +1870,30 @@
     const hostAdmins = info.host_admins || adminsInfo.host_admins || [];
     const pluginAdmins = onb.draftAdmins ?? (info.plugin_admins || info.settings_admins || adminsInfo.plugin_admins || adminsInfo.settings_admins || []);
     const recentDms = info.recent_dms || state.lastSnap?.recent_dms || [];
+    const sources = { ...(state.lastSnap?.chat_sources || {}), ...(info.chat_sources || {}) };
     const rawKnownChats = (Array.isArray(info.known_chat_specs) && info.known_chat_specs.length ? info.known_chat_specs : null)
       || info.known_chats
       || state.lastSnap?.known_chat_specs
       || state.lastSnap?.known_chats
       || state.lastSnap?.enabled_chats
       || [];
-    const knownChats = rawKnownChats
-      .map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || "")))
-      .filter(Boolean);
+    const knownChats = [...new Set(rawKnownChats
+      .map((c) => {
+        if (typeof c === "string") return c;
+        const spec = c?.stream_spec || c?.chat_id || "";
+        if (spec && c && typeof c === "object" && !sources[spec]) sources[spec] = c;
+        return spec;
+      })
+      .filter(Boolean))];
     const enabledChats = onb.draftChats ?? (info.enabled_chats || state.lastSnap?.enabled_chats || []);
-    const models = (Array.isArray(info.model_catalog) && info.model_catalog.length ? info.model_catalog : null)
-      || info.models
-      || (Array.isArray(state.lastSnap?.model_catalog) && state.lastSnap.model_catalog.length ? state.lastSnap.model_catalog : null)
-      || state.lastSnap?.available_models
-      || [];
-    const firstModelName = typeof models[0] === "string" ? models[0] : (models[0]?.name || "");
-    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || firstModelName || "";
+    const models = normalizeModelCatalog(
+      (Array.isArray(info.model_catalog) && info.model_catalog.length ? info.model_catalog : null)
+        || info.models
+        || (Array.isArray(state.lastSnap?.model_catalog) && state.lastSnap.model_catalog.length ? state.lastSnap.model_catalog : null)
+        || state.lastSnap?.available_models
+        || []
+    );
+    const curModel = onb.draftModel || info.default_model || state.lastSnap?.default_model || models[0]?.name || "";
     const curPerm = onb.draftPerm || info.permission_mode || state.lastSnap?.permission_mode || "ask_risky";
     const curSandbox = onb.draftSandbox !== null ? onb.draftSandbox : Boolean(info.sandbox_enabled ?? info.sandbox?.enabled ?? state.lastSnap?.sandbox_enabled ?? state.lastSnap?.docker?.enabled);
 
@@ -1410,27 +1912,39 @@
     if (step === "hello") {
       pane.innerHTML = `
         <div class="mil-silk">欢迎使用 Maisya · 五步快速就绪</div>
-        <div class="mil-hint">MaiBot 主脑保持对话节奏，Maisya 以四个核心概念扩展行动空间：能力档案、持续线程、唤醒意图与分层记忆。下面请确认核心权限与环境。</div>
+        <div class="mil-hint">按顺序检查权限、聊天范围与默认模型，几步即可完成首次启用。</div>
         <div class="onb-summary-grid">
-          ${items.map((it) => `<div class="onb-item"><div><strong style="font-size:12.5px">${esc(it.title || it.key)}</strong><div class="mil-hint">${esc(it.detail || "")}</div></div><span class="mil-tag ${it.state === "ok" ? "mil-tag--ok" : it.state === "warn" ? "mil-tag--warn" : "mil-tag--off"}">${it.state === "ok" ? "就绪" : it.state === "warn" ? "建议补齐" : "待设置"}</span></div>`).join("")}
+          ${items.map((it) => renderOnbItemWithIcon(it, `<span class="mil-tag ${it.state === "ok" ? "mil-tag--ok" : it.state === "warn" ? "mil-tag--warn" : "mil-tag--off"}">${it.state === "ok" ? "就绪" : it.state === "warn" ? "建议补齐" : "待设置"}</span>`)).join("")}
         </div>`;
     } else if (step === "admins") {
       onb.draftAdmins = [...pluginAdmins];
+      const ic = window.MaisyaIcons;
+      const closeIc = ic?.ctrl ? ic.ctrl("close", 12, 2) : "×";
       pane.innerHTML = `
-        <div class="mil-silk">第 2 步 · 确认管理员来源</div>
-        <div class="mil-hint">宿主管理员（只读）与插件管理员均可核验高权档案、连接器与配置操作；普通私聊也可点击最近私聊快速加入。</div>
+        <div class="mil-silk">第 2 步 · 确认管理员身份</div>
+        <div class="mil-hint">宿主管理员与插件管理员可更改插件配置与高权能力，也可以从最近私聊直接加入。</div>
         <div class="mil-field">
           <span class="mil-label">宿主授权管理员（只读）</span>
           <div class="onb-chip-row">${hostAdmins.length ? hostAdmins.map((a) => `<span class="mil-tag mil-tag--ok mono">${esc(a)}</span>`).join("") : `<span class="mil-hint">暂无宿主预设</span>`}</div>
         </div>
         <div class="mil-field">
           <span class="mil-label">插件管理员</span>
-          <div class="onb-chip-row" id="onb-admin-chips">${onb.draftAdmins.map((a) => `<button type="button" class="mil-key mil-key--sm mono" data-onb-del-admin="${esc(a)}">${esc(a)} ×</button>`).join("") || `<span class="mil-hint">暂未添加插件管理员</span>`}</div>
+          <div class="onb-chip-row" id="onb-admin-chips">${onb.draftAdmins.map((a) => `<button type="button" class="mil-key mil-key--sm mono" data-onb-del-admin="${esc(a)}"><span>${esc(a)}</span><span class="mil-inline-ic">${closeIc}</span></button>`).join("") || `<span class="mil-hint">暂未添加插件管理员</span>`}</div>
         </div>
-        ${recentDms.length ? `<div class="mil-field"><span class="mil-label">最近私聊快捷添加</span><div class="onb-chip-row">${recentDms.map((d) => `<button type="button" class="mil-key mil-key--sm" data-onb-add-admin="${esc(d.chat_id || d.user_id || d)}">+ ${esc(d.name || d.chat_id || d)}</button>`).join("")}</div></div>` : ""}
-        <div class="ms-entry-add">
-          <input type="text" class="mil-input mono" id="onb-admin-in" placeholder="输入管理员标识，例如 qq:private:10001" />
-          <button type="button" class="mil-key mil-key--sm" id="onb-admin-add-btn">添加</button>
+        ${recentDms.length ? `<div class="mil-field"><span class="mil-label">最近私聊快捷添加</span><div class="onb-chip-row">${recentDms.map((d) => {
+          const dmSpec = d.chat_id || (d.platform && d.user_id ? `${d.platform}:private:${d.user_id}` : String(d.user_id || d));
+          const dmMeta = resolveChatMeta(sources, typeof d === "object" ? { ...d, chat_id: dmSpec } : dmSpec);
+          const platSvg = ic?.platform ? ic.platform(dmMeta.platform, 12) : "";
+          return `<button type="button" class="ms-dm-chip" data-onb-add-admin="${esc(dmSpec)}" title="${esc(dmSpec)}">
+            ${renderChatAvatarHtml(dmMeta, 18)}
+            ${platSvg ? `<span class="ms-chat-plat">${platSvg}</span>` : ""}
+            <span class="ms-chat-name">${esc(dmMeta.name)}</span>
+            ${dmMeta.rawId && dmMeta.rawId !== dmMeta.name ? `<span class="ms-chat-rawid">${esc(dmMeta.rawId)}</span>` : ""}
+          </button>`;
+        }).join("")}</div></div>` : ""}
+        <div class="mil-field">
+          <span class="mil-label">按平台与账号添加管理员</span>
+          ${renderStructStreamBuilder("onb-adm", { chatSources: sources, allowGroup: false, allowPrivate: true, chatType: "private", placeholder: "输入用户 ID，例如 10001", ariaLabel: "管理员用户 ID", btnLabel: "添加", btnId: "onb-admin-add-btn" })}
         </div>`;
     } else if (step === "chats") {
       onb.draftChats = [...enabledChats];
@@ -1439,72 +1953,90 @@
         const isFirstColdStart = (info.show === true && !info.completed_at && info.status !== "completed");
         onb.draftPluginEnabled = rawPlg === undefined ? true : (isFirstColdStart && rawPlg === false ? true : Boolean(rawPlg));
       }
-      const allKnown = [...new Set([...knownChats, ...onb.draftChats])];
+      const enabledSet = new Set(onb.draftChats);
+      const candChats = knownChats.filter((cid) => !enabledSet.has(cid));
       pane.innerHTML = `
-        <div class="mil-silk">第 3 步 · 启用总开关与会话范围</div>
-        <div class="mil-hint">请先保持插件总开关开启；已核验管理员私聊会自动放行，群聊需明确打开白名单开关后才注入工具能力。</div>
+        <div class="mil-silk">第 3 步 · 启用开关与会话范围</div>
+        <div class="mil-hint">开启总开关并添加需要启用插件的群聊或私聊。</div>
         <div class="ms-entry-row">
           <div class="ms-entry-meta">
             <strong class="ms-entry-title">启用 Maisya 插件总开关</strong>
-            <span class="mil-hint">初次冷启动默认勾选开启，确保后续对话与能力调度可用</span>
           </div>
           <label class="mil-switch">
             <input type="checkbox" id="onb-plugin-enabled" ${onb.draftPluginEnabled ? "checked" : ""} />
             <span class="mil-switch-track"></span>
           </label>
         </div>
-        <div class="ms-entry-list" id="onb-chat-list">
-          ${allKnown.length ? allKnown.map((cid) => `<div class="ms-entry-row"><span class="ms-entry-code">${esc(cid)}</span><label class="mil-switch"><input type="checkbox" data-onb-chat="${esc(cid)}" ${onb.draftChats.includes(cid) ? "checked" : ""} /><span class="mil-switch-track"></span></label></div>`).join("") : `<div class="mil-hint">当前尚未检测到群聊记录，可在下方手动添加。</div>`}
+        <div class="mil-row" style="justify-content:space-between;align-items:center">
+          <span class="mil-label">已开启会话（${onb.draftChats.length} 个）</span>
+          <button type="button" class="mil-key mil-key--sm" id="onb-open-chat-picker">${onb.pickerOpen ? "收起候选列表" : `+ 添加聊天流${candChats.length ? ` (${candChats.length})` : ""}`}</button>
         </div>
-        <div class="ms-entry-add">
-          <input type="text" class="mil-input mono" id="onb-chat-in" placeholder="手动添加群聊，例如 qq:group:100246809" />
-          <button type="button" class="mil-key mil-key--sm" id="onb-chat-add-btn">添加群聊</button>
+        <div class="ms-stream-picker" id="onb-chat-picker" ${onb.pickerOpen ? "" : "hidden"}>
+          <input type="search" class="mil-input" id="onb-chat-cand-search" placeholder="搜索群名、私聊名称或 ID..." value="${esc(onb.candQuery)}" aria-label="搜索候选聊天流" />
+          <div class="ms-stream-cand-list" id="onb-chat-cand-list">${renderOnbCandRows(candChats, sources, onb.candQuery)}</div>
+        </div>
+        <div class="ms-entry-list" id="onb-chat-list">
+          ${onb.draftChats.length ? onb.draftChats.map((cid) => `<div class="ms-stream-row" data-chat-row="${esc(cid)}">
+            <div class="ms-stream-info">${renderChatBadgeHtml(sources, cid, { size: 22, platSize: 13, showType: true, showRawId: true })}</div>
+            <button type="button" class="mil-key mil-key--sm mil-key--danger" data-onb-del-chat="${esc(cid)}">移除</button>
+          </div>`).join("") : `<div class="mil-hint">暂未开启任何会话，请从上方「+ 添加聊天流」选择或下方手动添加。</div>`}
+        </div>
+        <div class="mil-field">
+          <span class="mil-label">手动指定聊天流</span>
+          ${renderStructStreamBuilder("onb-chat", { chatSources: sources, allowGroup: true, allowPrivate: true, chatType: "group", placeholder: "输入群号或用户 ID，例如 100246809", ariaLabel: "聊天流群号或用户 ID", btnLabel: "添加会话", btnId: "onb-chat-add-btn" })}
         </div>`;
     } else if (step === "runtime") {
       const pr = onb.probeResult;
       const isFail = pr?.state === "error" || pr?.state === "failed";
-      const prTxt = onb.probePending ? "正在探测模型连通性…" : pr?.message ? `${pr.state === "ok" ? "连通正常" : "连通失败"}：${pr.message}${pr.duration_ms ? ` (${pr.duration_ms}ms)` : ""}` : "建议在完成前点击右侧按钮实际探针测试一次";
+      const prTxt = onb.probePending ? "正在探测模型连通性…" : pr?.message ? `${pr.state === "ok" ? "连通正常" : "连通失败"}：${pr.message}${pr.duration_ms ? ` (${pr.duration_ms}ms)` : ""}` : "完成前建议测试一次默认模型连通性";
       const prCls = onb.probePending ? "mil-tag mil-tag--warn" : pr?.state === "ok" ? "mil-tag mil-tag--ok" : isFail ? "mil-tag mil-tag--bad" : "mil-tag";
       pane.innerHTML = `
         <div class="mil-silk">第 4 步 · 默认模型、授权与安全沙箱</div>
         <div class="mil-grid-2">
           <div class="mil-field">
-            <label class="mil-label" for="onb-model">默认任务模型</label>
-            <select class="mil-select" id="onb-model">
-              ${models.length ? models.map((m) => { const mn = typeof m === "string" ? m : (m.name || ""); const mp = typeof m === "object" ? (m.provider || "") : ""; return `<option value="${esc(mn)}" ${mn === curModel ? "selected" : ""}>${esc(mn)}${mp ? ` (${esc(mp)})` : ""}</option>`; }).join("") : `<option value="${esc(curModel || "utils")}">${esc(curModel || "utils")}</option>`}
-            </select>
+            <label class="mil-label" for="onb-model-trigger">默认任务模型</label>
+            ${renderSingleModelBoxHtml({
+              boxId: "onb-model-box",
+              inputId: "onb-model",
+              triggerId: "onb-model-trigger",
+              dropId: "onb-model-drop",
+              searchId: "onb-model-search",
+              listId: "onb-model-list",
+              models,
+              value: curModel,
+              query: onb.modelQuery,
+            })}
           </div>
           <div class="mil-field">
             <label class="mil-label" for="onb-perm">默认授权策略</label>
             <select class="mil-select" id="onb-perm">
-              <option value="ask_risky" ${curPerm === "ask_risky" ? "selected" : ""}>仅高危操作确认 (ask_risky)</option>
-              <option value="autonomous" ${curPerm === "autonomous" ? "selected" : ""}>受托自主执行 (autonomous)</option>
-              <option value="always_ask" ${curPerm === "always_ask" ? "selected" : ""}>每次操作都确认 (always_ask)</option>
+              <option value="ask_risky" ${curPerm === "ask_risky" ? "selected" : ""}>仅高危操作确认</option>
+              <option value="autonomous" ${curPerm === "autonomous" ? "selected" : ""}>受托自主执行</option>
+              <option value="always_ask" ${curPerm === "always_ask" ? "selected" : ""}>每次操作都确认</option>
             </select>
           </div>
         </div>
         <label class="mil-switch">
           <input type="checkbox" id="onb-sandbox" ${curSandbox ? "checked" : ""} />
           <span class="mil-switch-track"></span>
-          <span class="mil-switch-txt">默认优先启用轻量 Docker 沙箱（如宿主机已就绪）</span>
+          <span class="mil-switch-txt">默认优先启用轻量 Docker 沙箱</span>
         </label>
         <div class="now-summary-box">
           <div class="now-card-head">
-            <span class="mil-tag ${prCls}" id="onb-probe-tag">${esc(prTxt)}</span>
+            <span class="mil-tag mil-tag--wrap ${prCls}" id="onb-probe-tag">${esc(prTxt)}</span>
             <button type="button" class="mil-key mil-key--sm mil-key--hot" id="onb-probe-btn">测试模型连通</button>
           </div>
-          <div class="mil-hint">测试请求按 (run_id, sequence) 严格校验，切换步骤或重复点击会自动丢弃过期返回。</div>
         </div>`;
     } else {
       const promptText = "在群里帮我用默认档案总结最近讨论的要点";
       pane.innerHTML = `
-        <div class="mil-silk">第 5 步 · 7 项就绪清单与启航检查</div>
+        <div class="mil-silk">第 5 步 · 7 项就绪清单</div>
         <div class="onb-summary-grid">
-          ${items.map((it) => `<div class="onb-item"><div><strong style="font-size:12.5px">${esc(it.title || it.key)}</strong><div class="mil-hint">${esc(it.detail || "")}</div></div><button type="button" class="mil-key mil-key--sm" data-onb-jump-step="${esc(it.step || "hello")}">${it.state === "ok" ? "查看" : "去完善"}</button></div>`).join("")}
+          ${items.map((it) => renderOnbItemWithIcon(it, `<button type="button" class="mil-key mil-key--sm" data-onb-jump-step="${esc(it.step || "hello")}">${it.state === "ok" ? "查看" : "去完善"}</button>`)).join("")}
         </div>
         <div class="now-summary-box">
           <div class="now-card-head">
-            <span class="mil-label">推荐开场测试语</span>
+            <span class="mil-label">推荐测试消息</span>
             <button type="button" class="mil-key mil-key--sm" data-onb-copy="${esc(promptText)}">复制</button>
           </div>
           <code class="mono" style="font-size:12px">${esc(promptText)}</code>
@@ -1694,20 +2226,97 @@
       return;
     }
     if (ev.target.closest("#onb-admin-add-btn")) {
-      const val = ($("#onb-admin-in")?.value || "").trim();
-      if (val && !(onb.draftAdmins || []).includes(val)) {
-        onb.draftAdmins = [...(onb.draftAdmins || []), val];
+      const built = readStructStreamBuilder("onb-adm");
+      if (built.rawId && built.spec && !(onb.draftAdmins || []).includes(built.spec)) {
+        onb.draftAdmins = [...(onb.draftAdmins || []), built.spec];
         renderOnbStep(0);
       }
       return;
     }
-    if (ev.target.closest("#onb-chat-add-btn")) {
-      const val = ($("#onb-chat-in")?.value || "").trim();
-      if (val) {
-        onb.draftChats = [...new Set([...(onb.draftChats || []), val])];
+    if (ev.target.closest("#onb-open-chat-picker")) {
+      onb.pickerOpen = !onb.pickerOpen;
+      renderOnbStep(0);
+      if (onb.pickerOpen) {
+        $("#onb-chat-cand-search")?.focus();
+        const info = onb.info || state.lastSnap?.onboarding || {};
+        const sources = { ...(state.lastSnap?.chat_sources || {}), ...(info.chat_sources || {}) };
+        const rawKnown = (Array.isArray(info.known_chat_specs) && info.known_chat_specs.length ? info.known_chat_specs : null)
+          || info.known_chats || state.lastSnap?.known_chat_specs || state.lastSnap?.known_chats || [];
+        const enabledSet = new Set(onb.draftChats || []);
+        const missing = rawKnown
+          .map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || "")))
+          .filter((cid) => cid && !enabledSet.has(cid) && !sources[cid])
+          .slice(0, 40);
+        if (missing.length) {
+          const r = await hostRpc("read", "chat_sources", { chat_ids: missing });
+          if (!disposed && onb.open && r?.success && r.sources) {
+            if (!onb.info) onb.info = {};
+            onb.info.chat_sources = { ...(onb.info.chat_sources || {}), ...r.sources };
+            const candEl = $("#onb-chat-cand-list");
+            const curEnabled = new Set(onb.draftChats || []);
+            const candChats = [...new Set(rawKnown.map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || ""))).filter((x) => x && !curEnabled.has(x)))];
+            if (candEl && onb.pickerOpen) {
+              candEl.innerHTML = renderOnbCandRows(candChats, { ...(state.lastSnap?.chat_sources || {}), ...onb.info.chat_sources }, onb.candQuery);
+            }
+          }
+        }
+      }
+      return;
+    }
+    const addOnbChat = ev.target.closest("[data-onb-add-chat]");
+    if (addOnbChat) {
+      const cid = addOnbChat.dataset.onbAddChat;
+      if (cid) {
+        onb.draftChats = [...new Set([...(onb.draftChats || []), cid])];
         renderOnbStep(0);
       }
       return;
+    }
+    const delOnbChat = ev.target.closest("[data-onb-del-chat]");
+    if (delOnbChat) {
+      const cid = delOnbChat.dataset.onbDelChat;
+      onb.draftChats = (onb.draftChats || []).filter((x) => x !== cid);
+      renderOnbStep(0);
+      return;
+    }
+    if (ev.target.closest("#onb-chat-add-btn")) {
+      const built = readStructStreamBuilder("onb-chat");
+      if (built.rawId && built.spec) {
+        onb.draftChats = [...new Set([...(onb.draftChats || []), built.spec])];
+        renderOnbStep(0);
+      }
+      return;
+    }
+    if (ev.target.closest("#onb-model-trigger")) {
+      const drop = $("#onb-model-drop");
+      const trig = $("#onb-model-trigger");
+      if (drop && trig) {
+        const nextOpen = Boolean(drop.hidden);
+        drop.hidden = !nextOpen;
+        trig.setAttribute("aria-expanded", String(nextOpen));
+        onb.modelOpen = nextOpen;
+        if (nextOpen) $("#onb-model-search")?.focus();
+      }
+      return;
+    }
+    const onbModelPick = ev.target.closest("#onb-model-list [data-pick-model]");
+    if (onbModelPick) {
+      const chosen = onbModelPick.dataset.pickModel || "";
+      if (chosen) {
+        onb.draftModel = chosen;
+        onb.modelOpen = false;
+        const hiddenIn = $("#onb-model");
+        if (hiddenIn) hiddenIn.value = chosen;
+        renderOnbStep(0);
+      }
+      return;
+    }
+    if (!$("#onb-model-drop")?.hidden && !ev.target.closest("#onb-model-box")) {
+      const drop = $("#onb-model-drop");
+      const trig = $("#onb-model-trigger");
+      if (drop) drop.hidden = true;
+      if (trig) trig.setAttribute("aria-expanded", "false");
+      onb.modelOpen = false;
     }
     if (ev.target.closest("#onb-probe-btn")) {
       triggerOnbModelProbe();
@@ -1727,6 +2336,42 @@
     }
 
     if (activePage !== "now") return;
+
+    if (ev.target.closest("#now-goto-proposals")) {
+      switchWorkspaceTab("abilities", { abSub: "skills" });
+      return;
+    }
+    if (ev.target.closest("#now-add-intent-btn")) {
+      const f = $("#now-intent-form");
+      if (f) { f.hidden = !f.hidden; if (!f.hidden) $("#now-new-int-reason")?.focus(); }
+      return;
+    }
+    if (ev.target.closest("#now-new-int-cancel")) {
+      const f = $("#now-intent-form");
+      if (f) f.hidden = true;
+      return;
+    }
+    if (ev.target.closest("#now-prune-btn")) {
+      const r = await hostRpc("write", "prune_threads", {});
+      if (!r?.success) setNowFeedback(r?.error || "清理失败", true);
+      else {
+        const cnt = Array.isArray(r.deleted) ? r.deleted.length : Number(r.count || 0);
+        setNowFeedback(cnt > 0 ? `已清理 ${cnt} 条已结束废记录` : "暂无可清理的废记录");
+        refresh(true);
+      }
+      return;
+    }
+    if (ev.target.closest("#now-del-thread-btn") && state.threadId) {
+      const r = await hostRpc("write", "delete_thread", { thread_id: state.threadId });
+      if (!r?.success) setNowFeedback(r?.error || "删除失败", true);
+      else {
+        state.threadId = "";
+        state.selectedDetail = null;
+        setNowFeedback("已删除该条活动记录");
+        refresh(true);
+      }
+      return;
+    }
 
     const intentActBtn = ev.target.closest("[data-intent-act]");
     if (intentActBtn) {
@@ -1786,16 +2431,26 @@
       const inp = $("#now-note-input");
       const msg = (inp?.value || "").trim();
       if (!msg) return;
-      const r = await enqueueAction(() => callMaibotRaw("action", "note", { thread_id: state.threadId, message: msg, steer: true }));
+      const r = await enqueueAction(() => callMaibotRaw("action", "note", { thread_id: state.threadId, message: msg, steer: false }));
       if (!r?.success) setNowFeedback(r?.error || "补充发送失败", true);
       else { inp.value = ""; setNowFeedback("补充说明已送入线程"); refresh(true); }
+      return;
+    }
+
+    if (ev.target.closest("#now-steer-btn")) {
+      const inp = $("#now-note-input");
+      const msg = (inp?.value || "").trim();
+      if (!msg) { setNowFeedback("请先在输入框填写要转向的新要求", true); inp?.focus(); return; }
+      const r = await enqueueAction(() => callMaibotRaw("action", "note", { thread_id: state.threadId, message: msg, steer: true }));
+      if (!r?.success) setNowFeedback(r?.error || "转向发送失败", true);
+      else { inp.value = ""; setNowFeedback("已发送立即转向指令，正按新要求调整方向"); refresh(true); }
       return;
     }
 
     if (ev.target.closest("#now-stop-btn")) {
       const r = await hostRpc("write", "thread_stop", { thread_id: state.threadId });
       if (!r?.success) setNowFeedback(r?.error || "停止失败", true);
-      else { setNowFeedback("已请求停止并保留上下文（可恢复继续）"); refresh(true); }
+      else { setNowFeedback("已请求停止并保留上下文（发消息即可继续）"); refresh(true); }
       return;
     }
 
@@ -1845,14 +2500,80 @@
       return;
     }
 
+    if (ev.target.closest("#launch-profile-trigger")) {
+      const drop = $("#launch-profile-drop");
+      if (drop) {
+        const nextOpen = drop.hidden;
+        drop.hidden = !nextOpen;
+        $("#launch-profile-trigger")?.setAttribute("aria-expanded", String(nextOpen));
+        const chatDrop = $("#launch-chat-drop");
+        if (nextOpen && chatDrop && !chatDrop.hidden) {
+          chatDrop.hidden = true;
+          $("#launch-chat-trigger")?.setAttribute("aria-expanded", "false");
+        }
+      }
+      return;
+    }
+    const pickLP = ev.target.closest("[data-launch-pick-profile]");
+    if (pickLP) {
+      const pIn = $("#launch-profile");
+      if (pIn) pIn.value = pickLP.dataset.launchPickProfile;
+      const drop = $("#launch-profile-drop");
+      if (drop) drop.hidden = true;
+      $("#launch-profile-trigger")?.setAttribute("aria-expanded", "false");
+      if (state.lastSnap) renderLaunchAssist(state.lastSnap);
+      return;
+    }
+    if (ev.target.closest("#launch-chat-trigger")) {
+      const drop = $("#launch-chat-drop");
+      if (drop) {
+        const nextOpen = drop.hidden;
+        drop.hidden = !nextOpen;
+        $("#launch-chat-trigger")?.setAttribute("aria-expanded", String(nextOpen));
+        const profDrop = $("#launch-profile-drop");
+        if (nextOpen && profDrop && !profDrop.hidden) {
+          profDrop.hidden = true;
+          $("#launch-profile-trigger")?.setAttribute("aria-expanded", "false");
+        }
+        if (nextOpen) setTimeout(() => $("#launch-chat-search")?.focus(), 20);
+      }
+      return;
+    }
+    const pickLC = ev.target.closest("[data-launch-pick-chat]");
+    if (pickLC) {
+      const cIn = $("#launch-chat");
+      if (cIn) cIn.value = pickLC.dataset.launchPickChat;
+      const drop = $("#launch-chat-drop");
+      if (drop) drop.hidden = true;
+      $("#launch-chat-trigger")?.setAttribute("aria-expanded", "false");
+      if (state.lastSnap) renderLaunchAssist(state.lastSnap);
+      return;
+    }
+    if (!ev.target.closest("#launch-profile-box")) {
+      const drop = $("#launch-profile-drop");
+      if (drop && !drop.hidden) {
+        drop.hidden = true;
+        $("#launch-profile-trigger")?.setAttribute("aria-expanded", "false");
+      }
+    }
+    if (!ev.target.closest("#launch-chat-box")) {
+      const drop = $("#launch-chat-drop");
+      if (drop && !drop.hidden) {
+        drop.hidden = true;
+        $("#launch-chat-trigger")?.setAttribute("aria-expanded", "false");
+      }
+    }
+
     if (ev.target.closest("#launch-run")) {
       const fb = $("#launch-feedback");
       const msg = ($("#launch-prompt")?.value || "").trim();
       if (!msg) { if (fb) { fb.textContent = "请输入事情描述"; fb.className = "mil-feedback mil-feedback--err"; } return; }
+      const wsSel = $("#launch-ws-select");
+      const rawWs = wsSel?.value === "__new__" ? ($("#launch-workspace")?.value || "").trim() : (wsSel?.value || $("#launch-workspace")?.value || "").trim();
       const res = await enqueueAction(() => callMaibotRaw("action", "note", {
         profile: ($("#launch-profile")?.value || "default").trim() || "default",
         chat_id: ($("#launch-chat")?.value || "").trim() || undefined,
-        workspace: ($("#launch-workspace")?.value || "").trim() || undefined,
+        workspace: rawWs || undefined,
         message: msg,
         steer: false,
       }));
@@ -1861,7 +2582,60 @@
     }
   }, { signal: shellSig });
 
+  document.addEventListener("submit", async (ev) => {
+    if (ev.target.id !== "now-intent-form") return;
+    ev.preventDefault();
+    const modeVal = ($("#now-new-int-mode")?.value || "once").trim();
+    const mins = Math.max(1, Number($("#now-new-int-mins")?.value || 60));
+    const chatVal = ($("#now-new-int-chat")?.value || "").trim() || "self";
+    const profVal = ($("#now-new-int-profile")?.value || "default").trim();
+    const reasonVal = ($("#now-new-int-reason")?.value || "").trim();
+    const condVal = ($("#now-new-int-cond")?.value || "").trim();
+    if (!reasonVal) { setNowFeedback("请先填写安排或盯梢说明", true); $("#now-new-int-reason")?.focus(); return; }
+    if (modeVal === "watch" && !condVal) { setNowFeedback("条件盯梢需要填写触发条件", true); $("#now-new-int-cond")?.focus(); return; }
+    const payload = {
+      chat_id: chatVal,
+      profile: profVal,
+      reason: reasonVal,
+      prompt: reasonVal,
+      in_seconds: modeVal === "once" ? mins * 60 : Math.max(60, mins * 60),
+      ...(modeVal === "recurring" ? { every_seconds: Math.max(300, mins * 60) } : {}),
+      ...(modeVal === "watch" ? { mode: "watch", every_seconds: Math.max(300, mins * 60), condition: condVal } : {}),
+    };
+    const r = await hostRpc("write", "schedule_intent", payload);
+    if (!r?.success) { setNowFeedback(r?.error || "保存安排失败", true); return; }
+    $("#now-intent-form").hidden = true;
+    $("#now-new-int-reason").value = "";
+    $("#now-new-int-cond").value = "";
+    setNowFeedback("已加入预定与盯梢队列");
+    refresh(true);
+  }, { signal: shellSig });
+
   document.addEventListener("change", (ev) => {
+    if (ev.target.id === "now-thread-chat") {
+      state.thChat = ev.target.value || "";
+      if (state.lastSnap) renderThreads(state.lastSnap);
+      return;
+    }
+    if (ev.target.id === "now-new-int-mode") {
+      const cw = $("#now-new-int-cond-wrap");
+      if (cw) cw.hidden = ev.target.value !== "watch";
+      return;
+    }
+    if (ev.target.id === "launch-ws-select") {
+      const wsIn = $("#launch-workspace");
+      if (wsIn) {
+        if (ev.target.value === "__new__") {
+          wsIn.hidden = false;
+          wsIn.value = "";
+          setTimeout(() => wsIn.focus(), 20);
+        } else {
+          wsIn.hidden = true;
+          wsIn.value = ev.target.value || "";
+        }
+      }
+      return;
+    }
     const chk = ev.target.closest("[data-onb-chat]");
     if (chk) {
       const cid = chk.dataset.onbChat;
@@ -1880,12 +2654,44 @@
     if (ev.target.id === "now-thread-search") {
       state.thQuery = ev.target.value || "";
       if (state.lastSnap) renderThreads(state.lastSnap);
+    } else if (ev.target.id === "launch-chat-search") {
+      launchChatQuery = ev.target.value || "";
+      if (state.lastSnap) renderLaunchAssist(state.lastSnap);
+    } else if (ev.target.id === "onb-chat-cand-search") {
+      onb.candQuery = ev.target.value || "";
+      const listEl = $("#onb-chat-cand-list");
+      const info = onb.info || state.lastSnap?.onboarding || {};
+      const sources = { ...(state.lastSnap?.chat_sources || {}), ...(info.chat_sources || {}) };
+      const rawKnown = (Array.isArray(info.known_chat_specs) && info.known_chat_specs.length ? info.known_chat_specs : null)
+        || info.known_chats || state.lastSnap?.known_chat_specs || state.lastSnap?.known_chats || [];
+      const enabledSet = new Set(onb.draftChats || []);
+      const candChats = [...new Set(rawKnown.map((c) => (typeof c === "string" ? c : (c?.stream_spec || c?.chat_id || ""))).filter((x) => x && !enabledSet.has(x)))];
+      if (listEl) listEl.innerHTML = renderOnbCandRows(candChats, sources, onb.candQuery);
+    } else if (ev.target.id === "onb-model-search") {
+      onb.modelQuery = ev.target.value || "";
+      const listEl = $("#onb-model-list");
+      const info = onb.info || state.lastSnap?.onboarding || {};
+      const curVal = $("#onb-model")?.value || onb.draftModel || "";
+      const rawModels = (Array.isArray(info.model_catalog) && info.model_catalog.length ? info.model_catalog : null)
+        || info.models
+        || (Array.isArray(state.lastSnap?.model_catalog) && state.lastSnap.model_catalog.length ? state.lastSnap.model_catalog : null)
+        || state.lastSnap?.available_models || [];
+      const models = normalizeModelCatalog(rawModels, curVal ? [curVal] : []);
+      if (listEl) listEl.innerHTML = renderModelGroupsHtml(models, { selectedNames: curVal ? [curVal] : [], query: onb.modelQuery });
     }
   }, { signal: shellSig });
 
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {
       if (!$("#ctx-scrim")?.hidden) { closeCtxModal(); return; }
+      const mDrop = $("#onb-model-drop");
+      if (mDrop && !mDrop.hidden) {
+        mDrop.hidden = true;
+        $("#onb-model-trigger")?.setAttribute("aria-expanded", "false");
+        onb.modelOpen = false;
+        $("#onb-model-trigger")?.focus();
+        return;
+      }
       if (onb.open) { closeOnboardingModal(true); return; }
     }
     // 引导弹窗 Tab 焦点围栏
@@ -1987,9 +2793,23 @@
     renderIconSlots();
   }
 
-  function switchWorkspaceTab(targetPage, opts = {}) {
+  function switchWorkspaceTab(rawTarget, opts = {}) {
+    const resolved = resolvePageAlias(rawTarget);
+    const targetPage = resolved.page;
     if (!Object.prototype.hasOwnProperty.call(PAGES, targetPage)) return;
-    if (targetPage === activePage && !opts.forceBoot) return;
+    if (resolved.abSub) pendingAbilitiesSubTab = resolved.abSub;
+    else if (rawTarget === "abilities" && opts.abSub) pendingAbilitiesSubTab = opts.abSub;
+    if (resolved.memKind) pendingMemoryKind = resolved.memKind;
+    else if (opts.memKind) pendingMemoryKind = opts.memKind;
+
+    if (targetPage === activePage && !opts.forceBoot) {
+      if (targetPage === "abilities" && (resolved.abSub || opts.abSub)) {
+        window.dispatchEvent(new CustomEvent("maisya:abilities-subtab", { detail: { sub: pendingAbilitiesSubTab } }));
+      } else if (targetPage === "memory" && (resolved.memKind || opts.memKind)) {
+        window.dispatchEvent(new CustomEvent("maisya:memory-kind", { detail: { kind: pendingMemoryKind } }));
+      }
+      return;
+    }
     if (!opts.system) userNavigated = true;
     if (mgmtAbort) { mgmtAbort.abort(); mgmtAbort = null; }
     syncShellToPage(targetPage, { remountMgmt: opts.remountMgmt !== false, remountNow: opts.remountNow !== false });
@@ -2009,6 +2829,16 @@
     }
   }
 
+  window.addEventListener("maisya:themechange", () => {
+    if (disposed) return;
+    if (activePage === "now" && state.lastSnap) {
+      renderIntents(state.lastSnap);
+      renderThreads(state.lastSnap);
+      renderSelectedStage(state.lastSnap);
+    }
+    if (onb.open) renderOnbStep(0);
+  }, { signal: shellSig });
+
   window.__maisyaDispose = () => {
     disposed = true;
     if (timer) clearInterval(timer);
@@ -2016,9 +2846,10 @@
     shellAbort.abort();
   };
 
-  const initHostTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
-  if (initHostTab && Object.prototype.hasOwnProperty.call(PAGES, initHostTab) && initHostTab !== activePage) {
-    switchWorkspaceTab(initHostTab, { system: true, forceBoot: true });
+  const initHostRaw = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
+  const initHostResolved = resolvePageAlias(initHostRaw);
+  if (initHostRaw && Object.prototype.hasOwnProperty.call(PAGES, initHostResolved.page) && (initHostResolved.page !== activePage || initHostResolved.abSub || initHostResolved.memKind)) {
+    switchWorkspaceTab(initHostRaw, { system: true, forceBoot: true });
   } else {
     switchWorkspaceTab(activePage, { system: true, forceBoot: true, remountMgmt: false, remountNow: false });
   }
@@ -2026,9 +2857,10 @@
   Promise.resolve(window.maibot?.ready).then(() => {
     if (disposed) return;
     bootStarted = true;
-    const readyTab = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
-    if (!userNavigated && readyTab && Object.prototype.hasOwnProperty.call(PAGES, readyTab) && readyTab !== activePage) {
-      switchWorkspaceTab(readyTab, { system: true, forceBoot: true });
+    const readyRaw = String(window.maibot?.page?.state?.tab || window.maibot?.page?.state?.page || "").trim();
+    const readyResolved = resolvePageAlias(readyRaw);
+    if (!userNavigated && readyRaw && Object.prototype.hasOwnProperty.call(PAGES, readyResolved.page) && (readyResolved.page !== activePage || readyResolved.abSub || readyResolved.memKind)) {
+      switchWorkspaceTab(readyRaw, { system: true, forceBoot: true });
     } else if (activePage === "now") {
       applyTheme();
       refresh(true);

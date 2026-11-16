@@ -1,0 +1,707 @@
+<div class="m-ab-shell" data-tab="abilities">
+  <div class="ab-top-bar">
+    <div class="ab-top-tabs" id="ab-sub-tabs" role="tablist" aria-label="能力分区">
+      <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="ab-tab-profiles" data-ab-sub="profiles" aria-selected="true">角色</button>
+      <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="ab-tab-skills" data-ab-sub="skills" aria-selected="false">技能 <span class="mil-tag mil-tag--warn" id="ab-tab-prop-badge" hidden>待确认</span></button>
+      <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="ab-tab-connectors" data-ab-sub="connectors" aria-selected="false">外部连接</button>
+    </div>
+  </div>
+
+  <!-- 子栏 1：角色 -->
+  <div id="ab-pane-profiles" role="tabpanel" aria-labelledby="ab-tab-profiles">
+    <div class="ab-pane-inner">
+      <!-- 移动端无边框裸鱼轮播与首屏摘要卡片（<= 760px 展示） -->
+      <section class="m-ab-mob-head" id="ab-mob-head" aria-label="档案快速切换">
+        <div class="m-mob-carousel-wrap">
+          <button type="button" class="mob-role-step prev" data-mob-step="-1" aria-label="上一个档案">&lt;</button>
+          <div class="m-mob-carousel mob-role-carousel" id="mob-role-carousel" role="listbox" aria-label="档案小鱼轮播"></div>
+          <button type="button" class="mob-role-step next" data-mob-step="1" aria-label="下一个档案">&gt;</button>
+          <div class="mob-role-dots" id="mob-role-dots"></div>
+        </div>
+        <div class="mil-panel m-mob-role-card1" id="ab-mob-role-card1">
+          <div class="m-mob-role-card1-head">
+            <span class="m-mob-role-card1-title" id="ab-mob-role-title">—</span>
+            <span class="mil-tag" id="ab-mob-role-env">待加载</span>
+          </div>
+          <div class="m-mob-role-card1-rows">
+            <button type="button" class="m-mob-row" data-mob-role-jump="overview">
+              <span class="m-mob-row-l"><span class="m-mob-row-ic" data-icon-slot="roles"></span><span>基础档案信息</span></span>
+              <span class="m-mob-row-r"><span class="m-mob-row-val" id="mob-val-overview">—</span><span class="m-mob-row-arr">&gt;</span></span>
+            </button>
+            <button type="button" class="m-mob-row" data-mob-role-jump="advanced">
+              <span class="m-mob-row-l"><span class="m-mob-row-ic" data-icon-slot="cpu"></span><span>常规与模型设定</span></span>
+              <span class="m-mob-row-r"><span class="m-mob-row-val" id="mob-val-models">—</span><span class="m-mob-row-arr">&gt;</span></span>
+            </button>
+            <button type="button" class="m-mob-row" data-mob-role-jump="abilities">
+              <span class="m-mob-row-l"><span class="m-mob-row-ic" data-icon-slot="skills"></span><span>技能与系统工具</span></span>
+              <span class="m-mob-row-r"><span class="m-mob-row-val" id="mob-val-skills">—</span><span class="m-mob-row-arr">&gt;</span></span>
+            </button>
+            <button type="button" class="m-mob-row" data-mob-role-jump="fish">
+              <span class="m-mob-row-l"><span class="m-mob-row-ic" data-icon-slot="journal"></span><span>小鱼外形定制</span></span>
+              <span class="m-mob-row-r"><span class="m-mob-row-val" id="mob-val-fish">—</span><span class="m-mob-row-arr">&gt;</span></span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 主工作区：左侧角色列表 + 右侧定制表单 -->
+      <div class="m-ab-studio pr-studio">
+        <aside class="mil-panel m-ab-roster" aria-label="档案列表">
+          <div class="mil-head">
+            <div class="mil-head-l">
+              <span data-icon-slot="roles"></span>
+              <div class="mil-row" style="gap:6px;align-items:center">
+                <div class="mil-silk">角色</div>
+                <button type="button" class="mil-help" data-help="开箱提供全能默认助手、查证助手与资讯简报三位角色，你也可以按需新建或导入分享模板。" aria-label="角色列表说明">?</button>
+              </div>
+            </div>
+            <div class="mil-head-r">
+              <button type="button" class="mil-key mil-key--sm mil-key--hot" id="pr-btn-new">+ 新建角色</button>
+            </div>
+          </div>
+
+          <div class="pr-roster-tools">
+            <search>
+              <input type="search" class="mil-input" id="pr-search" placeholder="筛选角色标识、名称或描述…" aria-label="筛选角色" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            </search>
+            <div class="mil-row">
+              <button type="button" class="mil-key mil-key--sm" id="pr-btn-import">导入档案包</button>
+              <input type="file" id="pr-import-file" accept=".zip,application/zip" hidden />
+            </div>
+          </div>
+
+          <div class="ab-roster" id="pr-roster" role="listbox" aria-label="全部角色"></div>
+        </aside>
+
+        <section class="mil-panel pr-editor" id="pr-editor" aria-label="角色详情编辑">
+          <div class="mil-head">
+            <div class="mil-head-l">
+              <span id="pr-head-fish"></span>
+              <div class="mil-silk" id="pr-head-title">角色编辑</div>
+            </div>
+            <div class="mil-head-r pr-toolbar">
+              <button type="button" class="mil-key mil-key--sm" id="pr-btn-export">打包分享</button>
+              <button type="button" class="mil-key mil-key--sm mil-key--danger" id="pr-btn-delete">删除自定义角色</button>
+              <button type="button" class="mil-key mil-key--sm mil-key--hot" id="pr-btn-save">保存档案</button>
+            </div>
+          </div>
+
+          <div class="mil-feedback" id="pr-feedback" role="status" aria-live="polite"></div>
+
+          <!-- 顶部小鱼与外形切换 -->
+          <div class="role-fish-box" id="pr-fish-box">
+            <div class="role-fish-head">
+              <div class="fish-preview-box">
+                <div id="pr-fish-preview"></div>
+                <button type="button" class="mil-help" id="pr-fish-help" data-help="自动按角色名稳定生成小鱼外观，也可切换随机或定制固定款式。" aria-label="小鱼外形说明">?</button>
+              </div>
+              <div class="mil-seg" id="pr-fish-mode" role="group" aria-label="小鱼外形模式">
+                <button type="button" class="mil-key mil-key--sm" data-fish-mode="auto" aria-pressed="true">自动</button>
+                <button type="button" class="mil-key mil-key--sm" data-fish-mode="random" aria-pressed="false">随机</button>
+                <button type="button" class="mil-key mil-key--sm" data-fish-mode="lock" aria-pressed="false">定制</button>
+              </div>
+            </div>
+            <div class="fish-drawer" id="pr-fish-drawer" hidden>
+              <div class="mil-label">鱼种外形</div>
+              <div class="fish-opts" id="pr-fish-species"></div>
+              <div class="mil-label">配色</div>
+              <div class="fish-swatches" id="pr-fish-colors"></div>
+            </div>
+          </div>
+
+          <!-- 首屏核心字段 -->
+          <div class="pr-primary-grid">
+            <div class="mil-field">
+              <label class="mil-label" for="pr-id">角色标识</label>
+              <input type="text" class="mil-input mono" id="pr-id" name="id" placeholder="例如 coder_review" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            </div>
+            <div class="mil-field">
+              <label class="mil-label" for="pr-name">显示名称</label>
+              <input type="text" class="mil-input" id="pr-name" name="name" placeholder="例如 代码审校助手" autocomplete="off" />
+            </div>
+            <div class="mil-field pr-span-2">
+              <div class="mil-row" style="gap:6px;align-items:center">
+                <label class="mil-label" for="pr-desc">职责说明</label>
+                <button type="button" class="mil-help" data-help="说明 MaiBot 主脑何时适合调度这位角色。" aria-label="职责说明">?</button>
+              </div>
+              <input type="text" class="mil-input" id="pr-desc" name="description" placeholder="一句话说明这位角色适合处理什么事情" />
+            </div>
+            <div class="mil-field">
+              <label class="mil-label" for="pr-access">可用范围与权限层级</label>
+              <select class="mil-select" id="pr-access" name="access">
+                <option value="everyone">全部已启用会话</option>
+                <option value="admins">仅核验管理员</option>
+                <option value="listed">指定会话白名单</option>
+              </select>
+            </div>
+            <div class="mil-field pr-enable-field">
+              <span class="mil-label">启用状态</span>
+              <label class="mil-switch">
+                <input type="checkbox" id="pr-enabled" name="enabled" checked />
+                <span class="mil-switch-track"></span>
+                <span class="mil-switch-txt" id="pr-enabled-txt">已启用</span>
+              </label>
+            </div>
+            <div class="mil-field pr-span-2" id="pr-chats-wrap" hidden>
+              <div class="mil-row" style="justify-content:space-between;align-items:center">
+                <div class="mil-row" style="gap:6px;align-items:center">
+                  <span class="mil-label">允许使用的会话</span>
+                  <button type="button" class="mil-help" data-help="仅在所选群聊或私聊中暴露这位角色。" aria-label="允许会话说明">?</button>
+                </div>
+                <button type="button" class="mil-key mil-key--sm" id="pr-open-allow-picker">+ 添加会话</button>
+              </div>
+              <input type="hidden" id="pr-allowed-chats" value="" />
+              <div class="ms-stream-picker" id="pr-allow-picker" hidden>
+                <search>
+                  <input type="search" class="mil-input" id="pr-allow-cand-search" placeholder="搜索群名、私聊名称或 ID..." aria-label="搜索候选会话" autocorrect="off" autocapitalize="none" spellcheck="false" />
+                </search>
+                <div class="ms-stream-cand-list" id="pr-allow-cand-list"></div>
+              </div>
+              <div class="ms-entry-list" id="pr-allow-chat-list"></div>
+              <div id="pr-allow-struct-box"></div>
+            </div>
+          </div>
+
+          <!-- 资讯简报专属引导与各群信源总览（仅选中 digest 时显示） -->
+          <div class="set-subcard" id="pr-digest-guide" hidden style="margin-top:10px">
+            <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+              <div class="mil-row" style="gap:6px;align-items:center">
+                <strong style="font-size:13px">资讯简报 · 怎么用最省事</strong>
+                <span class="mil-tag mil-tag--ok">推荐对话启用</span>
+              </div>
+              <button type="button" class="mil-key mil-key--sm" id="pr-digest-copy-tip">复制对 MaiBot 说的话</button>
+            </div>
+            <div class="mil-hint">不用手动配复杂参数：直接在私聊告诉 MaiBot「帮某群打开资讯简报、每天 08:30 推 AI 与独立游戏，先跑一期发我预览」，它就会一次配好并试跑给你看；下方也能直接查看各群已订话题和信源。</div>
+            <div class="ms-entry-list" id="pr-digest-overview-list" style="margin-top:6px"></div>
+            <div class="mil-row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
+              <select class="mil-select" id="pr-digest-chat" aria-label="选择目标群聊" style="flex:0 0 auto;min-width:160px"></select>
+              <input type="text" class="mil-input" id="pr-digest-input" placeholder="输入关注话题（如 独立游戏, AI 工具）或信源网址…" style="flex:1 1 200px;min-width:0" autocomplete="off" />
+              <button type="button" class="mil-key mil-key--sm" id="pr-digest-add-btn">+ 添加关注</button>
+            </div>
+          </div>
+
+          <!-- 折叠高级区：常规 | 技能与工具 | 角色记忆 | 经验笔记 -->
+          <div class="pr-adv-wrap">
+            <button type="button" class="mil-key pr-adv-toggle" id="pr-adv-toggle" aria-expanded="false" aria-controls="pr-adv-body">
+              <span id="pr-adv-chevron">⌄</span>
+              <span>高级设置与角色记忆</span>
+            </button>
+
+            <div class="pr-adv-body" id="pr-adv-body" hidden>
+              <div class="ab-top-tabs pr-subtabs" id="pr-subtabs" role="tablist" aria-label="角色高级分页">
+                <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="pr-tab-general" data-pr-tab="general" aria-selected="true">常规</button>
+                <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="pr-tab-abilities" data-pr-tab="abilities" aria-selected="false">技能与工具</button>
+                <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="pr-tab-role-memory" data-pr-tab="role_memory" aria-selected="false">角色记忆</button>
+                <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="pr-tab-notes" data-pr-tab="notes" aria-selected="false">经验笔记</button>
+              </div>
+
+              <div class="pr-pane" id="pr-pane-general" role="tabpanel" aria-labelledby="pr-tab-general">
+                <div class="mil-grid-2">
+                  <div class="mil-field" id="pr-clone-wrap">
+                    <label class="mil-label" for="pr-clone">克隆来源（可选）</label>
+                    <select class="mil-select" id="pr-clone">
+                      <option value="">不从其他角色克隆</option>
+                    </select>
+                  </div>
+                  <div class="mil-field" id="pr-model-wrap">
+                    <div class="mil-row" style="gap:6px;align-items:center">
+                      <span class="mil-label">模型调用链</span>
+                      <button type="button" class="mil-help" data-help="按顺序依次尝试宿主已配置的模型，失败时自动向后回退。" aria-label="模型调用链说明">?</button>
+                    </div>
+                    <div class="ms-model-box" id="pr-model-box">
+                      <input type="hidden" id="pr-model" value="" />
+                      <div class="ms-model-chain" id="pr-model-chain"></div>
+                      <button type="button" class="mil-key mil-key--sm ms-model-trigger" id="pr-model-add-btn" aria-expanded="false" aria-controls="pr-model-dropdown">+ 添加模型</button>
+                      <div class="ms-model-dropdown" id="pr-model-dropdown" hidden>
+                        <div class="ms-model-search-wrap">
+                          <span class="mil-inline-ic" id="pr-model-search-ic"></span>
+                          <input type="search" id="pr-model-search" placeholder="搜索模型名称或厂商..." aria-label="搜索模型名称或厂商" autocorrect="off" autocapitalize="none" spellcheck="false" />
+                        </div>
+                        <div class="ms-model-groups" role="listbox" id="pr-model-groups"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="mil-field">
+                    <label class="mil-label" for="pr-exec-mode">执行环境</label>
+                    <select class="mil-select" id="pr-exec-mode">
+                      <option value="host">宿主机线程（默认）</option>
+                      <option value="sandbox">轻量沙箱环境</option>
+                    </select>
+                  </div>
+                  <div class="mil-field">
+                    <label class="mil-label" for="pr-session-mode">会话方式</label>
+                    <select class="mil-select" id="pr-session-mode">
+                      <option value="persistent">持续工作区</option>
+                      <option value="ephemeral">单次临时任务</option>
+                    </select>
+                  </div>
+                </div>
+
+                <label class="mil-chk">
+                  <input type="checkbox" id="pr-shared-secrets" checked />
+                  <span>允许在管理员核验轮次使用密码保险箱别名与已登记连接</span>
+                </label>
+
+                <div class="mil-field">
+                  <div class="pr-md-head">
+                    <div class="mil-row" style="gap:6px;align-items:center">
+                      <label class="mil-label" for="pr-md">角色设定说明</label>
+                      <button type="button" class="mil-help" data-help="编写这位角色的职责边界、口吻与交付要求，建议控制在 150 行以内。" aria-label="角色设定帮助">?</button>
+                    </div>
+                    <span class="mil-tag" id="pr-md-count">0 / 150 行</span>
+                  </div>
+                  <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="pr-md" rows="8" placeholder="留空自动生成默认规则；也可在这里补充角色职责与交付格式…"></textarea>
+                </div>
+              </div>
+
+              <div class="pr-pane" id="pr-pane-abilities" role="tabpanel" aria-labelledby="pr-tab-abilities" hidden>
+                <div class="pr-ab-filter">
+                  <search style="flex:1 1 200px">
+                    <input type="search" class="mil-input" id="pr-ab-search" placeholder="搜索技能或系统工具…" aria-label="搜索能力项" autocorrect="off" autocapitalize="none" spellcheck="false" />
+                  </search>
+                  <div class="mil-seg" id="pr-ab-kind" role="group" aria-label="能力分类">
+                    <button type="button" class="mil-key mil-key--sm" data-ab-kind="all" aria-pressed="true">全部</button>
+                    <button type="button" class="mil-key mil-key--sm" data-ab-kind="toolsets" aria-pressed="false">系统工具</button>
+                    <button type="button" class="mil-key mil-key--sm" data-ab-kind="skills" aria-pressed="false">技能</button>
+                    <button type="button" class="mil-key mil-key--sm" data-ab-kind="connectors" aria-pressed="false" hidden>外部连接</button>
+                  </div>
+                  <button type="button" class="mil-key mil-key--sm" id="pr-goto-skills">管理全部技能</button>
+                  <button type="button" class="mil-key mil-key--sm" id="pr-goto-connectors">管理外部连接</button>
+                </div>
+                <div class="pr-ability-grid" id="pr-ability-cards"></div>
+              </div>
+
+              <div class="pr-pane" id="pr-pane-role-memory" role="tabpanel" aria-labelledby="pr-tab-role-memory" hidden>
+                <div class="mil-field">
+                  <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div class="mil-row" style="gap:6px;align-items:center">
+                      <label class="mil-label" for="pr-role-mem-md">角色独立记忆（MEMORY.md）</label>
+                      <button type="button" class="mil-help" data-help="只属于这位角色自己的长期背景、审美偏好与领域事实，与群聊备忘及经验笔记互不混写。" aria-label="角色独立记忆说明">?</button>
+                      <span class="mil-tag num" id="pr-role-mem-ver">v0</span>
+                    </div>
+                    <div class="mil-row" style="gap:6px">
+                      <button type="button" class="mil-key mil-key--sm" id="pr-role-mem-reload">重新读取</button>
+                      <button type="button" class="mil-key mil-key--sm mil-key--hot" id="pr-role-mem-save">保存角色记忆</button>
+                    </div>
+                  </div>
+                  <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="pr-role-mem-md" rows="10" placeholder="在此记录这位角色专属的长期背景、偏好与事实（也可直接在聊天中让 MaiBot 帮忙补充）…"></textarea>
+                </div>
+                <div class="mil-field" id="pr-role-mem-hist-wrap" hidden>
+                  <span class="mil-label">角色记忆历史版本回滚</span>
+                  <div class="onb-chip-row" id="pr-role-mem-hist-list"></div>
+                </div>
+              </div>
+
+              <div class="pr-pane" id="pr-pane-notes" role="tabpanel" aria-labelledby="pr-tab-notes" hidden>
+                <div class="mil-field">
+                  <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div class="mil-row" style="gap:6px;align-items:center">
+                      <label class="mil-label" for="pr-notes-md">角色经验笔记（NOTES.md）</label>
+                      <button type="button" class="mil-help" data-help="记录这位角色在执行任务后沉淀的操作窍门与避坑要点，运行时自动注入。" aria-label="角色经验笔记说明">?</button>
+                      <span class="mil-tag num" id="pr-notes-ver">v0</span>
+                    </div>
+                    <div class="mil-row" style="gap:6px">
+                      <button type="button" class="mil-key mil-key--sm" id="pr-notes-reload">重新读取</button>
+                      <button type="button" class="mil-key mil-key--sm mil-key--hot" id="pr-notes-save">保存经验笔记</button>
+                    </div>
+                  </div>
+                  <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="pr-notes-md" rows="10" placeholder="在此记录或审阅该角色沉淀的专属经验笔记…"></textarea>
+                </div>
+                <div class="mil-field" id="pr-notes-hist-wrap" hidden>
+                  <span class="mil-label">经验笔记历史版本回滚</span>
+                  <div class="onb-chip-row" id="pr-notes-hist-list"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- 子栏 2：技能 -->
+  <div id="ab-pane-skills" role="tabpanel" aria-labelledby="ab-tab-skills" hidden>
+    <div class="ab-pane-inner sk-shell" id="sk-shell">
+      <section class="mil-panel">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span data-icon-slot="skills"></span>
+            <div class="mil-row" style="gap:6px;align-items:center">
+              <h2 class="mil-silk" style="margin:0">技能</h2>
+              <button type="button" class="mil-help" id="sk-help-btn" data-help="任务完成后默认自动复盘：首次提炼出的新技能会在这里等待你预览保存，后续相同技能会自动补充实战经验。" aria-label="技能说明">?</button>
+            </div>
+          </div>
+          <div class="mil-head-r sk-topbar-r">
+            <search>
+              <input type="search" class="mil-input" id="sk-search" placeholder="搜索技能名称或描述…" aria-label="搜索技能" style="width:220px;max-width:100%" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            </search>
+            <button type="button" class="mil-key mil-key--sm" id="sk-refresh">刷新</button>
+            <button type="button" class="mil-key mil-key--sm" id="sk-import-btn">导入能力包</button>
+            <button type="button" class="mil-key mil-key--sm mil-key--hot" id="sk-add-btn">+ 新建技能</button>
+          </div>
+        </div>
+
+        <div class="mil-feedback" id="sk-feedback" role="status" aria-live="polite"></div>
+
+        <!-- 自动复盘生成的新技能待确认草稿 -->
+        <div id="sk-proposals-sec" style="margin-top:10px" hidden>
+          <div class="sk-section-hd">
+            <div class="mil-row" style="gap:6px;align-items:center">
+              <span class="mil-label">待预览确认的新技能草稿</span>
+              <button type="button" class="mil-help" data-help="完成复杂任务后自动总结的新技能草稿，点击预览确认后即正式保存并分配给角色。" aria-label="新技能草稿说明">?</button>
+            </div>
+            <span class="mil-tag mil-tag--warn" id="sk-proposals-count">0 项</span>
+          </div>
+          <div class="sk-distill-list" id="sk-proposals-list"></div>
+        </div>
+
+        <!-- 已安装列表 -->
+        <div style="margin-top:14px">
+          <div class="sk-section-hd">
+            <div class="mil-row" style="gap:10px;align-items:center;flex-wrap:wrap">
+              <span class="mil-label">已安装</span>
+              <div class="mil-seg" id="sk-filters" role="group" aria-label="技能分类筛选">
+                <button type="button" class="mil-key mil-key--sm" data-sk-cat="all" aria-pressed="true">全部</button>
+                <button type="button" class="mil-key mil-key--sm" data-sk-cat="personal" aria-pressed="false">个人</button>
+                <button type="button" class="mil-key mil-key--sm" data-sk-cat="system" aria-pressed="false">系统</button>
+                <button type="button" class="mil-key mil-key--sm" data-sk-cat="toolsets" aria-pressed="false">系统工具</button>
+              </div>
+            </div>
+            <span class="mil-tag" id="sk-count-tag">0 项</span>
+          </div>
+          <div class="sk-grid" id="sk-grid"></div>
+        </div>
+
+        <!-- 从近期活动手动提炼（默认折叠于底部，平时任务后自动复盘） -->
+        <details class="mil-field" id="sk-distill-sec" style="margin-top:12px" hidden>
+          <summary class="mil-label" style="cursor:pointer">
+            从近期历史活动手动提炼（可选，平时会自动复盘）
+            <span class="mil-tag num" id="sk-distill-count">0 条</span>
+          </summary>
+          <div class="sk-distill-list" id="sk-distill-list" style="margin-top:8px"></div>
+        </details>
+      </section>
+    </div>
+  </div>
+
+  <!-- 子栏 3：外部连接 -->
+  <div id="ab-pane-connectors" role="tabpanel" aria-labelledby="ab-tab-connectors" hidden>
+    <div class="ab-pane-inner">
+      <section class="mil-panel">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span data-icon-slot="gear"></span>
+            <div class="mil-row" style="gap:6px;align-items:center">
+              <h2 class="mil-silk" style="margin:0">外部连接</h2>
+              <button type="button" class="mil-help" data-help="登记本机 MCP 工具服务或查看宿主其他插件提供的接口，登记后可在角色的「技能与工具」中按需勾选。" aria-label="外部连接说明">?</button>
+            </div>
+          </div>
+          <div class="mil-head-r">
+            <button type="button" class="mil-key mil-key--sm" id="conn-refresh">刷新状态</button>
+          </div>
+        </div>
+
+        <div class="mil-feedback" id="conn-feedback" role="status" aria-live="polite"></div>
+
+        <div class="mil-grid-2" style="margin-top:8px">
+          <div class="set-subcard">
+            <div class="mil-label">已登记外部服务（MCP）</div>
+            <div class="ms-entry-list" id="conn-mcp-list"></div>
+
+            <div class="mil-row" style="justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:6px">
+              <span class="mil-label" id="conn-form-title">添加外部 MCP 连接</span>
+              <div class="mil-seg" role="group" aria-label="配置录入方式">
+                <button type="button" class="mil-key mil-key--sm" data-conn-input-mode="form" aria-pressed="true">表单填写</button>
+                <button type="button" class="mil-key mil-key--sm" data-conn-input-mode="json" aria-pressed="false">粘贴现成配置</button>
+              </div>
+            </div>
+
+            <div class="mil-field" id="conn-json-box" hidden style="margin-top:8px">
+              <label class="mil-label" for="conn-json-input">粘贴标准 mcpServers 配置 JSON</label>
+              <textarea class="mil-textarea mil-textarea--code" id="conn-json-input" rows="5" placeholder='{"mcpServers": {"docs_mcp": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"], "env": {"API_KEY": "..."}}}}'></textarea>
+              <div class="mil-row" style="justify-content:flex-end;margin-top:6px">
+                <button type="button" class="mil-key mil-key--sm mil-key--hot" id="conn-json-parse">解析并填入表单</button>
+              </div>
+            </div>
+
+            <form id="conn-add-form" class="set-vault-form" aria-label="登记外部服务">
+              <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+                <span class="mil-label">连接方式</span>
+                <div class="mil-seg" id="conn-transport-seg" role="group" aria-label="MCP 连接方式">
+                  <button type="button" class="mil-key mil-key--sm" data-conn-transport="stdio" aria-pressed="true">本机程序</button>
+                  <button type="button" class="mil-key mil-key--sm" data-conn-transport="http" aria-pressed="false">远程网址</button>
+                </div>
+              </div>
+              <div class="mil-field">
+                <label class="mil-label" for="conn-name">连接名称</label>
+                <input type="text" class="mil-input mono" id="conn-name" name="name" placeholder="例如 local_docs" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+              </div>
+              <div class="mil-field" id="conn-stdio-wrap">
+                <label class="mil-label" for="conn-cmd">启动命令与参数</label>
+                <input type="text" class="mil-input mono" id="conn-cmd" name="command" placeholder="例如 npx -y @modelcontextprotocol/server-filesystem /tmp 或绝对路径" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+              </div>
+              <div class="mil-field" id="conn-http-wrap" hidden>
+                <label class="mil-label" for="conn-url">远程服务地址</label>
+                <input type="text" class="mil-input mono" id="conn-url" name="url" placeholder="填写远程 MCP 地址（以 https 或 http 开头）" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+              </div>
+              <div class="mil-field" id="conn-env-wrap">
+                <label class="mil-label" for="conn-env" id="conn-env-label">密码或环境变量（可选，每行一条 变量名=值，直接填写即可）</label>
+                <div class="onb-chip-row" id="conn-kept-keys" hidden style="margin-bottom:4px"></div>
+                <textarea class="mil-textarea mil-textarea--code" id="conn-env" rows="3" placeholder="例如 API_TOKEN=sk-xxx（保存时自动加密，无需先存密码保险箱）"></textarea>
+              </div>
+              <div class="mil-field">
+                <label class="mil-label" for="conn-desc">用途说明（可选）</label>
+                <input type="text" class="mil-input" id="conn-desc" name="description" placeholder="一句话说明这个外部连接提供什么能力" />
+              </div>
+              <div class="mil-field" id="conn-tools-box" hidden>
+                <div class="mil-row" style="justify-content:space-between;align-items:center">
+                  <span class="mil-label">发现的可用工具（勾选允许角色调用）</span>
+                  <span class="mil-tag num" id="conn-tools-count">0 项</span>
+                </div>
+                <div class="sk-bind-grid" id="conn-tools-list"></div>
+              </div>
+              <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <label class="mil-chk">
+                  <input type="checkbox" id="conn-readonly" name="readonly" checked />
+                  <span>只读服务（允许普通群聊角色安全共享）</span>
+                </label>
+                <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+                  <button type="button" class="mil-key mil-key--sm" id="conn-cancel-edit" hidden>取消编辑</button>
+                  <button type="button" class="mil-key mil-key--sm" id="conn-probe-btn">测试连接并获取工具</button>
+                  <button type="submit" class="mil-key mil-key--sm mil-key--hot" id="conn-save-btn">保存外部连接</button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div class="set-subcard">
+            <div class="mil-label">宿主跨插件接口与环境状态</div>
+            <div class="ms-entry-list" id="conn-disc-list"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 三层打包导出、预览与导入弹窗 -->
+  <div class="mil-scrim" id="pkg-scrim" hidden>
+    <div class="mil-modal pkg-modal" role="dialog" aria-modal="true" aria-labelledby="pkg-modal-title">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="roles"></span>
+          <div class="mil-silk" id="pkg-modal-title">打包与分享</div>
+        </div>
+        <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm" id="pkg-close">关闭</button>
+        </div>
+      </div>
+
+      <div class="mil-feedback" id="pkg-feedback" role="status" aria-live="polite"></div>
+
+      <div class="ab-top-tabs" id="pkg-mode-tabs" role="tablist" aria-label="打包模式">
+        <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="pkg-tab-export" data-pkg-mode="export" aria-selected="true">打包分享</button>
+        <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="pkg-tab-import" data-pkg-mode="import" aria-selected="false">导入还原</button>
+      </div>
+
+      <div id="pkg-pane-export" role="tabpanel" aria-labelledby="pkg-tab-export">
+        <div class="mil-field">
+          <span class="mil-label">选择打包层级</span>
+          <div class="pkg-tier-grid" id="pkg-tier-grid" role="group" aria-label="打包层级">
+            <button type="button" class="pkg-tier-card" data-pkg-tier="profile" aria-pressed="false">
+              <strong>身份档案</strong>
+              <span class="mil-hint">角色设定、模型链与权限配置</span>
+            </button>
+            <button type="button" class="pkg-tier-card" data-pkg-tier="capability_pack" aria-pressed="false">
+              <strong>能力包</strong>
+              <span class="mil-hint">绑定的技能、系统工具与去敏日程</span>
+            </button>
+            <button type="button" class="pkg-tier-card" data-pkg-tier="template" aria-pressed="true">
+              <strong>完整可分享模板</strong>
+              <span class="mil-hint">身份档案 + 能力包一次性打包，敏感数据自动脱敏</span>
+            </button>
+          </div>
+        </div>
+        <div class="pkg-preview-box" id="pkg-export-preview" style="margin-top:8px"></div>
+        <div class="mil-row" style="gap:8px;margin-top:8px">
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="pkg-export-download">下载压缩包 (.zip)</button>
+        </div>
+      </div>
+
+      <div id="pkg-pane-import" role="tabpanel" aria-labelledby="pkg-tab-import" hidden>
+        <div class="mil-field">
+          <label class="mil-label" for="pkg-import-url">从公开直链导入（可选）</label>
+          <div class="mil-row" style="gap:6px">
+            <input type="text" class="mil-input mono" id="pkg-import-url" placeholder="粘贴公开 .zip 下载直链（以 https 开头）" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            <button type="button" class="mil-key mil-key--sm" id="pkg-preview-url">解析预览</button>
+          </div>
+        </div>
+        <div class="mil-field">
+          <span class="mil-label">或选择本地压缩包</span>
+          <div class="mil-row" style="gap:8px">
+            <button type="button" class="mil-key mil-key--sm" id="pkg-pick-file">选择 .zip 文件</button>
+            <span class="mil-hint" id="pkg-file-label">未选择文件</span>
+          </div>
+        </div>
+        <fieldset class="mil-fieldset" id="pkg-import-mode-fs">
+          <legend class="mil-label">导入方式</legend>
+          <div class="mil-row" style="gap:14px;flex-wrap:wrap">
+            <span class="mil-radio-row">
+              <input type="radio" name="pkg_import_mode" id="pkg-imp-update" value="update" checked />
+              <label for="pkg-imp-update">直接导入或更新同名角色</label>
+            </span>
+            <span class="mil-radio-row">
+              <input type="radio" name="pkg_import_mode" id="pkg-imp-copy" value="copy" />
+              <label for="pkg-imp-copy">另存为新角色</label>
+            </span>
+          </div>
+        </fieldset>
+        <div class="mil-field" id="pkg-copy-id-wrap" hidden>
+          <label class="mil-label" for="pkg-copy-id">新角色标识</label>
+          <input type="text" class="mil-input mono" id="pkg-copy-id" placeholder="例如 digest_indie" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+        </div>
+        <div class="pkg-preview-box" id="pkg-import-preview" hidden></div>
+        <div class="mil-field" id="pkg-sched-chat-wrap" hidden>
+          <label class="mil-label" for="pkg-sched-chat">同时将推荐定时任务绑定到会话（可选）</label>
+          <select class="mil-select" id="pkg-sched-chat">
+            <option value="">暂不创建定时任务</option>
+          </select>
+        </div>
+        <div class="mil-row" style="justify-content:flex-end;gap:8px;margin-top:8px">
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="pkg-import-confirm" disabled>确认导入</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 移动端底部快捷编辑抽屉 -->
+  <div class="m-mob-scrim m-mob-sheet-scrim" id="profiles-mob-scrim" hidden>
+    <div class="m-mob-sheet" role="dialog" aria-modal="true" aria-label="档案移动端快捷操作">
+      <div class="m-mob-handle" aria-hidden="true"></div>
+      <div class="m-mob-sheet-head">
+        <strong id="profiles-mob-sheet-title">快速设定</strong>
+        <button type="button" class="mil-key mil-key--sm" id="profiles-mob-sheet-close">完成</button>
+      </div>
+      <div id="profiles-mob-sheet-body" class="pr-mob-sheet-body"></div>
+    </div>
+  </div>
+
+  <!-- 技能编辑与角色绑定抽屉 -->
+  <div class="mil-scrim" id="sk-drawer-scrim" hidden>
+    <div class="mil-modal sk-drawer" role="dialog" aria-modal="true" aria-labelledby="sk-drawer-title">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="skills"></span>
+          <div>
+            <div class="mil-silk" id="sk-drawer-title">编辑技能</div>
+          </div>
+        </div>
+        <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm" id="sk-drawer-export">导出 .zip</button>
+          <button type="button" class="mil-key mil-key--sm" id="sk-drawer-reset" hidden>恢复默认</button>
+          <button type="button" class="mil-key mil-key--sm mil-key--danger" id="sk-drawer-delete" hidden>删除</button>
+          <button type="button" class="mil-key mil-key--sm" id="sk-drawer-close" aria-label="关闭技能抽屉">关闭</button>
+        </div>
+      </div>
+
+      <div class="mil-feedback" id="sk-drawer-fb" role="status" aria-live="polite"></div>
+
+      <div class="sk-review-banner" id="sk-review-banner" hidden>
+        <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div class="mil-row" id="sk-review-badges" style="gap:6px;flex-wrap:wrap"></div>
+          <div class="mil-seg" id="sk-review-mode-seg" hidden role="group" aria-label="提炼写入方式">
+            <button type="button" class="mil-key mil-key--sm" data-sk-rev-op="patch" aria-pressed="true">并入已有技能</button>
+            <button type="button" class="mil-key mil-key--sm" data-sk-rev-op="create" aria-pressed="false">另建类级技能</button>
+          </div>
+        </div>
+        <div class="mil-hint" id="sk-review-rationale" style="margin-top:4px"></div>
+      </div>
+
+      <div class="mil-grid-2">
+        <div class="mil-field">
+          <label class="mil-label" for="sk-edit-id">技能标识</label>
+          <input type="text" class="mil-input mono" id="sk-edit-id" placeholder="例如 weekly_summary" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+        </div>
+        <div class="mil-field">
+          <label class="mil-label" for="sk-edit-title">显示名称</label>
+          <input type="text" class="mil-input" id="sk-edit-title" placeholder="例如 群聊周报整理" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="mil-field">
+        <label class="mil-label" for="sk-edit-desc">用途说明</label>
+        <input type="text" class="mil-input" id="sk-edit-desc" placeholder="一句话说明这个技能适合什么时候启用" />
+      </div>
+
+      <div class="mil-field">
+        <div class="mil-row" style="justify-content:space-between;align-items:center">
+          <label class="mil-label" for="sk-edit-md">技能正文</label>
+          <span class="mil-hint" id="sk-companion-hint"></span>
+        </div>
+        <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="sk-edit-md" rows="10" placeholder="# 技能名称&#10;&#10;说明适用场景、步骤和输出格式…"></textarea>
+      </div>
+
+      <details class="mil-field" id="sk-companions-box">
+        <summary class="mil-label" style="cursor:pointer">附属参考与模板文件 <span class="mil-tag num" id="sk-comp-count">0</span></summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+          <div class="onb-chip-row" id="sk-companions-list"></div>
+          <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+            <input type="text" class="mil-input mono" id="sk-comp-path" placeholder="references/guide.md" style="flex:1 1 180px" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            <button type="button" class="mil-key mil-key--sm" id="sk-comp-save">保存附属文件</button>
+            <button type="button" class="mil-key mil-key--sm mil-key--danger" id="sk-comp-del" hidden>删除此文件</button>
+          </div>
+          <textarea class="mil-textarea mil-textarea--code" id="sk-comp-editor" rows="5" placeholder="选择上方附属文件查看，或填写 references/... 路径新建参考文档…"></textarea>
+        </div>
+      </details>
+
+      <div class="mil-field">
+        <span class="mil-label">分配给角色</span>
+        <div class="sk-bind-grid" id="sk-bind-profiles"></div>
+      </div>
+
+      <div class="mil-field" id="sk-versions-wrap" hidden>
+        <span class="mil-label">历史版本</span>
+        <div class="onb-chip-row" id="sk-versions-list"></div>
+      </div>
+
+      <div class="mil-row" style="justify-content:flex-end;gap:8px;margin-top:8px">
+        <button type="button" class="mil-key mil-key--sm" id="sk-drawer-cancel">取消</button>
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="sk-drawer-save">保存技能</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 能力包导入弹窗（技能子栏专用） -->
+  <div class="mil-scrim" id="sk-pkg-scrim" hidden>
+    <div class="mil-modal" role="dialog" aria-modal="true" aria-labelledby="sk-pkg-title">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="skills"></span>
+          <div class="mil-silk" id="sk-pkg-title">导入能力包</div>
+        </div>
+        <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm" id="sk-pkg-close">关闭</button>
+        </div>
+      </div>
+      <div class="mil-feedback" id="sk-pkg-fb" role="status" aria-live="polite"></div>
+      <div class="mil-field">
+        <label class="mil-label" for="sk-pkg-link">从公开直链导入（可选）</label>
+        <div class="mil-row" style="gap:6px">
+          <input type="text" class="mil-input mono" id="sk-pkg-link" placeholder="粘贴公开能力包直链（以 https 开头）" autocorrect="off" autocapitalize="none" spellcheck="false" />
+          <button type="button" class="mil-key mil-key--sm" id="sk-pkg-preview-link">解析预览</button>
+        </div>
+      </div>
+      <div class="mil-field">
+        <span class="mil-label">或选择本地压缩包</span>
+        <div class="mil-row" style="gap:8px">
+          <button type="button" class="mil-key mil-key--sm" id="sk-pkg-pick-file">选择文件</button>
+          <span class="mil-hint" id="sk-pkg-file-name">未选择文件</span>
+          <input type="file" id="sk-pkg-file" accept=".zip,application/zip" hidden />
+        </div>
+      </div>
+      <div class="pkg-preview-box" id="sk-pkg-preview" hidden></div>
+      <div class="mil-row" style="justify-content:flex-end;gap:8px;margin-top:8px">
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="sk-pkg-confirm" disabled>确认导入</button>
+      </div>
+    </div>
+  </div>
+</div>

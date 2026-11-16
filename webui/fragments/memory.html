@@ -1,0 +1,111 @@
+<div class="mem-shell" data-tab="memory">
+  <div class="mem-studio">
+    <aside class="mil-panel mem-aside" aria-label="手账分册与检索">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="journal"></span>
+          <div class="mil-row" style="gap:6px;align-items:center">
+            <div class="mil-silk">手账分册</div>
+            <button type="button" class="mil-help" data-help="分册保存各群聊与私聊备忘、MaiBot 自身近况以及闲暇心跳说明，每次修改自动留存历史版本；你也可以直接在聊天中让 MaiBot 帮你记下或修改。" aria-label="手账分册说明">?</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ab-top-tabs mem-book-tabs" id="mem-book-tabs" role="tablist" aria-label="手账分册">
+        <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="mem-tab-memory" data-mem-kind="memory" aria-selected="true">会话备忘</button>
+        <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="mem-tab-role-memory" data-mem-kind="role_memory" aria-selected="false">角色记忆</button>
+        <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="mem-tab-journal" data-mem-kind="journal" aria-selected="false">自身近况</button>
+        <button type="button" class="mil-key mil-key--sm ab-top-tab" role="tab" id="mem-tab-heartbeat" data-mem-kind="heartbeat" aria-selected="false">心跳说明</button>
+      </div>
+
+      <div class="mil-field" id="mem-chat-sec">
+        <label class="mil-label" for="mem-chat-trigger">选择会话</label>
+        <div class="ms-model-box" id="mem-chat-box">
+          <input type="hidden" id="mem-chat-id" value="" />
+          <button type="button" class="mil-key ms-model-trigger" id="mem-chat-trigger" aria-expanded="false" aria-controls="mem-chat-drop">
+            <span id="mem-chat-badge" style="min-width:0;overflow:hidden">选择聊天流</span>
+            <span class="mil-inline-ic" id="mem-chat-chev"></span>
+          </button>
+          <div class="ms-model-dropdown" id="mem-chat-drop" hidden>
+            <div class="ms-model-search-wrap">
+              <span class="mil-inline-ic" id="mem-chat-search-ic"></span>
+              <input type="search" id="mem-chat-search" placeholder="搜索群名、昵称或会话号…" aria-label="搜索手账会话" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            </div>
+            <div class="ms-model-groups" role="listbox" id="mem-chat-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mil-field" id="mem-role-sec" hidden>
+        <label class="mil-label" for="mem-role-select">选择角色</label>
+        <select class="mil-select" id="mem-role-select" aria-label="选择要查看记忆的角色"></select>
+      </div>
+
+      <div class="mil-field" id="mem-hb-sec" hidden>
+        <span class="mil-label">心跳说明快捷操作</span>
+        <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+          <button type="button" class="mil-key mil-key--sm" id="mem-hb-template">填入示例模板</button>
+          <button type="button" class="mil-key mil-key--sm" id="mem-goto-hb-set">心跳开关与时段</button>
+        </div>
+      </div>
+
+      <search class="mem-search-box">
+        <form id="mem-search-form" class="mil-field" aria-label="搜索记忆与经历">
+          <label class="mil-label" for="mem-search-input">搜索备忘与过往经历</label>
+          <div class="mil-row" style="gap:6px;flex-wrap:nowrap">
+            <input type="search" class="mil-input" id="mem-search-input" name="q" placeholder="输入关键词查找…" autocorrect="off" autocapitalize="none" spellcheck="false" style="flex:1 1 0;min-width:0" />
+            <button type="submit" class="mil-key mil-key--sm" id="mem-search-btn">搜索</button>
+          </div>
+        </form>
+        <div class="ms-entry-list" id="mem-search-results"></div>
+      </search>
+    </aside>
+
+    <div class="mem-main-stack">
+      <div class="mil-row" id="mem-proactive-bar" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px" aria-label="今日主动状态"></div>
+      <section class="mil-panel" id="mem-doc-panel" role="tabpanel" aria-labelledby="mem-tab-memory">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span data-icon-slot="memory"></span>
+            <div class="mil-row" style="gap:6px;align-items:center;flex-wrap:wrap">
+              <div class="mil-silk" id="mem-doc-title">会话备忘</div>
+              <span class="mil-tag num" id="mem-ver-tag">v0</span>
+              <span class="mil-tag num" id="mem-len-tag">0 / 16000 字</span>
+            </div>
+          </div>
+          <div class="mil-head-r">
+            <button type="button" class="mil-key mil-key--sm" id="mem-reload">重新读取</button>
+            <button type="button" class="mil-key mil-key--sm mil-key--hot" id="mem-save">保存手账</button>
+          </div>
+        </div>
+
+        <div class="mil-feedback" id="mem-feedback" role="status" aria-live="polite"></div>
+
+        <div class="mil-field">
+          <label class="mil-label" for="mem-editor" id="mem-editor-label">当前会话的称呼、口味、群规与长期约定</label>
+          <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="mem-editor" rows="13" placeholder="在这里记录需要长期记住的偏好与背景…"></textarea>
+        </div>
+
+        <div class="mil-field" id="mem-versions-wrap" hidden>
+          <span class="mil-label">历史版本回滚</span>
+          <div class="onb-chip-row" id="mem-versions-list"></div>
+        </div>
+      </section>
+
+      <section class="mil-panel" aria-label="自动复盘与经验回执">
+        <div class="mil-head">
+          <div class="mil-head-l">
+            <span data-icon-slot="skills"></span>
+            <div class="mil-row" style="gap:6px;align-items:center">
+              <div class="mil-silk">自动复盘与经验回执</div>
+              <button type="button" class="mil-help" data-help="每次任务结束后自动总结的经验要点会显示在这里，如果不符合预期可以一键撤回。" aria-label="经验回执说明">?</button>
+            </div>
+          </div>
+        </div>
+        <div class="ms-entry-list" id="mem-learning-list">
+          <div class="mil-hint">暂无自动复盘回执</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>

@@ -692,7 +692,7 @@ pre, code, .mono, .num {
 .mil-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px 14px;
   padding-bottom: 10px;
@@ -711,6 +711,7 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  flex: 1 1 180px;
   min-width: 0;
 }
 
@@ -756,6 +757,7 @@ pre, code, .mono, .num {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ───────────── 柔和内屏 / 下沉液晶屏 / 示波器 ───────────── */
@@ -872,6 +874,7 @@ pre, code, .mono, .num {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  flex-shrink: 0;
   max-width: 100%;
   min-height: 36px;
   padding: 7px 15px;
@@ -985,6 +988,19 @@ pre, code, .mono, .num {
 .mil-switch input:focus-visible + span {
   outline: 2px solid var(--mil-accent);
   outline-offset: 2px;
+}
+
+.ms-nav-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--mil-warn, #d97706);
+  vertical-align: middle;
+}
+.ms-nav-dot[hidden] {
+  display: none !important;
 }
 
 /* 分段键帽组 */
@@ -1247,6 +1263,8 @@ pre, code, .mono, .num {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+  align-self: flex-start;
   max-width: 100%;
   padding: 2px 9px;
   border: 0;
@@ -1257,8 +1275,12 @@ pre, code, .mono, .num {
   font-size: 11.5px;
   font-weight: 600;
   line-height: 1.4;
+  white-space: nowrap;
+}
+.mil-tag--wrap {
   white-space: normal;
   overflow-wrap: anywhere;
+  flex-shrink: 1;
 }
 :root[data-ui-style="millennium"] .mil-tag {
   border-radius: 0;
@@ -2181,10 +2203,10 @@ pre, code, .mono, .num {
     bottom: 0;
     z-index: 48;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     align-items: center;
     gap: 2px;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
     background: var(--mil-glass);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
@@ -2206,15 +2228,15 @@ pre, code, .mono, .num {
     align-items: center;
     justify-content: center;
     gap: 3px;
-    min-width: 44px;
+    min-width: 0;
     min-height: 46px;
-    padding: 5px 4px;
+    padding: 5px 2px;
     border: 1px solid transparent;
     border-radius: 10px;
     background: transparent;
     color: var(--mil-muted);
     font-family: var(--mil-font-body);
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 500;
     line-height: 1.1;
     cursor: pointer;
@@ -2308,22 +2330,42 @@ pre, code, .mono, .num {
 
 .now-card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 .now-card-title {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 7px;
+  flex: 1 1 0;
   min-width: 0;
   font-size: 13px;
   font-weight: 700;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.now-card-title > span:last-child,
+.now-card-title-txt {
+  flex: 1 1 0;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.now-tl-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .now-card-meta {
@@ -2663,7 +2705,620 @@ pre, code, .mono, .num {
   .now-intent-card,
   .now-thread-card,
   .now-step-btn,
-  .onb-dot {
+  .onb-dot,
+  .sk-card,
+  .pkg-tier-card {
     transition: none;
+  }
+}
+
+/* ───────────── v0.3.1 MaiBot 聊天流徽章 / 结构化选择 / 模型目录 / 技能页 / 三层导出 ───────────── */
+.ms-chat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.ms-chat-av {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  overflow: hidden;
+  border: 1px solid var(--mil-line);
+}
+
+:root[data-ui-style="millennium"] .ms-chat-av {
+  border-radius: 0;
+  border: 1.5px solid var(--mil-line);
+}
+
+.ms-chat-av--c0 { background: #F5E6EA; color: #9F1239; }
+.ms-chat-av--c1 { background: #DCFCE7; color: #166534; }
+.ms-chat-av--c2 { background: #E0F2FE; color: #075985; }
+.ms-chat-av--c3 { background: #FEF3C7; color: #92400E; }
+.ms-chat-av--c4 { background: #EDE9FE; color: #5B21B6; }
+.ms-chat-av--c5 { background: #FFE4E6; color: #9A3412; }
+
+.dark .ms-chat-av--c0 { background: #4C1D2A; color: #FDA4AF; }
+.dark .ms-chat-av--c1 { background: #14532D; color: #86EFAC; }
+.dark .ms-chat-av--c2 { background: #0C4A6E; color: #7DD3FC; }
+.dark .ms-chat-av--c3 { background: #78350F; color: #FDE68A; }
+.dark .ms-chat-av--c4 { background: #4C1D95; color: #DDD6FE; }
+.dark .ms-chat-av--c5 { background: #7C2D12; color: #FDBA74; }
+
+.ms-chat-av-pic {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.ms-chat-plat {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ms-chat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--mil-ink);
+}
+
+.ms-chat-rawid {
+  font-family: var(--mil-font-mono);
+  font-size: 11px;
+  color: var(--mil-muted);
+  flex-shrink: 0;
+}
+
+/* 新手引导图标项 & 防挤压 */
+.onb-item-l {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.onb-item-ic {
+  flex-shrink: 0;
+  display: inline-flex;
+  margin-top: 1px;
+}
+
+.onb-item-text {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+/* 最近私聊快捷芯片 & 结构化 [平台 -> 类型 -> ID] 输入条 */
+.ms-dm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  min-height: 32px;
+  max-width: 100%;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+:root[data-ui-style="millennium"] .ms-dm-chip {
+  border-width: 2px;
+  border-radius: 0;
+  background: var(--mil-key);
+  box-shadow: inset 0 -2px 0 var(--mil-key-side);
+}
+
+.ms-struct-builder {
+  display: grid;
+  grid-template-columns: auto auto minmax(120px, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.ms-struct-builder .mil-select {
+  width: auto;
+  min-width: 92px;
+}
+
+/* 启用聊天流卡片 & 候选选择器 */
+.ms-stream-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+  min-width: 0;
+}
+
+:root[data-ui-style="millennium"] .ms-stream-row {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.ms-stream-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+}
+
+.ms-stream-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-well);
+}
+
+:root[data-ui-style="millennium"] .ms-stream-picker {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.ms-stream-picker[hidden] {
+  display: none;
+}
+
+.ms-stream-cand-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* MaiBot 风格有序模型链 & 可搜索按厂商分组模型选择器 */
+.ms-model-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.ms-model-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ms-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-screen);
+  min-width: 0;
+}
+
+:root[data-ui-style="millennium"] .ms-model-row {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.ms-model-row-l {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.ms-model-idx {
+  font-family: var(--mil-font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--mil-muted);
+  flex-shrink: 0;
+}
+
+.ms-model-meta {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.ms-model-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-model-sub {
+  font-size: 11px;
+  color: var(--mil-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ms-vis-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+  background: var(--mil-accent-soft);
+  color: var(--mil-accent);
+}
+
+:root[data-ui-style="millennium"] .ms-vis-badge {
+  border-radius: 0;
+  border: 1px solid var(--mil-line);
+}
+
+.ms-model-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ms-model-op {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--mil-line);
+  border-radius: 6px;
+  background: var(--mil-key);
+  color: var(--mil-ink);
+  cursor: pointer;
+}
+
+:root[data-ui-style="millennium"] .ms-model-op {
+  border-radius: 0;
+  border-width: 1.5px;
+}
+
+.ms-model-op--del {
+  color: var(--mil-bad, #c94a38);
+  border-color: transparent;
+  background: transparent;
+}
+.ms-model-op--del:hover {
+  background: var(--mil-well);
+}
+
+.ms-model-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ms-model-dropdown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-panel);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.14);
+}
+
+:root[data-ui-style="millennium"] .ms-model-dropdown {
+  border-width: 2px;
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--mil-drop);
+}
+
+.ms-model-dropdown[hidden] {
+  display: none;
+}
+
+.ms-model-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--mil-line);
+  border-radius: 8px;
+  background: var(--mil-screen);
+}
+
+:root[data-ui-style="millennium"] .ms-model-search-wrap {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.ms-model-search-wrap input {
+  border: 0;
+  background: transparent;
+  width: 100%;
+  padding: 7px 2px;
+  font-size: 12.5px;
+  color: var(--mil-ink);
+  outline: none;
+}
+
+.ms-model-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ms-model-group-hd {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mil-muted);
+  padding: 6px 8px 2px;
+  position: sticky;
+  top: 0;
+  background: var(--mil-panel);
+}
+
+.ms-model-opt {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mil-ink);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ms-model-opt:hover,
+.ms-model-opt[aria-selected="true"] {
+  background: var(--mil-well);
+}
+
+:root[data-ui-style="millennium"] .ms-model-opt {
+  border-radius: 0;
+}
+
+/* 技能专属工作台 */
+.sk-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sk-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sk-topbar-r {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 280px;
+  justify-content: flex-end;
+}
+
+.sk-topbar-r .mil-input {
+  max-width: 260px;
+}
+
+.sk-section-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sk-distill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sk-distill-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+}
+
+:root[data-ui-style="millennium"] .sk-distill-card {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.sk-distill-meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.sk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sk-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.sk-card:hover {
+  border-color: var(--mil-accent);
+  background: var(--mil-panel);
+}
+
+:root[data-ui-style="millennium"] .sk-card {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.sk-card-l {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.sk-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--mil-ink);
+  margin-bottom: 3px;
+}
+
+.sk-card-desc {
+  font-size: 12px;
+  color: var(--mil-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+}
+
+.sk-card-r {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 三层角色/能力包导出与导入弹窗 */
+.pkg-tier-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pkg-tier-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 12px;
+  background: var(--mil-screen);
+  color: var(--mil-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.pkg-tier-card[aria-pressed="true"] {
+  border-color: var(--mil-accent);
+  background: var(--mil-accent-soft);
+}
+
+:root[data-ui-style="millennium"] .pkg-tier-card {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+:root[data-ui-style="millennium"] .pkg-tier-card[aria-pressed="true"] {
+  background: var(--mil-key-hi);
+  border-color: var(--mil-hot);
+}
+
+.pkg-link-box,
+.pkg-preview-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--mil-line);
+  border-radius: 10px;
+  background: var(--mil-screen);
+}
+
+:root[data-ui-style="millennium"] .pkg-link-box,
+:root[data-ui-style="millennium"] .pkg-preview-box {
+  border-width: 2px;
+  border-radius: 0;
+}
+
+.sk-bind-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .sk-grid,
+  .pkg-tier-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sk-topbar-r {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .ms-struct-builder {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .ms-struct-builder .mil-select {
+    min-width: 0;
+    width: 100%;
+  }
+  .ms-struct-builder input {
+    grid-column: 1 / -1;
   }
 }

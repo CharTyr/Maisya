@@ -1,4 +1,4 @@
-"""将 Maisya v0.3 双主题 4 页工作台（现场 / 档案 / 资料库 / 设置）打包为宿主单入口自包含 `webui/now.html`。"""
+"""将 Maisya 5 页双主题工作台（现场 / 产物 / 能力 / 手账 / 设置）打包为宿主单入口自包含 `webui/now.html`。"""
 
 import json
 import sys
@@ -6,8 +6,9 @@ from pathlib import Path
 
 _PAGES: tuple[tuple[str, str], ...] = (
     ("now", "现场"),
-    ("profiles", "档案"),
-    ("library", "资料库"),
+    ("library", "产物"),
+    ("abilities", "能力"),
+    ("memory", "手账"),
     ("settings", "设置"),
 )
 
@@ -60,8 +61,9 @@ def _render_unified(
         "{{NOW_BODY}}": fragments["now"] if is_now else "",
         "{{MGMT_DEFAULT_BODY}}": "" if is_now else fragments[page],
         "{{NAV_NOW_CURRENT}}": ' aria-current="page"' if page == "now" else "",
-        "{{NAV_PROFILES_CURRENT}}": ' aria-current="page"' if page == "profiles" else "",
         "{{NAV_LIBRARY_CURRENT}}": ' aria-current="page"' if page == "library" else "",
+        "{{NAV_ABILITIES_CURRENT}}": ' aria-current="page"' if page == "abilities" else "",
+        "{{NAV_MEMORY_CURRENT}}": ' aria-current="page"' if page == "memory" else "",
         "{{NAV_SETTINGS_CURRENT}}": ' aria-current="page"' if page == "settings" else "",
     }
     for key, val in replacements.items():

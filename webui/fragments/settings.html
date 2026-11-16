@@ -7,15 +7,13 @@
       <div class="mil-head">
         <div class="mil-head-l">
           <span data-icon-slot="roles"></span>
-          <div>
+          <div class="mil-row" style="gap:6px;align-items:center">
             <div class="mil-silk">会话开关</div>
-            <div class="mil-silk-en">CHATS &amp; ALLOWLIST</div>
+            <button type="button" class="mil-help" data-help="管理员私聊默认可用；普通群聊与私聊按需添加到下方列表即可，也可以直接在私聊跟 MaiBot 说帮你开启某个群。" aria-label="会话开关说明">?</button>
           </div>
         </div>
         <span class="mil-tag mil-tag--ok">管理员私聊自动放行</span>
       </div>
-
-      <div class="mil-hint">已核验管理员在私聊发出的消息会自动放行且支持跨会话调度；普通群聊需在下方显式打开开关。</div>
 
       <div class="ms-entry-row">
         <div class="ms-entry-meta">
@@ -28,12 +26,39 @@
         </label>
       </div>
 
-      <div class="ms-entry-add">
-        <input type="text" class="mil-input mono" id="set-chat-input" placeholder="手动添加，例如 qq:group:100246809" aria-label="添加群聊标识" />
-        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="set-chat-add">添加会话</button>
+      <div class="mil-row" style="justify-content:space-between;align-items:center;margin-top:4px">
+        <span class="mil-label" id="set-chat-count-label">已开启会话（0 个）</span>
+        <button type="button" class="mil-key mil-key--sm" id="set-open-chat-picker">+ 添加聊天流</button>
+      </div>
+
+      <div class="ms-stream-picker" id="set-chat-picker" hidden>
+        <search>
+          <input type="search" class="mil-input" id="set-chat-cand-search" placeholder="搜索群名、私聊名称或 ID..." aria-label="搜索候选聊天流" autocorrect="off" autocapitalize="none" spellcheck="false" />
+        </search>
+        <div class="ms-stream-cand-list" id="set-chat-cand-list"></div>
       </div>
 
       <div class="ms-entry-list" id="set-chat-list"></div>
+
+      <div class="mil-field" style="margin-top:6px">
+        <span class="mil-label">手动添加聊天流</span>
+        <div class="ms-struct-builder" id="set-chat-builder">
+          <select class="mil-select" id="set-chat-plat" aria-label="选择平台">
+            <option value="qq">QQ</option>
+            <option value="weixin">微信</option>
+            <option value="discord">Discord</option>
+            <option value="feishu">飞书</option>
+            <option value="telegram">Telegram</option>
+            <option value="onebot">OneBot</option>
+          </select>
+          <select class="mil-select" id="set-chat-type" aria-label="选择类型">
+            <option value="group">群聊</option>
+            <option value="private">私聊</option>
+          </select>
+          <input type="text" class="mil-input mono" id="set-chat-id" placeholder="输入群号或用户 ID，例如 100246809" aria-label="聊天流群号或用户 ID" autocorrect="off" autocapitalize="none" spellcheck="false" />
+          <button type="button" class="mil-key mil-key--sm mil-key--hot" id="set-chat-add">添加会话</button>
+        </div>
+      </div>
     </section>
 
     <!-- 2. 权限与管理员 -->
@@ -41,114 +66,173 @@
       <div class="mil-head">
         <div class="mil-head-l">
           <span data-icon-slot="vault"></span>
-          <div>
+          <div class="mil-row" style="gap:6px;align-items:center">
             <div class="mil-silk">权限与管理员</div>
-            <div class="mil-silk-en">TRUST &amp; DUAL-SOURCE ADMINS</div>
+            <button type="button" class="mil-help" data-help="管理宿主与插件管理员名单、高危动作授权策略及已记住授权记录。" aria-label="权限说明">?</button>
           </div>
         </div>
-        <button type="button" class="mil-key mil-key--sm" id="set-reopen-onb">重新打开新手引导</button>
+        <button type="button" class="mil-key mil-key--sm" id="set-reopen-onb">重新打开引导</button>
       </div>
 
       <div class="mil-field">
         <label class="mil-label" for="set-perm-mode">默认授权策略</label>
         <select class="mil-select" id="set-perm-mode">
-          <option value="ask_risky">仅高危操作确认 (ask_risky · 推荐)</option>
-          <option value="autonomous">受托自主执行 (autonomous)</option>
-          <option value="always_ask">每次写/命令操作都确认 (always_ask)</option>
+          <option value="ask_risky">仅高危操作确认</option>
+          <option value="autonomous">受托自主执行</option>
+          <option value="always_ask">每次操作都确认</option>
         </select>
       </div>
 
       <div class="set-admins-split">
         <div class="set-subcard">
-          <div class="mil-label">宿主授权管理员（只读 · 来自宿主配置）</div>
+          <div class="mil-label">宿主授权管理员（只读）</div>
           <div class="set-admin-badges" id="set-host-admins"></div>
         </div>
         <div class="set-subcard">
-          <div class="mil-label">插件内管理员（可增删 · 至少保留一位管理员）</div>
+          <div class="mil-label">插件内管理员（至少保留一位）</div>
           <div class="mil-feedback mil-feedback--err" id="set-admin-err" role="alert"></div>
           <div class="set-admin-badges" id="set-plugin-admins"></div>
-          <div class="ms-entry-add">
-            <input type="text" class="mil-input mono" id="set-admin-input" placeholder="输入用户标识，例如 qq:private:10001" aria-label="添加插件管理员" />
+          <div class="mil-field" id="set-recent-dms-wrap" hidden>
+            <span class="mil-label">最近私聊快捷添加</span>
+            <div class="onb-chip-row" id="set-recent-dms"></div>
+          </div>
+          <div class="ms-struct-builder" id="set-admin-builder">
+            <select class="mil-select" id="set-adm-plat" aria-label="管理员平台">
+              <option value="qq">QQ</option>
+              <option value="weixin">微信</option>
+              <option value="discord">Discord</option>
+              <option value="feishu">飞书</option>
+              <option value="telegram">Telegram</option>
+              <option value="onebot">OneBot</option>
+            </select>
+            <select class="mil-select" id="set-adm-type" aria-label="账号类型">
+              <option value="private">私聊账号</option>
+            </select>
+            <input type="text" class="mil-input mono" id="set-adm-id" placeholder="输入用户 ID，例如 10001" aria-label="管理员用户 ID" autocorrect="off" autocapitalize="none" spellcheck="false" />
             <button type="button" class="mil-key mil-key--sm" id="set-admin-add">加入管理员</button>
           </div>
         </div>
       </div>
 
       <div class="set-grants-wrap">
-        <div class="mil-label">已记住的授权记录 (grants)</div>
+        <div class="mil-label">已记住的授权记录</div>
         <div class="ms-entry-list" id="set-grants-list"></div>
       </div>
     </section>
 
-    <!-- 3. 安全存储 -->
+    <!-- 3. 密码保险箱（别名 + 密码极简保存，查看仅显示别名与保存日期） -->
     <section class="mil-panel set-block" id="set-block-vault">
       <div class="mil-head">
         <div class="mil-head-l">
           <span data-icon-slot="vault"></span>
-          <div>
-            <div class="mil-silk">安全存储</div>
-            <div class="mil-silk-en">VAULT METADATA ONLY</div>
+          <div class="mil-row" style="gap:6px;align-items:center">
+            <div class="mil-silk">密码保险箱</div>
+            <button type="button" class="mil-help" data-help="只需保存「别名 + 密码」。当任务需要用到该密码时，直接跟 MaiBot 提到对应的别名即可自动安全注入；点击已保存条目只显示别名和保存日期，不显示密码。" aria-label="密码保险箱说明">?</button>
           </div>
         </div>
         <span class="mil-tag">只存不显</span>
       </div>
 
-      <div class="mil-hint">列表仅显示凭据句柄、标签与适用域名，永不回显任何秘密明文。</div>
       <div class="ms-entry-list" id="set-vault-list"></div>
 
-      <div class="set-vault-form">
+      <div class="set-subcard" id="set-vault-detail" hidden role="region" aria-label="已保存密码详情"></div>
+
+      <form id="set-vault-form" class="set-vault-form" aria-label="保存新密码">
         <div class="mil-grid-2">
           <div class="mil-field">
-            <label class="mil-label" for="set-vault-handle">凭据句柄 (handle)</label>
-            <input type="text" class="mil-input mono" id="set-vault-handle" placeholder="例如 github_pat" autocomplete="off" />
+            <label class="mil-label" for="set-vault-handle">密码别名</label>
+            <input type="text" class="mil-input mono" id="set-vault-handle" name="handle" placeholder="例如 github_pat" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
           </div>
           <div class="mil-field">
-            <label class="mil-label" for="set-vault-label">显示名称 (label)</label>
-            <input type="text" class="mil-input" id="set-vault-label" placeholder="例如 GitHub 只读令牌" autocomplete="off" />
-          </div>
-          <div class="mil-field">
-            <label class="mil-label" for="set-vault-domain">允许域名 (domain)</label>
-            <input type="text" class="mil-input mono" id="set-vault-domain" placeholder="例如 api.github.com" autocomplete="off" />
-          </div>
-          <div class="mil-field">
-            <label class="mil-label" for="set-vault-secret">秘密字段（每行 键=值，写入即清空输入框）</label>
-            <textarea class="mil-textarea mil-textarea--code" id="set-vault-secret" rows="2" placeholder="TOKEN=..." autocomplete="off"></textarea>
+            <label class="mil-label" for="set-vault-secret">密码内容</label>
+            <div class="mil-row" style="gap:6px;flex-wrap:nowrap">
+              <input type="password" class="mil-input mono" id="set-vault-secret" name="secret" placeholder="输入密码或令牌（保存后清空）" autocomplete="new-password" style="flex:1 1 0;min-width:0" />
+              <button type="button" class="mil-key mil-key--sm" id="set-vault-eye" aria-pressed="false" aria-label="切换显示输入中的密码">显示</button>
+            </div>
           </div>
         </div>
-        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="set-vault-save">存入安全存储</button>
-      </div>
+        <button type="submit" class="mil-key mil-key--sm mil-key--hot" id="set-vault-save" style="width:fit-content">保存密码</button>
+      </form>
     </section>
 
-    <!-- 4. 基础运行 -->
+    <!-- 4. 单一心跳与基础运行 -->
     <section class="mil-panel set-block" id="set-block-runtime">
       <div class="mil-head">
         <div class="mil-head-l">
-          <span data-icon-slot="gear"></span>
-          <div>
-            <div class="mil-silk">基础运行</div>
-            <div class="mil-silk-en">RUNTIME &amp; THEME</div>
+          <span data-icon-slot="heartbeat"></span>
+          <div class="mil-row" style="gap:6px;align-items:center">
+            <div class="mil-silk">心跳与运行</div>
+            <button type="button" class="mil-help" data-help="直观控制闲暇心跳开关、节奏与免打扰时段；更细致的关注主题、简报时间或个性化微调，直接跟 MaiBot 对话沟通即可。" aria-label="心跳与运行设置说明">?</button>
           </div>
         </div>
         <button type="button" class="mil-key mil-key--sm mil-key--hot" id="set-save-runtime">保存运行设置</button>
       </div>
 
+      <div class="set-subcard">
+        <div class="mil-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div class="ms-entry-meta">
+            <strong class="ms-entry-title">自主闲暇心跳</strong>
+            <span class="mil-hint" id="set-hb-enabled-txt">已开启</span>
+          </div>
+          <div class="mil-row" style="gap:8px;align-items:center">
+            <button type="button" class="mil-key mil-key--sm" id="set-goto-heartbeat">编辑心跳说明</button>
+            <label class="mil-switch">
+              <input type="checkbox" id="set-hb-enabled" checked aria-label="开启自主闲暇心跳" />
+              <span class="mil-switch-track"></span>
+            </label>
+          </div>
+        </div>
+        <div class="mil-grid-2">
+          <div class="mil-field">
+            <label class="mil-label" for="set-hb-interval">心跳间隔</label>
+            <select class="mil-select" id="set-hb-interval">
+              <option value="30">每 30 分钟</option>
+              <option value="60">每 1 小时</option>
+              <option value="120" selected>每 2 小时（默认）</option>
+              <option value="240">每 4 小时</option>
+            </select>
+          </div>
+          <div class="mil-field">
+            <div class="mil-row" style="gap:6px;align-items:center">
+              <label class="mil-label" for="set-daily-limit">每日主动搭话上限</label>
+              <button type="button" class="mil-help" data-help="普通闲聊每天主动惦记搭话的次数上限（0~50），填 0 表示平时不主动搭话，仅按计划任务响应。" aria-label="每日主动搭话上限说明">?</button>
+            </div>
+            <input type="number" class="mil-input num" id="set-daily-limit" min="0" max="50" step="1" value="1" />
+          </div>
+        </div>
+        <div class="mil-field">
+          <div class="mil-row" style="gap:6px;align-items:center">
+            <label class="mil-label" for="set-sleep-start">免打扰时段</label>
+            <button type="button" class="mil-help" data-help="填写起止时间（如 23:30 至 08:00），该时段内暂停无事主动搭话。" aria-label="免打扰时段说明">?</button>
+          </div>
+          <div class="mil-row" id="sleep-range-wrap" style="flex-wrap:nowrap;align-items:center;gap:6px">
+            <input type="text" class="mil-input mono" id="set-sleep-start" placeholder="23:30" maxlength="5" aria-label="免打扰开始时间" style="flex:1 1 0;min-width:0" autocorrect="off" autocapitalize="none" spellcheck="false" />
+            <span>~</span>
+            <input type="text" class="mil-input mono" id="set-sleep-end" placeholder="08:00" maxlength="5" aria-label="免打扰结束时间" style="flex:1 1 0;min-width:0" autocorrect="off" autocapitalize="none" spellcheck="false" />
+          </div>
+        </div>
+      </div>
+
       <div class="mil-grid-2">
         <div class="mil-field">
-          <label class="mil-label" for="set-default-model">默认任务模型槽位</label>
-          <select class="mil-select" id="set-default-model"></select>
-        </div>
-
-        <div class="mil-field">
-          <label class="mil-label" for="set-daily-limit">每日主动搭话上限 (0 - 50)</label>
-          <input type="number" class="mil-input num" id="set-daily-limit" min="0" max="50" step="1" value="1" />
-        </div>
-
-        <div class="mil-field">
-          <label class="mil-label">免打扰时段（HH:MM）</label>
-          <div class="mil-row" id="sleep-range-wrap">
-            <input type="text" class="mil-input mono" id="set-sleep-start" placeholder="23:30" maxlength="5" aria-label="免打扰开始时间" />
-            <span>~</span>
-            <input type="text" class="mil-input mono" id="set-sleep-end" placeholder="08:00" maxlength="5" aria-label="免打扰结束时间" />
+          <label class="mil-label" for="set-model-trigger">默认任务模型</label>
+          <div class="ms-model-box" id="set-model-box">
+            <input type="hidden" id="set-default-model" value="" />
+            <button type="button" class="mil-key ms-model-trigger" id="set-model-trigger" aria-expanded="false" aria-controls="set-model-drop">
+              <span class="mil-row" style="gap:6px;min-width:0">
+                <span class="mono" id="set-model-label">选择模型</span>
+                <span class="mil-hint" id="set-model-provider"></span>
+                <span class="ms-vis-badge" id="set-model-visual" hidden>视觉</span>
+              </span>
+              <span class="mil-inline-ic" id="set-model-chev"></span>
+            </button>
+            <div class="ms-model-dropdown" id="set-model-drop" hidden>
+              <div class="ms-model-search-wrap">
+                <span class="mil-inline-ic" id="set-model-search-ic"></span>
+                <input type="search" id="set-model-search" placeholder="搜索模型名称或厂商..." aria-label="搜索模型名称或厂商" autocorrect="off" autocapitalize="none" spellcheck="false" />
+              </div>
+              <div class="ms-model-groups" role="listbox" id="set-model-list"></div>
+            </div>
           </div>
         </div>
 
