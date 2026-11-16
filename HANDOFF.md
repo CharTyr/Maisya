@@ -1,44 +1,52 @@
 # Maisya Handoff
 
-写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [极简高权收敛计划](docs/07-极简高权收敛计划.md)。
+写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [管理台与接入](docs/04-管理台与接入.md)。
 
-最后更新：2026-11-16（**`v0.3.0` 极简高权收敛架构基线**，对应 `main` 合入 Wave 1～3 全部代码、测试与文档后的已验证形态；历史 `v0.2.0` 五页多预置方案已收敛取代）。
-
----
-
-## 1. 当前核心收敛形态与不变式
-
-- **唯一主体**：MaiBot 是唯一对话主体，保留原有人设、日常闲聊节奏与宿主 `A_Memorix` 记忆边界；Maisya 不抢话筒。
-- **四个核心概念（`v0.3` 收敛后）**：
-  1. **能力档案（`Profile`）**：收敛为单一开箱全能 [`presets/profiles/default/`](presets/profiles/default/profile.toml)（开启全部 5 大 `TOOLSETS`，并透明别名映射历史 `scout` / `maker` / `digest`），以及 Hermes 式渐进定制档案（首屏极简、5 大工具集 / 技能 / 连接器开关、`PROFILE.md <= 150` 行留空自动生成、单档案 `.zip` 导入导出；已移除旧版 `recipes.py` 配方系统）。
-  2. **双轨 Agent 线程（`Thread`）**：`default` 按事建轻量线程（`ephemeral`，兼容 `"task"`）；定制档案默认按 `(owner, chat_id, profile)` 自动绑定/续接同会话常驻主线（`primary_threads`，传 `fresh=true` 归档重开）。热改档案配置实时生效不锁旧工作区；`stop` 取消当前轮并回归 `"idle"` 状态，可随时通过 `send` 或 `reopen` 续聊。
-  3. **意图、Pulse 与条件盯梢（`Intent` / `Watch`）**：所有异步唤醒与定时统一落入 `intents`；新增 **`maisya_later(mode="watch", condition=...)` 原生条件盯梢**替代已移除的签名 Webhook（`incoming.py` / `maisya_incoming_event` / `webhooks.json`）。`watch` 未命中条件时静默重排（`[WATCH:NO_CHANGE]`），不唤醒聊天且不扣减每日主动额度。
-  4. **记忆层**：`A_Memorix`（宿主群友印象）继续只读借调；Maisya 管理会话备忘 `MEMORY.md`（≤2,200 字）、7 天近况 `JOURNAL.md`（≤1,500 字）、探索节奏 `HEARTBEAT.md` 及 `SKILL.md` / `NOTES.md` / `PROFILE.md`。
-- **双源管理员、私聊直通与两级执行器**：
-  - 有效管理员 = `宿主 plugin.permission（只读继承） ∪ 插件 Settings.admins（支持引导/设置页/对话增删，防清空与防删己自锁死）`，完整保留 `user_id` 大小写；
-  - `plugin.enabled = true` 后，**已核验管理员私聊默认免白名单直通全部能力与跨群调度**；普通群聊与非管理员私聊继续受 `enabled_chats` 严格门控；
-  - 宿主机执行采用 [`maisya/runner.py`](maisya/runner.py) `HostWorkspaceRunner`（管理员态免容器开箱执行，最小化环境 + 进程组超时强杀 + `0o400` 临时 `MAISYA_SECRETS_DIR` 退出即焚 + 输出脱敏），默认配合 `permission_mode = "ask_risky"` 挂起高风险操作至 `pending_approvals`，经真实管理员 `maisya_agent(action="approve", grant_tier="once|session|always|deny")` 确认并按需记录 `permission_grants`；
-  - 可选 [`maisya/sandbox.py`](maisya/sandbox.py) `DockerRunner` 降低门槛（不再强制要求 `runsc` 与 `@sha256:` 除非开启 `privileged_sandbox_mode`），主要用于非管理员代码隔离执行；未开启 Docker 时，普通用户严禁执行任意 Shell 或自由代码。
-- **planner 工具与接口收敛**：
-  - 可见工具：`maisya_agent`（`start | send | stop | reopen | list | approve | share`）、`maisya_recall`、`maisya_later`（`schedule | list | cancel`，含 `mode="watch"`）；
-  - 延迟工具：`maisya_shape`（**严禁设 `visibility` 标记**；收敛为 `overview` / `settings` / `profile` / `file` 4 类正交操作）；
-  - 静态 `@API` 共 **6 个**（`maisya_now`、`maisya_event`、`maisya_note`、`maisya_stop`、`maisya_manage_read`、`maisya_manage_write`）。
-- **四页双主题 WebUI 与 5 步启动引导**：
-  - [`webui.json`](webui.json) v2 仅暴露单入口 [`webui/now.html`](webui/now.html)，内部渲染 **现场 | 档案 | 资料库 | 设置** 四页与 **5 步冷启动引导浮层**（状态存 `onboarding.json`，含 `(run_id, sequence)` 防竞态票据与 7 项只读就绪清单）；
-  - 默认主题 `millennium`（千禧机械），可选 `modern`（现代极简，自动兼容旧值 `"maiwork"`）与 `auto`；
-  - 移动端（`<= 720px` 主布局及底栏 / `<= 760px` 档案轮播头）保留 4 栏底栏（`.ms-mob-dock`）与无框横向游动像素鱼轮播开关（`#ab-mob-head` / `#mob-role-carousel` / `#ab-mob-role-card1`）；
-  - 修改界面仅编辑 `webui/*.in`、`webui/fragments/*.html`、`webui/millennium.css`、`webui/icons.js`、`webui/fish.js` 后执行 `python3 webui/build.py`，严格遵守零 `<img>`、零 `<iframe>`、零 `localStorage`、零 `transition: all` 与峰值并发 RPC `<= 2`。
+最后更新：2026-11-16（**`v0.3.3` 产品蓝图对齐与安全加固基线**，对应本地 `main` 已完成 4 个提交并通过全量验证的状态；未推送远端，未部署上线）。
 
 ---
 
-## 2. 最新验收实测结果（`main` Wave 3 合流基线）
+## 1. 当前核心产品形态与架构不变式
 
-- **前端编译一致性**：`python3 webui/build.py --check` 返回退出码 `0`（[`webui/now.html`](webui/now.html) 与源码模板一致）。
-- **全量本地与 Playwright UI 单测**：
-  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：`505 passed`（`0 failed / 0 errors / 0 skipped`，加 `--rootdir=tests` 同为全量通过）；
-  - 已完整覆盖后端与运行期收口（`stop -> "idle"` 取消守卫联动、无管理员状态下配置回写防误拦、`maisya_shape` 4 动作防自锁死与 `chat_proactive_levels` 写入/清空、`set_profile_models` 落盘、`chat.open_session` 热写回路由、空 `account_id` 会话升级、`start` 解除 `admin_direct` 粘性、`ui_style` 版本号同步）以及 4 页双主题 Playwright Chromium UI 验收。
-- **真实宿主 venv 隔离契约**：`python3 tests_host/run_contract.py`：`Ran 22 tests` `OK`（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
-- **文档校验基线**：所有文档内部链接、模块清单与接口名称已逐一对照当前工作区代码校准，移除失效模块引用（`incoming.py`、`recipes.py`、`maisya_incoming_event`、`webhooks.json`、`templates` 等）。
+- **唯一主体**：MaiBot 是唯一对话主体，保留原有人设、日常闲聊节奏（原生 `reply`）与宿主 `A_Memorix` 记忆边界；Maisya 扩展行动空间，不抢话筒。
+- **三档内置能力档案 + 渐进定制 + 三层真实包分享**：
+  1. **能力档案（`Profile`）**：内置 [`presets/profiles/default/`](presets/profiles/default/profile.toml)（全能默认助手，开启全部 5 大 `TOOLSETS` 与 `render_report` 图文报告等）、[`scout/`](presets/profiles/scout/profile.toml)（轻量查证助手）与 [`digest/`](presets/profiles/digest/profile.toml)（资讯简报），支持渐进定制（`PROFILE.md <= 150` 行）与历史 `maker` 兼容别名。
+  2. **真实包导出与导入（[`maisya/packages.py`](maisya/packages.py)）**：支持 `profile` / `capability_pack` / `template` 三层脱敏 `.maisya.zip` 本地导出、聊天工作区工具 `package_export` 打包后由 `share` 直接发回文件、公开 `https://` 直链导入及重名确认/另存副本（**已彻底移除虚假 `maisya://` 分享链接**）。非管理员导出公共档案严格隔离为「仅当前会话且非管理员创建的常规任务」；导入执行前置全量校验，并在任何阶段失败时事务回滚已安装技能与目标目录。
+- **双轨线程与现场控制**：
+  - `default` / `scout` 默认轻量按事建线程（`ephemeral`）；持久档案按 `(owner, chat_id, profile)` 自动续接同会话常驻主线（`primary_threads`，传 `fresh=true` 归档重开）。
+  - `现场` 页区分「排入跟进」（`steer=false`）与运行中「立即转向」（`steer=true`）；从 `产物` 点击「查看生成过程」跳转回 `现场` 时自动重置筛选避免空白。
+- **全局预定与条件盯梢（`Intent` / `Watch`）**：
+  - `现场 -> 预定与盯梢` 展示**全局计划**（不随选中线程筛选消失）；`maisya_later` 支持 `schedule | list | pause | resume | run_now | cancel`（含 `mode="watch"` 静默盯梢），`run_now` / `intent_run_now` 在派发前先置 `'claimed'`（异常兜底转 `'deferred'`），防循环任务重复排期。
+  - **外部签名推送接口（原 `incoming.py` / `maisya_incoming_event` / `webhooks.json`）确定永久移除，不再恢复**。
+- **四本手账与双轨技能沉淀**：
+  - `手账` 页集成 4 本手账：`会话备忘`（`MEMORY.md` ≤16,000 字）| `角色记忆`（`profiles/<id>/MEMORY.md` ≤8,000 字，与 `能力 -> 角色` 实时同步）| `近期经历`（`JOURNAL.md` ≤8,000 字）| `闲暇心跳`（`HEARTBEAT.md` ≤16,000 字）。
+  - 自动学习（`Learning`，`max_tokens=500`）首次抽象的新技能落入 `skill_proposals` 草稿队列（`能力 -> 技能` 与 `手账` 入口预览保存）；对已有技能的微调自动写入并在 `手账 -> 自动复盘与经验回执` 展示，支持按历史版本一键撤回（`undo_learning_note`）。
+- **MCP 连接中心与凭据边界（`services.py` / `vault.py` / `management.py` / `shaping_setup.py`）**：
+  - 支持直接粘贴标准 `mcpServers` JSON、表单/对话框直接填写 `env`/`headers` 密码（加密存入 `kind="mcp_inline"` 内部句柄，不污染用户可见密码保险箱）、一键试连发现工具、工具白名单通配符 `*`，以及远程 Streamable HTTP MCP（含公网与 DNS 重绑 SSRF 校验）。
+  - `vault._mcp_secret_handle` 与 `purge_mcp_secrets` 使用**完整服务名 SHA-256 哈希与精确匹配**，消除长前缀与包含名称碰撞；配置保存先全量校验 `_validate_services` 再事务提交凭据（写盘失败自动恢复 `.enc` 与元数据）。
+  - 用户在聊天中直接发密码/Token 让 Bot 办事时正常执行，依赖出站与上下文脱敏兜底，**绝不因未提前录入保险箱而拒单**；密码保险箱仅作长期复用凭据时使用。
+- **Planner 工具、对话塑形与执行边界**：
+  - 可见工具：`maisya_agent`（`start | send | stop | reopen | list | approve | share`）、`maisya_recall`、`maisya_later`；
+  - 延迟工具：`maisya_shape`（**严禁设 `visibility` 标记**，`maisya/shaping.py` 严格 ≤ 600 行，现为 596 行），支持 `overview | setup | settings | profile | file | digest_sources | services | skill_proposal` 与 `setup(..., run_now=True, deliver_to='current')` 私聊试跑预览。
+  - 双源管理员（`宿主 plugin.permission ∪ Settings.admins`）私聊直接核验直通；`HostWorkspaceRunner`（默认 `ask_risky` 审批挂起）与可选 `DockerRunner` 隔离协作。
+- **五页双主题玻璃盒 WebUI（[`webui/now.html`](webui/now.html)）**：
+  - [`webui.json`](webui.json) v2 暴露唯一入口 `webui/now.html`，内嵌 **`现场 | 产物 | 能力 | 手账 | 设置`** 五页与 5 步冷启动引导（引导逻辑保持不变），提供千禧机械（`millennium`，默认）、清朗手账（`modern`，兼容旧值 `"maiwork"`）与 `auto` 三档外观。
+  - 界面层具备请求序号与交互脏标记保护（`bookLoadSeq`、`detailSeq`、`fishTouched`/`modelTouched`/`mdTouched`），避免后台异步加载覆盖用户刚打开的模型选择器、像素鱼定制抽屉或手账输入内容。
+
+---
+
+## 2. 最新验收实测结果（本地 `main` 最新提交后实测）
+
+- **全量本地与 Playwright Chromium UI 单测**：
+  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`523 passed`**（`0 failed / 0 skipped`，耗时 `103.37s`）。
+- **独立宿主隔离契约（真实 MaiBot SDK）**：
+  - `python3 tests_host/run_contract.py`：**`Ran 22 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
+- **前端构建与语法校验**：
+  - `python3 webui/build.py --check` 返回退出码 `0`；[`webui/now.html`](webui/now.html) 两段内嵌脚本通过 `node --check`。
+- **代码边界、格式与隐私扫描**：
+  - `wc -l maisya/shaping.py` = **`596`**（`<= 600`）；
+  - `git diff --check` 返回 `0`；
+  - 全部 67 个变更文件的本地地址与凭据关键词扫描：`findings=0`。
 
 ---
 
@@ -69,13 +77,15 @@ python3 tests_sandbox/run_isolated.py --execute
 
 ---
 
-## 4. 接手维护与线上部署指引
+## 4. 下一位接手待办与线上部署红线
 
-1. **本地隐私文件仅留本地**：`AGENTS.local.md`、`config.toml`、`.local-checks/` 与 `.trellis/` 不应写入或提交进代码正文；测试夹具统一使用虚拟标识如 `qq:group:100246809`、`qq:private:10001`。
-2. **`v0.3` 线上清零整洁替换约定**：
-   - 本次 `v0.3` 收敛重构完成验收后，**支持对线上既有 Maisya 插件文件与运行期数据执行清零整洁替换**，以干净状态完成首次 5 步启动引导与权限/模型初始化；
-   - 如需保留存量数据迁移，需核对 `<宿主根>/data/maisya/` 下的三路配置与 `vault/`、历史 `maisya.db` 的兼容读取（旧 `webhooks.json` 自动忽略）。
+1. **当前仓库与预览状态**：
+   - 本轮所有设计对齐、GPT 审查修复与回归测试已按模块拆分提交在本地 `main` 分支（**尚未 `git push` 至 `origin/main`，也未部署到线上服务器**）；
+   - 若本地开发预览服务仍在端口 `18765` 运行，测试结束后按需关闭或续用即可。
+2. **已就绪的下一份设计方案（尚未编码）**：
+   - 工作区保留了一份未跟踪新设计稿 [`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md)（将心跳与久违想念收口为 `heartbeat_mode = off | gentle | lively` 三档、全局+单会话两层每日主动额度、无由头零模型调用、有由头单次 `utils` 便宜 JSON 判断及 `heartbeat_ticks` 玻璃盒记录），可作为下一会话按其第 9 节 TDD 顺序直接推进的入口。
 3. **部署红线（来自 [AGENTS.md](AGENTS.md)）**：
+   - `AGENTS.local.md`、`config.toml`、`.local-checks/` 与 `.trellis/` 只留本地，严禁写入或提交进仓库；测试夹具统一使用 `qq:group:100246809`、`qq:private:10001`。
    - 任何涉及线上 `plugins/` 的放入、覆盖或删除（会触发插件热重载）前，**必须取得用户当次明确同意**；
-   - 部署前必须先将既有线上插件文件与运行期数据（SQLite 必须用只读 `.backup()` 复制）备份至 `/root/backups/`；
+   - 部署前必须先将既有线上插件文件与运行期数据（SQLite 必须用只读 `.backup()` 复制）备份至 `/root/backups/`，并保留线上 `config.toml`；
    - 严禁修改 MaiBot 宿主源码、严禁擅自更改 `config/bot_config.toml`、严禁重启 MaiBot 或适配器服务（重启由用户操作）。
