@@ -113,6 +113,9 @@
 | `heartbeat_mode` | string | `"off"` | 闲暇心跳档位：`off`（默认关）/ `gentle`（克制 `180m` & `72h`）/ `lively`（活泼 `90m` & `24h`） |
 | `daily_proactive_limit` | int | `3` | 全局每日主动唤醒总量上限（`0..50`） |
 | `per_chat_daily_proactive_limit` | int | `1` | 单会话每日主动唤醒上限（`0..10`，按流标识与 `session_id` 别名合并计数） |
+| `daily_bg_runs_limit` | int | `48` | 后台自主执行（心跳 / `watch` / `silent` / 周期工作流）每日运行次数上限（`0..1000`，不影响用户 `return` 回传） |
+| `daily_bg_tokens_limit` | int | `200000` | 后台自主执行每日可观测 token 预算上限（`0..50000000`，不影响用户 `return` 回传） |
+| `bg_max_consecutive_failures` | int | `3` | 后台周期 / 盯梢连续失败达到阈值后自动暂停为 `error_paused` 的次数上限（`1..20`） |
 | `sleep_window` | string | `""` | 免打扰区间（如 `"01-08"` 或 `"23:00-07:30"`） |
 | `heartbeat_interval_minutes` | int | `0` | 高级心跳基准间隔覆盖：`0` 跟随档位，或 `30..1440` 分钟 |
 | `acquaintance_users` | list | `[]` | 允许冷私聊主动打招呼的熟识账号列表 |
@@ -129,7 +132,7 @@
 |:-----|:-----|
 | `title` / `description` / `enabled` | 档案显示名称、一句话简介，以及启用/停用开关 |
 | `base` / `session_mode` | 继承基线（默认 `"default"`）；会话模式 `"persistent"`（定制档案默认：同会话常驻主线）或 `"ephemeral"`（按事建线，兼容 `"task"`） |
-| `execution_mode` / `permission_mode` | `"host"`（管理员默认工作区直跑）或 `"sandbox"`；留空则继承全局确认策略 |
+| `execution_mode` / `permission_mode` | `"auto"`（推荐，沙箱就绪优先隔离）、`"host"`（管理员工作区直跑）或 `"sandbox"`（强制隔离，未就绪不降级）；留空则继承全局确认策略 |
 | `access` / `allow_chats` / `allow_users` | 可用范围：`everyone`、`admins` 或 `listed` |
 | `model_name` / `fallback_models` / `task` | 第 1 主选模型、顺次备选列表，及留空时的宿主默认槽位 |
 | `toolsets` / `skills` / `connectors` | 5 大工具集开关（`context` / `web` / `workspace` / `exec` / `schedule`）、挂载技能与连接器列表 |

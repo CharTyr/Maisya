@@ -516,20 +516,6 @@ class ThreadStore:
                         ).fetchone()
                         if binding is not None:
                             break
-                if binding and not is_admin_caller:
-                    b_vis = str(
-                        (binding["visibility_scope"] if "visibility_scope" in binding.keys() else "")
-                        or initial_thread_scope(owner=binding["owner"], chat_id=binding["chat_id"])
-                    )
-                    ws_aliases = [chat_id]
-                    if callable(getattr(self, "chat_aliases", None)):
-                        try:
-                            ws_aliases = list(self.chat_aliases(chat_id, platform))
-                        except (TypeError, ValueError):
-                            pass
-                    if is_tainted_scope(b_vis, current_chat_id=chat_id, aliases=ws_aliases):
-                        binding = None
-                        ws_name_to_bind = f"{workspace}_clean_{uuid.uuid4().hex[:6]}"
                 if binding and fresh_workspace:
                     archived_name = f"{binding['name']}#archived_{str(binding['thread_id'])[-6:]}"
                     db.execute(
@@ -560,6 +546,21 @@ class ThreadStore:
                             raise PermissionError(
                                 "受限工作区不能随档案权限修改向其他用户开放"
                             )
+                if binding and not is_admin_caller:
+                    b_vis = str(
+                        (binding["visibility_scope"] if "visibility_scope" in binding.keys() else "")
+                        or initial_thread_scope(owner=binding["owner"], chat_id=binding["chat_id"])
+                    )
+                    ws_aliases = [chat_id]
+                    if callable(getattr(self, "chat_aliases", None)):
+                        try:
+                            ws_aliases = list(self.chat_aliases(chat_id, platform))
+                        except (TypeError, ValueError):
+                            pass
+                    if is_tainted_scope(b_vis, current_chat_id=chat_id, aliases=ws_aliases):
+                        binding = None
+                        ws_name_to_bind = f"{workspace}_clean_{uuid.uuid4().hex[:6]}"
+                if binding:
                     if previous and not _was_stopped_or_terminal(
                         db, binding["thread_id"], str(previous["state"] or "")
                     ):

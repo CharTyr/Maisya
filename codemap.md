@@ -20,7 +20,7 @@ Maisya/
 ├── AGENTS.md                     # 工程红线与 10 条架构不变式
 ├── HANDOFF.md                    # 当前 v0.3 收敛交付快照、验证状态与接手核查项
 ├── codemap.md                    # 本代码地图
-├── maisya/                       # 32 个核心 Python 运行时模块 + viz.css 样式资产
+├── maisya/                       # 35 个核心 Python 运行时模块 + viz.css 样式资产
 ├── presets/                      # 默认内置 default / scout / digest 档案、4 个共享技能、心跳模板与调度手册模板
 ├── sandbox/                      # 可选 Docker 镜像定义（Dockerfile、build_image.sh）
 ├── webui/                        # 五页双主题（现场 | 产物 | 能力 | 手账 | 设置）模板、编译脚本与产物
@@ -56,13 +56,16 @@ Maisya/
 
 ---
 
-## 3. `maisya/` 模块职责表（32 个 Python 模块 + `viz.css`）
+## 3. `maisya/` 模块职责表（35 个 Python 模块 + `viz.css`）
 
-> 注：已永久移除历史模块 `incoming.py` 与 `recipes.py`，新增 `runner.py`、`onboarding.py`、`packages.py` 与 `shaping_setup.py`。
+> 注：已永久移除历史模块 `incoming.py` 与 `recipes.py`，架构收口新增 `authz.py`、`data_scope.py` 与 `tx_recovery.py`（配合已有 `runner.py`、`onboarding.py`、`packages.py` 与 `shaping_setup.py`）。
 
 | 模块 | 职责与核心类/函数 |
 |---|---|
-| [config.py](maisya/config.py) | `PluginSettings`、`Settings`（`extra="ignore"`、默认 `heartbeat_mode="off"`、`daily_proactive_limit=3`、`per_chat_daily_proactive_limit=1`、`longing_quiet_hours=0` 跟随档位、`heartbeat_base_minutes()`/`longing_threshold_hours()`、`_migrate_legacy_heartbeat` 与 `apply_heartbeat_compat`，默认 `ui_style="millennium"`、`proactive_level="care"`）、三路合并与抗自锁死校验 |
+| [config.py](maisya/config.py) | `PluginSettings`、`Settings`（`extra="ignore"`、默认 `heartbeat_mode="off"`、`daily_proactive_limit=3`、`per_chat_daily_proactive_limit=1`、`daily_bg_runs_limit=48`、`daily_bg_tokens_limit=200000`、`bg_max_consecutive_failures=3`、`longing_quiet_hours=0` 跟随档位、`heartbeat_base_minutes()`/`longing_threshold_hours()`、`_migrate_legacy_heartbeat` 与 `apply_heartbeat_compat`，默认 `ui_style="millennium"`、`proactive_level="care"`）、三路合并与抗自锁死校验 |
+| [authz.py](maisya/authz.py) | 统一委托授权生命周期：`delegations` 持久化表、`approved_envelope` 权限包络、`check_hot_edit_expansion`（禁扩权逃逸）、`pause_delegations_for_revoked_admins` 与 `evaluate_activity_authority` |
+| [data_scope.py](maisya/data_scope.py) | 统一数据归属与可见性原语：`initial_thread_scope` / `merge_scopes` 污染传播格交集、`is_tainted_scope` / `can_read_scope` 隔离裁决、`asset_scopes` 档案记忆隔离，以及按 `(thread_id, revision)` 绑定的 `publication_grants` 发布表 |
+| [tx_recovery.py](maisya/tx_recovery.py) | 进程内写锁 `tx_lock`、无明文 `TxJournal`（`tx_journal/` 二阶段原子备份与回滚，失败显式抛错不静默吞异常），以及插件启动前置 `recover_pending_transactions` 崩溃恢复 |
 | [trust.py](maisya/trust.py) | 可信消息映射（`trusted_sources`）、双文件 WAL 路由索引（`session_routes`）、`<platform>:<group\|private>:<id>` <-> MD5 `session_id` 解析、大小写敏感 OpenID 保留、`merge_admins` 双源管理员合并、`validate_admin_update` 防删空自锁死，以及 `PermissionGrantStore`（`permission_grants` 表） |
 | [runner.py](maisya/runner.py) | 通用执行协议与宿主工作区执行器：`ExecutionRequest` / `ExecutionResult` / `ApprovalRequired`、`assess_execution_risk` / `evaluate_permission_gate`、`HostWorkspaceRunner`（`minimal_subprocess_env`、`PYTHONNOUSERSITE=1`、进程组超时强杀、`0o400` 临时 `MAISYA_SECRETS_DIR` 挂载与退出即焚、输出强制 `redact`） |
 | [sandbox.py](maisya/sandbox.py) | `SandboxSettings`（默认 `enabled=False, image="maisya-sandbox:latest"`）与降门槛 `DockerRunner`：自动探测 `runsc` 择优附加（`privileged_sandbox_mode=False` 时兼容常规镜像标签与默认无特权 `runc`）、`--cap-drop ALL --security-opt no-new-privileges --pids-limit 128`、工作区隔离副本及单次只读 `/run/secrets/<handle>` 挂载、`executions`/`execution_resources` 记录 |

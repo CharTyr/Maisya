@@ -98,6 +98,9 @@ class ProactiveSettings(BaseModel):
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     daily_proactive_limit: int = Field(default=3, ge=0, le=50)
     per_chat_daily_proactive_limit: int = Field(default=1, ge=0, le=10)
+    daily_bg_runs_limit: int = Field(default=48, ge=0, le=1000)
+    daily_bg_tokens_limit: int = Field(default=200000, ge=0, le=50000000)
+    bg_max_consecutive_failures: int = Field(default=3, ge=1, le=20)
     heartbeat_mode: Literal["off", "gentle", "lively"] = "off"
     heartbeat_interval_minutes: int = Field(default=0, ge=0, le=1440)
     heartbeat_profile: str = Field(
@@ -147,6 +150,9 @@ class Settings(PluginConfigBase):
     proactive_level: str = Field(default="care", pattern=r"^(quiet|care|lively)$")
     daily_proactive_limit: int = Field(default=3, ge=0, le=50)
     per_chat_daily_proactive_limit: int = Field(default=1, ge=0, le=10)
+    daily_bg_runs_limit: int = Field(default=48, ge=0, le=1000)
+    daily_bg_tokens_limit: int = Field(default=200000, ge=0, le=50000000)
+    bg_max_consecutive_failures: int = Field(default=3, ge=1, le=20)
     heartbeat_mode: Literal["off", "gentle", "lively"] = "off"
     heartbeat_interval_minutes: int = Field(default=0, ge=0, le=1440)
     heartbeat_profile: str = Field(
@@ -218,6 +224,9 @@ class Settings(PluginConfigBase):
             proactive_level=self.proactive_level,
             daily_proactive_limit=self.daily_proactive_limit,
             per_chat_daily_proactive_limit=self.per_chat_daily_proactive_limit,
+            daily_bg_runs_limit=self.daily_bg_runs_limit,
+            daily_bg_tokens_limit=self.daily_bg_tokens_limit,
+            bg_max_consecutive_failures=self.bg_max_consecutive_failures,
             heartbeat_mode=self.heartbeat_mode,
             heartbeat_interval_minutes=self.heartbeat_interval_minutes,
             heartbeat_profile=self.heartbeat_profile,

@@ -152,7 +152,7 @@ async def test_returns_marks_inline_only_after_accepted_and_prevents_double_wake
 
 @pytest.mark.asyncio
 async def test_corrupt_payload_deleted_profile_and_empty_silent_stop_looping(tmp_path):
-    plugin = await loaded(tmp_path / "resilience")
+    plugin = await loaded(tmp_path / "resilience", ["qq:admin"])
     try:
         clock = [1_795_000_000.0]
         plugin.intents.clock = lambda: clock[0]
@@ -301,7 +301,7 @@ async def test_corrupt_payload_deleted_profile_and_empty_silent_stop_looping(tmp
 
 @pytest.mark.asyncio
 async def test_recent_runs_skips_rejected_and_thread_error(tmp_path):
-    plugin = await loaded(tmp_path / "recent_runs")
+    plugin = await loaded(tmp_path / "recent_runs", ["qq:admin"])
     try:
         clock = [_utc8_ts(2026, 11, 16, 10, 0)]
         plugin.intents.clock = lambda: clock[0]

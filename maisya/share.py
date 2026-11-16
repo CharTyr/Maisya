@@ -313,6 +313,18 @@ class Share:
         )
         if row["state"] != "idle" or revision != row["revision"] or stopped:
             raise ValueError("分享需要已完成且仍有效的线程结果")
+        if (
+            is_admin
+            and chat_id != source_chat_id
+            and hasattr(self.store, "record_publication_grant")
+        ):
+            await asyncio.to_thread(
+                self.store.record_publication_grant,
+                thread_id,
+                revision,
+                chat_id,
+                actor="admin_share",
+            )
         old = await asyncio.to_thread(
             self.bridge.delivery, thread_id, revision, chat_id
         )

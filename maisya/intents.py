@@ -116,11 +116,17 @@ class Intents:
         clock=time.time,
         daily_proactive_limit=3,
         per_chat_daily_proactive_limit=1,
+        daily_bg_runs_limit=48,
+        daily_bg_tokens_limit=200000,
+        bg_max_consecutive_failures=3,
         tz_offset_minutes=480,
     ):
         self.store, self.clock = store, clock
         self.daily_proactive_limit = int(daily_proactive_limit)
         self.per_chat_daily_proactive_limit = int(per_chat_daily_proactive_limit)
+        self.daily_bg_runs_limit = int(daily_bg_runs_limit)
+        self.daily_bg_tokens_limit = int(daily_bg_tokens_limit)
+        self.bg_max_consecutive_failures = max(1, int(bg_max_consecutive_failures))
         if tz_offset_minutes is None:
             self.tz_offset_minutes = 480
         elif callable(tz_offset_minutes):
@@ -137,7 +143,9 @@ class Intents:
                 "bypass_limits INTEGER NOT NULL DEFAULT 0, "
                 "mode TEXT NOT NULL DEFAULT 'schedule', "
                 "condition TEXT NOT NULL DEFAULT '', "
-                "last_checked_at REAL, last_triggered_at REAL)"
+                "last_checked_at REAL, last_triggered_at REAL, "
+                "failure_count INTEGER NOT NULL DEFAULT 0, "
+                "last_error TEXT NOT NULL DEFAULT '')"
             )
             intent_cols = {
                 row[1] for row in db.execute("PRAGMA table_info(intents)").fetchall()
@@ -158,6 +166,23 @@ class Intents:
                 db.execute("ALTER TABLE intents ADD COLUMN last_checked_at REAL")
             if "last_triggered_at" not in intent_cols:
                 db.execute("ALTER TABLE intents ADD COLUMN last_triggered_at REAL")
+            if "failure_count" not in intent_cols:
+                db.execute(
+                    "ALTER TABLE intents ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_error" not in intent_cols:
+                db.execute(
+                    "ALTER TABLE intents ADD COLUMN last_error TEXT NOT NULL DEFAULT ''"
+                )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS bg_budget_usage ("
+                "day_key TEXT NOT NULL, scope_key TEXT NOT NULL, "
+                "runs_used INTEGER NOT NULL DEFAULT 0, "
+                "tokens_used INTEGER NOT NULL DEFAULT 0, "
+                "duration_ms INTEGER NOT NULL DEFAULT 0, "
+                "updated_at REAL NOT NULL, "
+                "PRIMARY KEY (day_key, scope_key))"
+            )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS intent_due ON intents(status, kind, due_at)"
             )
@@ -206,6 +231,8 @@ class Intents:
         result["condition"] = str(result.get("condition") or "")
         result.setdefault("last_checked_at", None)
         result.setdefault("last_triggered_at", None)
+        result["failure_count"] = int(result.get("failure_count") or 0)
+        result["last_error"] = str(result.get("last_error") or "")
         pause_err = str(result["payload"].get("pause_error") or "").strip()
         if pause_err:
             result["error"] = pause_err
@@ -221,7 +248,11 @@ class Intents:
         return self._intent(row)
 
     def list(self, target, *, limit=20, include_paused: bool = False):
-        statuses = "('pending','paused')" if include_paused else "('pending')"
+        statuses = (
+            "('pending','paused','error_paused','budget_paused')"
+            if include_paused
+            else "('pending')"
+        )
         with self.store.connect() as db:
             rows = db.execute(
                 f"SELECT * FROM intents WHERE target=? AND status IN {statuses} "
@@ -377,11 +408,15 @@ class Intents:
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             self._require_modifiable_intent(
-                db, intent_id, target, statuses=("pending", "paused"), is_admin=is_admin
+                db,
+                intent_id,
+                target,
+                statuses=("pending", "paused", "error_paused", "budget_paused"),
+                is_admin=is_admin,
             )
             db.execute(
                 "UPDATE intents SET status='cancelled', handled=? "
-                "WHERE intent_id=? AND target=? AND status IN ('pending', 'paused')",
+                "WHERE intent_id=? AND target=? AND status IN ('pending', 'paused', 'error_paused', 'budget_paused')",
                 (self.clock(), intent_id, target),
             )
         return {"intent_id": intent_id, "status": "cancelled"}
@@ -427,16 +462,25 @@ class Intents:
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = self._require_modifiable_intent(
-                db, intent_id, target, statuses=("paused",), is_admin=is_admin
+                db,
+                intent_id,
+                target,
+                statuses=("paused", "error_paused", "budget_paused"),
+                is_admin=is_admin,
             )
             payload = _parse_payload(row["payload"])
             payload.pop("pause_error", None)
             if isinstance(payload_patch, dict):
                 payload.update(payload_patch)
-            due_at = max(float(row["due_at"] or 0.0), self.clock())
+            due_at = (
+                self.clock()
+                if row["status"] in {"error_paused", "budget_paused"}
+                else max(float(row["due_at"] or 0.0), self.clock())
+            )
             db.execute(
-                "UPDATE intents SET status='pending', wake_status='', due_at=?, payload=? "
-                "WHERE intent_id=? AND target=? AND status='paused'",
+                "UPDATE intents SET status='pending', wake_status='', due_at=?, payload=?, "
+                "failure_count=0, last_error='' "
+                "WHERE intent_id=? AND target=? AND status IN ('paused', 'error_paused', 'budget_paused')",
                 (due_at, encode(payload), intent_id, target),
             )
         return self.get(intent_id)
@@ -469,11 +513,16 @@ class Intents:
                 encode(payload) if payload is not None else row["payload"]
             )
             next_tid = row["thread_id"] if thread_id is None else thread_id
+            clear_err_sql = (
+                ", failure_count=0, last_error=''"
+                if wake_status != "thread_error"
+                else ""
+            )
             if next_due_at is not None:
                 db.execute(
-                    "UPDATE intents SET status='pending', due_at=?, handled=NULL, "
-                    "wake_status=?, last_checked_at=?, last_triggered_at=?, payload=?, thread_id=? "
-                    "WHERE intent_id=?",
+                    f"UPDATE intents SET status='pending', due_at=?, handled=NULL, "
+                    f"wake_status=?, last_checked_at=?, last_triggered_at=?, payload=?, thread_id=?{clear_err_sql} "
+                    f"WHERE intent_id=?",
                     (
                         float(next_due_at),
                         wake_status or ("watch_triggered" if triggered else "watch_unmet"),
@@ -486,9 +535,9 @@ class Intents:
                 )
             else:
                 db.execute(
-                    "UPDATE intents SET status='done', handled=?, "
-                    "wake_status=?, last_checked_at=?, last_triggered_at=?, payload=?, thread_id=? "
-                    "WHERE intent_id=?",
+                    f"UPDATE intents SET status='done', handled=?, "
+                    f"wake_status=?, last_checked_at=?, last_triggered_at=?, payload=?, thread_id=?{clear_err_sql} "
+                    f"WHERE intent_id=?",
                     (
                         now,
                         wake_status or ("accepted" if triggered else "watch_unmet"),
@@ -505,6 +554,12 @@ class Intents:
         now = self.clock()
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
+            if not self.bg_budget_state(now=now, db=db)["exhausted"]:
+                db.execute(
+                    "UPDATE intents SET status='pending', wake_status='' "
+                    "WHERE status='budget_paused' AND due_at<=?",
+                    (now,),
+                )
             rows = db.execute(
                 "SELECT * FROM intents WHERE status='pending' AND due_at<=? "
                 "ORDER BY due_at LIMIT 64",
@@ -564,6 +619,12 @@ class Intents:
                     "UPDATE intents SET status='pending', due_at=? "
                     "WHERE intent_id=? AND status='claimed'",
                     (self.clock() + delay, intent_id),
+                )
+            elif status == "done":
+                db.execute(
+                    "UPDATE intents SET status=?, wake_status=?, handled=?, failure_count=0, last_error='' "
+                    "WHERE intent_id=? AND status='claimed'",
+                    (status, wake_status, self.clock(), intent_id),
                 )
             else:
                 db.execute(
@@ -967,3 +1028,140 @@ class Intents:
         now_sec = math.floor(float(now))
         start = now_sec - (now_sec + offset_sec) % 86400
         return start, start + 86400
+
+    def _day_key(self, now=None, *, tz_offset_minutes=None) -> str:
+        cur = self.clock() if now is None else float(now)
+        offset_min = self._tz_offset_minutes(tz_offset_minutes)
+        dt = datetime.fromtimestamp(cur, tz=timezone(timedelta(minutes=offset_min)))
+        return dt.strftime("%Y-%m-%d")
+
+    def record_bg_usage(
+        self,
+        *,
+        source: str,
+        target: str = "",
+        runs: int = 1,
+        tokens: int = 0,
+        duration_ms: int = 0,
+        now=None,
+    ) -> None:
+        cur = self.clock() if now is None else float(now)
+        day_key = self._day_key(cur)
+        r_inc = max(0, int(runs))
+        t_inc = max(0, int(tokens))
+        d_inc = max(0, int(duration_ms))
+        scopes = ["__global__"]
+        if source:
+            scopes.append(f"source:{source}")
+        if target:
+            scopes.append(f"target:{target}")
+        with self.store.connect() as db, db:
+            for scope_key in scopes:
+                db.execute(
+                    "INSERT INTO bg_budget_usage (day_key, scope_key, runs_used, tokens_used, duration_ms, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(day_key, scope_key) DO UPDATE SET "
+                    "runs_used=bg_budget_usage.runs_used+excluded.runs_used, "
+                    "tokens_used=bg_budget_usage.tokens_used+excluded.tokens_used, "
+                    "duration_ms=bg_budget_usage.duration_ms+excluded.duration_ms, "
+                    "updated_at=excluded.updated_at",
+                    (day_key, scope_key, r_inc, t_inc, d_inc, cur),
+                )
+
+    def bg_budget_state(
+        self,
+        *,
+        runs_limit: int | None = None,
+        tokens_limit: int | None = None,
+        now=None,
+        db=None,
+    ) -> dict:
+        cur = self.clock() if now is None else float(now)
+        day_key = self._day_key(cur)
+        r_lim = max(0, int(self.daily_bg_runs_limit if runs_limit is None else runs_limit))
+        t_lim = max(0, int(self.daily_bg_tokens_limit if tokens_limit is None else tokens_limit))
+        sql = (
+            "SELECT runs_used, tokens_used, duration_ms FROM bg_budget_usage "
+            "WHERE day_key=? AND scope_key='__global__'"
+        )
+        if db is not None:
+            row = db.execute(sql, (day_key,)).fetchone()
+        else:
+            with self.store.connect() as conn:
+                row = conn.execute(sql, (day_key,)).fetchone()
+        runs_used = int(row["runs_used"] or 0) if row else 0
+        tokens_used = int(row["tokens_used"] or 0) if row else 0
+        duration_ms = int(row["duration_ms"] or 0) if row else 0
+        if runs_used >= r_lim:
+            reason = "daily_bg_runs_limit"
+        elif tokens_used >= t_lim:
+            reason = "daily_bg_tokens_limit"
+        else:
+            reason = ""
+        return {
+            "day_key": day_key,
+            "runs_used": runs_used,
+            "runs_limit": r_lim,
+            "runs_remaining": max(0, r_lim - runs_used),
+            "tokens_used": tokens_used,
+            "tokens_limit": t_lim,
+            "tokens_remaining": max(0, t_lim - tokens_used),
+            "duration_ms": duration_ms,
+            "exhausted": bool(reason),
+            "exhausted_reason": reason,
+        }
+
+    def pause_for_budget(self, intent_id: str, reason: str = "", *, now=None) -> dict:
+        cur = self.clock() if now is None else float(now)
+        _, next_day_start = self._day_bounds(cur)
+        clean_reason = str(reason or "daily_bg_runs_limit")[:120]
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT due_at FROM intents WHERE intent_id=?", (intent_id,)).fetchone()
+            if row is None:
+                raise ValueError("意图不存在")
+            next_due = max(float(row["due_at"] or 0.0), float(next_day_start))
+            db.execute(
+                "UPDATE intents SET status='budget_paused', wake_status=?, due_at=?, thread_id='' "
+                "WHERE intent_id=?",
+                (clean_reason, next_due, intent_id),
+            )
+        return self.get(intent_id)
+
+    def record_bg_failure(
+        self,
+        intent_id: str,
+        error: str,
+        *,
+        max_failures: int | None = None,
+        base_backoff: float = 60.0,
+        now=None,
+    ) -> dict:
+        cur = self.clock() if now is None else float(now)
+        cap = max(1, int(self.bg_max_consecutive_failures if max_failures is None else max_failures))
+        err_text = str(error or "后台执行失败")[:300]
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT failure_count, due_at FROM intents WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("意图不存在")
+            fails = int(row["failure_count"] or 0) + 1
+            if fails >= cap:
+                db.execute(
+                    "UPDATE intents SET status='error_paused', wake_status='error_paused', "
+                    "failure_count=?, last_error=?, last_checked_at=?, thread_id='' "
+                    "WHERE intent_id=?",
+                    (fails, err_text, cur, intent_id),
+                )
+            else:
+                delay = min(3600.0, float(base_backoff) * (2 ** (fails - 1)))
+                next_due = cur + delay
+                db.execute(
+                    "UPDATE intents SET status='pending', wake_status='retry_backoff', "
+                    "due_at=?, failure_count=?, last_error=?, last_checked_at=?, thread_id='' "
+                    "WHERE intent_id=?",
+                    (next_due, fails, err_text, cur, intent_id),
+                )
+        return self.get(intent_id)

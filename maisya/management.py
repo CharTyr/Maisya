@@ -33,6 +33,7 @@ from .config import Settings, apply_heartbeat_compat, canonical_ui_style
 from .console import snapshot
 from .digest import DigestWorkspace
 from .memory import PRESETS_DIR, SKILL_ID_RE, MemoryLayers, parse_skill_meta
+from .tx_recovery import TxJournal, tx_lock
 from .packages import (
     export_package,
     import_package_bundle,
@@ -775,33 +776,31 @@ class Management:
             if any(variant.encode("utf-8") in content for variant in variants):
                 raise ValueError("服务登记只接受结构化配置和凭据句柄")
         vault = self.plugin.vault
-        prev_meta: dict = {}
-        meta_existed = False
-        enc_snapshots: dict[Path, bytes | None] = {}
-        if pending_secrets and vault is not None:
-            prev_meta = vault._load_meta()
-            meta_existed = vault.meta_path.exists()
-            for svc, key, _val, slot in pending_secrets:
-                handle = vault._mcp_secret_handle(svc, key, slot=slot)
-                enc_path = vault.path / f"{handle}.enc"
-                if enc_path not in enc_snapshots:
-                    enc_snapshots[enc_path] = enc_path.read_bytes() if enc_path.exists() else None
-        try:
-            for svc, key, val, slot in pending_secrets:
-                vault.set_mcp_secret(svc, key, val, slot=slot)
-            atomic_private_write(self.plugin.runtime.services.path, content)
-        except BaseException:
+        lock_root = getattr(self.plugin, "data_root", None) or self.plugin.runtime.services.path.parent
+        with tx_lock(lock_root):
+            tx = TxJournal(lock_root, kind="services_vault")
+            tx.backup_file("services", self.plugin.runtime.services.path)
             if pending_secrets and vault is not None:
-                for enc_path, old_bytes in enc_snapshots.items():
-                    if old_bytes is None:
-                        enc_path.unlink(missing_ok=True)
-                    else:
-                        atomic_private_write(enc_path, old_bytes)
-                if meta_existed or prev_meta:
-                    vault._save_meta(prev_meta)
-                elif vault.meta_path.exists():
-                    vault.meta_path.unlink(missing_ok=True)
-            raise
+                tx.backup_file("vault_meta", vault.meta_path)
+                seen_enc: set[Path] = set()
+                for svc, key, _val, slot in pending_secrets:
+                    handle = vault._mcp_secret_handle(svc, key, slot=slot)
+                    enc_path = vault.path / f"{handle}.enc"
+                    if enc_path not in seen_enc:
+                        seen_enc.add(enc_path)
+                        tx.backup_file(f"enc_{handle}", enc_path)
+            try:
+                for svc, key, val, slot in pending_secrets:
+                    vault.set_mcp_secret(svc, key, val, slot=slot)
+                atomic_private_write(self.plugin.runtime.services.path, content)
+                tx.commit()
+            except BaseException:
+                tx.rollback(
+                    store_path=getattr(
+                        getattr(self.plugin, "threads", None), "path", None
+                    )
+                )
+                raise
 
     def _upsert_service_item_sync(self, options: dict) -> dict:
         kind, bucket = self._service_bucket(options.get("kind") or "mcp")
@@ -1334,6 +1333,12 @@ class Management:
             "grants": grants_list,
             "docker": docker,
             "proactive_quota": self._proactive_quota(),
+            "bg_budget": (
+                self.plugin.intents.bg_budget_state()
+                if getattr(self.plugin, "intents", None) is not None
+                and callable(getattr(self.plugin.intents, "bg_budget_state", None))
+                else {}
+            ),
         }
 
     def _memory(self, options):
@@ -3416,6 +3421,12 @@ class Management:
             chat_sources = await self.plugin._resolve_chat_sources([c for c in chat_ids if c])
             result = {
                 **snap,
+                "bg_budget": (
+                    self.plugin.intents.bg_budget_state()
+                    if getattr(self.plugin, "intents", None) is not None
+                    and callable(getattr(self.plugin.intents, "bg_budget_state", None))
+                    else {}
+                ),
                 "chat_sources": chat_sources,
                 "chat_meta": chat_sources,
                 "default_model": str(self.plugin.settings.default_model or ""),
@@ -5125,12 +5136,16 @@ class Management:
                 sk_md = str(options.get("content") or prop["content"])
                 if sk_id in await completed_thread(plugin.memory.skills):
                     cur_sk = await completed_thread(plugin.memory.read, "skill", target=sk_id)
+                    prov_author = (
+                        f"proposal:{prop_id}:thread:{prop.get('thread_id', '')}@r{int(prop.get('revision') or 0)}"
+                    )
                     saved = await completed_thread(
                         plugin.memory.write,
                         "skill",
                         sk_md,
                         target=sk_id,
                         expected_version=cur_sk["version"],
+                        author=prov_author,
                         allow_custom=True,
                     )
                 else:
@@ -5748,11 +5763,26 @@ class Management:
                 "inline_header_keys",
                 "tools",
                 "readonly",
+                "readonly_tools",
+                "idempotent",
+                "idempotent_tools",
+                "idempotency_key_arg",
                 "access",
                 "memory_mib",
                 "description",
             }:
                 raise ValueError("MCP 服务含未知配置项")
+            for list_field in ("readonly_tools", "idempotent_tools"):
+                if list_field in server and (
+                    not isinstance(server[list_field], list)
+                    or not all(isinstance(t, str) and t.strip() for t in server[list_field])
+                ):
+                    raise ValueError(f"MCP 服务 {list_field} 必须是工具名称数组")
+            if "idempotency_key_arg" in server and (
+                not isinstance(server["idempotency_key_arg"], str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", server["idempotency_key_arg"])
+            ):
+                raise ValueError("MCP 服务 idempotency_key_arg 字段名无效")
             is_http = str(server.get("transport") or "").strip().lower() == "http" or bool(
                 str(server.get("url") or "").strip()
             )

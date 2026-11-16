@@ -81,6 +81,8 @@ def validate_api_entry(name, spec):
         "api_name",
         "version",
         "readonly",
+        "idempotent",
+        "idempotency_key_arg",
         "access",
         "description",
         "schema",
@@ -96,6 +98,13 @@ def validate_api_entry(name, spec):
         raise ValueError("跨插件 API 名称无效，且不能登记 Maisya 自身内部接口")
     if "readonly" in spec and type(spec["readonly"]) is not bool:
         raise ValueError("跨插件 API readonly 必须是布尔值")
+    if "idempotent" in spec and type(spec["idempotent"]) is not bool:
+        raise ValueError("跨插件 API idempotent 必须是布尔值")
+    if "idempotency_key_arg" in spec and (
+        not isinstance(spec["idempotency_key_arg"], str)
+        or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", spec["idempotency_key_arg"])
+    ):
+        raise ValueError("跨插件 API idempotency_key_arg 字段名无效")
     if spec.get("access", "everyone") not in {"everyone", "admins"}:
         raise ValueError("跨插件 API 访问范围无效")
     version = spec.get("version", "")
@@ -508,6 +517,59 @@ class HttpMcpSession:
         return None
 
 
+def classify_external_effect(spec_or_cfg: dict | None, tool_name: str = "") -> str:
+    """分类外部调用副作用级别；未显式标注时可写工具默认视为非幂等写入。"""
+    cfg = spec_or_cfg if isinstance(spec_or_cfg, dict) else {}
+    if cfg.get("readonly") is True:
+        return "read_only"
+    ro_tools = cfg.get("readonly_tools")
+    if tool_name and isinstance(ro_tools, (list, tuple, set, frozenset)) and tool_name in ro_tools:
+        return "read_only"
+    if cfg.get("idempotent") is True:
+        return "idempotent_write"
+    idem_tools = cfg.get("idempotent_tools")
+    if tool_name and isinstance(idem_tools, (list, tuple, set, frozenset)) and tool_name in idem_tools:
+        return "idempotent_write"
+    return "non_idempotent_write"
+
+
+def _prepare_external_op(
+    connector_kind: str,
+    connector_id: str,
+    tool_name: str,
+    raw_args: dict | None,
+    spec_or_cfg: dict | None,
+    schema: dict | None,
+    context: dict,
+) -> tuple[str, str, dict]:
+    effect = classify_external_effect(spec_or_cfg, tool_name)
+    clean_in = dict(raw_args) if isinstance(raw_args, dict) else {}
+    cfg = spec_or_cfg if isinstance(spec_or_cfg, dict) else {}
+    idem_field = str(cfg.get("idempotency_key_arg") or "").strip()
+    if not idem_field and isinstance(schema, dict):
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            if "idempotency_key" in props:
+                idem_field = "idempotency_key"
+            elif "client_request_id" in props:
+                idem_field = "client_request_id"
+    args_for_hash = {
+        k: v for k, v in clean_in.items() if k != idem_field or bool(clean_in.get(k))
+    }
+    args_canon = json.dumps(
+        args_for_hash, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    args_sha = hashlib.sha256(args_canon.encode("utf-8")).hexdigest()[:24]
+    op_id = f"ext:{connector_kind}:{connector_id}:{tool_name or 'call'}:{args_sha}"
+    call_args = dict(clean_in)
+    if effect != "read_only" and idem_field and not call_args.get(idem_field):
+        seed = f"{context.get('thread_id', '')}:{int(context.get('revision') or 0)}:{op_id}"
+        call_args[idem_field] = (
+            f"maisya-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+        )
+    return effect, op_id, call_args
+
+
 class Services:
     def __init__(self, path, vault):
         self.path, self.vault = Path(path), vault
@@ -676,30 +738,79 @@ class Services:
             return self.vault.redact(payload)
 
         if action == "call":
-            call_args = arguments.get("arguments")
-            if call_args is None:
-                call_args = {}
+            raw_call_args = arguments.get("arguments")
+            if raw_call_args is None:
+                raw_call_args = {}
+            schema_obj = spec.get("schema") if isinstance(spec.get("schema"), dict) else None
+            effect, op_id, call_args = _prepare_external_op(
+                "plugin_api", api_id, "", raw_call_args, spec, schema_obj, context
+            )
             if "schema" in spec:
                 await completed_thread(validate, spec["schema"], call_args)
-            raw = await call_capability(
-                runtime.host,
-                "api.call",
-                timeout_ms=30000,
-                api_name=spec["api_name"],
-                version=spec.get("version", ""),
-                args=call_args,
-            )
-            result = self.vault.redact(_unwrap_api_result(raw, "result"))
-            wrapped = {"api": api_id, "result": result}
-            encoded = json.dumps(wrapped, ensure_ascii=False)
-            if len(encoded) > 20000:
-                return {
-                    "api": api_id,
-                    "text": encoded[:20000],
-                    "truncated": True,
-                    "original_chars": len(encoded),
-                }
-            return wrapped
+            receipt_store = getattr(getattr(runtime, "sandbox", None), "_receipt", None) if runtime is not None else None
+            thread_id = str(context.get("thread_id") or "").strip()
+            key = (thread_id, int(context.get("revision") or 0), op_id)
+            if effect != "read_only" and callable(receipt_store) and thread_id:
+                previous = await completed_thread(receipt_store, key)
+                if previous:
+                    if previous.get("status") not in {"running", "interrupted", "uncertain"}:
+                        try:
+                            prev_result = json.loads(previous.get("result") or "{}")
+                        except (TypeError, ValueError):
+                            prev_result = {}
+                        if isinstance(prev_result, dict) and prev_result:
+                            return {
+                                "status": previous["status"],
+                                **prev_result,
+                                "repeated": True,
+                                "op_id": op_id,
+                            }
+                    elif effect == "non_idempotent_write":
+                        if previous.get("status") != "uncertain":
+                            await completed_thread(receipt_store, key, status="uncertain")
+                        return {
+                            "status": "uncertain",
+                            "reconcile_required": True,
+                            "op_id": op_id,
+                            "effect_class": effect,
+                            "message": "上次外部非幂等写入结果未确认，已拦截更换 call_id 自动重发；请先查询远端状态核实",
+                        }
+                await completed_thread(receipt_store, key, status="running")
+            try:
+                raw = await call_capability(
+                    runtime.host,
+                    "api.call",
+                    timeout_ms=30000,
+                    api_name=spec["api_name"],
+                    version=spec.get("version", ""),
+                    args=call_args,
+                )
+                result = self.vault.redact(_unwrap_api_result(raw, "result"))
+                wrapped = {"api": api_id, "result": result}
+                encoded = json.dumps(wrapped, ensure_ascii=False)
+                final_out = (
+                    {
+                        "api": api_id,
+                        "text": encoded[:20000],
+                        "truncated": True,
+                        "original_chars": len(encoded),
+                    }
+                    if len(encoded) > 20000
+                    else wrapped
+                )
+                if effect != "read_only" and callable(receipt_store) and thread_id:
+                    await completed_thread(
+                        receipt_store, key, status="completed", result=final_out
+                    )
+                return final_out
+            except BaseException:
+                if effect != "read_only" and callable(receipt_store) and thread_id:
+                    await completed_thread(
+                        receipt_store,
+                        key,
+                        status=("uncertain" if effect == "non_idempotent_write" else "interrupted"),
+                    )
+                raise
 
         raise ValueError("未知跨插件 API 动作")
 
@@ -1012,7 +1123,7 @@ class Services:
             raise PermissionError("MCP 服务需要当前管理员授权")
         if (
             profile.environment == "readonly"
-            and not config.get("readonly", False)
+            and classify_external_effect(config, tool) != "read_only"
             and not (
                 profile.access == "admins"
                 and await completed_thread(runtime.authorized, context)
@@ -1024,53 +1135,108 @@ class Services:
             session = await self._session(service, context, config)
             if tool not in session.tools:
                 raise PermissionError("MCP 未提供登记的工具")
-            await completed_thread(
-                validate,
-                session.tools[tool].get("inputSchema", {}),
-                arguments["arguments"],
+            schema_obj = session.tools[tool].get("inputSchema", {})
+            effect, op_id, call_args = _prepare_external_op(
+                "mcp",
+                service,
+                tool,
+                arguments.get("arguments"),
+                config,
+                schema_obj if isinstance(schema_obj, dict) else None,
+                context,
             )
+            await completed_thread(validate, schema_obj, call_args)
+            receipt_store = getattr(getattr(runtime, "sandbox", None), "_receipt", None) if runtime is not None else None
+            key = (context["thread_id"], int(context.get("revision") or 0), op_id)
             raw_call_id = str(context.get("_tool_call_id") or f"call_{uuid.uuid4().hex[:8]}")
             step_index = context.get("_step_index")
-            receipt_call_id = (
-                f"s{step_index}:{raw_call_id}"
-                if step_index is not None
-                else raw_call_id
-            )
-            key = context["thread_id"], context["revision"], receipt_call_id
-            previous = await completed_thread(runtime.sandbox._receipt, key)
-            if previous and previous.get("status") not in {
-                "running",
-                "interrupted",
-                "uncertain",
-            }:
+            ro_call_id = f"s{step_index}:{raw_call_id}" if step_index is not None else raw_call_id
+            ro_key = (context["thread_id"], int(context.get("revision") or 0), ro_call_id)
+            if effect == "read_only":
+                if callable(receipt_store):
+                    prev_ro = await completed_thread(receipt_store, ro_key)
+                    if prev_ro and prev_ro.get("status") not in {
+                        "running",
+                        "interrupted",
+                        "uncertain",
+                    }:
+                        try:
+                            prev_result = json.loads(prev_ro.get("result") or "{}")
+                        except (TypeError, ValueError):
+                            prev_result = {}
+                        if isinstance(prev_result, dict) and prev_result:
+                            return {
+                                "status": prev_ro["status"],
+                                **prev_result,
+                                "repeated": True,
+                            }
                 try:
-                    prev_result = json.loads(previous.get("result") or "{}")
-                except (TypeError, ValueError):
-                    prev_result = {}
-                if isinstance(prev_result, dict) and prev_result:
-                    return {
-                        "status": previous["status"],
-                        **prev_result,
-                        "repeated": True,
-                    }
-            await completed_thread(runtime.sandbox._receipt, key, status="running")
+                    result = await session.request(
+                        "tools/call", {"name": tool, "arguments": call_args}
+                    )
+                    if result.get("isError"):
+                        raise RuntimeError("MCP 工具执行失败")
+                    response = await self._content(
+                        result.get("content", []), context, runtime
+                    )
+                    if callable(receipt_store):
+                        await completed_thread(
+                            receipt_store, ro_key, status="completed", result=response
+                        )
+                    return response
+                except BaseException:
+                    for session_key in list(self.sessions):
+                        if self.sessions[session_key] is session:
+                            self.sessions.pop(session_key)
+                    await session.close()
+                    raise
+            if callable(receipt_store):
+                previous = await completed_thread(receipt_store, key)
+                if previous:
+                    if previous.get("status") not in {"running", "interrupted", "uncertain"}:
+                        try:
+                            prev_result = json.loads(previous.get("result") or "{}")
+                        except (TypeError, ValueError):
+                            prev_result = {}
+                        if isinstance(prev_result, dict) and prev_result:
+                            return {
+                                "status": previous["status"],
+                                **prev_result,
+                                "repeated": True,
+                                "op_id": op_id,
+                            }
+                    elif effect == "non_idempotent_write":
+                        if previous.get("status") != "uncertain":
+                            await completed_thread(receipt_store, key, status="uncertain")
+                        return {
+                            "status": "uncertain",
+                            "reconcile_required": True,
+                            "op_id": op_id,
+                            "effect_class": effect,
+                            "message": "上次外部非幂等写入结果未确认，已拦截更换 call_id 自动重发；请先查询远端状态核实",
+                        }
+                await completed_thread(receipt_store, key, status="running")
             try:
                 result = await session.request(
-                    "tools/call", {"name": tool, "arguments": arguments["arguments"]}
+                    "tools/call", {"name": tool, "arguments": call_args}
                 )
                 if result.get("isError"):
                     raise RuntimeError("MCP 工具执行失败")
                 response = await self._content(
                     result.get("content", []), context, runtime
                 )
-                await completed_thread(
-                    runtime.sandbox._receipt, key, status="completed", result=response
-                )
+                if callable(receipt_store):
+                    await completed_thread(
+                        receipt_store, key, status="completed", result=response
+                    )
                 return response
             except BaseException:
-                await completed_thread(
-                    runtime.sandbox._receipt, key, status="uncertain"
-                )
+                if callable(receipt_store):
+                    await completed_thread(
+                        receipt_store,
+                        key,
+                        status=("uncertain" if effect == "non_idempotent_write" else "interrupted"),
+                    )
                 for session_key in list(self.sessions):
                     if self.sessions[session_key] is session:
                         self.sessions.pop(session_key)

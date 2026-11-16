@@ -89,7 +89,7 @@ async def test_longing_disabled_by_default_config_webui_and_pulse(tmp_path):
 
 @pytest.mark.asyncio
 async def test_recurring_survives_failures_safety_floor_and_recent_runs_carryover(tmp_path):
-    plugin = await loaded(tmp_path)
+    plugin = await loaded(tmp_path, ["qq:admin"])
     try:
         now, clock = _make_fake_pulse_clock(1_700_000_000.0)
         plugin.intents.clock = clock
@@ -468,7 +468,7 @@ async def test_recurring_survives_failures_safety_floor_and_recent_runs_carryove
 
 @pytest.mark.asyncio
 async def test_dispatch_nonblocking_short_defer_and_silent_kick_queued(tmp_path):
-    plugin = await loaded(tmp_path)
+    plugin = await loaded(tmp_path, ["qq:admin"])
     try:
         now, clock = _make_fake_pulse_clock(1_700_000_000.0)
         plugin.intents.clock = clock

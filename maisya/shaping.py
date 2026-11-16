@@ -389,7 +389,7 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
         if simple in patch and simple in Settings.model_fields:
             cand[simple] = str(patch[simple] or "").strip()
             changes.append(simple)
-    for int_field in ("heartbeat_interval_minutes", "longing_quiet_hours", "tz_offset_minutes", "daily_proactive_limit", "per_chat_daily_proactive_limit"):
+    for int_field in ("heartbeat_interval_minutes", "longing_quiet_hours", "tz_offset_minutes", "daily_proactive_limit", "per_chat_daily_proactive_limit", "daily_bg_runs_limit", "daily_bg_tokens_limit", "bg_max_consecutive_failures"):
         if int_field in patch and int_field in Settings.model_fields:
             cand[int_field] = int(patch[int_field])
             changes.append(int_field)

@@ -33,6 +33,7 @@ from .abilities import (
 from .authz import approved_envelope, record_delegation
 from .memory import SKILL_ID_RE, MemoryLayers, parse_skill_meta
 from .pathsafe import ensure_dirs, path_is_link_like
+from .tx_recovery import TxJournal, tx_lock
 from .trust import format_stream_spec, parse_stream_spec
 from .vault import atomic_private_write
 
@@ -935,7 +936,12 @@ def preview_package(
 
 
 def _apply_imported_schedules(
-    plugin, profile_id: str, schedules: list[dict[str, Any]], target_chat: str
+    plugin,
+    profile_id: str,
+    schedules: list[dict[str, Any]],
+    target_chat: str,
+    *,
+    tx: TxJournal | None = None,
 ) -> int:
     clean_chat = str(target_chat or "").strip()
     if not clean_chat or not schedules or getattr(plugin, "intents", None) is None:
@@ -988,6 +994,8 @@ def _apply_imported_schedules(
             },
             bypass_limits=True,
         )
+        if created.get("intent_id") and tx is not None:
+            tx.record_created_intent(created["intent_id"])
         if getattr(plugin, "grants", None) is not None and created.get("intent_id"):
             record_delegation(
                 plugin.grants,
@@ -1133,139 +1141,124 @@ def import_package_bundle(
         toml_text = _serialize_profile_dict(settings_cfg)
         tomllib.loads(toml_text)
 
-    # 2. 按事务安装技能并更新角色目录/能力包，任何一步失败均回滚已写入技能与目标目录
+    # 2. 按事务日志提交技能与角色目录/能力包，任何一步或崩溃均支持原子恢复并暴露回滚故障
     imported_skills: list[str] = []
     skipped_skills: list[str] = []
-    skill_rb_root = Path(tempfile.mkdtemp(prefix="pkg-skill-rb-", dir=plugin.profiles.path))
-    created_sids: list[str] = []
-    overwritten_sids: dict[str, tuple[Path, int]] = {}
-    added_companions: list[Path] = []
     stage: Path | None = None
     backup_dir: Path | None = None
-    try:
-        for sid, sdata, meta, skill_md in valid_skill_items:
-            sdir = Path(plugin.data_root) / "abilities" / "skills" / sid
-            if sid in existing_skills:
-                if overwrite:
-                    cur = plugin.memory.read("skill", target=sid, document="SKILL.md")
-                    snap_dir = skill_rb_root / sid
-                    if sdir.exists():
-                        shutil.copytree(sdir, snap_dir, symlinks=False)
-                    overwritten_sids[sid] = (snap_dir, int(cur["version"]))
-                    plugin.memory.write(
-                        "skill",
-                        skill_md,
-                        expected_version=cur["version"],
-                        target=sid,
-                        document="SKILL.md",
-                        author="package_import",
+    with tx_lock(plugin.data_root):
+        tx = TxJournal(plugin.data_root, kind="package_import")
+        try:
+            for sid, sdata, meta, skill_md in valid_skill_items:
+                sdir = Path(plugin.data_root) / "abilities" / "skills" / sid
+                if sid in existing_skills:
+                    tx.backup_tree(f"skill_{sid}", sdir)
+                    if overwrite:
+                        cur = plugin.memory.read("skill", target=sid, document="SKILL.md")
+                        tx.record_skill_overwrite(sid, int(cur["version"]))
+                        plugin.memory.write(
+                            "skill",
+                            skill_md,
+                            expected_version=cur["version"],
+                            target=sid,
+                            document="SKILL.md",
+                            author="package_import",
+                        )
+                        imported_skills.append(sid)
+                    else:
+                        skipped_skills.append(sid)
+                else:
+                    tx.backup_tree(f"skill_{sid}", sdir)
+                    tx.record_skill_create(sid)
+                    plugin.memory.create_skill(
+                        sid,
+                        title=meta["title"],
+                        description=meta["description"],
+                        content=skill_md,
+                        allow_custom=True,
                     )
                     imported_skills.append(sid)
-                else:
-                    skipped_skills.append(sid)
-            else:
-                created_sids.append(sid)
-                plugin.memory.create_skill(
-                    sid,
-                    title=meta["title"],
-                    description=meta["description"],
-                    content=skill_md,
-                    allow_custom=True,
-                )
-                imported_skills.append(sid)
-            companions = sdata.get("companions") or {}
-            if companions and not path_is_link_like(sdir):
-                for rel_sub, comp_bytes in companions.items():
-                    rel_parts = Path(rel_sub).parts
-                    if not rel_parts or any(p in {"", ".", ".."} or p.startswith(".") for p in rel_parts):
-                        continue
-                    parent = ensure_dirs(sdir, rel_parts[:-1], create=True, mode=0o700)
-                    dest = parent / rel_parts[-1]
-                    if path_is_link_like(dest):
-                        continue
-                    existed_dest = dest.exists()
-                    if overwrite or not existed_dest:
-                        if sid in existing_skills and not overwrite and not existed_dest:
-                            added_companions.append(dest)
-                        atomic_private_write(dest, comp_bytes)
+                companions = sdata.get("companions") or {}
+                if companions and not path_is_link_like(sdir):
+                    for rel_sub, comp_bytes in companions.items():
+                        rel_parts = Path(rel_sub).parts
+                        if not rel_parts or any(p in {"", ".", ".."} or p.startswith(".") for p in rel_parts):
+                            continue
+                        parent = ensure_dirs(sdir, rel_parts[:-1], create=True, mode=0o700)
+                        dest = parent / rel_parts[-1]
+                        if path_is_link_like(dest):
+                            continue
+                        existed_dest = dest.exists()
+                        if overwrite or not existed_dest:
+                            atomic_private_write(dest, comp_bytes)
 
-        if pkg_kind == "capability_pack":
-            if existing_prof is not None and bind_pid:
-                merged_skills = list(dict.fromkeys([*existing_prof.skills, *pack_skills, *imported_skills]))
-                merged_toolsets = list(dict.fromkeys([*existing_prof.toolsets, *pack_toolsets]))
-                plugin.profiles.update(
-                    bind_pid,
-                    toolsets=merged_toolsets or list(existing_prof.toolsets),
-                    skills=merged_skills,
+            if pkg_kind == "capability_pack":
+                if existing_prof is not None and bind_pid:
+                    tx.backup_tree(f"prof_{bind_pid}", plugin.profiles.path / bind_pid)
+                    merged_skills = list(dict.fromkeys([*existing_prof.skills, *pack_skills, *imported_skills]))
+                    merged_toolsets = list(dict.fromkeys([*existing_prof.toolsets, *pack_toolsets]))
+                    plugin.profiles.update(
+                        bind_pid,
+                        toolsets=merged_toolsets or list(existing_prof.toolsets),
+                        skills=merged_skills,
+                    )
+                scheduled_count = _apply_imported_schedules(
+                    plugin,
+                    bind_pid or (existing_prof.id if existing_prof is not None else "default"),
+                    [s for s in (pack.get("schedules") or ()) if isinstance(s, dict)],
+                    schedule_target_chat,
+                    tx=tx,
                 )
+                tx.commit()
+                return {
+                    "ok": True,
+                    "kind": pkg_kind,
+                    "profile_id": bind_pid,
+                    "imported_skills": imported_skills,
+                    "skipped_skills": skipped_skills,
+                    "missing_secret_handles": missing_handles,
+                    "scheduled_count": scheduled_count,
+                }
+
+            assert target_dir is not None
+            tx.backup_tree(f"prof_{raw_pid}", target_dir)
+            stage = Path(tempfile.mkdtemp(prefix="pkg-import-", dir=plugin.profiles.path))
+            atomic_private_write(stage / "PROFILE.md", md_text.encode("utf-8"))
+            atomic_private_write(stage / "profile.toml", toml_text.encode("utf-8"))
+            if target_dir.exists():
+                backup_dir = Path(tempfile.mkdtemp(prefix="pkg-backup-", dir=plugin.profiles.path))
+                shutil.rmtree(backup_dir)
+                target_dir.rename(backup_dir)
+            stage.rename(target_dir)
+            prof = plugin.profiles.get(raw_pid)
+            plugin.memory.seed_profile(prof.id)
+            scheduled_count = _apply_imported_schedules(
+                plugin,
+                prof.id,
+                [s for s in (pack.get("schedules") or ()) if isinstance(s, dict)],
+                schedule_target_chat,
+                tx=tx,
+            )
+            if backup_dir is not None and backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            tx.commit()
             return {
                 "ok": True,
                 "kind": pkg_kind,
-                "profile_id": bind_pid,
+                "profile_id": prof.id,
                 "imported_skills": imported_skills,
                 "skipped_skills": skipped_skills,
                 "missing_secret_handles": missing_handles,
+                "scheduled_count": scheduled_count,
             }
-
-        assert target_dir is not None
-        stage = Path(tempfile.mkdtemp(prefix="pkg-import-", dir=plugin.profiles.path))
-        atomic_private_write(stage / "PROFILE.md", md_text.encode("utf-8"))
-        atomic_private_write(stage / "profile.toml", toml_text.encode("utf-8"))
-        if target_dir.exists():
-            backup_dir = Path(tempfile.mkdtemp(prefix="pkg-backup-", dir=plugin.profiles.path))
-            shutil.rmtree(backup_dir)
-            target_dir.rename(backup_dir)
-        stage.rename(target_dir)
-        prof = plugin.profiles.get(raw_pid)
-        plugin.memory.seed_profile(prof.id)
-        scheduled_count = _apply_imported_schedules(
-            plugin, prof.id, [s for s in (pack.get("schedules") or ()) if isinstance(s, dict)], schedule_target_chat
-        )
-        if backup_dir is not None and backup_dir.exists():
-            shutil.rmtree(backup_dir)
-        return {
-            "ok": True,
-            "kind": pkg_kind,
-            "profile_id": prof.id,
-            "imported_skills": imported_skills,
-            "skipped_skills": skipped_skills,
-            "missing_secret_handles": missing_handles,
-            "scheduled_count": scheduled_count,
-        }
-    except BaseException:
-        if target_dir is not None and backup_dir is not None:
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            if backup_dir.exists():
-                backup_dir.rename(target_dir)
-        elif target_dir is not None and stage is not None and not stage.exists() and target_dir.exists():
-            shutil.rmtree(target_dir)
-        for p in added_companions:
-            p.unlink(missing_ok=True)
-        for sid in created_sids:
-            sdir = Path(plugin.data_root) / "abilities" / "skills" / sid
-            shutil.rmtree(sdir, ignore_errors=True)
-            asset = f"skill:{sid}:SKILL.md"
-            with plugin.memory.store.connect() as db, db:
-                db.execute("DELETE FROM memory_versions WHERE kind='skill' AND target=?", (sid,))
-                db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
-        for sid, (snap_dir, prev_ver) in overwritten_sids.items():
-            sdir = Path(plugin.data_root) / "abilities" / "skills" / sid
-            shutil.rmtree(sdir, ignore_errors=True)
-            if snap_dir.exists():
-                shutil.copytree(snap_dir, sdir, symlinks=False)
-                try:
-                    plugin.memory.rollback("skill", prev_ver, target=sid, document="SKILL.md", allow_custom=True)
-                except Exception:
-                    pass
-            else:
-                asset = f"skill:{sid}:SKILL.md"
-                with plugin.memory.store.connect() as db, db:
-                    db.execute("DELETE FROM memory_versions WHERE kind='skill' AND target=?", (sid,))
-                    db.execute("DELETE FROM memory_search WHERE asset=?", (asset,))
-        raise
-    finally:
-        if stage is not None and stage.exists():
-            shutil.rmtree(stage)
-        if skill_rb_root.exists():
-            shutil.rmtree(skill_rb_root)
+        except BaseException:
+            if backup_dir is not None and backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            tx.rollback(
+                store_path=getattr(getattr(plugin, "threads", None), "path", None),
+                memory=plugin.memory,
+            )
+            raise
+        finally:
+            if stage is not None and stage.exists():
+                shutil.rmtree(stage, ignore_errors=True)

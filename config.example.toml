@@ -25,6 +25,10 @@ heartbeat_mode = "off"
 # 每日主动总量（全局）与单会话每日上限
 daily_proactive_limit = 3
 per_chat_daily_proactive_limit = 1
+# 后台自主执行日预算与连续失败退避熔断上限（仅限后台心跳/盯梢/周期任务，不限制用户触发的 return 回传）
+daily_bg_runs_limit = 48
+daily_bg_tokens_limit = 200000
+bg_max_consecutive_failures = 3
 
 [chat_proactive_levels]
 

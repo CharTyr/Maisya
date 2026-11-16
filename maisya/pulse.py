@@ -84,11 +84,17 @@ class Pulse:
         tz_offset_minutes=None,
         watch_evaluator=None,
         authority_check=None,
+        daily_bg_runs_limit=48,
+        daily_bg_tokens_limit=200000,
+        bg_max_consecutive_failures=3,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
         self.watch_evaluator = watch_evaluator
         self.authority_check = authority_check
+        self.daily_bg_runs_limit = max(0, int(daily_bg_runs_limit))
+        self.daily_bg_tokens_limit = max(0, int(daily_bg_tokens_limit))
+        self.bg_max_consecutive_failures = max(1, int(bg_max_consecutive_failures))
         self.sleep_window, self.redact = sleep_window, redact
         if tz_offset_minutes is not None and not callable(tz_offset_minutes):
             tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
@@ -505,7 +511,9 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred"
                 )
 
-    async def _reschedule_recurring(self, row, *, thread=None, record_run: bool = True):
+    async def _reschedule_recurring(
+        self, row, *, thread=None, record_run: bool = True, error: str = ""
+    ):
         payload = row.get("payload") or {}
         every = int(payload.get("every_seconds") or 0)
         daily_at = str(payload.get("daily_at") or "").strip()
@@ -563,13 +571,17 @@ class Pulse:
         else:
             due_at = now + every
         due_at = max(now + 60, due_at)
+        fails = int(row.get("failure_count") or 0) + (1 if error else 0)
+        if error:
+            backoff = min(3600.0, 60.0 * (2 ** max(0, fails - 1)))
+            due_at = max(due_at, now + backoff)
         bypass = bool(
             row.get("source") == "workflow"
             or str(next_payload.get("profile") or "").strip()
             or next_payload.get("scheduled_admin")
         )
         try:
-            await asyncio.to_thread(
+            created = await asyncio.to_thread(
                 self.intents.schedule,
                 kind=row["kind"],
                 source=row["source"],
@@ -582,6 +594,23 @@ class Pulse:
                 mode=row.get("mode", "schedule"),
                 condition=row.get("condition", ""),
             )
+            if error and created and created.get("intent_id"):
+                new_id = created["intent_id"]
+                err_txt = str(error)[:300]
+                pause_err = fails >= max(1, int(getattr(self, "bg_max_consecutive_failures", 3)))
+                def _mark_fail():
+                    with self.intents.store.connect() as db, db:
+                        if pause_err:
+                            db.execute(
+                                "UPDATE intents SET status='error_paused', wake_status='error_paused', failure_count=?, last_error=? WHERE intent_id=?",
+                                (fails, err_txt, new_id),
+                            )
+                        else:
+                            db.execute(
+                                "UPDATE intents SET failure_count=?, last_error=? WHERE intent_id=?",
+                                (fails, err_txt, new_id),
+                            )
+                await asyncio.to_thread(_mark_fail)
         except ValueError as exc:
             logger.warning(
                 "循环意图续排跳过 intent=%s target=%s: %s",
@@ -673,6 +702,31 @@ class Pulse:
             return False
         return True
 
+    def _bg_budget_exhausted(self, now=None) -> tuple[bool, str]:
+        fn = getattr(self.intents, "bg_budget_state", None)
+        if not callable(fn):
+            return False, ""
+        state = fn(
+            runs_limit=getattr(self, "daily_bg_runs_limit", 48),
+            tokens_limit=getattr(self, "daily_bg_tokens_limit", 200000),
+            now=now,
+        )
+        return bool(state.get("exhausted")), str(state.get("exhausted_reason") or "")
+
+    def _record_bg_usage_sync(
+        self, *, source: str, target: str = "", runs: int = 1, tokens: int = 0, duration_ms: int = 0, now=None
+    ) -> None:
+        fn = getattr(self.intents, "record_bg_usage", None)
+        if callable(fn):
+            fn(
+                source=source,
+                target=target,
+                runs=runs,
+                tokens=tokens,
+                duration_ms=duration_ms,
+                now=now,
+            )
+
     async def _handle_watch(self, row):
         if not await self._check_intent_authority(row):
             return
@@ -690,6 +744,19 @@ class Pulse:
         ):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
+        if row.get("kind") != "return" and not (
+            row.get("thread_id") and payload.get("wait_thread")
+        ):
+            exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted)
+            if exhausted:
+                pause_fn = getattr(self.intents, "pause_for_budget", None)
+                if callable(pause_fn):
+                    await asyncio.to_thread(pause_fn, row["intent_id"], b_reason)
+                else:
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred"
+                    )
+                return
 
         condition = str(
             row.get("condition") or payload.get("condition") or row.get("reason") or ""
@@ -707,14 +774,50 @@ class Pulse:
                 "condition": condition,
                 "now": self.intents.clock(),
             }
+            t0 = time.monotonic()
             params = inspect.signature(self.watch_evaluator).parameters
-            ev_res = (
-                self.watch_evaluator(row)
-                if len(params) == 1
-                else self.watch_evaluator(row, ctx)
+            try:
+                ev_res = (
+                    self.watch_evaluator(row)
+                    if len(params) == 1
+                    else self.watch_evaluator(row, ctx)
+                )
+                if inspect.isawaitable(ev_res):
+                    ev_res = await ev_res
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                dur_ms = int((time.monotonic() - t0) * 1000)
+                await asyncio.to_thread(
+                    self._record_bg_usage_sync,
+                    source="watch",
+                    target=target,
+                    runs=1,
+                    duration_ms=dur_ms,
+                )
+                fail_fn = getattr(self.intents, "record_bg_failure", None)
+                if callable(fail_fn):
+                    await asyncio.to_thread(
+                        fail_fn,
+                        row["intent_id"],
+                        str(exc),
+                        max_failures=getattr(self, "bg_max_consecutive_failures", 3),
+                    )
+                else:
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred"
+                    )
+                return
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            toks = int(ev_res.get("tokens_used") or 0) if isinstance(ev_res, dict) else 0
+            await asyncio.to_thread(
+                self._record_bg_usage_sync,
+                source="watch",
+                target=target,
+                runs=1,
+                tokens=toks,
+                duration_ms=dur_ms,
             )
-            if inspect.isawaitable(ev_res):
-                ev_res = await ev_res
             if isinstance(ev_res, bool):
                 triggered = ev_res
             elif isinstance(ev_res, dict):
@@ -838,6 +941,9 @@ class Pulse:
                 if isinstance(thread, dict) and isinstance(thread.get("result"), dict)
                 else {}
             )
+            await asyncio.to_thread(
+                self._record_bg_usage_sync, source="watch", target=target, runs=1
+            )
             if result_obj.get("error"):
                 now_ts = self.intents.clock()
                 logger.warning(
@@ -846,15 +952,24 @@ class Pulse:
                     thread.get("thread_id") if isinstance(thread, dict) else "",
                     result_obj.get("error"),
                 )
-                await asyncio.to_thread(
-                    self.intents.record_watch_check,
-                    row["intent_id"],
-                    checked_at=now_ts,
-                    triggered=False,
-                    next_due_at=self._next_watch_due(row, now_ts),
-                    wake_status="thread_error",
-                    thread_id="",
-                )
+                fail_fn = getattr(self.intents, "record_bg_failure", None)
+                if callable(fail_fn):
+                    await asyncio.to_thread(
+                        fail_fn,
+                        row["intent_id"],
+                        str(result_obj.get("error")),
+                        max_failures=getattr(self, "bg_max_consecutive_failures", 3),
+                    )
+                else:
+                    await asyncio.to_thread(
+                        self.intents.record_watch_check,
+                        row["intent_id"],
+                        checked_at=now_ts,
+                        triggered=False,
+                        next_due_at=self._next_watch_due(row, now_ts),
+                        wake_status="thread_error",
+                        thread_id="",
+                    )
                 return
             summary = str(result_obj.get("text") or "").strip()
             attachments = list(result_obj.get("attachments") or [])
@@ -1044,6 +1159,17 @@ class Pulse:
             and self.engine is not None
             and self.profiles is not None
         ):
+            if row.get("kind") != "return":
+                exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted)
+                if exhausted:
+                    pause_fn = getattr(self.intents, "pause_for_budget", None)
+                    if callable(pause_fn):
+                        await asyncio.to_thread(pause_fn, row["intent_id"], b_reason)
+                    else:
+                        await asyncio.to_thread(
+                            self.intents.finish, row["intent_id"], "deferred"
+                        )
+                    return
             try:
                 ability = await asyncio.to_thread(
                     self.profiles.get, row["payload"]["profile"]
@@ -1221,6 +1347,18 @@ class Pulse:
             )
         if thread and isinstance(thread.get("result"), dict):
             result_obj = thread["result"]
+            if row.get("kind") != "return" and (
+                row.get("source") == "workflow"
+                or row["payload"].get("profile")
+                or row["payload"].get("every_seconds")
+                or row["payload"].get("daily_at")
+            ):
+                await asyncio.to_thread(
+                    self._record_bg_usage_sync,
+                    source=row["source"],
+                    target=target,
+                    runs=1,
+                )
             if result_obj.get("error"):
                 logger.warning(
                     "线程执行失败，终止本次唤醒 intent=%s thread=%s error=%s",
@@ -1231,7 +1369,12 @@ class Pulse:
                 await asyncio.to_thread(
                     self.intents.finish, row["intent_id"], "failed", "thread_error"
                 )
-                await self._reschedule_recurring(row, thread=thread, record_run=False)
+                await self._reschedule_recurring(
+                    row,
+                    thread=thread,
+                    record_run=False,
+                    error=str(result_obj.get("error") or "thread_error"),
+                )
                 return
             result_text = str(result_obj.get("text") or "")
             attachments = result_obj.get("attachments") or []
@@ -1356,6 +1499,16 @@ class Pulse:
             and self.engine is not None
             and self.profiles is not None
         ):
+            exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted)
+            if exhausted:
+                pause_fn = getattr(self.intents, "pause_for_budget", None)
+                if callable(pause_fn):
+                    await asyncio.to_thread(pause_fn, row["intent_id"], b_reason)
+                else:
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred"
+                    )
+                return
             platform = row["payload"].get("platform", "")
             if not platform and parse_stream_spec(raw_target_chat):
                 platform = parse_stream_spec(raw_target_chat)[0]
@@ -1429,6 +1582,12 @@ class Pulse:
                     self.intents.finish, row["intent_id"], "deferred", delay=15
                 )
                 return
+            await asyncio.to_thread(
+                self._record_bg_usage_sync,
+                source=row["source"],
+                target=row["target"],
+                runs=1,
+            )
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
             await self._reschedule_recurring(row, thread=started_thread)
             return
@@ -2180,8 +2339,16 @@ class Pulse:
                     self.intents.record_heartbeat_tick, "ok:no_reason", "", at=now
                 )
                 return
+            exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted, now)
+            if exhausted:
+                self._schedule_next_heartbeat(now)
+                await asyncio.to_thread(
+                    self.intents.record_heartbeat_tick, "budget_paused", b_reason, at=now
+                )
+                return
             if not await asyncio.to_thread(self._claim_heartbeat, now):
                 return
+            hb_t0 = time.monotonic()
             journal_obj = await asyncio.to_thread(self.memory.read, "journal")
             journal_text = str((journal_obj or {}).get("content") or "").strip()
             recent_journal = self.redact(journal_text)[-600:] if journal_text else ""
@@ -2191,6 +2358,14 @@ class Pulse:
                 plan if ability is not None else "",
                 recent_journal[-400:],
                 candidates,
+            )
+            await asyncio.to_thread(
+                self._record_bg_usage_sync,
+                source="heartbeat",
+                target="self",
+                runs=1,
+                duration_ms=int((time.monotonic() - hb_t0) * 1000),
+                now=now,
             )
             # 第 3 步：落地
             if action == "miss":

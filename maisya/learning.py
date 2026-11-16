@@ -88,15 +88,6 @@ class Learning:
         ):
             trace.append({"signal": "multiple_redirects", "count": min(redirects, 8)})
             recovered = True
-        if not recovered and len(success_tools) >= 3 and len(set(success_tools)) >= 2:
-            trace.append(
-                {
-                    "signal": "multi_step_workflow",
-                    "steps": len(success_tools),
-                    "distinct_tools": len(set(success_tools)),
-                }
-            )
-            recovered = True
         return trace if recovered else []
 
     def _receipt(self, row, status, *, reserve=False):
@@ -342,6 +333,15 @@ class Learning:
                 op = str(candidate.get("op") or "").strip().lower()
                 cand_skill = str(candidate.get("skill_id") or "").strip()
                 lesson = str(candidate.get("lesson") or "").strip()
+                prov = f"thread:{row['thread_id']}@r{int(row.get('completed_revision') or 0)}"
+                trace_signals = [prov]
+                for item in trace:
+                    if isinstance(item, dict) and item.get("signal"):
+                        sig = str(item["signal"])
+                        if sig not in trace_signals:
+                            trace_signals.append(sig)
+                    elif isinstance(item, dict) and item.get("tool") and "tool_recovery" not in trace_signals:
+                        trace_signals.append("tool_recovery")
 
                 if (
                     op == "patch" or (cand_skill and cand_skill in existing_skills and lesson)
@@ -361,13 +361,24 @@ class Learning:
                             else:
                                 next_sk = f"{base_txt}\n\n## 实战补充与避坑\n{bullet}\n"
                             await completed_thread(
-                                self.memory.write,
+                                self.memory._guard,
                                 "skill",
                                 next_sk,
-                                target=target_sk,
-                                chat_id=row["chat_id"],
-                                expected_version=cur_sk["version"],
-                                author="thread:" + row["thread_id"],
+                                row["chat_id"],
+                                allow_custom=True,
+                            )
+                            await completed_thread(
+                                lambda: self.memory.save_skill_proposal(
+                                    thread_id=row["thread_id"],
+                                    revision=int(row.get("completed_revision") or 0),
+                                    profile_id=str(row.get("profile") or "default"),
+                                    skill_id=target_sk,
+                                    title=f"补充技能：{target_sk}",
+                                    description=lesson[:180],
+                                    content=next_sk,
+                                    signals=trace_signals[:6],
+                                    rationale=f"来自 {prov} 的实战避坑补充，确认后合并入技能",
+                                )
                             )
                         did_work = True
                 elif op == "create" and cand_skill and cand_skill not in existing_skills:
@@ -424,7 +435,7 @@ class Learning:
                                 title=title,
                                 description=desc,
                                 content=raw_md,
-                                signals=[f"{len(trace)} 步工具链"],
+                                signals=[prov, f"{len(trace)} 步恢复轨迹"],
                                 rationale=rationale,
                             )
                         )
@@ -442,7 +453,7 @@ class Learning:
                                 target=row["profile"],
                                 chat_id=row["chat_id"],
                                 expected_version=old["version"],
-                                author="thread:" + row["thread_id"],
+                                author=prov,
                             )
                         did_work = True
                     elif not did_work:

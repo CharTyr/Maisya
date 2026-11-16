@@ -185,12 +185,16 @@ def pause_delegations_for_revoked_admins(
             return 0
         db.row_factory = sqlite3.Row
         rows = db.execute(
-            "SELECT delegation_id, issuer FROM delegations WHERE status='active'"
+            "SELECT delegation_id, issuer, subject_kind FROM delegations WHERE status='active'"
         ).fetchall()
         paused = 0
         for row in rows:
             issuer = str(row["issuer"] or "").strip()
-            revoked = (not active_admins) or (_is_user_issuer(issuer) and issuer not in active_admins)
+            subj_kind = str(row["subject_kind"] or "").strip()
+            is_console_thread = issuer == "console" and subj_kind == "thread"
+            revoked = (not active_admins and not is_console_thread) or (
+                _is_user_issuer(issuer) and issuer not in active_admins
+            )
             if revoked:
                 db.execute(
                     "UPDATE delegations SET status='paused', "
@@ -287,7 +291,11 @@ def evaluate_activity_authority(
         return True, ""
 
     active_admins = set(getattr(plugin, "admins", set()) or ())
-    if not active_admins:
+    if not active_admins and not (
+        grant.get("console_admin") is True
+        and str(grant.get("issuer_admin") or "console") == "console"
+        and subject_kind == "thread"
+    ):
         return False, "当前没有有效管理员，高权委托已暂停"
 
     sid = subject_id or str(

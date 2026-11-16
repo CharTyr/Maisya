@@ -790,15 +790,15 @@ def snapshot(
         ]
         try:
             if chat_id:
-                intent_where = "WHERE status IN ('pending','paused') AND target=? "
+                intent_where = "WHERE status IN ('pending','paused','error_paused','budget_paused') AND target=? "
                 intent_params = ("chat:" + chat_id,)
             else:
-                intent_where = "WHERE status IN ('pending','paused') "
+                intent_where = "WHERE status IN ('pending','paused','error_paused','budget_paused') "
                 intent_params = ()
             try:
                 intent_rows = db.execute(
                     "SELECT intent_id,kind,source,target,due_at,status,wake_status,reason,thread_id,"
-                    "payload,mode,condition,last_checked_at,last_triggered_at "
+                    "payload,mode,condition,last_checked_at,last_triggered_at,failure_count,last_error "
                     "FROM intents "
                     + intent_where
                     + "ORDER BY due_at ASC, created DESC LIMIT 32",
@@ -835,6 +835,8 @@ def snapshot(
                         "last_triggered_at": item["last_triggered_at"] if "last_triggered_at" in keys else None,
                         "status": item["status"],
                         "wake_status": item["wake_status"] if "wake_status" in keys else "",
+                        "failure_count": int(item["failure_count"] or 0) if "failure_count" in keys else 0,
+                        "last_error": str(redact(item["last_error"]))[:200] if ("last_error" in keys and item["last_error"]) else "",
                         "reason": str(redact(item["reason"]))[:200],
                         "thread_id": item["thread_id"],
                         "workspace": str(payload_obj.get("workspace") or ""),

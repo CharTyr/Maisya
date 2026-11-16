@@ -57,6 +57,7 @@ if __package__:
     )
     from .maisya.share import Share
     from .maisya.threads import ThreadEngine, ThreadStore
+    from .maisya.tx_recovery import recover_pending_transactions
     from .maisya.trust import (
         PRIVATE_KEY,
         VAULT_COMMAND,
@@ -115,6 +116,7 @@ else:
     )
     from maisya.share import Share
     from maisya.threads import ThreadEngine, ThreadStore
+    from maisya.tx_recovery import recover_pending_transactions
     from maisya.trust import (
         PRIVATE_KEY,
         VAULT_COMMAND,
@@ -383,6 +385,12 @@ class MaisyaPlugin(MaiBotPlugin):
             **self._tz_init_kwargs(MemoryLayers, tz_offset),
         )
         self.memory.chat_aliases = self.chat_aliases_for
+        await asyncio.to_thread(
+            recover_pending_transactions,
+            self.data_root,
+            store_path=self.threads.path,
+            memory=self.memory,
+        )
         self.bridge = await asyncio.to_thread(
             Bridge, self.threads, redact=self.vault.redact
         )
@@ -392,6 +400,15 @@ class MaisyaPlugin(MaiBotPlugin):
             daily_proactive_limit=self.settings.daily_proactive_limit,
             per_chat_daily_proactive_limit=self.settings.per_chat_daily_proactive_limit,
             **self._tz_init_kwargs(Intents, tz_offset),
+        )
+        self.intents.daily_bg_runs_limit = int(
+            getattr(self.settings, "daily_bg_runs_limit", 48)
+        )
+        self.intents.daily_bg_tokens_limit = int(
+            getattr(self.settings, "daily_bg_tokens_limit", 200000)
+        )
+        self.intents.bg_max_consecutive_failures = max(
+            1, int(getattr(self.settings, "bg_max_consecutive_failures", 3))
         )
         self.host_runner = HostWorkspaceRunner(vault=self.vault, grants=self.grants)
         self.runtime = AgentRuntime(
@@ -463,6 +480,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 subject_kind="intent",
                 subject_id=str(intent_row.get("intent_id") or ""),
             ),
+            daily_bg_runs_limit=self.settings.daily_bg_runs_limit,
+            daily_bg_tokens_limit=self.settings.daily_bg_tokens_limit,
+            bg_max_consecutive_failures=self.settings.bg_max_consecutive_failures,
             **self._tz_init_kwargs(Pulse, tz_offset),
         )
         self._sync_tz_offset(tz_offset)
@@ -1485,6 +1505,11 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.intents.per_chat_daily_proactive_limit = (
                         settings.per_chat_daily_proactive_limit
                     )
+                    self.intents.daily_bg_runs_limit = settings.daily_bg_runs_limit
+                    self.intents.daily_bg_tokens_limit = settings.daily_bg_tokens_limit
+                    self.intents.bg_max_consecutive_failures = (
+                        settings.bg_max_consecutive_failures
+                    )
                 if self.pulse:
                     self.pulse.sleep_window = settings.sleep_window
                     self.pulse.proactive_level = settings.proactive_level
@@ -1495,6 +1520,11 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.pulse.longing_quiet_hours = settings.longing_threshold_hours()
                     self.pulse.heartbeat_interval = settings.heartbeat_base_minutes() * 60
                     self.pulse.heartbeat_profile = self._resolve_heartbeat_profile()
+                    self.pulse.daily_bg_runs_limit = settings.daily_bg_runs_limit
+                    self.pulse.daily_bg_tokens_limit = settings.daily_bg_tokens_limit
+                    self.pulse.bg_max_consecutive_failures = (
+                        settings.bg_max_consecutive_failures
+                    )
                     if hasattr(self.pulse, "invalidate_caches"):
                         self.pulse.invalidate_caches()
                 for thread_id in list(self.engine.tasks):

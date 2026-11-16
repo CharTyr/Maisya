@@ -240,7 +240,7 @@ async def test_auto_distillation_first_create_stages_draft_subsequent_patches_sk
         assert "log-triage" in plugin.memory.skills()
         assert "log-triage" in plugin.profiles.get("default").skills
 
-        # 第 2 次：绑定该技能后再次完成同类排障 -> 自动补经验更新进 log-triage，无需用户手点创建
+        # 第 2 次：绑定该技能后再次完成同类排障 -> 补丁进入待确认草稿队列并保留线程来源，确认后才写入 log-triage
         llm_mode = "patch_existing"
         prof_updated = plugin.profiles.get("default")
         t2 = plugin.threads.create(
@@ -275,6 +275,20 @@ async def test_auto_distillation_first_create_stages_draft_subsequent_patches_sk
         await learning.schedule(row2)
         await learning.drain()
 
+        assert plugin.memory.read("skill", target="log-triage")["version"] == 1
+        patch_props = [
+            p
+            for p in plugin.memory.list_skill_proposals(status="pending")
+            if p["skill_id"] == "log-triage"
+        ]
+        assert patch_props and any(
+            t2["thread_id"] in json.dumps(p, ensure_ascii=False) for p in patch_props
+        )
+        confirmed2 = await plugin.manage_write(
+            "confirm_skill_proposal",
+            json.dumps({"proposal_id": patch_props[0]["proposal_id"]}, ensure_ascii=False),
+        )
+        assert confirmed2["success"], confirmed2
         updated_skill = plugin.memory.read("skill", target="log-triage")
         assert "压缩轮转日志" in updated_skill["content"]
         assert updated_skill["version"] >= 2

@@ -381,11 +381,6 @@ class Workspaces:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS attachments (handle TEXT PRIMARY KEY, chat_id TEXT, thread_id TEXT, revision INTEGER, name TEXT, kind TEXT, size INTEGER, digest TEXT, created REAL)"
             )
-            cols = {r[1] for r in db.execute("PRAGMA table_info(attachments)").fetchall()}
-            if "visibility_scope" not in cols:
-                db.execute(
-                    "ALTER TABLE attachments ADD COLUMN visibility_scope TEXT NOT NULL DEFAULT ''"
-                )
 
     def inventory(self, path, *, roots=("project", "in", "out")):
         return inventory(
@@ -558,7 +553,7 @@ class Workspaces:
                 try:
                     with self.store.connect() as db, db:
                         db.execute(
-                            "INSERT INTO attachments (handle, chat_id, thread_id, revision, name, kind, size, digest, created, visibility_scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO attachments (handle, chat_id, thread_id, revision, name, kind, size, digest, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 handle,
                                 row["chat_id"],
@@ -569,7 +564,6 @@ class Workspaces:
                                 size,
                                 digest,
                                 time.time(),
-                                str(row.get("visibility_scope") or ""),
                             ),
                         )
                 except BaseException:

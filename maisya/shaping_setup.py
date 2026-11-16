@@ -180,6 +180,7 @@ def heartbeat_overview(plugin, heartbeat_text: str, current_chat_id: str = "") -
         "next_at": next_at or None,
         "sleep_window": st.sleep_window,
         "quota": intents.proactive_quota_state(f"chat:{current_chat_id}" if current_chat_id else "") if intents is not None else {},
+        "bg_budget": intents.bg_budget_state() if intents is not None and callable(getattr(intents, "bg_budget_state", None)) else {},
         "recent_ticks": intents.heartbeat_ticks(5) if intents is not None else [],
         "content": heartbeat_text[:1200],
     }
