@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [管理台与接入](docs/04-管理台与接入.md)。
 
-最后更新：2026-11-17。**架构收口方案（`B0`～`B7`）、GPT 4 项代码审查修复、`docs/08` 心跳恢复、`docs/09` 调度手册及线上简报预览实测暴露的 4 项问题修复已全部落地并通过全量本地 + Playwright + 真实宿主隔离契约验收；当前新修复提交已通过本地与契约验证，待确认后再同步更新至线上 `plugins/`。** 当前分支 `main`。
+最后更新：2026-11-17。**架构收口方案（`B0`～`B7`）、GPT 4 项代码审查修复、`docs/08` 心跳恢复、`docs/09` 调度手册及线上简报预览实测暴露的 4 项问题修复（`d85b5cd`）已全部落地、通过全量本地 + Playwright + 真实宿主隔离契约验收，并已安全备份后原子部署上线且热重载成功。** 当前分支 `main`。
 
 全量验收实测结果：`tests/` 共 **607 passed**（0 failed / 0 skipped）；`tests_host/run_contract.py` 共 **23 tests OK**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；`python3 webui/build.py --check` 返回 `0`；`wc -l maisya/shaping.py` = **592**（`<= 600`）。
 
@@ -87,8 +87,9 @@ python3 tests_sandbox/run_isolated.py --execute
 ## 4. 下一位接手待办与线上部署红线
 
 1. **当前仓库与线上部署状态**：
-   - 本地 `main` 分支已完成 `P0`（`13d0324`）、`P1/P2 + 文档`（`553d097`）、交接提交（`c5ba9b8`）与最新 4 项线上简报/跨会话引导修复提交，**尚未 `git push` 至 `origin/main`**；
-   - 此前已完成先备份后原子部署（旧插件与 `.backup()` 校验通过的运行期数据备份于 `/root/backups/maisya-deploy-20261116-191431/`），宿主核心代码零改动且未重启 MaiBot；随后开启插件已跑通早间简报与私聊试跑预览。最新 4 项修复提交仅在本地与隔离宿主契约验证通过，**尚待用户明确同意后再原子同步至线上 `plugins/`**。
+   - 本地 `main` 分支已完成 `P0`（`13d0324`）、`P1/P2 + 文档`（`553d097`）、`4 项线上简报/跨会话引导修复`（`d85b5cd`）与本交接提交，**尚未 `git push` 至 `origin/main`**；
+   - 线上已完成最新一次先备份后原子部署（旧插件与 SQLite `.backup()` 只读一致性校验通过的数据备份于 `/root/backups/maisya-deploy-20261117-115215/`；前序备份保留在 `/root/backups/maisya-deploy-20261116-191431/`），线上 `config.toml`（`mode 600`，`[plugin] enabled = true`）逐字节原样保留，宿主核心代码零改动且未重启 MaiBot；
+   - 轻触 `_manifest.json` 触发宿主全插件热重载后，日志确认 `chartyr.maisya v0.3.0` 导入、注册与 `on_load` 均成功无报错，目录内已生成 `.pyc` 字节码；当前可直接在私聊或指定测试群复测新修复后的资讯简报图卡链路。
 2. **已收口文档基准**：
    - [`docs/01-架构蓝图.md`](docs/01-架构蓝图.md)、[`docs/guide/configuration.md`](docs/guide/configuration.md) 与 [`codemap.md`](codemap.md)（35 个模块）已随 `B0`～`B7` 同步更新；[`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md) 与 [`docs/09-调度手册方案.md`](docs/09-调度手册方案.md) 已完成并入库。
 3. **部署红线（来自 [AGENTS.md](AGENTS.md)）**：
@@ -142,4 +143,4 @@ python3 tests_sandbox/run_isolated.py --execute
 | `B6` 外部副作用幂等与对账（`553d097`） | ✅ | [`maisya/services.py`](maisya/services.py) 引入 `classify_external_effect`、`(thread_id, revision)` 级 `op_id`、`idempotency_key` 与非幂等 `uncertain`/`reconcile_required` 阻断；保留 `read_only` 单步回执去重 |
 | `B7` 后台预算与回归稳态（`553d097`） | ✅ | [`maisya/config.py`](maisya/config.py)、[`maisya/intents.py`](maisya/intents.py)、[`maisya/pulse.py`](maisya/pulse.py) 增加日常运行/Token 预算、`bg_max_consecutive_failures` 退避暂停与控制台可观测状态，`return` 完全豁免 |
 | 回归测试与文档同步 | ✅ | 新增 [`tests/test_arch_consolidation_p0.py`](tests/test_arch_consolidation_p0.py)、[`tests/test_arch_consolidation_p1_p2.py`](tests/test_arch_consolidation_p1_p2.py)，同步 `docs/01`、`docs/guide/configuration.md` 与 `codemap.md` |
-| 简报与跨会话调度实测 4 项修复 | ✅（待部署） | [`maisya/digest.py`](maisya/digest.py) 合并 6 小时内多次 `collect` 池与未成卡 `score_select` 草稿（防自锁重与空增量清空）；[`maisya/threads.py`](maisya/threads.py) 屏蔽运行中持久线程上一轮旧 `result`（保留 `_resolve` 对刚完成轮次的精确交付）；[`plugin.py`](plugin.py) 强化未启用私聊管理员 `source_msg_id` 引导与报错提示；新增 [`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 并固定 [`tests/test_audit_b2_entry.py`](tests/test_audit_b2_entry.py) 晨间时钟（本地 + 宿主隔离契约已通过，等待确认后同步线上） |
+| 简报与跨会话调度实测 4 项修复 | ✅（`d85b5cd`，已部署） | [`maisya/digest.py`](maisya/digest.py) 合并 6 小时内多次 `collect` 池与未成卡 `score_select` 草稿（防自锁重与空增量清空）；[`maisya/threads.py`](maisya/threads.py) 屏蔽运行中持久线程上一轮旧 `result`（保留 `_resolve` 对刚完成轮次的精确交付）；[`plugin.py`](plugin.py) 强化未启用私聊管理员 `source_msg_id` 引导与报错提示；新增 [`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 并固定 [`tests/test_audit_b2_entry.py`](tests/test_audit_b2_entry.py) 晨间时钟（已备份并原子热重载上线） |
