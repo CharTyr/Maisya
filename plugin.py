@@ -303,6 +303,7 @@ class MaisyaPlugin(MaiBotPlugin):
             "by_alias": {},
             "_streams_id": 0,
         }
+        self._chat_titles: dict[str, str] = {}
         self._avatar_cache = {}
         self._avatar_data_mem = {}
         self._avatar_data_neg = {}
@@ -515,6 +516,8 @@ class MaisyaPlugin(MaiBotPlugin):
             "by_alias": {},
             "_streams_id": 0,
         }
+        if isinstance(getattr(self, "_chat_titles", None), dict):
+            self._chat_titles.clear()
         self._avatar_sem = None
         if self.management:
             await self.management.close()
@@ -2551,6 +2554,18 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             if self.messages and chat_enabled:
                 await asyncio.to_thread(self.messages.record, identity)
+                ginfo = (message.get("message_info") or {}).get("group_info")
+                if isinstance(ginfo, dict):
+                    gname = clean_display_name(ginfo.get("group_name") or "")
+                    if gname and gname not in {identity.group_id, identity.session_id}:
+                        titles = getattr(self, "_chat_titles", None)
+                        if not isinstance(titles, dict):
+                            titles = {}
+                            self._chat_titles = titles
+                        titles.pop(identity.session_id, None)
+                        titles[identity.session_id] = gname
+                        while len(titles) > 128:
+                            titles.pop(next(iter(titles)))
                 if self.bridge and not identity.is_plugin_relayed:
                     self.bridge.new_input(identity.session_id)
                 if self.intents and not identity.is_plugin_relayed:
@@ -5567,7 +5582,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 "管理员在任意会话（含未加白名单私聊）均可用 maisya_shape（传入真实 source_msg_id）跨会话读取与配置全部能力。"
             )
             admin_lines.append(
-                "管理员指正调度或交付方式（何时自己回、何时派线程、怎么拆分与交付）时，用 maisya_shape(action='planner', op='patch', patch={'append'|'old_string'/'new_string': ...}) 修改调度手册 PLANNER.md；只针对本会话的约定写本会话 MEMORY.md，什么事交给哪个角色改对应档案的描述。"
+                "管理员指正调度或交付方式（何时自己回、何时派线程、怎么拆分与交付）时，用 maisya_shape(action='planner', op='patch', patch={'append'|'old_string'/'new_string': ...}) 修改调度手册 PLANNER.md；单个会话的兴趣/口味/规矩只能写进该会话自己的 MEMORY.md（记录完整多元偏好，绝不写进全局 NOTES.md、档案或 SKILL.md），什么事交给哪个角色改对应档案的描述；派往持续角色做全新探索或切换视角时传 fresh=True 避免沿用旧轮预设标签。"
             )
             if not has_shape:
                 admin_lines.append(
@@ -6347,6 +6362,43 @@ class MaisyaPlugin(MaiBotPlugin):
             if self.messages is not None and indexed:
                 await asyncio.to_thread(self.messages.upsert_routes, dict(indexed))
         return self._stream_cache.get("streams", {})
+
+    def chat_meta_for(self, chat_id: str) -> dict[str, str]:
+        """Return non-sensitive display metadata (chat_type, chat_title) for an active session."""
+        cid = str(chat_id or "").strip()
+        if not cid or cid == "self":
+            return {}
+        streams = (getattr(self, "_stream_cache", {}) or {}).get("streams") or {}
+        stream = streams.get(cid) if isinstance(streams, dict) else None
+        route = (
+            self.messages.route_for(cid)
+            if getattr(self, "messages", None) is not None
+            else None
+        )
+        chat_type = str(
+            (stream or {}).get("chat_type") or (route or {}).get("chat_type") or ""
+        ).strip()
+        raw_title = clean_display_name(
+            (stream or {}).get("name")
+            or (getattr(self, "_chat_titles", None) or {}).get(cid)
+            or ""
+        )
+        ignored = {
+            "",
+            cid,
+            str((stream or {}).get("target_id") or "").strip(),
+            str((stream or {}).get("group_id") or "").strip(),
+            str((stream or {}).get("user_id") or "").strip(),
+            str((stream or {}).get("stream_spec") or "").strip(),
+            str((route or {}).get("group_id") or "").strip(),
+            str((route or {}).get("user_id") or "").strip(),
+        }
+        meta: dict[str, str] = {}
+        if chat_type:
+            meta["chat_type"] = chat_type
+        if raw_title and raw_title not in ignored:
+            meta["chat_title"] = raw_title
+        return meta
 
     async def _resolve_chat_sources(self, chat_ids=None) -> dict[str, dict]:
         if chat_ids is None:

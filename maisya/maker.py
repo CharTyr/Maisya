@@ -618,13 +618,24 @@ class AgentRuntime(Scout):
             raise PermissionError("当前真实来源或会话不在档案范围内")
         if profile.access == "admins" and not self.authorized(context):
             raise PermissionError("继续受限线程需要当前真实管理员授权")
-        return (
+        ctx_data = (
             self.memory.context(
                 context["chat_id"] if context["owner"] == "chat" else ""
             )
             if self.memory
             else None
         )
+        if (
+            isinstance(ctx_data, dict)
+            and context.get("owner") == "chat"
+            and context.get("chat_id")
+        ):
+            plugin_ref = getattr(self, "_plugin_ref", None)
+            if plugin_ref is not None and hasattr(plugin_ref, "chat_meta_for"):
+                meta = plugin_ref.chat_meta_for(context["chat_id"])
+                if meta:
+                    ctx_data = {**ctx_data, **meta}
+        return ctx_data
 
     def _sync_skill_companions(self, row, work):
         if self.memory is None:

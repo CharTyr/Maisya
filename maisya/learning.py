@@ -312,6 +312,7 @@ class Learning:
                                 "role": "system",
                                 "content": (
                                     "从工具执行与恢复轨迹提炼通用程序性经验。仅可使用给定的角色名、工具轨迹与已有技能公开摘要，严禁推测或包含人物、会话、主机、路径、资产、具体数值或凭据。\n"
+                                    "严禁把单一会话或特定用户的题材偏好、兴趣领域或内容口味写入全局 note（NOTES.md）或 skill（SKILL.md）；全局笔记与技能只保留跨领域通用的工具用法与排障步骤。\n"
                                     '1) 若 existing_skills 或 bound_skills 中已有同领域技能可承接新经验，优先返回 {"op":"patch","skill_id":"已有技能ID","lesson":"一句祈使句避坑规则","note":"通用方法"}；\n'
                                     '2) 若确无覆盖技能且属全新可复用多步工作流，返回 {"op":"create","skill_id":"英文短横线ID","title":"类级中文名","description":"适用时机：...","rules":["规则1","规则2"],"pitfalls":["避坑1"],"rationale":"一句话说明为何新建"}（也可直接给 content）；\n'
                                     '3) 若仅适合写角色短笔记，返回 {"note":"通用方法"}；无可提炼内容返回 {"note":""}。'

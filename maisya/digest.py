@@ -1190,7 +1190,7 @@ STARTER_FEEDS: tuple[dict[str, Any], ...] = (
         "url": "https://itch.io/blog.xml",
         "title": "itch.io Blog",
         "category": "indie-game",
-        "keywords": ("indie game", "game", "gamedev", "独立游戏", "游戏开发", "像素"),
+        "keywords": ("indie game", "itch", "gamedev", "独立游戏", "游戏开发", "像素"),
     },
     {
         "url": "https://www.rockpapershotgun.com/feed",
@@ -1278,6 +1278,30 @@ STARTER_FEEDS: tuple[dict[str, Any], ...] = (
         "title": "Lil'Log",
         "category": "ai-research",
         "keywords": ("ai", "llm", "agent", "research", "safety", "大模型", "智能体", "论文"),
+    },
+    {
+        "url": "https://www.animenewsnetwork.com/all/rss.xml?ann-edition=us",
+        "title": "Anime News Network",
+        "category": "acg",
+        "keywords": ("anime", "manga", "acg", "二次元", "动画", "番剧", "漫画", "声优"),
+    },
+    {
+        "url": "https://www.theverge.com/rss/index.xml",
+        "title": "The Verge",
+        "category": "consumer-tech",
+        "keywords": ("gadget", "consumer", "mobile", "phone", "apple", "数码", "手机", "外设", "影音"),
+    },
+    {
+        "url": "https://api.quantamagazine.org/feed/",
+        "title": "Quanta Magazine",
+        "category": "science",
+        "keywords": ("physics", "mathematics", "biology", "cosmos", "科学", "物理", "数学", "生物", "天文"),
+    },
+    {
+        "url": "https://boardgamegeek.com/rss/blog/1",
+        "title": "BoardGameGeek News",
+        "category": "tabletop",
+        "keywords": ("boardgame", "tabletop", "card game", "桌游", "跑团", "卡牌"),
     },
 )
 
