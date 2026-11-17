@@ -256,3 +256,72 @@ def test_all_presets_and_learning_are_domain_neutral_and_pass_guard(tmp_path):
 
     categories = {str(entry.get("category") or "") for entry in digest.STARTER_FEEDS}
     assert {"acg", "consumer-tech", "science", "tabletop"} <= categories
+
+
+@pytest.mark.asyncio
+async def test_chat_read_high_traffic_group_backfills_earlier_day_buckets_via_get_by_time():
+    now = time.time()
+    all_messages = []
+    # Days 1-6 (now - 6d to now - 24h): 1600 earlier messages across 6 days
+    for i in range(1600):
+        ts = (now - 6 * 86400) + i * ((5 * 86400) / 1600.0)
+        if 100 <= i < 150:
+            txt = f"第一天主机讨论 与 战争机器联机 {i}"
+        elif 700 <= i < 760:
+            txt = f"第三天番剧音乐 MyGO 专辑吐槽 {i}"
+        elif 1250 <= i < 1310:
+            txt = f"第五天开源工具 SQLite 升级排障 {i}"
+        else:
+            txt = f"日常工作摸鱼闲聊 {i}"
+        all_messages.append(_msg(i, txt, ts=ts))
+
+    # Latest 18 hours: 800 high-traffic spam messages saturating get_recent(limit=800)
+    for j in range(800):
+        idx = 1600 + j
+        ts = (now - 18 * 3600) + j * ((18 * 3600 - 10) / 800.0)
+        all_messages.append(_msg(idx, f"今日刷屏吃啥午饭 {idx}", ts=ts))
+
+    bucket_calls = []
+
+    class _Host:
+        async def call_capability(self, name, **kwargs):
+            if name == "message.get_recent":
+                lim = int(kwargs.get("limit", 100))
+                hrs = kwargs.get("hours")
+                items = all_messages
+                if hrs is not None:
+                    cutoff = now - float(hrs) * 3600
+                    items = [m for m in items if m["timestamp"] >= cutoff]
+                return {"success": True, "messages": items[-lim:]}
+            if name == "message.get_by_time_in_chat":
+                bucket_calls.append(kwargs)
+                st = float(kwargs.get("start_time", 0.0))
+                et = float(kwargs.get("end_time", now))
+                lim = int(kwargs.get("limit", 150) or 150)
+                windowed = [m for m in all_messages if st <= m["timestamp"] <= et]
+                return {"success": True, "messages": windowed[-lim:]}
+            raise AssertionError(name)
+
+    scout = Scout(_Host())
+    sampled = await scout.call(
+        "chat_read",
+        {"hours": 168, "limit": 64},
+        {"chat_id": "chat-a", "owner": "chat"},
+    )
+    assert 1 <= len(bucket_calls) <= 4
+    assert len(sampled) == 64
+    mids = [m["message_id"] for m in sampled]
+    assert len(set(mids)) == len(mids)
+    tss = [m["timestamp"] for m in sampled]
+    assert tss == sorted(tss)
+    joined = "\n".join(m["text"] for m in sampled)
+    for phrase in ("第一天主机讨论", "第三天番剧音乐", "第五天开源工具", "今日刷屏"):
+        assert phrase in joined, f"Missing {phrase} in high-traffic stratified read"
+
+    bucket_calls.clear()
+    hits = await scout.call(
+        "chat_read",
+        {"hours": 168, "limit": 10, "query": "第三天番剧音乐"},
+        {"chat_id": "chat-a", "owner": "chat"},
+    )
+    assert hits and all("第三天番剧音乐" in m["text"] for m in hits)

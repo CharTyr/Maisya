@@ -1243,6 +1243,7 @@ class HostContract(unittest.TestCase):
         manifest = validator.load_from_plugin_path(PLUGIN_DIR)
         self.assertIsNotNone(manifest, validator.errors)
         self.assertIn("chat.open_session", manifest.capabilities)
+        self.assertIn("message.get_by_time_in_chat", manifest.capabilities)
 
         async def run():
             with tempfile.TemporaryDirectory() as directory:

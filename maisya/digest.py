@@ -3214,6 +3214,160 @@ class DigestWorkspace:
             },
         }
 
+    async def backfill_uncached_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        web: Any = None,
+        context: dict[str, Any] | None = None,
+    ) -> int:
+        """Fetch full text into digest_pool.json for uncached public URLs lacking source_text."""
+        if web is None or not hasattr(web, "fetch") or not candidates:
+            return 0
+        now = self.clock()
+
+        def _find_missing() -> list[tuple[str, str]]:
+            with self._thread_sources_lock():
+                history = self._load_history()
+                pool = self._load_pool()
+            blocked_domains = {
+                d.lower() for d in history.get("blocked_domains", []) if isinstance(d, str)
+            }
+            existing_updated = float(pool.get("updated_at", 0.0) or 0.0)
+            pool_by_url: dict[str, dict[str, Any]] = {}
+            if (
+                0.0 <= now - existing_updated <= POOL_RETENTION_SECS
+                and isinstance(pool.get("by_url"), dict)
+            ):
+                for u_key, entry in pool["by_url"].items():
+                    if not isinstance(entry, dict):
+                        continue
+                    cached_at = float(entry.get("cached_at", existing_updated) or existing_updated)
+                    if 0.0 <= now - cached_at <= POOL_RETENTION_SECS:
+                        pool_by_url[str(u_key)] = dict(entry)
+
+            targets: list[tuple[str, str]] = []
+            seen_keys: set[str] = set()
+            for raw in candidates:
+                if not isinstance(raw, dict):
+                    continue
+                url = str(raw.get("url") or "").strip()
+                host = _host_of(url)
+                if (
+                    not url
+                    or not _is_safe_http_url(url)
+                    or not host
+                    or _is_blocked_domain(host, blocked_domains)
+                    or raw.get("paywall") is True
+                ):
+                    continue
+                if str(raw.get("source_text") or "").strip():
+                    continue
+                u_key = _normalize_url_key(url)
+                if not u_key or u_key in seen_keys:
+                    continue
+                cached = pool_by_url.get(u_key)
+                if isinstance(cached, dict) and str(cached.get("source_text") or "").strip():
+                    continue
+                seen_keys.add(u_key)
+                targets.append((u_key, url))
+                if len(targets) >= 6:
+                    break
+            return targets
+
+        targets = await asyncio.to_thread(_find_missing)
+        if not targets:
+            return 0
+
+        sem = asyncio.Semaphore(4)
+        fetched_entries: dict[str, dict[str, Any]] = {}
+
+        async def _fetch_one(u_key: str, url: str) -> None:
+            async with sem:
+                try:
+                    page = await asyncio.wait_for(web.fetch(url, context=context), timeout=8.0)
+                except Exception:
+                    return
+            if not isinstance(page, dict):
+                return
+            raw_content = str(page.get("content") or page.get("text") or "").strip()
+            if not raw_content:
+                return
+            cleaned = re.sub(r"[ \t]+", " ", raw_content)
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()[:30000]
+            pub = str(page.get("published_at") or page.get("published") or "").strip()
+            if not pub:
+                pub = published_from_text(
+                    cleaned,
+                    now=now,
+                    tz_offset_minutes=self._tz_offset(),
+                )
+            img = str(page.get("image_url") or page.get("og_image") or "").strip()
+            fetched_entries[u_key] = {
+                "url": url,
+                "image_url": img,
+                "published": pub,
+                "published_ts": _parse_timestamp(pub) if pub else None,
+                "source_text": cleaned,
+                "cached_at": now,
+            }
+
+        await asyncio.gather(*(_fetch_one(u_key, url) for u_key, url in targets))
+        if not fetched_entries:
+            return 0
+
+        def _merge_save() -> int:
+            with self._thread_sources_lock():
+                pool = self._load_pool()
+                existing_updated = float(pool.get("updated_at", 0.0) or 0.0)
+                pool_by_url: dict[str, dict[str, Any]] = {}
+                if (
+                    0.0 <= now - existing_updated <= POOL_RETENTION_SECS
+                    and isinstance(pool.get("by_url"), dict)
+                ):
+                    for k, v in pool["by_url"].items():
+                        if isinstance(v, dict):
+                            cached_at = float(v.get("cached_at", existing_updated) or existing_updated)
+                            if 0.0 <= now - cached_at <= POOL_RETENTION_SECS:
+                                pool_by_url[str(k)] = dict(v)
+                added = 0
+                for u_key, entry in fetched_entries.items():
+                    prev = pool_by_url.get(u_key) or {}
+                    pool_by_url[u_key] = {
+                        "url": entry["url"],
+                        "image_url": entry["image_url"] or str(prev.get("image_url") or ""),
+                        "published": entry["published"] or str(prev.get("published") or ""),
+                        "published_ts": (
+                            entry["published_ts"]
+                            if entry["published_ts"] is not None
+                            else prev.get("published_ts")
+                        ),
+                        "feed_id": str(prev.get("feed_id") or ""),
+                        "feed_title": str(prev.get("feed_title") or ""),
+                        "source_text": entry["source_text"] or str(prev.get("source_text") or ""),
+                        "cached_at": now,
+                    }
+                    added += 1
+                if len(pool_by_url) > POOL_MAX_ENTRIES:
+                    newest = sorted(
+                        pool_by_url.items(),
+                        key=lambda kv: float((kv[1] or {}).get("cached_at", 0.0) or 0.0),
+                        reverse=True,
+                    )[:POOL_MAX_ENTRIES]
+                    pool_by_url = dict(newest)
+                prev_total = int(pool.get("total_discovered") or 0)
+                self._save_pool(
+                    {
+                        "updated_at": now,
+                        "total_discovered": max(prev_total, len(pool_by_url)),
+                        "by_url": pool_by_url,
+                    }
+                )
+                self.work.commit()
+                return added
+
+        return await asyncio.to_thread(_merge_save)
+
     def score_select(
         self,
         candidates: list[dict[str, Any]],
@@ -3417,7 +3571,9 @@ class DigestWorkspace:
                 else (str(source_text) if source_text is not None else "")
             )
             if not verifiable_src.strip():
-                item["reject_reason"] = reject_quote_msg
+                item["reject_reason"] = (
+                    "引用片段未能在原文中找到对照依据（该链接不在 collect 缓存池且缺少原文 source_text，请优先用 collect 补采或先 web_fetch 抓取正文）"
+                )
                 rejected.append(item)
                 continue
             norm_src = _norm_quote_match(verifiable_src)
@@ -3997,9 +4153,12 @@ async def run_digest_tool(
         run_key = ""
         if isinstance(context, dict) and context.get("thread_id"):
             run_key = f"{context.get('thread_id', '')}:{context.get('revision', '')}"
+        cand_list = list(arguments.get("candidates") or [])
+        if cand_list and web is not None:
+            await dw.backfill_uncached_candidates(cand_list, web=web, context=context)
         return await asyncio.to_thread(
             dw.score_select,
-            list(arguments.get("candidates") or []),
+            cand_list,
             max_items=int(arguments.get("max_items", 5) or 5),
             run_key=run_key,
         )

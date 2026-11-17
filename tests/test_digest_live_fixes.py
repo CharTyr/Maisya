@@ -615,3 +615,93 @@ async def test_digest_drops_trivial_single_metric_viz_while_keeping_multi_metric
     assert "94%" in html
     assert "+6%" in html
     assert "95%%" not in html
+
+
+def test_card_eyebrow_dedupes_same_day_date_and_slot_tokens_while_keeping_custom_labels():
+    from maisya import digest_card
+
+    now_ts = 1_794_897_600.0  # 2026-11-17 14:40 UTC+8 -> "11月17日 · 周二", slot="下午"
+    items = [
+        {
+            "title": "标题A",
+            "summary": "正文摘要内容。",
+            "why": "一句话看点。",
+            "topic": "开源",
+            "source": "example.org",
+            "url": "https://example.org/post-1",
+            "published_ts": now_ts - 3600,
+        }
+    ]
+
+    html_same_date = digest_card.build_card_html(items, slot_label="11月17日", now_ts=now_ts)
+    assert '<p class="eyebrow">11月17日 · 周二</p>' in html_same_date
+
+    html_iso_noon = digest_card.build_card_html(items, slot_label="2026-11-17 午间", now_ts=now_ts)
+    assert '<p class="eyebrow">11月17日 · 周二 · 午间</p>' in html_iso_noon
+
+    html_preview = digest_card.build_card_html(
+        items, slot_label="11月17日 · 周二 · 管理员预览", now_ts=now_ts
+    )
+    assert '<p class="eyebrow">11月17日 · 周二 · 管理员预览</p>' in html_preview
+
+    html_hist = digest_card.build_card_html(items, slot_label="11月13日 · 下午", now_ts=now_ts)
+    assert '<p class="eyebrow">11月17日 · 周二 · 11月13日 · 下午</p>' in html_hist
+
+
+@pytest.mark.asyncio
+async def test_run_digest_tool_score_select_auto_backfills_uncached_web_search_urls(monkeypatch):
+    import time
+
+    monkeypatch.setattr(digest_mod, "fetch_public_bytes", _offline_fetch)
+    work = _MemoryWork()
+    pub_iso = formatdate(time.time() - 7200, usegmt=True)
+    target_url = "https://actiongame.example/patches/1-03"
+    fetched_urls = []
+
+    class _FakeWeb:
+        async def fetch(self, url, context=None):
+            fetched_urls.append(url)
+            return {
+                "url": url,
+                "title": "Action Patch 1.03",
+                "content": "PC version now skips default ray tracing shader compilation at startup and cuts boot time by 40%.",
+                "published_at": pub_iso,
+                "image_url": "https://cdn.actiongame.example/cover-103.jpg",
+            }
+
+    cand = {
+        "title": "《暗影之刃》1.03 补丁：启动不再默认编译光追着色器",
+        "url": target_url,
+        "quote": "PC version now skips default ray tracing shader compilation at startup",
+        "brief": "游戏 1.03 补丁优化了 PC 端启动流程，默认跳过光线追踪着色器预编译，使冷启动等待时间缩短四成，需光追的玩家可在选项内手动触发。",
+        "why": "直击玩家反馈的启动慢痛点，改动具体可验证。",
+        "topic": "版本更新",
+        "source": "actiongame.example",
+        "info": 5,
+        "source_score": 5,
+        "relevance": 5,
+        "timeliness": 5,
+        "chat": 5,
+    }
+    res = await run_digest_tool(
+        work,
+        {"action": "score_select", "candidates": [cand], "max_items": 5},
+        web=_FakeWeb(),
+    )
+    assert fetched_urls == [target_url]
+    assert len(res["selected"]) == 1, res["rejected"]
+    assert res["selected"][0]["image_url"] == "https://cdn.actiongame.example/cover-103.jpg"
+    pool_doc = json.loads(work.files["project/digest_pool.json"])
+    assert _normalize_url_key(target_url) in pool_doc["by_url"]
+
+    # Without web or source_text, uncached candidate explains clearly to use collect/web_fetch
+    work_offline = _MemoryWork()
+    offline_res = await run_digest_tool(
+        work_offline,
+        {"action": "score_select", "candidates": [cand], "max_items": 5},
+        web=None,
+    )
+    assert offline_res["selected"] == []
+    rej_msg = offline_res["rejected"][0]["reject_reason"]
+    assert rej_msg.startswith("引用片段未能在原文中找到对照依据")
+    assert "collect" in rej_msg

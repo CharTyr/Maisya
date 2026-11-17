@@ -1639,6 +1639,44 @@ def _build_html_once(
     return _SCRIPT_TAG_RE.sub("", doc)
 
 
+def _dedupe_eyebrow_slot_label(slot_label: str, dt: datetime, slot_word: str) -> str:
+    """Strip duplicate same-day date/weekday tokens from slot_label while keeping other dates or custom tags."""
+    clean = str(slot_label or "").strip()
+    if not clean or clean == slot_word:
+        return ""
+    wd = _WEEKDAYS[dt.weekday()]
+    same_date_tokens = sorted(
+        {
+            f"{dt.year}年{dt.month:02d}月{dt.day:02d}日",
+            f"{dt.year}年{dt.month}月{dt.day}日",
+            f"{dt.year}-{dt.month:02d}-{dt.day:02d}",
+            f"{dt.year}-{dt.month}-{dt.day}",
+            f"{dt.year}/{dt.month:02d}/{dt.day:02d}",
+            f"{dt.year}/{dt.month}/{dt.day}",
+            f"{dt.month:02d}月{dt.day:02d}日",
+            f"{dt.month}月{dt.day}日",
+            f"{dt.month:02d}-{dt.day:02d}",
+            f"{dt.month}-{dt.day}",
+            f"{dt.month:02d}/{dt.day:02d}",
+            f"{dt.month}/{dt.day}",
+            f"星期{wd}",
+            f"周{wd}",
+        },
+        key=len,
+        reverse=True,
+    )
+    pattern = re.compile("|".join(re.escape(tok) for tok in same_date_tokens))
+    stripped, n_hits = pattern.subn("", clean)
+    if n_hits == 0:
+        return clean
+    parts = [
+        p.strip(" -")
+        for p in re.split(r"(?:\s*[·•｜|]+\s*|\s+)", stripped)
+        if p.strip(" -") and p.strip(" -") != slot_word
+    ]
+    return " · ".join(parts)
+
+
 def build_card_html(
     items: list[dict[str, Any]],
     *,
@@ -1657,8 +1695,8 @@ def build_card_html(
     slot_word = str(sky["slot_word"])
 
     date_part = f"{dt.month}月{dt.day}日 · 周{_WEEKDAYS[dt.weekday()]}"
-    clean_slot_label = str(slot_label or "").strip()
-    if clean_slot_label and clean_slot_label != slot_word:
+    clean_slot_label = _dedupe_eyebrow_slot_label(slot_label, dt, slot_word)
+    if clean_slot_label:
         eyebrow_text = f"{date_part} · {clean_slot_label}"
     else:
         eyebrow_text = date_part

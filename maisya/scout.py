@@ -1,5 +1,6 @@
 """通过宿主能力运行的只读探索工具。"""
 
+import asyncio
 import base64
 import ipaddress
 import json
@@ -622,13 +623,13 @@ def _sample_chat_window(messages: list[dict], limit: int) -> list[dict]:
         return list(tail[-limit:])
     subst_idx = [i for i, item in enumerate(earlier) if _is_substantive_chat_message(item)]
     if len(subst_idx) >= need:
-        picked = [subst_idx[int(k * len(subst_idx) / need)] for k in range(need)]
+        picked = [subst_idx[int((k + 0.5) * len(subst_idx) / need)] for k in range(need)]
     else:
         picked_set = set(subst_idx)
         other_idx = [i for i in range(len(earlier)) if i not in picked_set]
         rem = min(need - len(subst_idx), len(other_idx))
         extra = (
-            [other_idx[int(k * len(other_idx) / rem)] for k in range(rem)]
+            [other_idx[int((k + 0.5) * len(other_idx) / rem)] for k in range(rem)]
             if rem > 0
             else []
         )
@@ -949,9 +950,13 @@ class Scout:
                 mode == "auto" and not query_text and hours is not None and hours >= 12
             )
             fetch_limit = (
-                min(max(req_limit * 8, 400), 800)
-                if (query_text or want_sample)
-                else req_limit
+                800
+                if ((query_text or want_sample) and hours is not None and hours >= 24)
+                else (
+                    min(max(req_limit * 8, 400), 800)
+                    if (query_text or want_sample)
+                    else req_limit
+                )
             )
             rpc_kwargs = {
                 "chat_id": chat_id,
@@ -993,6 +998,95 @@ class Scout:
                         ),
                     )
                 ]
+            if (
+                cutoff is not None
+                and (want_sample or bool(query_text))
+                and hours >= 24
+                and len(scoped) >= int(fetch_limit * 0.85)
+            ):
+                tss = [_numeric_ts(m.get("timestamp")) for m in scoped]
+                if tss and all(t is not None for t in tss):
+                    oldest_ts = float(tss[0])  # type: ignore[arg-type]
+                    newest_ts = float(tss[-1])  # type: ignore[arg-type]
+                    if (
+                        (newest_ts - oldest_ts) < (hours * 3600.0) * 0.6
+                        and oldest_ts > cutoff + 3600.0
+                    ):
+                        gap = oldest_ts - cutoff
+                        n_buckets = min(4, max(2, int(round(gap / 86400.0))))
+                        step = gap / n_buckets
+                        buckets = [
+                            (cutoff + k * step, cutoff + (k + 1) * step)
+                            for k in range(n_buckets)
+                        ]
+
+                        async def _fetch_bucket(b_start: float, b_end: float) -> list[dict]:
+                            try:
+                                raw_bucket = checked(
+                                    await call_capability(
+                                        self.host,
+                                        "message.get_by_time_in_chat",
+                                        timeout_ms=15000,
+                                        chat_id=chat_id,
+                                        start_time=b_start,
+                                        end_time=b_end,
+                                        limit=500,
+                                        include_binary_data=False,
+                                    ),
+                                    "messages",
+                                    redact=self.redact,
+                                )
+                                return [
+                                    item
+                                    for item in (raw_bucket or [])
+                                    if isinstance(item, dict)
+                                ]
+                            except Exception:
+                                return []
+
+                        bucket_lists = await asyncio.gather(
+                            *(_fetch_bucket(bs, be) for bs, be in buckets)
+                        )
+                        seen_ids = {
+                            str(m.get("message_id") or "")
+                            for m in scoped
+                            if m.get("message_id")
+                        }
+                        extra_msgs: list[dict] = []
+                        for chunk in bucket_lists:
+                            for item in chunk:
+                                if item.get("session_id") != chat_id:
+                                    continue
+                                ts_val = _numeric_ts(item.get("timestamp"))
+                                if ts_val is not None and ts_val < cutoff:
+                                    continue
+                                enriched = self._message_text(item)
+                                mid = str(enriched.get("message_id") or "")
+                                if mid:
+                                    if mid in seen_ids:
+                                        continue
+                                    seen_ids.add(mid)
+                                elif ts_val is not None and ts_val >= oldest_ts:
+                                    continue
+                                extra_msgs.append(enriched)
+                        if extra_msgs:
+                            combined = extra_msgs + scoped
+                            if all(
+                                _numeric_ts(m.get("timestamp")) is not None
+                                for m in combined
+                            ):
+                                scoped = [
+                                    m
+                                    for _, m in sorted(
+                                        enumerate(combined),
+                                        key=lambda pair: (
+                                            _numeric_ts(pair[1].get("timestamp")) or 0.0,
+                                            pair[0],
+                                        ),
+                                    )
+                                ]
+                            else:
+                                scoped = combined
             if query_text:
                 matched = []
                 for enriched in scoped:

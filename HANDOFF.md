@@ -45,7 +45,7 @@
 ## 2. 最新全量验收状态（v0.3 + 08/09 + 架构收口 B0～B7）
 
 - **全量本地与 Playwright Chromium UI 单测**：
-  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`613 passed`**（`0 failed / 0 skipped`）。
+  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`616 passed`**（`0 failed / 0 skipped`）。
 - **独立宿主隔离契约（真实 MaiBot SDK）**：
   - `python3 tests_host/run_contract.py`：**`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
 - **前端构建与语法校验**：
@@ -117,7 +117,7 @@ python3 tests_sandbox/run_isolated.py --execute
 ### 5.2 阶段验收结果（`08/09` 基准；最新全量见第 2 节）
 
 - 新增测试：[`tests/test_planner_manual.py`](tests/test_planner_manual.py)（21 项）、[`tests/test_heartbeat_restore.py`](tests/test_heartbeat_restore.py)（49 项）；
-- 当时阶段全量本地与 Playwright：`PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider` -> **`593 passed`**（0 failed / 0 skipped；叠加第 6 节收口与线上实测修复回归后现为 **`613 passed`**）；
+- 当时阶段全量本地与 Playwright：`PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider` -> **`593 passed`**（0 failed / 0 skipped；叠加第 6 节收口与线上实测修复回归后现为 **`616 passed`**）；
 - 宿主 SDK 隔离契约：`python3 tests_host/run_contract.py` -> **`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；
 - 构建与边界检查：`python3 webui/build.py --check` 返回 `0`，`wc -l maisya/shaping.py` 当时为 `588`（现为 `592`）。
 
@@ -146,3 +146,4 @@ python3 tests_sandbox/run_isolated.py --execute
 | 简报与跨会话调度实测 4 项修复 | ✅（`d85b5cd`，已部署） | [`maisya/digest.py`](maisya/digest.py) 合并 6 小时内多次 `collect` 池与未成卡 `score_select` 草稿（防自锁重与空增量清空）；[`maisya/threads.py`](maisya/threads.py) 屏蔽运行中持久线程上一轮旧 `result`（保留 `_resolve` 对刚完成轮次的精确交付）；[`plugin.py`](plugin.py) 强化未启用私聊管理员 `source_msg_id` 引导与报错提示；新增 [`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 并固定 [`tests/test_audit_b2_entry.py`](tests/test_audit_b2_entry.py) 晨间时钟（已备份并原子热重载上线） |
 | 简报图卡质检与画像采编 3 项修复 | ✅（`f448526`，已部署） | [`maisya/viz_spec.py`](maisya/viz_spec.py) 补齐 `stat`/`stats` 块级与单项 `unit`/`display` 渲染、防重复后缀及核数覆盖；[`maisya/digest.py`](maisya/digest.py) 过滤单指标 `stats`/`bars` 与无 `delta` `stat`（保留对比与 `report` 档案）；[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md) 明确 `chat_read(limit=80, hours=168)` 群画像抽样、仅无封面配图且 `>= 2` 项可比数据时加 `viz` 与纯正中文标题规范；[`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 新增 2 项回归测试（已备份并原子热重载上线） |
 | 通用上下文抽样、会话元数据与记忆层防偏收口 | ✅（`fe34d52`，已部署并清旧残留） | [`maisya/scout.py`](maisya/scout.py) 透传 `chat_read` 的 `hours`/全域搜索与跨天抗刷屏抽样（`mode` `auto`/`recent`/`sample`），并在线程系统提示写明 `<memory_context>`/`<methods>` 非工作区文件与实时查证优先；[`plugin.py`](plugin.py) 与 [`maisya/maker.py`](maisya/maker.py) 被动缓存群名称并仅向 `owner="chat"` 注入 `chat_type`/`chat_title`；[`maisya/learning.py`](maisya/learning.py)、[`presets/planner/PLANNER.md`](presets/planner/PLANNER.md)、[`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md)、[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md)、[`maisya/shaping.py`](maisya/shaping.py) 与 [`maisya/digest.py`](maisya/digest.py) 强化记忆层隔离、领域中立多兴趣拼盘及跨领域精选源；[`docs/06-宿主接口事实.md`](docs/06-宿主接口事实.md) 补实 `message.get_recent` 参数事实，新增 [`tests/test_general_context_and_sampling.py`](tests/test_general_context_and_sampling.py)（已备份热重载并清理线上旧独立游戏测试残留） |
+| 眉标去重、漏存自动回补与高活跃群跨天补采 | ✅ | [`maisya/digest_card.py`](maisya/digest_card.py) 新增 `_dedupe_eyebrow_slot_label` 自动剥离 `slot_label` 中重复的当天日期/星期与时段词；[`maisya/digest.py`](maisya/digest.py) 为 `score_select` 增设 `backfill_uncached_candidates` 自动抓存未入池公开链接原文并给出更清晰的缺正文报错，同步更新 [`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md)；[`_manifest.json`](_manifest.json)、[`maisya/scout.py`](maisya/scout.py) 与 [`docs/06-宿主接口事实.md`](docs/06-宿主接口事实.md) 声明并使用 `message.get_by_time_in_chat` 为高活跃大群分桶补采跨天样本，新增 3 项回归用例并补充 [`tests_host/test_contract.py`](tests_host/test_contract.py) 契约断言 |

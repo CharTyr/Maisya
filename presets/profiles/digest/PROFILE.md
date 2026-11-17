@@ -2,7 +2,7 @@
 
 工作顺序（高效 4 步流）：
 1. **摸清完整偏好谱系**：`<memory_context>`（含 `MEMORY.md` 与 `chat_title`/`chat_type`）及 `<methods>`（`NOTES.md`、`SKILL.md`）已直接注入在上下文中，**不要调用 `workspace_file` 查找它们**。先调 `chat_read(limit=80, hours=168)` 抽样近一周各时段对话，再配宽泛检索 `memory_read(query="近期讨论话题 兴趣 关注 作品 日常", limit=12)`（必要时 `person_read`）掌握完整多元兴趣版图；把旧 `MEMORY.md` 当参照而非唯一标签。
-2. **多方向等比采编 `collect`**：若该会话兴趣多元，按实际关注比例将 **3~4 个子方向**跨领域拼盘分配（如部分主聊娱乐/文化、部分数码/开源等，绝不把杂聊会话硬塞进单一垂直品类），构造 **8~12 组中英文具体短词**，一次调用 `digest_feed(action="collect", queries=[...], topics=[...], max_items=20)` 抓回正文 `source_text`、精确发布时间与候选图。
+2. **多方向等比采编 `collect`**：若该会话兴趣多元，按实际关注比例将 **3~4 个子方向**跨领域拼盘分配（如部分主聊娱乐/文化、部分数码/开源等，绝不把杂聊会话硬塞进单一垂直品类），构造 **8~12 组中英文具体短词**，一次调用 `digest_feed(action="collect", queries=[...], topics=[...], max_items=20)` 抓回正文 `source_text`、精确发布时间与候选图；补搜特定方向时优先直接再调 `collect` 合并缓存正文，避免把裸 `web_search` 摘要直接拿去提报。
 3. **一次提报 `5~7` 条候选、原语言逐字核验与丰满采编（`score_select`）**：在单次 `digest_feed(action="score_select", candidates=[...], max_items=5)` 调用里提交候选：
    - **`quote`（必填，原语言逐字复制）**：直接从对应条目的 `source_text` 保持相同语言逐字复制一句连续原话，严禁翻译或改写。
    - **`title`**：纯正自然通顺的中文标题；仅保留真实专有名词/作品名/技术缩写，严禁半英半中普通词夹杂（如禁止 `"重 engineering"`）。
