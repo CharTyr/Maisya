@@ -45,7 +45,7 @@
 ## 2. 最新全量验收状态（v0.3 + 08/09 + 架构收口 B0～B7）
 
 - **全量本地与 Playwright Chromium UI 单测**：
-  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`607 passed`**（`0 failed / 0 skipped`）。
+  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`609 passed`**（`0 failed / 0 skipped`）。
 - **独立宿主隔离契约（真实 MaiBot SDK）**：
   - `python3 tests_host/run_contract.py`：**`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
 - **前端构建与语法校验**：
@@ -117,7 +117,7 @@ python3 tests_sandbox/run_isolated.py --execute
 ### 5.2 阶段验收结果（`08/09` 基准；最新全量见第 2 节）
 
 - 新增测试：[`tests/test_planner_manual.py`](tests/test_planner_manual.py)（21 项）、[`tests/test_heartbeat_restore.py`](tests/test_heartbeat_restore.py)（49 项）；
-- 当时阶段全量本地与 Playwright：`PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider` -> **`593 passed`**（0 failed / 0 skipped；叠加第 6 节收口与线上实测修复回归后现为 **`607 passed`**）；
+- 当时阶段全量本地与 Playwright：`PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider` -> **`593 passed`**（0 failed / 0 skipped；叠加第 6 节收口与线上实测修复回归后现为 **`609 passed`**）；
 - 宿主 SDK 隔离契约：`python3 tests_host/run_contract.py` -> **`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；
 - 构建与边界检查：`python3 webui/build.py --check` 返回 `0`，`wc -l maisya/shaping.py` 当时为 `588`（现为 `592`）。
 
@@ -144,3 +144,4 @@ python3 tests_sandbox/run_isolated.py --execute
 | `B7` 后台预算与回归稳态（`553d097`） | ✅ | [`maisya/config.py`](maisya/config.py)、[`maisya/intents.py`](maisya/intents.py)、[`maisya/pulse.py`](maisya/pulse.py) 增加日常运行/Token 预算、`bg_max_consecutive_failures` 退避暂停与控制台可观测状态，`return` 完全豁免 |
 | 回归测试与文档同步 | ✅ | 新增 [`tests/test_arch_consolidation_p0.py`](tests/test_arch_consolidation_p0.py)、[`tests/test_arch_consolidation_p1_p2.py`](tests/test_arch_consolidation_p1_p2.py)，同步 `docs/01`、`docs/guide/configuration.md` 与 `codemap.md` |
 | 简报与跨会话调度实测 4 项修复 | ✅（`d85b5cd`，已部署） | [`maisya/digest.py`](maisya/digest.py) 合并 6 小时内多次 `collect` 池与未成卡 `score_select` 草稿（防自锁重与空增量清空）；[`maisya/threads.py`](maisya/threads.py) 屏蔽运行中持久线程上一轮旧 `result`（保留 `_resolve` 对刚完成轮次的精确交付）；[`plugin.py`](plugin.py) 强化未启用私聊管理员 `source_msg_id` 引导与报错提示；新增 [`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 并固定 [`tests/test_audit_b2_entry.py`](tests/test_audit_b2_entry.py) 晨间时钟（已备份并原子热重载上线） |
+| 简报图卡质检与画像采编 3 项修复 | ✅ | [`maisya/viz_spec.py`](maisya/viz_spec.py) 补齐 `stat`/`stats` 块级与单项 `unit`/`display` 渲染、防重复后缀及核数覆盖；[`maisya/digest.py`](maisya/digest.py) 过滤单指标 `stats`/`bars` 与无 `delta` `stat`（保留对比与 `report` 档案）；[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md) 明确 `chat_read(limit=80, hours=168)` 群画像抽样、仅无封面配图且 `>= 2` 项可比数据时加 `viz` 与纯正中文标题规范；[`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 新增 2 项回归测试 |

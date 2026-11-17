@@ -458,3 +458,160 @@ async def test_unenabled_admin_dm_bootstrap_and_missing_source_msg_id_guidance(t
         assert stranger_res["success"] is False
     finally:
         await plugin.on_unload()
+
+
+def test_viz_stats_renders_item_and_block_units_and_display():
+    from maisya import viz_spec
+
+    spec = {
+        "v": 1,
+        "blocks": [
+            {
+                "type": "stats",
+                "title": "实测指标",
+                "unit": "%",
+                "items": [
+                    {"label": "留存率", "value": 95},
+                    {"label": "渲染视距", "value": 3000, "unit": "米"},
+                    {"label": "测试规模", "value": 100, "display": "100 名玩家"},
+                    {"label": "折扣幅度", "value": "25%", "unit": "%"},
+                ],
+            },
+            {
+                "type": "stat",
+                "label": "好评率",
+                "value": 42,
+                "unit": "%",
+                "delta": "+5%",
+                "trend": "up",
+            },
+        ],
+    }
+    validated = viz_spec.validate(spec, "news")
+    source_text = "留存率达到 95%，渲染视距提升至 3000 米，共 100 名玩家参与测试，提供 25% 折扣，好评率 42%（+5%）。"
+    ok, detail = viz_spec.check_spec_numbers(validated, source_text)
+    assert ok is True, detail
+
+    html = viz_spec.render(validated, uid="t_unit", static=True)
+    assert "95%" in html
+    assert "3000米" in html
+    assert "100 名玩家" in html
+    assert "25%" in html and "25%%" not in html
+    assert "42%" in html and "+5%" in html
+
+    # Hallucinated number inside display must still be caught by check_spec_numbers
+    bad_spec = viz_spec.validate(
+        {
+            "v": 1,
+            "blocks": [
+                {"type": "stat", "label": "规模", "value": 100, "display": "999 名玩家", "delta": "+5%"}
+            ],
+        },
+        "news",
+    )
+    bad_ok, _bad_detail = viz_spec.check_spec_numbers(bad_spec, "共 100 名玩家参与，增幅 +5%。")
+    assert bad_ok is False
+
+    # Report profile still allows a single stat block without delta
+    rep = viz_spec.validate({"v": 1, "blocks": [{"type": "stat", "label": "版本", "value": 3, "unit": "个"}]}, "report")
+    assert "3个" in viz_spec.render(rep, uid="t_rep", static=True)
+
+
+@pytest.mark.asyncio
+async def test_digest_drops_trivial_single_metric_viz_while_keeping_multi_metric_stats_with_units(monkeypatch):
+    monkeypatch.setattr(digest_mod, "fetch_public_bytes", _offline_fetch)
+    clock_ref = [1_794_880_000.0]
+    work = _MemoryWork()
+    dw = DigestWorkspace(work, fetcher=_offline_fetch, clock=lambda: clock_ref[0])
+    pub_iso = formatdate(clock_ref[0] - 1800, usegmt=True)
+
+    def _cand(slug: str, title: str, quote: str, src: str, viz: dict, *, topic: str) -> dict:
+        return {
+            "title": title,
+            "url": f"https://news.example/{slug}",
+            "published": pub_iso,
+            "source_text": src,
+            "quote": quote,
+            "brief": f"{title} 公布了具体的工程与玩法实测数字，包含清晰对照指标与实现细节说明，信息完整。",
+            "why": "一手数据可核实且有对比价值。",
+            "topic": topic,
+            "source": "news.example",
+            "viz": viz,
+            "info": 5,
+            "source_score": 5,
+            "relevance": 5,
+            "timeliness": 5,
+            "chat": 4,
+        }
+
+    c_single_stats = _cand(
+        "single-stats",
+        "《极光计划》公开玩家满意度测试结果",
+        "Steam player satisfaction reached 95% in closed beta",
+        "Report: Steam player satisfaction reached 95% in closed beta test.",
+        {"type": "stats", "items": [{"label": "满意度", "value": 95, "unit": "%"}]},
+        topic="测试反馈",
+    )
+    c_single_bars = _cand(
+        "single-bars",
+        "《夜港回声》首轮联机峰值突破一千二",
+        "Concurrent peak hit 1200 players during weekend playtest",
+        "Concurrent peak hit 1200 players during weekend playtest session.",
+        {"type": "bars", "items": [{"label": "周末峰值", "value": 1200, "unit": "人"}]},
+        topic="试玩数据",
+    )
+    c_single_stat_plain = _cand(
+        "single-stat-plain",
+        "《深空矿工》确认抢先体验共五章内容",
+        "Early access launches with 5 playable chapters",
+        "Dev update: Early access launches with 5 playable chapters on day one.",
+        {"type": "stat", "label": "章节数", "value": 5, "unit": "章"},
+        topic="发售情报",
+    )
+    c_stat_delta = _cand(
+        "stat-delta",
+        "《风帆日志》重构新手引导后好评升至九成四",
+        "Positive reviews climbed to 94%, up +6% after tutorial rework",
+        "Metrics: Positive reviews climbed to 94%, up +6% after tutorial rework.",
+        {"type": "stat", "label": "近期好评率", "value": 94, "unit": "%", "delta": "+6%", "trend": "up"},
+        topic="版本优化",
+    )
+    c_multi_stats = _cand(
+        "multi-stats",
+        "《浮空岛》物理与视距双项渲染重构",
+        "Mesh vertices dropped 95% while view distance expanded to 3000 meters",
+        "Engineering blog: Mesh vertices dropped 95% while view distance expanded to 3000 meters.",
+        {
+            "type": "stats",
+            "title": "重构实测",
+            "items": [
+                {"label": "网格瘦身", "value": 95, "unit": "%"},
+                {"label": "最高视距", "value": 3000, "unit": "米"},
+            ],
+        },
+        topic="引擎技术",
+    )
+
+    sel = dw.score_select(
+        [c_single_stats, c_single_bars, c_single_stat_plain, c_stat_delta, c_multi_stats],
+        max_items=5,
+        run_key="th_viz:1",
+    )
+    assert len(sel["selected"]) == 5, sel["rejected"]
+    by_slug = {it["url"].rsplit("/", 1)[-1]: it for it in sel["selected"]}
+
+    for trivial in ("single-stats", "single-bars", "single-stat-plain"):
+        assert by_slug[trivial].get("viz") is None, by_slug[trivial]
+        assert "单指标数值无需单独生成图解框" in (by_slug[trivial].get("viz_dropped_reason") or "")
+
+    assert by_slug["stat-delta"].get("viz") is not None
+    assert by_slug["multi-stats"].get("viz") is not None
+
+    card = await run_digest_tool(work, {"action": "render_card_html", "output_path": "out/digest-viz.html"})
+    assert card["count"] == 5
+    html = work.files["out/digest-viz.html"]
+    assert "95%" in html
+    assert "3000米" in html
+    assert "94%" in html
+    assert "+6%" in html
+    assert "95%%" not in html

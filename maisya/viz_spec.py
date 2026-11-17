@@ -167,6 +167,8 @@ def _validate_stat_item(item: Any, ctx: str) -> None:
     _req_str(item, "label", ctx)
     _req_scalar_text(item, "value", ctx)
     _opt_scalar_text(item, "delta", ctx)
+    _opt_str(item, "unit", ctx=ctx)
+    _opt_str(item, "display", ctx=ctx)
     _opt_str(item, "note", ctx=ctx)
     trend = item.get("trend")
     if trend is not None and trend not in {"up", "down", "flat", "neutral"}:
@@ -190,6 +192,7 @@ def _validate_block(block: Any, profile: str, ctx: str, *, depth: int = 0) -> No
         return
 
     if btype == "stats":
+        _opt_str(block, "unit", ctx=ctx)
         items = block.get("items")
         if not isinstance(items, list) or not items:
             raise SpecError(f"{ctx}: stats.items 必须为非空数组")
@@ -445,14 +448,17 @@ def _block_texts(block: dict[str, Any], out: list[str]) -> None:
 
     btype = block.get("type")
     if btype == "stat":
-        for key in ("label", "value", "delta", "note"):
+        for key in ("label", "value", "display", "unit", "delta", "note"):
             val = block.get(key)
             if _is_number(val) or (isinstance(val, str) and val.strip()):
                 out.append(str(val).strip())
     elif btype == "stats":
+        u_blk = block.get("unit")
+        if _is_number(u_blk) or (isinstance(u_blk, str) and u_blk.strip()):
+            out.append(str(u_blk).strip())
         for item in block.get("items") or []:
             if isinstance(item, dict):
-                for key in ("label", "value", "delta", "note"):
+                for key in ("label", "value", "display", "unit", "delta", "note"):
                     val = item.get(key)
                     if _is_number(val) or (isinstance(val, str) and val.strip()):
                         out.append(str(val).strip())
@@ -772,9 +778,21 @@ def _render_block_header(block: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _render_stat(block: dict[str, Any]) -> str:
+def _stat_display_value(block: dict[str, Any], default_unit: str = "") -> str:
+    """Format stat value with optional display override or non-duplicated unit suffix."""
+    display = _opt_str(block, "display")
+    if display:
+        return display
+    raw_value = _req_scalar_text(block, "value", "stat")
+    unit = _opt_str(block, "unit") or default_unit
+    if unit and not raw_value.endswith(unit):
+        return f"{raw_value}{unit}"
+    return raw_value
+
+
+def _render_stat(block: dict[str, Any], *, default_unit: str = "") -> str:
     label = _esc(block["label"])
-    value = _esc(_req_scalar_text(block, "value", "stat"))
+    value = _esc(_stat_display_value(block, default_unit=default_unit))
     delta = _opt_scalar_text(block, "delta", "stat")
     trend = block.get("trend") or ""
     if trend == "neutral":
@@ -981,7 +999,8 @@ def _render_block(
         return _render_block_header(block) + f'<div class="vs-card">{_render_stat(block)}</div>'
 
     if btype == "stats":
-        cards = "".join(_render_stat(item) for item in block["items"])
+        global_unit = _opt_str(block, "unit")
+        cards = "".join(_render_stat(item, default_unit=global_unit) for item in block["items"])
         return _render_block_header(block) + f'<div class="vs-stats">{cards}</div>'
 
     if btype == "compare":

@@ -1424,6 +1424,25 @@ def _check_viz_result(res: Any) -> tuple[bool, str]:
     return True, ""
 
 
+_TRIVIAL_VIZ_REASON = "单指标数值无需单独生成图解框（至少需 2 项并列或对比数据）"
+
+
+def _is_trivial_news_viz(spec_cand: dict[str, Any]) -> bool:
+    """Return True when a news viz only renders one metric without comparison."""
+    blocks = spec_cand.get("blocks")
+    if not isinstance(blocks, list) or len(blocks) != 1 or not isinstance(blocks[0], dict):
+        return False
+    blk = blocks[0]
+    btype = blk.get("type")
+    if btype in {"stats", "bars"}:
+        items = blk.get("items")
+        return isinstance(items, list) and len(items) < 2
+    if btype == "stat":
+        delta = blk.get("delta")
+        return delta is None or (isinstance(delta, str) and not delta.strip())
+    return False
+
+
 def _validate_and_check_viz(
     viz_raw: Any, source_text: Any
 ) -> tuple[dict[str, Any] | None, str]:
@@ -1440,6 +1459,8 @@ def _validate_and_check_viz(
             validated = viz_spec.validate(spec_cand, "news")
         except Exception as exc:
             return None, f"viz 结构校验失败: {exc}"
+        if _is_trivial_news_viz(validated):
+            return None, _TRIVIAL_VIZ_REASON
         if source_text is not None:
             try:
                 res = viz_spec.check_spec_numbers(validated, str(source_text))
@@ -1464,6 +1485,8 @@ def _validate_and_check_viz(
             return None, f"viz 块类型不受支持: {btype or 'empty'}"
         if not any(k in blk and blk[k] not in (None, "", [], {}) for k in _FALLBACK_VIZ_DATA_KEYS):
             return None, "viz 块缺少数据字段"
+    if _is_trivial_news_viz(spec_cand):
+        return None, _TRIVIAL_VIZ_REASON
 
     if source_text is not None:
         src_nums = _significant_numbers(str(source_text))
