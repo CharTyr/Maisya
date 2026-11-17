@@ -93,10 +93,27 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-def public(row):
-    return {
+def _effective_public_result(row, parsed_result):
+    state = row["state"] if isinstance(row, sqlite3.Row) else row.get("state")
+    if state == "active":
+        rev_raw = row["revision"] if isinstance(row, sqlite3.Row) else row.get("revision")
+        comp_raw = (
+            row["completed_revision"]
+            if isinstance(row, sqlite3.Row)
+            else row.get("completed_revision")
+        )
+        if int(comp_raw or 0) < int(rev_raw or 0):
+            return {}
+    return parsed_result
+
+
+def public(row, *, reveal_result: bool = False):
+    out = {
         key: row[key] for key in ("thread_id", "profile", "owner", "state", "result")
     }
+    if not reveal_result:
+        out["result"] = _effective_public_result(row, out["result"])
+    return out
 
 
 _INPUT_TAG_RE = re.compile(
@@ -2083,7 +2100,7 @@ class ThreadStore:
                     "state": row["state"],
                     "title": title,
                     "workspace": ws_name,
-                    "result": json.loads(row["result"]),
+                    "result": _effective_public_result(row, json.loads(row["result"])),
                 }
                 if row["state"] in {"active", "waiting"}:
                     latest_ev = db.execute(
@@ -2278,7 +2295,7 @@ class ThreadStore:
                         "state": row["state"],
                         "title": title,
                         "workspace": ws_name,
-                        "result": json.loads(row["result"]),
+                        "result": _effective_public_result(row, json.loads(row["result"])),
                         "updated": row["updated"],
                     }
                 )
@@ -2862,7 +2879,15 @@ class ThreadEngine:
         for revision, future in waiters:
             if stopped_now or revision <= row["completed_revision"] or row["state"] in {"closed", "archived"}:
                 if not future.done():
-                    future.set_result(public(row))
+                    future.set_result(
+                        public(
+                            row,
+                            reveal_result=(
+                                not stopped_now
+                                and revision <= row["completed_revision"]
+                            ),
+                        )
+                    )
             else:
                 remaining.append((revision, future))
         if remaining:

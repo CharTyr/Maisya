@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -84,6 +85,10 @@ async def test_b2_item2_later_tool_ops_receipt_replace_aliases_and_daily_limit(t
         tmp_path, permissions=["qq:Alice"], enabled_chats=[group_sid]
     )
     plugin.ctx.call_capability = _streams_rpc()
+    fixed_morning_ts = datetime(
+        2026, 11, 15, 8, 0, 0, tzinfo=timezone(timedelta(hours=8))
+    ).timestamp()
+    plugin.intents.clock = lambda: fixed_morning_ts
     try:
         # 2a) Non-admin later_tool calls must NEVER record _turn_ops_receipts
         bob_msg = _group_msg(

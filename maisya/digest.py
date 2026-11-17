@@ -135,6 +135,9 @@ NOVELTY_REJECT_MAX = 2.0
 RSS_SOURCES_FILE = "project/rss_sources.json"
 DIGEST_HISTORY_FILE = "project/digest_history.json"
 DIGEST_POOL_FILE = "project/digest_pool.json"
+POOL_RETENTION_SECS = 6.0 * 3600.0
+POOL_MAX_ENTRIES = 200
+UNRENDERED_DRAFT_TTL_SECS = 1800.0
 
 
 def _is_public_ip(raw_ip: str) -> bool:
@@ -3042,7 +3045,24 @@ class DigestWorkspace:
             cand.pop("feed_links", None)
             final_candidates.append(cand)
 
+        existing_pool = await asyncio.to_thread(self._load_pool)
+        existing_updated = float(existing_pool.get("updated_at", 0.0) or 0.0)
         pool_by_url: dict[str, dict[str, Any]] = {}
+        had_fresh_pool = False
+        prev_discovered = 0
+        if 0.0 <= now - existing_updated <= POOL_RETENTION_SECS:
+            raw_by_url = existing_pool.get("by_url")
+            if isinstance(raw_by_url, dict):
+                for u_key, entry in raw_by_url.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    cached_at = float(entry.get("cached_at", existing_updated) or existing_updated)
+                    if 0.0 <= now - cached_at <= POOL_RETENTION_SECS:
+                        pool_by_url[str(u_key)] = dict(entry)
+                if pool_by_url:
+                    had_fresh_pool = True
+                    prev_discovered = int(existing_pool.get("total_discovered") or 0)
+
         for cand in [*combined, *final_candidates]:
             c_url = str(cand.get("url") or "").strip()
             if not c_url:
@@ -3066,12 +3086,27 @@ class DigestWorkspace:
                 "feed_id": str(cand.get("feed_id") or prev.get("feed_id") or ""),
                 "feed_title": str(cand.get("feed_title") or prev.get("feed_title") or ""),
                 "source_text": full_text_by_url.get(u_key) or str(prev.get("source_text") or ""),
+                "cached_at": now,
             }
+        if len(pool_by_url) > POOL_MAX_ENTRIES:
+            newest = sorted(
+                pool_by_url.items(),
+                key=lambda kv: float((kv[1] or {}).get("cached_at", 0.0) or 0.0),
+                reverse=True,
+            )[:POOL_MAX_ENTRIES]
+            pool_by_url = dict(newest)
+
+        total_discovered = (
+            max(prev_discovered, len(combined), len(final_candidates), len(pool_by_url))
+            if had_fresh_pool
+            else max(len(combined), len(final_candidates))
+        )
+
         def _persist_pool() -> None:
             self._save_pool(
                 {
                     "updated_at": now,
-                    "total_discovered": max(len(combined), len(final_candidates)),
+                    "total_discovered": total_discovered,
                     "by_url": pool_by_url,
                 }
             )
@@ -3133,13 +3168,23 @@ class DigestWorkspace:
         }
 
     def score_select(
-        self, candidates: list[dict[str, Any]], *, max_items: int = 5
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        max_items: int = 5,
+        run_key: str = "",
     ) -> dict[str, Any]:
         with self._thread_sources_lock():
-            return self._score_select_unlocked(candidates, max_items=max_items)
+            return self._score_select_unlocked(
+                candidates, max_items=max_items, run_key=run_key
+            )
 
     def _score_select_unlocked(
-        self, candidates: list[dict[str, Any]], *, max_items: int = 5
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        max_items: int = 5,
+        run_key: str = "",
     ) -> dict[str, Any]:
         now = self.clock()
         history = self._load_history()
@@ -3150,6 +3195,47 @@ class DigestWorkspace:
         blocked_domains = {
             d.lower() for d in history.get("blocked_domains", []) if isinstance(d, str)
         }
+        feed_map = {
+            f["id"]: f
+            for f in sources.get("feeds", [])
+            if isinstance(f, dict) and f.get("id")
+        }
+        prev_last_selected = list(history.get("last_selected") or [])
+        prev_total_candidates = int(history.get("last_total_candidates") or 0)
+        prev_unrendered_ids = {
+            str(x) for x in (history.get("unrendered_ids") or []) if x
+        }
+        prev_unrendered_at = float(history.get("unrendered_at", 0.0) or 0.0)
+        prev_unrendered_run = str(history.get("unrendered_run") or "")
+        same_unrendered_draft = bool(
+            prev_unrendered_ids
+            and (
+                (run_key and run_key == prev_unrendered_run)
+                or (
+                    not run_key
+                    and not prev_unrendered_run
+                    and 0.0 <= now - prev_unrendered_at <= UNRENDERED_DRAFT_TTL_SECS
+                )
+            )
+        )
+        peeled_sources = False
+        if prev_unrendered_ids:
+            kept_history_items: list[dict[str, Any]] = []
+            for hist_item in history.get("items", []):
+                if (
+                    isinstance(hist_item, dict)
+                    and str(hist_item.get("id") or "") in prev_unrendered_ids
+                ):
+                    fid = str(hist_item.get("feed_id") or "")
+                    if fid and fid in feed_map:
+                        feed_map[fid]["kept_total"] = max(
+                            0, int(feed_map[fid].get("kept_total", 0)) - 1
+                        )
+                        peeled_sources = True
+                    continue
+                kept_history_items.append(hist_item)
+            history["items"] = kept_history_items
+
         prior_14d = [
             it
             for it in history.get("items", [])
@@ -3167,16 +3253,36 @@ class DigestWorkspace:
                 if topic:
                     topic_counts_3d[topic] = topic_counts_3d.get(topic, 0) + 1
 
+        if not candidates:
+            total_candidates = max(0, pool_total)
+            history["last_selected"] = []
+            history["unrendered_ids"] = []
+            history["unrendered_at"] = 0.0
+            history["unrendered_run"] = ""
+            history["last_total_candidates"] = total_candidates
+            if (
+                prev_last_selected
+                or prev_unrendered_ids
+                or total_candidates != prev_total_candidates
+            ):
+                self._save_history(history)
+                if peeled_sources:
+                    self._save_sources(sources)
+                self.work.commit()
+            return {
+                "selected": [],
+                "rejected": [],
+                "total_candidates": total_candidates,
+            }
+
         rejected: list[dict[str, Any]] = []
         regular_pool: list[dict[str, Any]] = []
         explore_pool: list[dict[str, Any]] = []
-        feed_map = {
-            f["id"]: f
-            for f in sources.get("feeds", [])
-            if isinstance(f, dict) and f.get("id")
+        submitted_url_keys = {
+            _normalize_url_key(str(raw.get("url") or "").strip())
+            for raw in candidates
+            if isinstance(raw, dict) and str(raw.get("url") or "").strip()
         }
-        prev_last_selected = list(history.get("last_selected") or [])
-        prev_total_candidates = int(history.get("last_total_candidates") or 0)
 
         for raw in candidates:
             if not isinstance(raw, dict):
@@ -3458,12 +3564,92 @@ class DigestWorkspace:
             if cand["kind"] == "guide":
                 guides_used += 1
 
+        if same_unrendered_draft and prev_last_selected:
+            selected_urls = {
+                str(it.get("url_key") or _normalize_url_key(it.get("url", "")))
+                for it in selected
+            }
+            carry_unsubmitted: list[dict[str, Any]] = []
+            carry_fallback: list[dict[str, Any]] = []
+            carry_seen: set[str] = set()
+            for prev_it in prev_last_selected:
+                if not isinstance(prev_it, dict):
+                    continue
+                u_key = str(
+                    prev_it.get("url_key") or _normalize_url_key(prev_it.get("url", ""))
+                )
+                if not u_key or u_key in selected_urls or u_key in carry_seen:
+                    continue
+                carry_seen.add(u_key)
+                copied = dict(prev_it)
+                copied["url_key"] = u_key
+                copied.setdefault("kind", "news")
+                if u_key not in submitted_url_keys:
+                    carry_unsubmitted.append(copied)
+                else:
+                    carry_fallback.append(copied)
+
+            merged_selected = [*selected]
+            if carry_unsubmitted:
+                candidates_to_merge = [*selected, *carry_unsubmitted]
+                candidates_to_merge.sort(
+                    key=lambda it: float(it.get("avg", 0.0) or 0.0),
+                    reverse=True,
+                )
+                merged_selected = []
+                merged_urls: set[str] = set()
+                merged_guides = 0
+                for cand in candidates_to_merge:
+                    u_key = str(
+                        cand.get("url_key") or _normalize_url_key(cand.get("url", ""))
+                    )
+                    if not u_key or u_key in merged_urls or len(merged_selected) >= max_items:
+                        continue
+                    if any(_same_story(cand, chosen) for chosen in merged_selected):
+                        continue
+                    if cand.get("kind") == "guide" and merged_guides >= 1:
+                        continue
+                    merged_selected.append(cand)
+                    merged_urls.add(u_key)
+                    if cand.get("kind") == "guide":
+                        merged_guides += 1
+            if len(merged_selected) < max_items and carry_fallback:
+                merged_urls = {
+                    str(it.get("url_key") or _normalize_url_key(it.get("url", "")))
+                    for it in merged_selected
+                }
+                merged_guides = sum(
+                    1 for it in merged_selected if it.get("kind") == "guide"
+                )
+                for cand in carry_fallback:
+                    if len(merged_selected) >= max_items:
+                        break
+                    u_key = cand["url_key"]
+                    if u_key in merged_urls:
+                        continue
+                    if any(_same_story(cand, chosen) for chosen in merged_selected):
+                        continue
+                    if cand.get("kind") == "guide" and merged_guides >= 1:
+                        continue
+                    merged_selected.append(cand)
+                    merged_urls.add(u_key)
+                    if cand.get("kind") == "guide":
+                        merged_guides += 1
+            selected = merged_selected
+
         clean_selected = []
+        used_ids: set[str] = set()
         for idx, cand in enumerate(selected, 1):
             clean = {
                 k: v for k, v in cand.items() if not k.startswith("_") and k != "source_text"
             }
-            clean["id"] = clean.get("id") or f"it_{int(now)}_{idx}"
+            cand_id = str(clean.get("id") or "")
+            if not cand_id or cand_id in used_ids:
+                cand_id = f"it_{int(now)}_{idx}"
+                while cand_id in used_ids:
+                    cand_id = f"{cand_id}_r"
+            clean["id"] = cand_id
+            used_ids.add(cand_id)
             clean["created"] = float(clean.get("created") or now)
             clean_selected.append(clean)
             history["items"].append(
@@ -3488,14 +3674,18 @@ class DigestWorkspace:
 
         total_candidates = max(len(candidates), pool_total)
         history["last_selected"] = clean_selected
+        history["unrendered_ids"] = [it["id"] for it in clean_selected]
+        history["unrendered_at"] = now if clean_selected else 0.0
+        history["unrendered_run"] = run_key if clean_selected else ""
         history["last_total_candidates"] = total_candidates
         if (
             clean_selected
             or prev_last_selected
+            or prev_unrendered_ids
             or total_candidates != prev_total_candidates
         ):
             self._save_history(history)
-            if clean_selected:
+            if clean_selected or peeled_sources:
                 self._save_sources(sources)
             self.work.commit()
 
@@ -3670,6 +3860,14 @@ class DigestWorkspace:
         )
         doc = re.sub(r"<script\b[^>]*>.*?</script>", "", doc, flags=re.I | re.S)
         res = self.work.write(output_path, doc)
+        if picked:
+            with self._thread_sources_lock():
+                hist = self._load_history()
+                if hist.get("unrendered_ids") or hist.get("unrendered_run"):
+                    hist["unrendered_ids"] = []
+                    hist["unrendered_at"] = 0.0
+                    hist["unrendered_run"] = ""
+                    self._save_history(hist)
         self.work.commit()
         return {"path": output_path, "bytes": res["bytes"], "count": len(picked)}
 
@@ -3749,10 +3947,14 @@ async def run_digest_tool(
             note=str(arguments.get("note") or ""),
         )
     if action == "score_select":
+        run_key = ""
+        if isinstance(context, dict) and context.get("thread_id"):
+            run_key = f"{context.get('thread_id', '')}:{context.get('revision', '')}"
         return await asyncio.to_thread(
             dw.score_select,
             list(arguments.get("candidates") or []),
             max_items=int(arguments.get("max_items", 5) or 5),
+            run_key=run_key,
         )
     if action == "render_card_html":
         raw_max = arguments.get("max_items")

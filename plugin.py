@@ -2335,6 +2335,22 @@ class MaisyaPlugin(MaiBotPlugin):
             and self.authorize_admin_source(source_msg_id, session_id, platform)
         )
 
+    @staticmethod
+    def _unenabled_chat_error(
+        source_msg_id: str, *, with_target_hint: bool = True
+    ) -> str:
+        if not source_msg_id:
+            if with_target_hint:
+                return "当前会话没有启用 Maisya（管理员在未启用会话调用请传入当前真实消息的 source_msg_id；若跨会话操作目标群请同时传 target_chat）"
+            return "当前会话没有启用 Maisya（管理员在未启用会话调用请传入当前真实消息的 source_msg_id）"
+        return "当前会话没有启用 Maisya"
+
+    @staticmethod
+    def _cross_chat_auth_error(prefix: str, source_msg_id: str) -> str:
+        if not source_msg_id:
+            return f"{prefix}（请传入当前真实管理员消息的 source_msg_id）"
+        return prefix
+
     def tools_for_request(self, tools, source_msg_ids, session_id, platform):
         is_admin = any(
             self.authorize_admin_source(msg_id, session_id, platform)
@@ -2986,7 +3002,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 else effective_chat_id != chat_id
             )
             if cross_chat and not is_admin_caller:
-                raise PermissionError("跨会话调度需要真实管理员消息授权")
+                raise PermissionError(
+                    self._cross_chat_auth_error(
+                        "跨会话调度需要真实管理员消息授权", source_msg_id
+                    )
+                )
             if (
                 pre_row is None
                 and action in {"send", "reopen", "approve"}
@@ -3072,7 +3092,9 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
                 or effective_admin
             ):
-                raise PermissionError("当前会话没有启用 Maisya")
+                raise PermissionError(
+                    self._unenabled_chat_error(source_msg_id, with_target_hint=True)
+                )
             if owner not in {"chat", "self"}:
                 raise ValueError("未知线程归属")
             if cross_chat and ref_msg_ids:
@@ -4061,7 +4083,11 @@ class MaisyaPlugin(MaiBotPlugin):
             raw_target_chat = str(target_chat or "").strip()
             if raw_target_chat.lower() == "all":
                 if not is_admin_caller:
-                    raise PermissionError("跨全部会话检索需要真实管理员消息授权")
+                    raise PermissionError(
+                        self._cross_chat_auth_error(
+                            "跨全部会话检索需要真实管理员消息授权", source_msg_id
+                        )
+                    )
                 all_chats = True
                 search_chat_id, search_platform = chat_id, platform
                 alias_ids = None
@@ -4070,7 +4096,11 @@ class MaisyaPlugin(MaiBotPlugin):
                     raw_target_chat, current_chat_id=chat_id, current_platform=platform
                 )
                 if search_chat_id != chat_id and not is_admin_caller:
-                    raise PermissionError("跨会话检索需要真实管理员消息授权")
+                    raise PermissionError(
+                        self._cross_chat_auth_error(
+                            "跨会话检索需要真实管理员消息授权", source_msg_id
+                        )
+                    )
                 all_chats = False
                 alias_ids = await asyncio.to_thread(
                     self.chat_aliases_for, search_chat_id, search_platform
@@ -4080,7 +4110,9 @@ class MaisyaPlugin(MaiBotPlugin):
                     not await asyncio.to_thread(self.enabled_for, chat_id, platform)
                     and not is_admin_caller
                 ):
-                    raise PermissionError("当前会话没有启用 Maisya")
+                    raise PermissionError(
+                        self._unenabled_chat_error(source_msg_id, with_target_hint=True)
+                    )
                 all_chats = False
                 search_chat_id, search_platform = chat_id, platform
                 alias_ids = await asyncio.to_thread(
@@ -4805,14 +4837,20 @@ class MaisyaPlugin(MaiBotPlugin):
                         current_platform=platform,
                     )
                     if effective_chat_id != chat_id and not is_admin_caller:
-                        raise PermissionError("跨会话查看计划需要真实管理员消息授权")
+                        raise PermissionError(
+                            self._cross_chat_auth_error(
+                                "跨会话查看计划需要真实管理员消息授权", source_msg_id
+                            )
+                        )
                 elif (
                     not await asyncio.to_thread(
                         self.enabled_for, effective_chat_id, effective_platform
                     )
                     and not (is_admin_caller or is_admin_dm)
                 ):
-                    raise PermissionError("当前会话没有启用 Maisya")
+                    raise PermissionError(
+                        self._unenabled_chat_error(source_msg_id, with_target_hint=True)
+                    )
                 rows = await asyncio.to_thread(
                     self.intents.list,
                     "chat:" + effective_chat_id,
@@ -4835,13 +4873,21 @@ class MaisyaPlugin(MaiBotPlugin):
                         current_platform=platform,
                     )
                     if effective_chat_id != chat_id and not is_admin_caller:
-                        raise PermissionError("跨会话调整计划需要真实管理员消息授权")
+                        raise PermissionError(
+                            self._cross_chat_auth_error(
+                                "跨会话调整计划需要真实管理员消息授权", source_msg_id
+                            )
+                        )
                     op_target = "chat:" + effective_chat_id
                 elif is_admin_caller or is_admin_dm:
                     op_target = existing["target"]
                 else:
                     if not await asyncio.to_thread(self.enabled_for, chat_id, platform):
-                        raise PermissionError("当前会话没有启用 Maisya")
+                        raise PermissionError(
+                            self._unenabled_chat_error(
+                                source_msg_id, with_target_hint=False
+                            )
+                        )
                     op_target = "chat:" + chat_id
                 if existing.get("target") != op_target:
                     raise PermissionError("目标会话与该计划不匹配，无权操作")
@@ -4983,7 +5029,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 )
             cross_chat = effective_chat_id != chat_id
             if cross_chat and not is_admin_caller:
-                raise PermissionError("跨会话安排计划需要真实管理员消息授权")
+                raise PermissionError(
+                    self._cross_chat_auth_error(
+                        "跨会话安排计划需要真实管理员消息授权", source_msg_id
+                    )
+                )
             intent_kind = kind if kind in {"proactive", "silent"} else "return"
             effective_enabled = await asyncio.to_thread(
                 self.enabled_for, effective_chat_id, effective_platform
@@ -5003,7 +5053,9 @@ class MaisyaPlugin(MaiBotPlugin):
                         "目标会话尚未加入 enabled_chats，请先通过 maisya_shape 开启白名单后再安排计划"
                     )
             elif not (effective_enabled or is_admin_caller or is_admin_dm):
-                raise PermissionError("当前会话没有启用 Maisya")
+                raise PermissionError(
+                    self._unenabled_chat_error(source_msg_id, with_target_hint=True)
+                )
             admin_direct = bool(
                 (is_admin_caller or is_admin_dm)
                 and (
@@ -5526,7 +5578,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "管理员可通过 maisya_shape(action='overview'|'setup'|'settings'|'profile'|'file'|'digest_sources'|'services'|'skill_proposal', op=..., target_chat=..., source_msg_id=...) 读取与调整全部能力：setup 支持一句开启群、配置简报主题/定时/各群主动分寸(chat_proactive_levels)并用 run_now=True, deliver_to='current' 立即在私聊试跑预览；settings 支持 enabled_chats、sleep_window 等核心设置；主动性按说法对应旋钮：「更主动 / 安静点 / 别主动找人」→ heartbeat_mode（off 关、gentle 克制、lively 活泼，默认关，事后惦记不受影响），「闲着去逛什么」→ 写 HEARTBEAT.md 的「## 自主探索方向」，「某个群别打扰」→ chat_proactive_levels（quiet / care / lively），「一天最多几次」→ daily_proactive_limit（全局总量）与 per_chat_daily_proactive_limit（单会话上限），心跳间隔与久违阈值的精确覆盖用 heartbeat_interval_minutes / longing_quiet_hours（0 = 跟随档位），调整后用 overview 的 heartbeat.effective 确认实际生效状态；file 支持 HEARTBEAT.md、MEMORY.md、profiles/<id>/MEMORY.md、JOURNAL.md 与 skills/<id>/SKILL.md；services 支持直接附带 env/url 登记 MCP；profile(op='export') 生成脱敏 .maisya.zip（聊天发压缩包走 package_export + share），profile(op='import') 支持公开 https:// .zip 直链导入（重名时先问用户更新还是另存新名）。尽量合并修改，避免碎片调用。",
                     "所有流标识统一用 平台:类型:id（如 qq:group:100246809，target_chat 也兼容群号/群名/current）；密码保险箱仅作用户主动存别名之用，若用户直接在对话里给出临时密码、Token 或私钥委托执行任务，直接通过 maisya_agent 传给线程完成即可，绝不拒单或强制要求先存保险箱；在私聊中宿主 search_chat_history 只能搜当前私聊，要摸清目标群近期聊什么与口味，应交给目标会话开启的线程用 chat_read 了解。",
                     "两段式自然反馈规则（重要）：只要 maisya_agent(start/send/reopen/approve) 返回 state='active'（后台线程已跑起），请在本轮**立即调用 reply**（reply_style=\"长回复\"）自然简短地交代已完成的配置/调整以及后台正在按新要求跑，等系统通过 <maisya_returns> 自动唤醒后再交付成图或结论；若返回 state='waiting' 且含 pending_approval，先向管理员确认风险详情，得到同意后调 maisya_agent(action='approve', thread_id=..., grant_tier='once'|'session'|'always'|'deny', source_msg_id=...)；**绝对不要调用 wait 或反复调用 maisya_recall 轮询等待，也不要对运行中的同一线程重复发指令**。",
-                    "平时单独回查或调起可用 maisya_recall(target_chat=.../'all')、maisya_later(action='schedule'|'list'|'pause'|'resume'|'run_now'|'cancel', mode='once'|'recurring'|'watch', daily_at=..., condition=..., replace=True, target_chat=...)、maisya_agent(target_chat=..., deliver_to='current'|'target')。",
+                    "平时单独回查或调起可用 maisya_recall(target_chat=.../'all', source_msg_id=...)、maisya_later(action='schedule'|'list'|'pause'|'resume'|'run_now'|'cancel', mode='once'|'recurring'|'watch', daily_at=..., condition=..., replace=True, target_chat=..., source_msg_id=...)、maisya_agent(target_chat=..., deliver_to='current'|'target', source_msg_id=...)。",
                 ]
             )
             pending_props = (
@@ -5553,7 +5605,7 @@ class MaisyaPlugin(MaiBotPlugin):
             returned = await self.bridge.offer(chat_id)
             boot_parts = [
                 "<maisya_admin_bootstrap>",
-                f"当前管理员会话（chat_id={chat_id}, stream_spec={current_spec}, platform={platform}, latest_source_msg_id={latest_source}）尚未加入 enabled_chats，仅对当前已核验管理员开放跨会话管理、私聊试跑预览与个人提醒引导。",
+                f'当前管理员会话（chat_id={chat_id}, stream_spec={current_spec}, platform={platform}, latest_source_msg_id={latest_source}）尚未加入 enabled_chats，仅对当前已核验管理员开放跨会话管理、私聊试跑预览与个人提醒引导；本会话未加入 enabled_chats，调用 maisya_agent / maisya_recall / maisya_later / maisya_shape 时均须传入 source_msg_id="{latest_source}"（操作目标群时一并传 target_chat=...）。',
                 *admin_lines,
                 *([manual_block] if manual_block else []),
                 "<maisya_profiles>"
