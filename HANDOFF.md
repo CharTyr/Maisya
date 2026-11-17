@@ -87,7 +87,7 @@ python3 tests_sandbox/run_isolated.py --execute
 ## 4. 下一位接手待办与线上部署红线
 
 1. **当前仓库与线上部署状态**：
-   - 本地 `main` 分支已完成 `P0`（`13d0324`）、`P1/P2 + 文档`（`553d097`）、`4 项线上简报/跨会话引导修复`（`d85b5cd`）、`图卡质检与画像采编 3 项修复`（`f448526`）、`通用上下文抽样与领域中立预设`（`fe34d52`）、`眉标去重、漏存自动回补与高活跃群跨天补采`（`93a9119`、`2851113`）及 `多人持续活动 P1 通用底座`（`f6dc7a3`）与本交接提交，**尚未 `git push` 至 `origin/main`**；
+   - 本地 `main` 分支已完成 `P0`（`13d0324`）、`P1/P2 + 文档`（`553d097`）、`4 项线上简报/跨会话引导修复`（`d85b5cd`）、`图卡质检与画像采编 3 项修复`（`f448526`）、`通用上下文抽样与领域中立预设`（`fe34d52`）、`眉标去重、漏存自动回补与高活跃群跨天补采`（`93a9119`、`2851113`）及 `多人持续活动 P1 通用底座`（`f6dc7a3`）与本交接提交，已收敛发布为 `v0.3.0` 并同步推送至 `origin/main`；
    - 线上已完成最新一次先备份后原子部署（`f6dc7a3`，61 个运行文件 + 保留线上 `config.toml` 与 38 个 `.pyc`；旧插件、运行期数据与 SQLite `.backup()` 只读 `quick_check: ok` 备份位于 `/root/backups/maisya-deploy-20261117-171120/`；前序备份保留在 `/root/backups/maisya-deploy-20261117-152729/`、`/root/backups/maisya-deploy-20261117-144307/` 等目录），线上 `config.toml`（`mode 600`，`[plugin] enabled = true`）逐字节原样保留，宿主核心代码零改动且未重启 MaiBot；
    - 轻触 `_manifest.json` 触发热重载后，日志确认 `chartyr.maisya v0.3.0` 加载、注入与注册全部成功且 `0` 报错；只读查库确认 `trusted_sources.sender_name`、`agent_threads.state_note`、`agent_workspaces.state_note` 已就绪且 `abilities/skills/ongoing-workspace/SKILL.md` 已同步。
 2. **已收口文档基准**：
