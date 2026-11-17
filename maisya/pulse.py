@@ -1398,6 +1398,18 @@ class Pulse:
             )
         if thread and isinstance(thread.get("result"), dict):
             result_obj = thread["result"]
+            payload_obj = row.get("payload") or {}
+            t_grant = (thread.get("grant") or {}) if isinstance(thread, dict) else {}
+            src_chat = str(
+                payload_obj.get("source_chat_id")
+                or t_grant.get("source_chat_id")
+                or ""
+            ).strip()
+            issuer = str(
+                payload_obj.get("issuer_admin")
+                or t_grant.get("issuer_admin")
+                or ""
+            ).strip()
             if row.get("kind") != "return" and (
                 row.get("source") == "workflow"
                 or row["payload"].get("profile")
@@ -1411,6 +1423,7 @@ class Pulse:
                     runs=1,
                 )
             if result_obj.get("error"):
+                err_text = str(result_obj.get("error") or "thread_error")
                 logger.warning(
                     "线程执行失败，终止本次唤醒 intent=%s thread=%s error=%s",
                     row["intent_id"],
@@ -1424,8 +1437,50 @@ class Pulse:
                     row,
                     thread=thread,
                     record_run=False,
-                    error=str(result_obj.get("error") or "thread_error"),
+                    error=err_text,
                 )
+                if (
+                    row.get("kind") == "return"
+                    and payload_obj.get("already_started")
+                    and (src_chat or issuer)
+                ):
+                    err_notify = await self._resolve_approval_notify_chat(
+                        source_chat_id=src_chat,
+                        issuer_admin=issuer,
+                        fallback_chat_id="",
+                    )
+                    if (
+                        err_notify
+                        and err_notify != chat_id
+                        and self._chat_arena(err_notify) == "private"
+                    ):
+                        await asyncio.to_thread(
+                            self.bridge.stage,
+                            thread,
+                            err_notify,
+                            archived=False,
+                            admin_direct=True,
+                        )
+                        err_wake = (
+                            "之前发起的跨会话后台 Agent 线程执行失败（未向目标会话发送任何消息）。"
+                            "请立即调用 reply 向管理员如实说明失败原因，再决定是否重派或改向。\n"
+                            "<maisya_workflow>"
+                            + text
+                            + "</maisya_workflow>\n<maisya_thread_error>"
+                            + html.escape(self.redact(err_text))
+                            + "</maisya_thread_error>"
+                        )
+                        await self._wake(
+                            err_notify,
+                            err_wake,
+                            reason="maisya:workflow_error",
+                            metadata={
+                                "kind": row["kind"],
+                                "source": "workflow",
+                                "intent_id": row["intent_id"],
+                                "thread_id": str(thread.get("thread_id") or ""),
+                            },
+                        )
                 return
             pending_apr = (
                 _pending_approval_of(result_obj)
@@ -1433,18 +1488,6 @@ class Pulse:
                 else None
             )
             if pending_apr is not None:
-                payload_obj = row.get("payload") or {}
-                t_grant = thread.get("grant") or {}
-                src_chat = str(
-                    payload_obj.get("source_chat_id")
-                    or t_grant.get("source_chat_id")
-                    or ""
-                ).strip()
-                issuer = str(
-                    payload_obj.get("issuer_admin")
-                    or t_grant.get("issuer_admin")
-                    or ""
-                ).strip()
                 notify_chat = await self._resolve_approval_notify_chat(
                     source_chat_id=src_chat,
                     issuer_admin=issuer,
@@ -1454,7 +1497,11 @@ class Pulse:
                     notify_chat != chat_id or self._chat_arena(chat_id) == "private"
                 ):
                     await asyncio.to_thread(
-                        self.bridge.stage, thread, notify_chat, archived=False
+                        self.bridge.stage,
+                        thread,
+                        notify_chat,
+                        archived=False,
+                        admin_direct=True,
                     )
                     apr_body = json.dumps(
                         self.redact(
@@ -1516,6 +1563,87 @@ class Pulse:
             except ValueError:
                 result_links = []
             if result_text or attachments or result_links:
+                has_att = any(
+                    isinstance(item, dict)
+                    and str(item.get("handle") or "").startswith("att_")
+                    for item in attachments
+                )
+                if (
+                    row.get("kind") == "return"
+                    and payload_obj.get("already_started")
+                    and not payload_obj.get("explicit_deliver_target")
+                    and not has_att
+                    and (src_chat or issuer)
+                ):
+                    src_notify = await self._resolve_approval_notify_chat(
+                        source_chat_id=src_chat,
+                        issuer_admin=issuer,
+                        fallback_chat_id="",
+                    )
+                    if (
+                        src_notify
+                        and src_notify != chat_id
+                        and self._chat_arena(src_notify) == "private"
+                    ):
+                        await asyncio.to_thread(
+                            self.bridge.stage,
+                            thread,
+                            src_notify,
+                            archived=False,
+                            admin_direct=True,
+                        )
+                        src_intent = (
+                            "你在管理员私聊发起的跨会话后台 Agent 线程已完成本轮运行（不含需要直接发往目标群的媒体/文件附件，未向目标群发送消息）。"
+                            "请立即调用 reply（reply_style=\"长回复\"）向管理员如实汇报查证结论、进展或卡点；如需补发群消息或附件，再显式确认。\n"
+                            "<maisya_workflow>"
+                            + text
+                            + "</maisya_workflow>\n<maisya_thread_result>"
+                            + html.escape(self.redact(result_text))
+                            + "</maisya_thread_result>"
+                        )
+                        if result_links:
+                            src_intent += (
+                                "\n<maisya_delivery_hint>"
+                                + html.escape(
+                                    json.dumps(
+                                        {
+                                            "thread_id": str(thread["thread_id"]),
+                                            "links": result_links[:12],
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                )
+                                + "</maisya_delivery_hint>"
+                            )
+                        src_status = await self._wake(
+                            src_notify,
+                            src_intent,
+                            reason="maisya:workflow",
+                            metadata={
+                                "kind": row["kind"],
+                                "source": "workflow",
+                                "intent_id": row["intent_id"],
+                                "thread_id": str(thread["thread_id"]),
+                            },
+                        )
+                        done_src = (
+                            "done"
+                            if src_status == "accepted"
+                            else (
+                                "deferred"
+                                if src_status in {"session_missing", "uncertain"}
+                                else "failed"
+                            )
+                        )
+                        wake_src = (
+                            "return_routed_source"
+                            if src_status == "accepted"
+                            else src_status
+                        )
+                        await asyncio.to_thread(
+                            self.intents.finish, row["intent_id"], done_src, wake_src
+                        )
+                        return
                 await asyncio.to_thread(
                     self.bridge.stage,
                     thread,

@@ -693,3 +693,525 @@ async def test_get_avatar_handles_top_level_status_available_and_unsupported_wit
         assert len(avatar_calls) == 2, f"unexpected cache miss after 30s: {avatar_calls}"
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_admin_bootstrap_clarifies_share_unshared_returned_and_self_msg_auth_error(
+    tmp_path: Path,
+) -> None:
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+    )
+    try:
+        await _enable_digest_profile(plugin)
+
+        # 1) Create a recalled historical group thread with attachment (staged archived=True on recall)
+        hist_row = plugin.threads.create(
+            plugin.profiles.get("digest"),
+            "历史简报",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id="",
+            workspace="digest",
+        )
+        hist_work = await plugin.runtime._work(hist_row)
+        hist_work.write_bytes("out/old.png", base64.b64decode(PNG_1X1_B64))
+        hist_work.commit()
+        hist_atts = plugin.runtime.files.attach(hist_row, hist_work, ["out/old.png"])
+        hist_rev = plugin.threads.enqueue(hist_row["thread_id"], "历史简报", TEST_GROUP_SID)
+        assert plugin.threads.finish(
+            hist_row["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "历史结果", "attachments": hist_atts},
+            [],
+            hist_rev,
+        )
+
+        # 2) Create a separate preview thread whose unshared attachment is staged via admin_direct (archived=False)
+        prev_row = plugin.threads.create(
+            plugin.profiles.get("default"),
+            "私聊预览重做",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id="",
+            workspace="digest_preview",
+        )
+        prev_work = await plugin.runtime._work(prev_row)
+        prev_work.write_bytes("out/digest.png", base64.b64decode(PNG_1X1_B64))
+        prev_work.commit()
+        prev_atts = plugin.runtime.files.attach(prev_row, prev_work, ["out/digest.png"])
+        prev_rev = plugin.threads.enqueue(prev_row["thread_id"], "重做 600px", TEST_GROUP_SID)
+        assert plugin.threads.finish(
+            prev_row["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "修正版简报图卡已发到群里。", "attachments": prev_atts},
+            [],
+            prev_rev,
+        )
+        finished_prev = plugin.threads.get(prev_row["thread_id"], TEST_GROUP_SID)
+
+        await plugin.after_receive(message=_dm_message("看看进度", msg_id="m-dm-boot-1"))
+        await plugin.after_receive(
+            message=_dm_message(
+                "好的喵",
+                msg_id="bot_self_reply_1",
+                user_id="bot_self",
+            )
+        )
+
+        # Recalling target group threads MUST NOT pollute <maisya_returned> via archived=True staging
+        recalled = await plugin.recall_tool(
+            kind="threads",
+            query="",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-boot-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert recalled["success"] is True, recalled
+
+        plugin.bridge.stage(finished_prev, TEST_PRIV_SID, archived=False, admin_direct=True)
+
+        # Re-record latest real admin message for planner turn
+        await plugin.after_receive(message=_dm_message("能发吗", msg_id="m-dm-boot-2"))
+        boot_res = await plugin.before_planner(
+            session_id=TEST_PRIV_SID,
+            items=[],
+            tool_definitions=[
+                {"type": "function", "function": {"name": "reply"}},
+                {"type": "function", "function": {"name": "maisya_agent"}},
+                {"type": "function", "function": {"name": "maisya_recall"}},
+                {"type": "function", "function": {"name": "maisya_later"}},
+                {"type": "function", "function": {"name": "maisya_shape"}},
+            ],
+        )
+        boot_text = boot_res["modified_kwargs"]["items"][-1]["parts"][0]["text"]
+        assert "<maisya_admin_bootstrap>" in boot_text
+        assert "action='share'" in boot_text and "result_attach" in boot_text
+        assert prev_row["thread_id"] in boot_text
+        assert hist_row["thread_id"] not in boot_text
+        assert "未真正" in boot_text or "尚未发出" in boot_text or "待交付" in boot_text
+
+        # Passing bot's own reply msg_id as source_msg_id gives actionable error hint
+        bad_auth = await plugin.agent_tool(
+            action="send",
+            thread_id=prev_row["thread_id"],
+            message="重发",
+            source_msg_id="bot_self_reply_1",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert bad_auth["success"] is False
+        assert "跨会话调度需要真实管理员消息授权" in bad_auth["error"]
+        assert "bot_self_reply_1" in bad_auth["error"]
+        assert "reply" in bad_auth["error"] or "管理员" in bad_auth["error"]
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_cross_chat_auto_non_attachment_and_error_returns_notify_admin_dm(
+    tmp_path: Path,
+) -> None:
+    wakes: list[tuple[str, dict]] = []
+    mode = {"val": "text_only"}
+
+    def _cap(name: str, kwargs: dict):
+        if name == "maisaka.proactive.trigger":
+            wakes.append((str(kwargs.get("stream_id") or ""), dict(kwargs)))
+            return {"success": True, "queued": True}
+        if name == "llm.generate_with_tools":
+            if mode["val"] == "error":
+                return {"success": False, "error": "upstream timeout"}
+            return {
+                "success": True,
+                "response": f"核查结论({mode['val']})：今天只有早上发过一次。",
+                "tool_calls": [],
+            }
+        return None
+
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+        capability_fn=_cap,
+    )
+    try:
+        pro_tools = [
+            {"type": "function", "function": {"name": "reply"}},
+            {"type": "function", "function": {"name": "maisya_agent"}},
+            {"type": "function", "function": {"name": "maisya_shape"}},
+            {"type": "function", "function": {"name": "maisya_later"}},
+        ]
+        await plugin.after_receive(
+            message=_dm_message("去群里查下今天发了没", msg_id="m-dm-auto-1")
+        )
+        await plugin.before_planner(
+            session_id=TEST_PRIV_SID,
+            items=[],
+            tool_definitions=pro_tools,
+        )
+        # Subcase A: cross-chat deliver_to='auto' with plain-text result wakes issuing admin DM
+        res_a = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            message="查群今天消息记录",
+            source_msg_id="m-dm-auto-1",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+            wait_seconds=0,
+        )
+        assert res_a["success"] is True, res_a
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        intent_a = plugin.intents.get(res_a["delivery_intent_id"])
+        assert intent_a is not None
+        await plugin.pulse.tick()
+
+        assert len(wakes) == 1, wakes
+        wake_sid_a, wake_kw_a = wakes[0]
+        assert wake_sid_a == TEST_PRIV_SID
+        assert "<maisya_thread_result>" in wake_kw_a["intent"]
+        assert "核查结论(text_only)" in wake_kw_a["intent"]
+        assert plugin.intents.get(res_a["delivery_intent_id"])["wake_status"] == "return_routed_source"
+
+        # Proactive wakeup turn in unenabled admin DM retains maisya_agent without duplicate return prompt
+        pro_res = await plugin.before_planner(
+            session_id=TEST_PRIV_SID,
+            items=[
+                {
+                    "item_type": "UserMessageItem",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": f"<plugin_proactive_task>{wake_kw_a['intent']}</plugin_proactive_task>",
+                        }
+                    ],
+                }
+            ],
+            tool_definitions=pro_tools,
+        )
+        kept_names = [t["function"]["name"] for t in pro_res["modified_kwargs"]["tool_definitions"]]
+        assert "maisya_agent" in kept_names
+        assert "items" not in pro_res["modified_kwargs"], pro_res["modified_kwargs"]
+
+        # Overlapping pending source on a wake turn keeps bootstrap without duplicate <maisya_returned>
+        await plugin.after_receive(
+            message=_dm_message("查到了吗", msg_id="m-dm-auto-2")
+        )
+        boot_wake_res = await plugin.before_planner(
+            session_id=TEST_PRIV_SID,
+            items=[
+                {
+                    "item_type": "UserMessageItem",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": f"<plugin_proactive_task>{wake_kw_a['intent']}</plugin_proactive_task>",
+                        }
+                    ],
+                }
+            ],
+            tool_definitions=pro_tools,
+        )
+        boot_wake_text = boot_wake_res["modified_kwargs"]["items"][-1]["parts"][0]["text"]
+        assert "<maisya_admin_bootstrap>" in boot_wake_text
+        assert "<maisya_returned>" not in boot_wake_text
+
+        # Subcase B: explicit deliver_to='target' wakes target group even without attachments
+        wakes.clear()
+        mode["val"] = "explicit_target"
+        res_b = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            message="在群里说一声",
+            source_msg_id="m-dm-auto-1",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+            wait_seconds=0,
+        )
+        assert res_b["success"] is True, res_b
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        await plugin.pulse.tick()
+        assert len(wakes) == 1 and wakes[0][0] == TEST_GROUP_SID, wakes
+
+        # Subcase C: cross-chat worker failure notifies issuing admin DM instead of silent drop
+        wakes.clear()
+        mode["val"] = "error"
+        res_c = await plugin.agent_tool(
+            action="start",
+            profile="scout",
+            message="触发上游报错",
+            source_msg_id="m-dm-auto-1",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+            wait_seconds=0,
+        )
+        assert res_c["success"] is True, res_c
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        await plugin.pulse.tick()
+        finished_c = plugin.intents.get(res_c["delivery_intent_id"])
+        assert finished_c["status"] == "failed"
+        assert finished_c["wake_status"] == "thread_error"
+        assert len(wakes) == 1 and wakes[0][0] == TEST_PRIV_SID, wakes
+        assert wakes[0][1]["reason"] == "maisya:workflow_error"
+        assert "<maisya_thread_error>" in wakes[0][1]["intent"]
+        thread_c = plugin.threads.get(res_c["thread_id"], TEST_GROUP_SID)
+        assert thread_c["result"]["error"] and thread_c["result"]["error"] in wakes[0][1]["intent"]
+        assert "本轮 Agent 活动中断" in wakes[0][1]["intent"]
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_maisya_recall_reports_real_delivery_status_and_unshared_prior_attachments(
+    tmp_path: Path,
+) -> None:
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+    )
+    try:
+        await _enable_digest_profile(plugin)
+        row = plugin.threads.create(
+            plugin.profiles.get("default"),
+            "群简报任务",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id="",
+            workspace="digest",
+        )
+        tid = row["thread_id"]
+        work = await plugin.runtime._work(row)
+        work.write_bytes("out/digest.png", base64.b64decode(PNG_1X1_B64))
+        work.commit()
+        rev1 = plugin.threads.enqueue(tid, "生成600px图卡", TEST_GROUP_SID)
+        atts_v1 = plugin.runtime.files.attach(
+            plugin.threads.get(tid, TEST_GROUP_SID), work, ["out/digest.png"]
+        )
+        assert plugin.threads.finish(
+            tid,
+            TEST_GROUP_SID,
+            {"text": "修正版简报图卡已发到群里。", "attachments": atts_v1},
+            [],
+            rev1,
+        )
+        # Simulate stale reply receipt with empty message_id
+        plugin.bridge.claim_delivery(
+            plugin.threads.get(tid, TEST_GROUP_SID), "reply"
+        )
+
+        await plugin.after_receive(message=_dm_message("查下这个线程", msg_id="m-dm-rec-1"))
+        rec1 = await plugin.recall_tool(
+            kind="threads",
+            query="",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-rec-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert rec1["success"] is True, rec1
+        entry1 = next(t for t in rec1["threads"] if t["thread_id"] == tid)
+        assert entry1["delivery"]["shared"] is False
+        assert entry1["delivery"]["records"][0]["route"] == "reply"
+        assert "尚未通过 share" in entry1["delivery"]["note"]
+
+        # Advance thread to rev2 with pure text (e.g. thread reported it lacked send permission)
+        rev2 = plugin.threads.enqueue(tid, "查看为何没发", TEST_GROUP_SID)
+        assert plugin.threads.finish(
+            tid,
+            TEST_GROUP_SID,
+            {"text": "我没有直接发群权限，result_attach 仅挂载。", "attachments": []},
+            [],
+            rev2,
+        )
+        rec2 = await plugin.recall_tool(
+            kind="threads",
+            query="",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-rec-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        entry2 = next(t for t in rec2["threads"] if t["thread_id"] == tid)
+        assert entry2["delivery"]["shared"] is False
+        assert entry2["unshared_attachments"][0]["handle"] == atts_v1[0]["handle"]
+        assert entry2["unshared_attachments"][0]["revision"] == rev1
+        assert entry2["unshared_attachments"][0]["name"] == "digest.png"
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_share_upgrades_stale_reply_receipt_and_allows_same_thread_prior_revision_attachment(
+    tmp_path: Path,
+) -> None:
+    sent_hybrid: list[dict] = []
+    voice_refs: list[str] = []
+
+    def _cap(name: str, kwargs: dict):
+        if name == "send.hybrid":
+            sent_hybrid.append(dict(kwargs))
+            return {"success": True, "sent": True, "message_id": f"msg-{len(sent_hybrid)}"}
+        if name == "maisaka.reply.generate":
+            voice_refs.append(str(kwargs.get("reference") or ""))
+            return {"success": True, "text": "今天的简报图卡发过来啦。"}
+        return None
+
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+        capability_fn=_cap,
+    )
+    try:
+        # Thread 1: rev 1 has att1 + stale reply receipt in result_deliveries
+        t1 = plugin.threads.create(
+            plugin.profiles.get("default"),
+            "重发带旧reply回执的图卡",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id="",
+            workspace="ws_t1",
+        )
+        w1 = await plugin.runtime._work(t1)
+        w1.write_bytes("out/digest.png", base64.b64decode(PNG_1X1_B64))
+        w1.commit()
+        rev1_t1 = plugin.threads.enqueue(t1["thread_id"], "出图", TEST_GROUP_SID)
+        atts1 = plugin.runtime.files.attach(
+            plugin.threads.get(t1["thread_id"], TEST_GROUP_SID), w1, ["out/digest.png"]
+        )
+        assert plugin.threads.finish(
+            t1["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "图卡做好了。", "attachments": atts1},
+            [],
+            rev1_t1,
+        )
+        plugin.bridge.claim_delivery(plugin.threads.get(t1["thread_id"], TEST_GROUP_SID), "reply")
+
+        await plugin.after_receive(message=_dm_message("补发到群里", msg_id="m-dm-share-1"))
+        shared1 = await plugin.agent_tool(
+            action="share",
+            thread_id=t1["thread_id"],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            source_msg_id="m-dm-share-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert shared1["success"] is True and shared1["sent"] is True, shared1
+        assert len(sent_hybrid) == 1 and sent_hybrid[0]["stream_id"] == TEST_GROUP_SID
+        assert any(seg.get("type") == "image" for seg in sent_hybrid[0]["segments"])
+        deliv1 = plugin.bridge.delivery(t1["thread_id"], rev1_t1, TEST_GROUP_SID)
+        assert deliv1["route"] == "share" and deliv1["status"] == "sent"
+
+        # Second share of same revision is idempotent
+        dup1 = await plugin.agent_tool(
+            action="share",
+            thread_id=t1["thread_id"],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            source_msg_id="m-dm-share-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert dup1.get("already_handled") is True
+        assert len(sent_hybrid) == 1
+
+        # Thread 2: rev 1 made att2, rev 2 finished plain text; share explicitly passes rev 1's att2
+        t2 = plugin.threads.create(
+            plugin.profiles.get("default"),
+            "续聊后补发上一版附件",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id="",
+            workspace="ws_t2",
+        )
+        w2 = await plugin.runtime._work(t2)
+        w2.write_bytes("out/digest2.png", base64.b64decode(PNG_1X1_B64))
+        w2.commit()
+        rev1_t2 = plugin.threads.enqueue(t2["thread_id"], "出图2", TEST_GROUP_SID)
+        atts2 = plugin.runtime.files.attach(
+            plugin.threads.get(t2["thread_id"], TEST_GROUP_SID), w2, ["out/digest2.png"]
+        )
+        assert plugin.threads.finish(
+            t2["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "修订1卡片摘要：独立游戏5条。", "attachments": atts2},
+            [],
+            rev1_t2,
+        )
+        rev2_t2 = plugin.threads.enqueue(t2["thread_id"], "查为什么没发", TEST_GROUP_SID)
+        assert plugin.threads.finish(
+            t2["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "抱歉我发不出去", "attachments": []},
+            [],
+            rev2_t2,
+        )
+
+        shared2 = await plugin.agent_tool(
+            action="share",
+            thread_id=t2["thread_id"],
+            attachment_handles=[atts2[0]["handle"]],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            message="补发今天的简报",
+            source_msg_id="m-dm-share-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert shared2["success"] is True and shared2["sent"] is True, shared2
+        assert len(sent_hybrid) == 2 and sent_hybrid[1]["stream_id"] == TEST_GROUP_SID
+        assert "独立游戏5条" in voice_refs[-1]
+        assert "抱歉我发不出去" not in voice_refs[-1]
+
+        dup2 = await plugin.agent_tool(
+            action="share",
+            thread_id=t2["thread_id"],
+            attachment_handles=[atts2[0]["handle"]],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            message="补发今天的简报",
+            source_msg_id="m-dm-share-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert dup2.get("already_handled") is True
+        assert len(sent_hybrid) == 2
+
+        rec_t2 = await plugin.recall_tool(
+            kind="threads",
+            query="",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-share-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert rec_t2["success"] is True, rec_t2
+        entry_t2 = next(t for t in rec_t2["threads"] if t["thread_id"] == t2["thread_id"])
+        assert all(
+            item["handle"] != atts2[0]["handle"]
+            for item in entry_t2.get("unshared_attachments") or []
+        )
+
+        # Foreign thread attachment handle MUST still be rejected
+        foreign = await plugin.agent_tool(
+            action="share",
+            thread_id=t2["thread_id"],
+            attachment_handles=[atts1[0]["handle"]],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            deliver_to="target",
+            source_msg_id="m-dm-share-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert foreign["success"] is False
+        assert "附件不属于当前版本的线程结果" in foreign["error"]
+    finally:
+        await plugin.on_unload()

@@ -128,9 +128,79 @@ class Bridge:
             ).fetchone()
         return dict(row) if row else None
 
-    def claim_delivery(self, row, route, retry_statuses=()):
+    def deliveries_for_thread(
+        self, thread_id: str, revision: int | None = None
+    ) -> list[dict]:
+        """Return persisted main-destination delivery receipts for a thread."""
+        if not thread_id:
+            return []
+        with self.store.connect() as db:
+            if revision is not None:
+                rows = db.execute(
+                    "SELECT thread_id, revision, destination, route, status, message_id, at "
+                    "FROM result_deliveries WHERE thread_id=? AND revision=? AND destination NOT LIKE '%#%' "
+                    "ORDER BY revision DESC, at DESC",
+                    (thread_id, int(revision)),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT thread_id, revision, destination, route, status, message_id, at "
+                    "FROM result_deliveries WHERE thread_id=? AND destination NOT LIKE '%#%' "
+                    "ORDER BY revision DESC, at DESC",
+                    (thread_id,),
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def unshared_thread_attachments(
+        self, thread_id: str, *, exclude_revision: int | None = None
+    ) -> list[dict]:
+        """Return un-shared att_ attachments from other revisions of a thread."""
+        if not thread_id:
+            return []
+        with self.store.connect() as db:
+            rows = db.execute(
+                "SELECT a.handle, a.chat_id, a.thread_id, a.revision, a.name, a.kind, a.size "
+                "FROM attachments a "
+                "WHERE a.thread_id=? "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM result_deliveries d "
+                "  WHERE d.thread_id=a.thread_id AND d.revision=a.revision "
+                "  AND d.route='share' AND d.status IN ('sent', 'uncertain')"
+                ") "
+                "ORDER BY a.revision DESC, a.created DESC LIMIT 8",
+                (thread_id,),
+            ).fetchall()
+        items: list[dict] = []
+        for r in rows:
+            rev = int(r["revision"] or 0)
+            if exclude_revision is not None and rev == int(exclude_revision):
+                continue
+            items.append(
+                {
+                    "handle": r["handle"],
+                    "revision": rev,
+                    "name": r["name"],
+                    "kind": r["kind"],
+                    "bytes": int(r["size"] or 0),
+                }
+            )
+        return items
+
+    def claim_delivery(
+        self,
+        row,
+        route,
+        retry_statuses=(),
+        *,
+        allow_upgrade_from_reply: bool = False,
+    ):
         thread_id = row["thread_id"]
-        revision = row.get("completed_revision", row["revision"])
+        override_rev = row.get("delivery_revision")
+        revision = (
+            int(override_rev)
+            if override_rev is not None
+            else row.get("completed_revision", row["revision"])
+        )
         destination = (
             row.get("delivery_chat_id") or row.get("return_chat_id") or row["chat_id"]
         )
@@ -145,25 +215,53 @@ class Bridge:
                 and old["route"] == route
                 and old["status"] in (retry_statuses or ())
             )
-            if old and not can_retry:
+            upgrade_reply = bool(
+                allow_upgrade_from_reply
+                and route == "share"
+                and old
+                and old["route"] == "reply"
+            )
+            if old and not can_retry and not upgrade_reply:
                 return {"already_handled": True, **dict(old)}
             current = db.execute(
                 "SELECT t.state,t.revision,t.completed_revision FROM agent_threads t "
                 "WHERE t.thread_id=? AND " + _NOT_STOPPED_SQL,
                 (thread_id,),
             ).fetchone()
-            if (
-                not current
-                or current["revision"] != revision
-                or current["completed_revision"] != revision
-                or current["state"] not in {"idle", "waiting"}
+            prior_rev_ok = bool(
+                override_rev is not None
+                and current
+                and current["revision"] == current["completed_revision"]
+                and current["state"] in {"idle", "waiting"}
+                and db.execute(
+                    "SELECT 1 FROM thread_events WHERE thread_id=? AND revision=? AND kind='result' LIMIT 1",
+                    (thread_id, revision),
+                ).fetchone()
+                is not None
+            )
+            if not current or current["state"] not in {"idle", "waiting"} or (
+                not prior_rev_ok
+                and (
+                    current["revision"] != revision
+                    or current["completed_revision"] != revision
+                )
             ):
                 raise ValueError("线程结果已停止或被新的方向替代")
             status = "preparing" if route == "share" else "offered"
-            if can_retry:
+            if can_retry or upgrade_reply:
                 db.execute(
-                    "UPDATE result_deliveries SET status=?, at=? WHERE thread_id=? AND revision=? AND destination=?",
-                    (status, self.clock(), thread_id, revision, destination),
+                    "UPDATE result_deliveries SET route=?, status=?, "
+                    "message_id=CASE WHEN ? THEN '' ELSE message_id END, at=? "
+                    "WHERE thread_id=? AND revision=? AND destination=?",
+                    (
+                        route,
+                        status,
+                        1 if upgrade_reply else 0,
+                        self.clock(),
+                        thread_id,
+                        revision,
+                        destination,
+                    ),
                 )
             else:
                 db.execute(
@@ -224,7 +322,9 @@ class Bridge:
                 (status, message_id, thread_id, revision, destination, thread_id),
             )
 
-    def stage(self, row, chat_id, *, archived=False, matches=None):
+    def stage(
+        self, row, chat_id, *, archived=False, matches=None, admin_direct: bool = False
+    ):
         material = {
             "thread_id": row["thread_id"],
             "revision": row["completed_revision"],
@@ -235,6 +335,8 @@ class Bridge:
             "manual": True,
             "archived": archived,
         }
+        if admin_direct:
+            material["admin_direct"] = True
         if matches:
             material["result"] = {**material["result"], "matched_history": matches}
         self._manual.setdefault(chat_id, {})[row["thread_id"]] = material
@@ -249,6 +351,22 @@ class Bridge:
         if not chat_id:
             return False
         target_thread = thread_id or None
+        manual_bucket = self._manual.get(chat_id) or {}
+        if target_thread:
+            mentry = manual_bucket.get(target_thread)
+            if (
+                isinstance(mentry, dict)
+                and not mentry.get("archived")
+                and mentry.get("admin_direct") is True
+            ):
+                return True
+        elif any(
+            isinstance(mentry, dict)
+            and not mentry.get("archived")
+            and mentry.get("admin_direct") is True
+            for mentry in manual_bucket.values()
+        ):
+            return True
         with self.store.connect() as db:
             rows = self._rows(db, chat_id, thread_id=target_thread)
             offered_ids = self._offered.get(chat_id)
@@ -535,7 +653,11 @@ class Bridge:
         self._offered.setdefault(chat_id, set()).update(await asyncio.to_thread(stage))
 
     async def offer(self, chat_id):
-        manual_candidates = list((self._manual.get(chat_id) or {}).values())
+        manual_candidates = [
+            item
+            for item in (self._manual.get(chat_id) or {}).values()
+            if isinstance(item, dict) and not item.get("archived")
+        ]
 
         def read():
             with self.store.connect() as db:
@@ -614,7 +736,7 @@ class Bridge:
         plain_manual = []
         keep_manual = {}
         for tid, mrow in raw_manual.items():
-            if _row_has_attachments(mrow):
+            if _row_has_attachments(mrow) and not mrow.get("archived"):
                 keep_manual[tid] = mrow
             else:
                 plain_manual.append(mrow)
@@ -623,7 +745,7 @@ class Bridge:
         rows += await asyncio.to_thread(self.current, plain_manual)
         unique = {}
         for row in rows:
-            if _row_has_attachments(row):
+            if _row_has_attachments(row) and not row.get("archived"):
                 continue
             if not row.get("archived"):
                 try:

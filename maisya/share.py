@@ -313,36 +313,6 @@ class Share:
         )
         if row["state"] != "idle" or revision != row["revision"] or stopped:
             raise ValueError("分享需要已完成且仍有效的线程结果")
-        if (
-            is_admin
-            and chat_id != source_chat_id
-            and hasattr(self.store, "record_publication_grant")
-        ):
-            await asyncio.to_thread(
-                self.store.record_publication_grant,
-                thread_id,
-                revision,
-                chat_id,
-                actor="admin_share",
-            )
-        old = await asyncio.to_thread(
-            self.bridge.delivery, thread_id, revision, chat_id
-        )
-        main_part_pre = (
-            await asyncio.to_thread(
-                self.bridge.get_delivery_part,
-                thread_id,
-                revision,
-                f"{chat_id}#main",
-            )
-            if old and old.get("route") == "share" and old.get("status") == "failed"
-            else None
-        )
-        can_retry_partial = bool(
-            main_part_pre and main_part_pre.get("status") == "sent"
-        )
-        if old and not can_retry_partial:
-            return {"already_handled": True, **old}
         if attachment_handles is None or attachment_handles == []:
             raw_atts = [
                 item
@@ -386,19 +356,102 @@ class Share:
             raise ValueError("分享最多引用一条原会话消息")
         if not isinstance(message, str) or len(message) > 4000:
             raise ValueError("分享表达须为 4000 字符以内的文字")
-        links = links_in(row["result"])
-        if not handles and not refs and not links:
-            self.bridge.stage(row, chat_id, archived=row["owner"] == "self")
-            return {"route": "reply", "thread_id": thread_id, "result": row["result"]}
         declared = {
             item["handle"]
-            for item in row["result"].get("attachments", [])
+            for item in (row.get("result") or {}).get("attachments", [])
             if isinstance(item, dict) and "handle" in item
         }
-        if any(
-            handle.startswith("att_") and handle not in declared for handle in handles
+        att_handles = [handle for handle in handles if handle.startswith("att_")]
+        effective_revision = revision
+        effective_result = row["result"]
+        att_revisions: set[int] = {revision}
+        if any(handle not in declared for handle in att_handles):
+            if row["owner"] == "self":
+                raise PermissionError("附件不属于当前版本的线程结果")
+
+            def _resolve_thread_atts():
+                with self.store.connect() as db:
+                    revs: set[int] = set()
+                    for h in att_handles:
+                        arow = db.execute(
+                            "SELECT handle, chat_id, thread_id, revision, size FROM attachments WHERE handle=?",
+                            (h,),
+                        ).fetchone()
+                        if (
+                            not arow
+                            or arow["thread_id"] != thread_id
+                            or arow["chat_id"] != source_chat_id
+                        ):
+                            raise PermissionError("附件不属于当前版本的线程结果")
+                        if int(arow["size"] or 0) > 5 * 1024**2:
+                            raise ValueError("本次直接分享附件超过 5 MiB，请使用预览链接")
+                        revs.add(int(arow["revision"] or 0))
+                    pick_rev = max(revs) if revs else effective_revision
+                    ev_row = db.execute(
+                        "SELECT payload FROM thread_events WHERE thread_id=? AND revision=? AND kind='result' ORDER BY seq DESC LIMIT 1",
+                        (thread_id, pick_rev),
+                    ).fetchone()
+                parsed_res = None
+                if ev_row and ev_row["payload"]:
+                    try:
+                        parsed = json.loads(ev_row["payload"])
+                        if isinstance(parsed, dict):
+                            parsed_res = parsed
+                    except (TypeError, ValueError):
+                        parsed_res = None
+                return revs, pick_rev, parsed_res
+
+            att_revisions, pick_rev, parsed_res = await asyncio.to_thread(
+                _resolve_thread_atts
+            )
+            if pick_rev is not None and pick_rev > 0:
+                effective_revision = pick_rev
+            if parsed_res is not None:
+                effective_result = parsed_res
+        revision = effective_revision
+        if (
+            is_admin
+            and chat_id != source_chat_id
+            and hasattr(self.store, "record_publication_grant")
         ):
-            raise PermissionError("附件不属于当前版本的线程结果")
+            for grant_rev in sorted(att_revisions | {revision}):
+                await asyncio.to_thread(
+                    self.store.record_publication_grant,
+                    thread_id,
+                    grant_rev,
+                    chat_id,
+                    actor="admin_share",
+                )
+        links = links_in(effective_result)
+        has_att_handles = bool(att_handles)
+        old = await asyncio.to_thread(
+            self.bridge.delivery, thread_id, revision, chat_id
+        )
+        if not handles and not refs and not links:
+            if old:
+                return {"already_handled": True, **old}
+            self.bridge.stage(row, chat_id, archived=row["owner"] == "self")
+            return {"route": "reply", "thread_id": thread_id, "result": row["result"]}
+        upgrade_from_reply = bool(
+            old and old.get("route") == "reply" and has_att_handles
+        )
+        can_retry_failed = bool(
+            old
+            and old.get("route") == "share"
+            and old.get("status") in {"failed", "cancelled"}
+        )
+        main_part_pre = (
+            await asyncio.to_thread(
+                self.bridge.get_delivery_part,
+                thread_id,
+                revision,
+                f"{chat_id}#main",
+            )
+            if can_retry_failed
+            else None
+        )
+        if old and not upgrade_from_reply and not can_retry_failed:
+            return {"already_handled": True, **old}
         if row["owner"] == "self" and (
             refs or any(not handle.startswith("att_") for handle in handles)
         ):
@@ -408,9 +461,10 @@ class Share:
         )
         claimed = await asyncio.to_thread(
             self.bridge.claim_delivery,
-            {**row, "delivery_chat_id": chat_id},
+            {**row, "delivery_chat_id": chat_id, "delivery_revision": revision},
             "share",
-            ("failed",) if can_retry_partial else (),
+            ("failed", "cancelled") if can_retry_failed else (),
+            allow_upgrade_from_reply=upgrade_from_reply,
         )
         if claimed.get("already_handled"):
             return claimed
@@ -420,7 +474,7 @@ class Share:
             self.bridge.get_delivery_part, thread_id, revision, f"{chat_id}#main"
         )
         retried_main_sent = bool(
-            claimed.get("retried_from") == "failed"
+            claimed.get("retried_from") in {"failed", "cancelled"}
             and main_part
             and main_part.get("status") == "sent"
         )
@@ -431,7 +485,7 @@ class Share:
                 "<external_data>"
                 + html.escape(
                     json.dumps(
-                        self.bridge.redact(row["result"]), ensure_ascii=False
+                        self.bridge.redact(effective_result), ensure_ascii=False
                     )[:12000]
                 )
                 + "</external_data>"
@@ -490,7 +544,8 @@ class Share:
                 or (is_admin and allow_admin_destination)
             )
             or current["state"] != "idle"
-            or current["revision"] != revision
+            or current["revision"] != row["revision"]
+            or current["completed_revision"] != row["completed_revision"]
             or stopped
         ):
             abort_status = "failed" if retried_main_sent else "cancelled"

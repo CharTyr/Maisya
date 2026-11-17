@@ -2352,7 +2352,10 @@ class MaisyaPlugin(MaiBotPlugin):
     def _cross_chat_auth_error(prefix: str, source_msg_id: str) -> str:
         if not source_msg_id:
             return f"{prefix}（请传入当前真实管理员消息的 source_msg_id）"
-        return prefix
+        return (
+            f"{prefix}（传入的 source_msg_id={source_msg_id!r} 不是当前会话的真实管理员消息；"
+            "请传入管理员本人发来的消息 ID，切勿传你自己刚 reply 发出的消息 ID）"
+        )
 
     def tools_for_request(self, tools, source_msg_ids, session_id, platform):
         is_admin = any(
@@ -2655,6 +2658,7 @@ class MaisyaPlugin(MaiBotPlugin):
         issuer_admin: str = "",
         source_chat_id: str = "",
         source_platform: str = "",
+        explicit_deliver_target: bool = False,
     ) -> dict:
         """Register an immediate workflow delivery intent for cross-chat agent runs."""
         reason_text = (
@@ -2675,6 +2679,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 "wait_thread": True,
                 "already_started": True,
                 "scheduled_admin": bool(is_admin_caller),
+                **(
+                    {"explicit_deliver_target": True}
+                    if explicit_deliver_target
+                    else {}
+                ),
                 **({"issuer_admin": issuer_admin} if is_admin_caller and issuer_admin else {}),
                 **({"source_chat_id": source_chat_id} if source_chat_id else {}),
                 **({"source_platform": source_platform} if source_platform else {}),
@@ -2706,6 +2715,7 @@ class MaisyaPlugin(MaiBotPlugin):
         issuer_admin: str = "",
         source_chat_id: str = "",
         source_platform: str = "",
+        explicit_deliver_target: bool = False,
     ) -> dict:
         return await self.schedule_cross_chat_delivery(
             chat_id,
@@ -2717,6 +2727,7 @@ class MaisyaPlugin(MaiBotPlugin):
             issuer_admin=issuer_admin,
             source_chat_id=source_chat_id,
             source_platform=source_platform,
+            explicit_deliver_target=explicit_deliver_target,
         )
 
     def _planner_brief_profiles_sync(self) -> list[dict]:
@@ -2868,6 +2879,7 @@ class MaisyaPlugin(MaiBotPlugin):
                 "action": {
                     "type": "string",
                     "enum": ["start", "send", "stop", "reopen", "list", "approve", "share"],
+                    "description": "start/send/reopen/stop/list/approve 调度后台线程；share 是主脑将线程 result_attach 挂载的 att_ 图片/文件或准确链接实际发往当前会话或 target_chat 的唯一动作（后台线程只挂载成品，不能直接往群里发消息）。",
                 },
                 "source_msg_id": {
                     "type": "string",
@@ -2943,7 +2955,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 4,
-                    "description": "share 时选择本次结果声明的 att_ 附件句柄，或原会话媒体 message:<消息编号>:<原始消息段索引>。",
+                    "description": "share 时选择本次结果或同线程历史版本尚未发出的 att_ 附件句柄，或原会话媒体 message:<消息编号>:<原始消息段索引>；留空时默认发最新版本声明的附件。",
                 },
             },
             "required": ["action"],
@@ -3583,6 +3595,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         issuer_admin=issuer_actor,
                         source_chat_id=chat_id,
                         source_platform=platform,
+                        explicit_deliver_target=(raw_deliver_to == "target"),
                     )
                     result = {**result, "delivery_intent_id": delivery["intent_id"]}
             elif action in {"send", "stop", "reopen", "approve", "share"}:
@@ -3835,6 +3848,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             issuer_admin=issuer_actor,
                             source_chat_id=chat_id,
                             source_platform=platform,
+                            explicit_deliver_target=(raw_deliver_to == "target"),
                         )
                         result = {**result, "delivery_intent_id": delivery["intent_id"]}
                 else:
@@ -4045,6 +4059,7 @@ class MaisyaPlugin(MaiBotPlugin):
                                 issuer_admin=issuer_actor,
                                 source_chat_id=chat_id,
                                 source_platform=platform,
+                                explicit_deliver_target=(raw_deliver_to == "target"),
                             )
                             result = {**result, "delivery_intent_id": delivery["intent_id"]}
             else:
@@ -4387,9 +4402,71 @@ class MaisyaPlugin(MaiBotPlugin):
             readable = readable[:limit]
             redacted_rows = self.vault.redact([entry for entry, _ in readable])
             for (_, row), entry in zip(readable, redacted_rows):
-                self.bridge.stage(
-                    row, chat_id, archived=True, matches=entry.get("matches")
-                )
+                if self.bridge is not None:
+                    rev = int(
+                        row.get("completed_revision") or row.get("revision") or 0
+                    )
+                    deliveries = await asyncio.to_thread(
+                        self.bridge.deliveries_for_thread, row["thread_id"], None
+                    )
+                    if caller_arena == "group" and raw_target_chat.lower() == "all":
+                        filtered_deliv = []
+                        for item_deliv in deliveries:
+                            dest = str(item_deliv.get("destination") or "")
+                            if (
+                                dest
+                                and await asyncio.to_thread(
+                                    self._chat_arena, dest, ""
+                                )
+                                == "private"
+                            ):
+                                continue
+                            filtered_deliv.append(item_deliv)
+                        deliveries = filtered_deliv
+                    deliveries = deliveries[:5]
+                    records = []
+                    for item_deliv in deliveries:
+                        dest = str(item_deliv.get("destination") or "")
+                        d_spec = (
+                            await asyncio.to_thread(self.canonical_stream_spec, dest)
+                            if dest
+                            else ""
+                        )
+                        records.append(
+                            {
+                                "revision": int(item_deliv.get("revision") or 0),
+                                "route": item_deliv.get("route") or "",
+                                "status": item_deliv.get("status") or "",
+                                "message_id": item_deliv.get("message_id") or "",
+                                "destination": d_spec or dest,
+                            }
+                        )
+                    shared_ok = any(
+                        r["revision"] == rev
+                        and r["route"] == "share"
+                        and r["status"] == "sent"
+                        for r in records
+                    )
+                    cur_atts = (
+                        (entry.get("result") or {}).get("attachments")
+                        or (row.get("result") or {}).get("attachments")
+                    )
+                    delivery_info = {"shared": shared_ok, "records": records}
+                    if cur_atts and not shared_ok:
+                        delivery_info["note"] = (
+                            "尚未通过 share 实际发出（线程文本若自称已发群不代表已送达）"
+                        )
+                    entry["delivery"] = delivery_info
+                    unshared = await asyncio.to_thread(
+                        self.bridge.unshared_thread_attachments,
+                        row["thread_id"],
+                        exclude_revision=rev,
+                    )
+                    if unshared and (row.get("owner") != "self" or is_admin_caller):
+                        entry["unshared_attachments"] = unshared
+                    self.bridge.stage(
+                        row, chat_id, archived=True, matches=entry.get("matches")
+                    )
             rows = redacted_rows
             memories = (
                 await asyncio.to_thread(
@@ -5487,6 +5564,15 @@ class MaisyaPlugin(MaiBotPlugin):
                 "<maisya_intent",
                 "<maisya_return",
                 "<maisya_approval_required",
+                "<maisya_thread_error",
+            )
+        )
+        already_has_wake_payload = any(
+            marker in item_text
+            for marker in (
+                "<maisya_approval_required",
+                "<maisya_thread_result>",
+                "<maisya_thread_error>",
             )
         )
         lookup_max_age = await asyncio.to_thread(
@@ -5552,7 +5638,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         not in {"subagent", "subagent_status", "subagent_stop"}
                     ]
                 returned = await self.bridge.offer(chat_id)
-                if returned:
+                if returned and not already_has_wake_payload:
                     return_item = {
                         "item_type": "UserMessageItem",
                         "meta": {
@@ -5688,6 +5774,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "管理员可通过 maisya_shape(action='overview'|'setup'|'settings'|'profile'|'file'|'digest_sources'|'services'|'skill_proposal', op=..., target_chat=..., source_msg_id=...) 读取与调整全部能力：setup 支持一句开启群、配置简报主题/定时/各群主动分寸(chat_proactive_levels)并用 run_now=True, deliver_to='current' 立即在私聊试跑预览；settings 支持 enabled_chats、sleep_window 等核心设置；主动性按说法对应旋钮：「更主动 / 安静点 / 别主动找人」→ heartbeat_mode（off 关、gentle 克制、lively 活泼，默认关，事后惦记不受影响），「闲着去逛什么」→ 写 HEARTBEAT.md 的「## 自主探索方向」，「某个群别打扰」→ chat_proactive_levels（quiet / care / lively），「一天最多几次」→ daily_proactive_limit（全局总量）与 per_chat_daily_proactive_limit（单会话上限），心跳间隔与久违阈值的精确覆盖用 heartbeat_interval_minutes / longing_quiet_hours（0 = 跟随档位），调整后用 overview 的 heartbeat.effective 确认实际生效状态；file 支持 HEARTBEAT.md、MEMORY.md、profiles/<id>/MEMORY.md、JOURNAL.md 与 skills/<id>/SKILL.md；services 支持直接附带 env/url 登记 MCP；profile(op='export') 生成脱敏 .maisya.zip（聊天发压缩包走 package_export + share），profile(op='import') 支持公开 https:// .zip 直链导入（重名时先问用户更新还是另存新名）。尽量合并修改，避免碎片调用。",
                     "所有流标识统一用 平台:类型:id（如 qq:group:100246809，target_chat 也兼容群号/群名/current）；密码保险箱仅作用户主动存别名之用，若用户直接在对话里给出临时密码、Token 或私钥委托执行任务，直接通过 maisya_agent 传给线程完成即可，绝不拒单或强制要求先存保险箱；在私聊中宿主 search_chat_history 只能搜当前私聊，要摸清目标群近期聊什么与口味，应交给目标会话开启的线程用 chat_read 了解。",
                     "两段式自然反馈规则（重要）：只要 maisya_agent(start/send/reopen/approve) 返回 state='active'（后台线程已跑起），请在本轮**立即调用 reply**（reply_style=\"长回复\"）自然简短地交代已完成的配置/调整以及后台正在按新要求跑，等系统通过 <maisya_returns> 自动唤醒后再交付成图或结论；若返回 state='waiting' 且含 pending_approval，先向管理员确认风险详情，得到同意后调 maisya_agent(action='approve', thread_id=..., grant_tier='once'|'session'|'always'|'deny', source_msg_id=...)；**绝对不要调用 wait 或反复调用 maisya_recall 轮询等待，也不要对运行中的同一线程重复发指令**。",
+                    "交付与查证分工（重要）：后台线程只能用 result_attach 挂载成品，不能直接往群或私聊发图片/文件；需要把 att_ 附件或准确链接发给群或当前会话时，必须由你调用 maisya_agent(action='share', thread_id=..., target_chat=..., deliver_to='target'|'current', source_msg_id=...)（补发旧版本尚未发出的附件可传 attachment_handles=['att_...']）；从私聊派只读查证（如 scout）默认保持 deliver_to='auto' 或传 'current'（不含附件时自动回传当前私聊）；此外，每次调用 maisya_* 的 source_msg_id 仍须填管理员本人真实消息 ID，即使本轮刚调过 reply 也绝不能填你自己的 reply 消息 ID。",
                     "平时单独回查或调起可用 maisya_recall(target_chat=.../'all', source_msg_id=...)、maisya_later(action='schedule'|'list'|'pause'|'resume'|'run_now'|'cancel', mode='once'|'recurring'|'watch', daily_at=..., condition=..., replace=True, target_chat=..., source_msg_id=...)、maisya_agent(target_chat=..., deliver_to='current'|'target', source_msg_id=...)。",
                 ]
             )
@@ -5732,11 +5819,11 @@ class MaisyaPlugin(MaiBotPlugin):
                 ),
                 *(
                     [
-                        "<maisya_returned>"
+                        "注意：下方 <maisya_returned> 是尚待你交付的后台产出（不代表已发到任何目标群；即使线程文本自称「已发」也尚未真实发出，含 att_ 图片/文件时须由你调用 maisya_agent(action='share', thread_id=..., target_chat=..., deliver_to='target'|'current', source_msg_id=...) 才会真正发出）。\n<maisya_returned>"
                         + html.escape(json.dumps(returned, ensure_ascii=False))
                         + "</maisya_returned>"
                     ]
-                    if returned
+                    if returned and not already_has_wake_payload
                     else []
                 ),
                 "</maisya_admin_bootstrap>",
