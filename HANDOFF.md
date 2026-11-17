@@ -87,9 +87,9 @@ python3 tests_sandbox/run_isolated.py --execute
 ## 4. 下一位接手待办与线上部署红线
 
 1. **当前仓库与线上部署状态**：
-   - 本地 `main` 分支已完成 `P0`（`13d0324`）、`P1/P2 + 文档`（`553d097`）、`4 项线上简报/跨会话引导修复`（`d85b5cd`）与本交接提交，**尚未 `git push` 至 `origin/main`**；
-   - 线上已完成最新一次先备份后原子部署（旧插件与 SQLite `.backup()` 只读一致性校验通过的数据备份于 `/root/backups/maisya-deploy-20261117-115215/`；前序备份保留在 `/root/backups/maisya-deploy-20261116-191431/`），线上 `config.toml`（`mode 600`，`[plugin] enabled = true`）逐字节原样保留，宿主核心代码零改动且未重启 MaiBot；
-   - 轻触 `_manifest.json` 触发宿主全插件热重载后，日志确认 `chartyr.maisya v0.3.0` 导入、注册与 `on_load` 均成功无报错，目录内已生成 `.pyc` 字节码；当前可直接在私聊或指定测试群复测新修复后的资讯简报图卡链路。
+   - 本地 `main` 分支已完成 `P0`（`13d0324`）、`P1/P2 + 文档`（`553d097`）、`4 项线上简报/跨会话引导修复`（`d85b5cd`）、`图卡质检与画像采编 3 项修复`（`f448526`）与本交接提交，**尚未 `git push` 至 `origin/main`**；
+   - 线上已完成最新一次先备份后原子部署（旧插件与 SQLite `.backup()` 只读一致性校验通过的数据备份于 `/root/backups/maisya-deploy-20261117-123446/`；前序备份保留在 `/root/backups/maisya-deploy-20261117-115215/` 与 `/root/backups/maisya-deploy-20261116-191431/`），线上 `config.toml`（`mode 600`，`[plugin] enabled = true`）逐字节原样保留，宿主核心代码零改动且未重启 MaiBot；
+   - 轻触 `_manifest.json` 触发热重载后，日志确认 `chartyr.maisya v0.3.0` 导入、注册与 `on_load` 均成功且 `0` 报错，已生成 `.pyc` 字节码，且 `abilities/skills/news-digest/SKILL.md` 与 `abilities/profiles/digest/PROFILE.md` 已自动同步最新预设；当前可直接测选项 B（群画像驱动资讯简报，目标图卡由私聊预览交付，不打扰目标群）。
 2. **已收口文档基准**：
    - [`docs/01-架构蓝图.md`](docs/01-架构蓝图.md)、[`docs/guide/configuration.md`](docs/guide/configuration.md) 与 [`codemap.md`](codemap.md)（35 个模块）已随 `B0`～`B7` 同步更新；[`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md) 与 [`docs/09-调度手册方案.md`](docs/09-调度手册方案.md) 已完成并入库。
 3. **部署红线（来自 [AGENTS.md](AGENTS.md)）**：
@@ -144,4 +144,4 @@ python3 tests_sandbox/run_isolated.py --execute
 | `B7` 后台预算与回归稳态（`553d097`） | ✅ | [`maisya/config.py`](maisya/config.py)、[`maisya/intents.py`](maisya/intents.py)、[`maisya/pulse.py`](maisya/pulse.py) 增加日常运行/Token 预算、`bg_max_consecutive_failures` 退避暂停与控制台可观测状态，`return` 完全豁免 |
 | 回归测试与文档同步 | ✅ | 新增 [`tests/test_arch_consolidation_p0.py`](tests/test_arch_consolidation_p0.py)、[`tests/test_arch_consolidation_p1_p2.py`](tests/test_arch_consolidation_p1_p2.py)，同步 `docs/01`、`docs/guide/configuration.md` 与 `codemap.md` |
 | 简报与跨会话调度实测 4 项修复 | ✅（`d85b5cd`，已部署） | [`maisya/digest.py`](maisya/digest.py) 合并 6 小时内多次 `collect` 池与未成卡 `score_select` 草稿（防自锁重与空增量清空）；[`maisya/threads.py`](maisya/threads.py) 屏蔽运行中持久线程上一轮旧 `result`（保留 `_resolve` 对刚完成轮次的精确交付）；[`plugin.py`](plugin.py) 强化未启用私聊管理员 `source_msg_id` 引导与报错提示；新增 [`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 并固定 [`tests/test_audit_b2_entry.py`](tests/test_audit_b2_entry.py) 晨间时钟（已备份并原子热重载上线） |
-| 简报图卡质检与画像采编 3 项修复 | ✅ | [`maisya/viz_spec.py`](maisya/viz_spec.py) 补齐 `stat`/`stats` 块级与单项 `unit`/`display` 渲染、防重复后缀及核数覆盖；[`maisya/digest.py`](maisya/digest.py) 过滤单指标 `stats`/`bars` 与无 `delta` `stat`（保留对比与 `report` 档案）；[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md) 明确 `chat_read(limit=80, hours=168)` 群画像抽样、仅无封面配图且 `>= 2` 项可比数据时加 `viz` 与纯正中文标题规范；[`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 新增 2 项回归测试 |
+| 简报图卡质检与画像采编 3 项修复 | ✅（`f448526`，已部署） | [`maisya/viz_spec.py`](maisya/viz_spec.py) 补齐 `stat`/`stats` 块级与单项 `unit`/`display` 渲染、防重复后缀及核数覆盖；[`maisya/digest.py`](maisya/digest.py) 过滤单指标 `stats`/`bars` 与无 `delta` `stat`（保留对比与 `report` 档案）；[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md) 明确 `chat_read(limit=80, hours=168)` 群画像抽样、仅无封面配图且 `>= 2` 项可比数据时加 `viz` 与纯正中文标题规范；[`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 新增 2 项回归测试（已备份并原子热重载上线） |
