@@ -41,6 +41,16 @@ _SERENDIPITY_FILLERS = (
 _SERENDIPITY_FILLER_SET = set(_SERENDIPITY_FILLERS)
 
 
+def _pending_approval_of(result_obj) -> dict | None:
+    """Return pending approval payload when a waiting thread paused for admin confirmation."""
+    if not isinstance(result_obj, dict):
+        return None
+    pa = result_obj.get("pending_approval")
+    if isinstance(pa, dict) and pa.get("pending_approval"):
+        return pa
+    return None
+
+
 def _extract_tokens(text):
     lower = str(text or "").lower()
     tokens = set(re.findall(r"[a-z0-9_]{2,}", lower))
@@ -439,8 +449,20 @@ class Pulse:
             facts = html.escape(
                 json.dumps(self.bridge.redact(material_rows), ensure_ascii=False)
             )
+            has_pending_apr = any(
+                _pending_approval_of(row.get("result"))
+                for row in rows
+                if isinstance(row, dict)
+            )
             admin_direct = any(_grant_admin_direct(row.get("raw_grant")) for row in rows)
-            if admin_direct:
+            if has_pending_apr:
+                intent = (
+                    "之前发起的 Agent 线程因高风险操作暂停等待管理员审批（尚未完成产出）。"
+                    "请立即调用 reply 向管理员说明触发审批的具体命令与风险详情，并请对方确认是否批准放行或改用安全方式继续。\n<maisya_return>"
+                    + facts
+                    + "</maisya_return>"
+                )
+            elif admin_direct:
                 intent = (
                     "之前由本会话真实用户消息触发的 Agent 线程已有结果。"
                     "这是管理员最新发起的后台试跑预览（晚于此前历史闲聊或旧取消语，请勿因旧消息静默跳过）："
@@ -1080,6 +1102,35 @@ class Pulse:
             thread_id="",
         )
 
+    async def _resolve_approval_notify_chat(
+        self,
+        *,
+        source_chat_id: str,
+        issuer_admin: str,
+        fallback_chat_id: str,
+    ) -> str:
+        clean_src = str(source_chat_id or "").strip()
+        if clean_src:
+            resolved = await self._ensure_runtime_chat_id(clean_src)
+            if resolved:
+                return resolved
+        clean_issuer = str(issuer_admin or "").strip()
+        if (
+            clean_issuer
+            and clean_issuer != "console"
+            and not clean_issuer.startswith("admin:")
+            and ":" in clean_issuer
+        ):
+            plat, uid = clean_issuer.split(":", 1)
+            if plat.strip() and uid.strip():
+                spec = f"{plat.strip().lower()}:private:{uid.strip()}"
+                resolved = await self._ensure_runtime_chat_id(spec)
+                if resolved:
+                    return resolved
+        if fallback_chat_id and self._chat_arena(fallback_chat_id) == "private":
+            return fallback_chat_id
+        return ""
+
     async def _dispatch(self, row):
         if not await self._check_intent_authority(row):
             return
@@ -1375,6 +1426,86 @@ class Pulse:
                     record_run=False,
                     error=str(result_obj.get("error") or "thread_error"),
                 )
+                return
+            pending_apr = (
+                _pending_approval_of(result_obj)
+                if thread.get("state") == "waiting"
+                else None
+            )
+            if pending_apr is not None:
+                payload_obj = row.get("payload") or {}
+                t_grant = thread.get("grant") or {}
+                src_chat = str(
+                    payload_obj.get("source_chat_id")
+                    or t_grant.get("source_chat_id")
+                    or ""
+                ).strip()
+                issuer = str(
+                    payload_obj.get("issuer_admin")
+                    or t_grant.get("issuer_admin")
+                    or ""
+                ).strip()
+                notify_chat = await self._resolve_approval_notify_chat(
+                    source_chat_id=src_chat,
+                    issuer_admin=issuer,
+                    fallback_chat_id=chat_id,
+                )
+                if notify_chat and (
+                    notify_chat != chat_id or self._chat_arena(chat_id) == "private"
+                ):
+                    await asyncio.to_thread(
+                        self.bridge.stage, thread, notify_chat, archived=False
+                    )
+                    apr_body = json.dumps(
+                        self.redact(
+                            {
+                                "thread_id": str(thread["thread_id"]),
+                                "target_chat": chat_id,
+                                "pending_approval": pending_apr,
+                            }
+                        ),
+                        ensure_ascii=False,
+                    )
+                    wake_intent = (
+                        "之前发起的后台 Agent 线程因高风险操作暂停等待管理员审批（尚未完成交付或发群）。"
+                        "请立即调用 reply 向管理员说明触发审批的具体命令与风险详情，询问是批准放行还是改用工作区文件安全重做。\n"
+                        "<maisya_approval_required>"
+                        + html.escape(apr_body)
+                        + "</maisya_approval_required>"
+                    )
+                    status = await self._wake(
+                        notify_chat,
+                        wake_intent,
+                        reason="maisya:approval",
+                        metadata={
+                            "kind": row["kind"],
+                            "source": "workflow",
+                            "intent_id": row["intent_id"],
+                            "thread_id": str(thread["thread_id"]),
+                        },
+                    )
+                    done_st = (
+                        "done"
+                        if status == "accepted"
+                        else (
+                            "deferred"
+                            if status in {"session_missing", "uncertain"}
+                            else "failed"
+                        )
+                    )
+                    wake_st = (
+                        "approval_notified" if status == "accepted" else status
+                    )
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], done_st, wake_st
+                    )
+                else:
+                    await asyncio.to_thread(
+                        self.intents.finish,
+                        row["intent_id"],
+                        "done",
+                        "approval_waiting",
+                    )
                 return
             result_text = str(result_obj.get("text") or "")
             attachments = result_obj.get("attachments") or []

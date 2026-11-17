@@ -503,6 +503,55 @@ class ThreadStore:
         connection.row_factory = sqlite3.Row
         return closing(connection)
 
+    def _find_workspace_binding(
+        self,
+        db: sqlite3.Connection,
+        owner: str,
+        chat_id: str,
+        workspace: str,
+        platform: str = "",
+    ):
+        if not workspace:
+            return None
+        binding = db.execute(
+            "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
+            (owner, chat_id, workspace),
+        ).fetchone()
+        if (
+            binding is None
+            and owner == "chat"
+            and callable(getattr(self, "chat_aliases", None))
+        ):
+            try:
+                aliases = sorted(
+                    set(self.chat_aliases(chat_id, platform)) - {chat_id}
+                )
+            except (TypeError, ValueError):
+                aliases = []
+            for alias in aliases:
+                if not isinstance(alias, str) or not alias:
+                    continue
+                binding = db.execute(
+                    "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
+                    (owner, alias, workspace),
+                ).fetchone()
+                if binding is not None:
+                    break
+        return binding
+
+    def workspace_profile_for(
+        self, owner: str, chat_id: str, workspace: str, *, platform: str = ""
+    ) -> str:
+        """返回命名工作区已绑定的角色编号；未绑定时返回空串。"""
+        clean_ws = str(workspace or "").strip()
+        if owner not in {"chat", "self"} or not clean_ws:
+            return ""
+        with self.connect() as db:
+            binding = self._find_workspace_binding(
+                db, owner, chat_id, clean_ws, platform
+            )
+        return str(binding["profile"] or "").strip() if binding is not None else ""
+
     def create(
         self,
         profile,
@@ -551,30 +600,9 @@ class ThreadStore:
             workspace_id = ""
             ws_name_to_bind = workspace
             if workspace:
-                binding = db.execute(
-                    "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
-                    (owner, chat_id, workspace),
-                ).fetchone()
-                if (
-                    binding is None
-                    and owner == "chat"
-                    and callable(getattr(self, "chat_aliases", None))
-                ):
-                    try:
-                        aliases = sorted(
-                            set(self.chat_aliases(chat_id, platform)) - {chat_id}
-                        )
-                    except (TypeError, ValueError):
-                        aliases = []
-                    for alias in aliases:
-                        if not isinstance(alias, str) or not alias:
-                            continue
-                        binding = db.execute(
-                            "SELECT * FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
-                            (owner, alias, workspace),
-                        ).fetchone()
-                        if binding is not None:
-                            break
+                binding = self._find_workspace_binding(
+                    db, owner, chat_id, workspace, platform
+                )
                 if binding and fresh_workspace:
                     archived_name = f"{binding['name']}#archived_{str(binding['thread_id'])[-6:]}"
                     db.execute(
@@ -584,7 +612,10 @@ class ThreadStore:
                     binding = None
                 if binding:
                     if binding["profile"] != profile.id:
-                        raise ValueError("该工作区已绑定另一个角色")
+                        bound_prof = str(binding["profile"] or "")
+                        raise ValueError(
+                            f"该工作区已绑定另一个角色（{bound_prof}），请改传 profile='{bound_prof}'、传 fresh=True 重开，或换用新工作区名"
+                        )
                     previous = db.execute(
                         "SELECT state,profile_snapshot,visibility_scope FROM agent_threads WHERE thread_id=?",
                         (binding["thread_id"],),

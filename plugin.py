@@ -2653,6 +2653,8 @@ class MaisyaPlugin(MaiBotPlugin):
         *,
         is_admin_caller: bool,
         issuer_admin: str = "",
+        source_chat_id: str = "",
+        source_platform: str = "",
     ) -> dict:
         """Register an immediate workflow delivery intent for cross-chat agent runs."""
         reason_text = (
@@ -2674,6 +2676,8 @@ class MaisyaPlugin(MaiBotPlugin):
                 "already_started": True,
                 "scheduled_admin": bool(is_admin_caller),
                 **({"issuer_admin": issuer_admin} if is_admin_caller and issuer_admin else {}),
+                **({"source_chat_id": source_chat_id} if source_chat_id else {}),
+                **({"source_platform": source_platform} if source_platform else {}),
             },
             bypass_limits=True,
         )
@@ -2699,6 +2703,9 @@ class MaisyaPlugin(MaiBotPlugin):
         default_reason: str,
         *,
         is_admin_caller: bool,
+        issuer_admin: str = "",
+        source_chat_id: str = "",
+        source_platform: str = "",
     ) -> dict:
         return await self.schedule_cross_chat_delivery(
             chat_id,
@@ -2707,6 +2714,9 @@ class MaisyaPlugin(MaiBotPlugin):
             message,
             default_reason,
             is_admin_caller=is_admin_caller,
+            issuer_admin=issuer_admin,
+            source_chat_id=source_chat_id,
+            source_platform=source_platform,
         )
 
     def _planner_brief_profiles_sync(self) -> list[dict]:
@@ -3256,9 +3266,49 @@ class MaisyaPlugin(MaiBotPlugin):
                 return wait_seconds
 
             del caller_specified_wait
-            target_profile = str(profile or "").strip()
+            raw_profile = str(profile or "").strip()
+            target_profile = raw_profile
             if action == "start" and not target_profile:
-                target_profile = "default"
+                clean_ws = str(workspace or "").strip()
+                ws_chat = effective_chat_id if owner == "chat" else "self"
+
+                def _resolve_default_start_profile() -> str:
+                    if clean_ws and not fresh and self.threads is not None:
+                        bound_prof = self.threads.workspace_profile_for(
+                            owner, ws_chat, clean_ws, platform=effective_platform
+                        )
+                        if bound_prof and self.profiles is not None:
+                            try:
+                                self.profiles.get(bound_prof)
+                                return bound_prof
+                            except (
+                                FileNotFoundError,
+                                OSError,
+                                ValueError,
+                                PermissionError,
+                                RuntimeError,
+                            ):
+                                pass
+                    if (
+                        clean_ws
+                        and clean_ws != "default"
+                        and self.profiles is not None
+                    ):
+                        try:
+                            matched = self.profiles.get(clean_ws)
+                            if matched.enabled:
+                                return matched.id
+                        except (
+                            FileNotFoundError,
+                            OSError,
+                            ValueError,
+                            PermissionError,
+                            RuntimeError,
+                        ):
+                            pass
+                    return "default"
+
+                target_profile = await asyncio.to_thread(_resolve_default_start_profile)
             admin_direct_grant = bool(
                 is_admin_caller
                 and delivery_mode == "current"
@@ -3531,6 +3581,8 @@ class MaisyaPlugin(MaiBotPlugin):
                         "跨会话工作流试跑",
                         is_admin_caller=is_admin_caller,
                         issuer_admin=issuer_actor,
+                        source_chat_id=chat_id,
+                        source_platform=platform,
                     )
                     result = {**result, "delivery_intent_id": delivery["intent_id"]}
             elif action in {"send", "stop", "reopen", "approve", "share"}:
@@ -3781,6 +3833,8 @@ class MaisyaPlugin(MaiBotPlugin):
                             "跨会话审批续跑",
                             is_admin_caller=is_admin_caller,
                             issuer_admin=issuer_actor,
+                            source_chat_id=chat_id,
+                            source_platform=platform,
                         )
                         result = {**result, "delivery_intent_id": delivery["intent_id"]}
                 else:
@@ -3989,6 +4043,8 @@ class MaisyaPlugin(MaiBotPlugin):
                                 "跨会话工作流续接",
                                 is_admin_caller=is_admin_caller,
                                 issuer_admin=issuer_actor,
+                                source_chat_id=chat_id,
+                                source_platform=platform,
                             )
                             result = {**result, "delivery_intent_id": delivery["intent_id"]}
             else:
@@ -5426,7 +5482,12 @@ class MaisyaPlugin(MaiBotPlugin):
         )
         is_pulse_wakeup = any(
             marker in item_text
-            for marker in ("<plugin_proactive_task", "<maisya_intent", "<maisya_return")
+            for marker in (
+                "<plugin_proactive_task",
+                "<maisya_intent",
+                "<maisya_return",
+                "<maisya_approval_required",
+            )
         )
         lookup_max_age = await asyncio.to_thread(
             self._admin_source_max_age, chat_id, platform
@@ -5748,6 +5809,29 @@ class MaisyaPlugin(MaiBotPlugin):
                 + "</maisya_threads>"
             )
         if returned:
+            has_pending_attachments = any(
+                isinstance(item, dict)
+                and isinstance(item.get("result"), dict)
+                and (
+                    (
+                        isinstance(item["result"].get("attachments"), list)
+                        and any(
+                            isinstance(att, dict)
+                            and str(att.get("handle") or "").startswith("att_")
+                            for att in item["result"]["attachments"]
+                        )
+                    )
+                    or (
+                        isinstance(item["result"].get("attachments"), str)
+                        and "att_" in item["result"]["attachments"]
+                    )
+                )
+                for item in returned
+            )
+            if has_pending_attachments:
+                parts.append(
+                    "注意：下方 <maisya_returns> 含尚未发送的图片或文件附件（即使线程结语写「已发/已完成」也只是挂载待发，尚未真正发出）；若需向本会话交付该结果，请直接调用 maisya_agent(action='share', thread_id=...) 发送后结束本轮，切勿仅用 reply 代替发图。"
+                )
             parts.append(
                 "<maisya_returns>"
                 + html.escape(json.dumps(returned, ensure_ascii=False))
@@ -6706,13 +6790,31 @@ class MaisyaPlugin(MaiBotPlugin):
                                     scope=meta["scope"],
                                 )
                                 now_done = time.monotonic()
+                                av = None
                                 if (
                                     isinstance(res, dict)
-                                    and res.get("success")
-                                    and isinstance(res.get("avatar"), dict)
+                                    and res.get("success") is not False
+                                    and not res.get("error")
                                 ):
-                                    av = res["avatar"]
-                                    if av.get("status") == "available":
+                                    if isinstance(res.get("avatar"), dict):
+                                        av = res["avatar"]
+                                    elif (
+                                        str(res.get("status") or "").strip().lower()
+                                        in {
+                                            "available",
+                                            "unsupported",
+                                            "unavailable",
+                                            "empty",
+                                            "none",
+                                            "not_found",
+                                        }
+                                    ):
+                                        av = res
+                                if isinstance(av, dict):
+                                    if (
+                                        str(av.get("status") or "").strip().lower()
+                                        == "available"
+                                    ):
                                         url = self._safe_avatar_url(av.get("url"))
                                     if url and av.get("expires_at"):
                                         try:
@@ -7129,6 +7231,55 @@ class MaisyaPlugin(MaiBotPlugin):
             allow_any_chat=True,
         )
 
+    async def _prepare_console_resume(
+        self, row: dict, default_source: str
+    ) -> tuple[dict | None, dict]:
+        """Extract origin delivery/grant metadata and build a return_route for console resumes."""
+
+        def _load_merged_grant() -> dict:
+            merged: dict = {}
+            tid = str(row.get("thread_id") or "")
+            if tid and self.threads is not None:
+                with self.threads.connect() as db:
+                    ev = db.execute(
+                        "SELECT payload FROM thread_events "
+                        "WHERE thread_id=? AND kind='input' ORDER BY seq DESC LIMIT 1",
+                        (tid,),
+                    ).fetchone()
+                if ev and ev["payload"]:
+                    try:
+                        payload = json.loads(ev["payload"])
+                    except (TypeError, ValueError):
+                        payload = {}
+                    ctx = payload.get("context") if isinstance(payload, dict) else None
+                    if isinstance(ctx, dict) and isinstance(ctx.get("grant"), dict):
+                        merged.update(ctx["grant"])
+            if isinstance(row.get("grant"), dict):
+                merged.update(row["grant"])
+            return merged
+
+        merged_grant = await asyncio.to_thread(_load_merged_grant)
+        preserved_grant = {
+            k: merged_grant[k]
+            for k in (
+                "admin_direct",
+                "source_chat_id",
+                "source_platform",
+                "source_msg_id",
+                "scheduled_admin",
+                "issuer_admin",
+            )
+            if k in merged_grant and merged_grant[k] not in ("", None)
+        }
+        if row.get("owner") != "chat" or self.bridge is None:
+            return None, preserved_grant
+        admin_direct = bool(preserved_grant.get("admin_direct"))
+        src_chat = str(preserved_grant.get("source_chat_id") or "").strip()
+        src_msg = str(preserved_grant.get("source_msg_id") or "").strip()
+        dest_chat = src_chat if (admin_direct and src_chat) else str(row["chat_id"])
+        route = await self.bridge.route(dest_chat, src_msg or default_source, 0)
+        return route, preserved_grant
+
     @API("maisya_note", description="给原线程补充方向或从控制台直接发起工作流", version="1", public=False)
     async def console_send(
         self,
@@ -7182,21 +7333,32 @@ class MaisyaPlugin(MaiBotPlugin):
                     else {},
                     target_chat=target_chat,
                 )
-                started = await self.engine.start(
-                    ability,
-                    message,
-                    chat_id=target_chat,
-                    platform=target_platform,
-                    user_id="",
-                    owner="self" if target_chat == "self" else "chat",
-                    wait_seconds=0,
-                    workspace=norm_workspace,
-                    grant={
-                        "console_admin": True,
-                        "issuer_admin": "console",
-                        "envelope": c_env,
-                    },
+                route = (
+                    await self.bridge.route(target_chat, "console-send", 0)
+                    if target_chat != "self" and self.bridge is not None
+                    else None
                 )
+                try:
+                    started = await self.engine.start(
+                        ability,
+                        message,
+                        chat_id=target_chat,
+                        platform=target_platform,
+                        user_id="",
+                        owner="self" if target_chat == "self" else "chat",
+                        wait_seconds=0,
+                        return_route=route,
+                        workspace=norm_workspace,
+                        grant={
+                            "console_admin": True,
+                            "admin_verified": True,
+                            "issuer_admin": "console",
+                            "envelope": c_env,
+                        },
+                    )
+                finally:
+                    if route is not None and self.bridge is not None:
+                        await self.bridge.submitted(route)
                 if self.grants is not None and started.get("thread_id"):
                     await asyncio.to_thread(
                         record_delegation,
@@ -7237,20 +7399,28 @@ class MaisyaPlugin(MaiBotPlugin):
                 else {},
                 target_chat=row["chat_id"],
             )
-            result = await self.engine.send(
-                thread_id,
-                message,
-                chat_id=row["chat_id"],
-                wait_seconds=0,
-                steer=steer,
-                input_context={
-                    "grant": {
-                        "console_admin": True,
-                        "issuer_admin": "console",
-                        "envelope": c_env,
-                    }
-                },
-            )
+            route, preserved_grant = await self._prepare_console_resume(row, "console-send")
+            try:
+                result = await self.engine.send(
+                    thread_id,
+                    message,
+                    chat_id=row["chat_id"],
+                    wait_seconds=0,
+                    steer=steer,
+                    return_route=route,
+                    input_context={
+                        "grant": {
+                            **preserved_grant,
+                            "console_admin": True,
+                            "admin_verified": True,
+                            "issuer_admin": preserved_grant.get("issuer_admin") or "console",
+                            "envelope": c_env,
+                        }
+                    },
+                )
+            finally:
+                if route is not None and self.bridge is not None:
+                    await self.bridge.submitted(route)
             if self.grants is not None:
                 await asyncio.to_thread(
                     record_delegation,

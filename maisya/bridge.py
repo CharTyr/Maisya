@@ -33,6 +33,22 @@ def _grant_admin_direct(raw_grant) -> bool:
     return isinstance(parsed, dict) and bool(parsed.get("admin_direct"))
 
 
+def _row_has_attachments(row: dict) -> bool:
+    """Return True when a thread return row declares staged att_ file/image attachments."""
+    if not isinstance(row, dict):
+        return False
+    res = row.get("result")
+    if not isinstance(res, dict):
+        return False
+    atts = res.get("attachments")
+    if not isinstance(atts, list):
+        return False
+    return any(
+        isinstance(item, dict) and str(item.get("handle") or "").startswith("att_")
+        for item in atts
+    )
+
+
 def record_return(db, thread_id, revision, event_seq):
     source = db.execute(
         'SELECT payload FROM thread_events WHERE thread_id=? AND revision=? AND kind="input"',
@@ -158,6 +174,11 @@ class Bridge:
                 "UPDATE return_intents SET consumed=1 WHERE thread_id=? AND revision=?",
                 (thread_id, revision),
             )
+        manual_bucket = self._manual.get(destination)
+        if manual_bucket is not None:
+            manual_bucket.pop(thread_id, None)
+            if not manual_bucket:
+                self._manual.pop(destination, None)
         result = {
             "thread_id": thread_id,
             "revision": revision,
@@ -514,26 +535,61 @@ class Bridge:
         self._offered.setdefault(chat_id, set()).update(await asyncio.to_thread(stage))
 
     async def offer(self, chat_id):
+        manual_candidates = list((self._manual.get(chat_id) or {}).values())
+
         def read():
             with self.store.connect() as db:
-                return self._rows(db, chat_id)[-16:]
+                rows = self._rows(db, chat_id)[-16:]
+                valid_manual = self.current(manual_candidates) if manual_candidates else []
+                valid_tids = {r["thread_id"] for r in valid_manual}
+                kept_manual = []
+                stale_tids = {
+                    str(r.get("thread_id") or "")
+                    for r in manual_candidates
+                    if isinstance(r, dict) and r.get("thread_id") not in valid_tids
+                }
+                for mrow in valid_manual:
+                    delivered = db.execute(
+                        "SELECT 1 FROM result_deliveries WHERE thread_id=? AND revision=? AND destination=?",
+                        (mrow["thread_id"], mrow["revision"], chat_id),
+                    ).fetchone()
+                    if delivered is not None:
+                        stale_tids.add(str(mrow["thread_id"]))
+                    else:
+                        kept_manual.append(mrow)
+                return rows, kept_manual, stale_tids
 
-        rows = await asyncio.to_thread(read)
+        rows, kept_manual, stale_tids = await asyncio.to_thread(read)
+        if stale_tids and chat_id in self._manual:
+            bucket = self._manual[chat_id]
+            for tid in stale_tids:
+                bucket.pop(tid, None)
+            if not bucket:
+                self._manual.pop(chat_id, None)
         self._offered.setdefault(chat_id, set()).update(
             row["event_seq"] for row in rows
         )
-        return self.redact(self.material(rows))
+        merged: dict[tuple[str, int], dict] = {}
+        for row in [*rows, *kept_manual]:
+            merged.setdefault((row["thread_id"], int(row["revision"])), row)
+        return self.redact(self.material(list(merged.values())[-16:]))
 
     def _retire(self, chat_id, ids):
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             rows = self._rows(db, chat_id, ids)
+            plain_rows = []
+            keep_seqs = set()
             for row in rows:
+                if _row_has_attachments(row):
+                    keep_seqs.add(row["event_seq"])
+                    continue
                 db.execute(
                     "UPDATE return_intents SET consumed=1 WHERE event_seq=?",
                     (row["event_seq"],),
                 )
-        return rows
+                plain_rows.append(row)
+        return plain_rows, keep_seqs
 
     def _facts(self, rows):
         facts = html.escape(
@@ -548,11 +604,27 @@ class Bridge:
 
     async def _consume(self, chat_id):
         ids = self._offered.pop(chat_id, set())
-        rows = await asyncio.to_thread(self._retire, chat_id, ids) if ids else []
-        manual = list(self._manual.pop(chat_id, {}).values())
-        rows += await asyncio.to_thread(self.current, manual)
+        if ids:
+            rows, keep_seqs = await asyncio.to_thread(self._retire, chat_id, ids)
+            if keep_seqs:
+                self._offered.setdefault(chat_id, set()).update(keep_seqs)
+        else:
+            rows = []
+        raw_manual = self._manual.pop(chat_id, {})
+        plain_manual = []
+        keep_manual = {}
+        for tid, mrow in raw_manual.items():
+            if _row_has_attachments(mrow):
+                keep_manual[tid] = mrow
+            else:
+                plain_manual.append(mrow)
+        if keep_manual:
+            self._manual[chat_id] = keep_manual
+        rows += await asyncio.to_thread(self.current, plain_manual)
         unique = {}
         for row in rows:
+            if _row_has_attachments(row):
+                continue
             if not row.get("archived"):
                 try:
                     claim = await asyncio.to_thread(self.claim_delivery, row, "reply")

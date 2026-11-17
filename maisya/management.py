@@ -24,6 +24,7 @@ from .abilities import (
     PROFILE_ID_RE,
     TASK_RE,
     TOOLSETS,
+    Profile,
     _TOOLSET_LABELS,
     _serialize_profile_dict,
     _validate_instructions,
@@ -4657,13 +4658,72 @@ class Management:
                 )
             if note:
                 resume_msg += f" 管理员附注：{note}"
-            await engine.send(
-                tid,
-                resume_msg,
-                chat_id=row["chat_id"],
-                wait_seconds=0,
-                background=True,
+            svc_cfg = (
+                self.plugin.runtime.services.load()
+                if (
+                    getattr(self.plugin, "runtime", None)
+                    and getattr(self.plugin.runtime, "services", None)
+                )
+                else {}
             )
+            live_ability = None
+            if getattr(self.plugin, "profiles", None) is not None:
+                try:
+                    live_ability = await completed_thread(
+                        self.plugin.profiles.get, row["profile"]
+                    )
+                except (FileNotFoundError, ValueError, OSError):
+                    live_ability = None
+            if live_ability is None and isinstance(row.get("profile_snapshot"), dict):
+                live_ability = Profile.from_snapshot(row["profile_snapshot"])
+            app_env = (
+                approved_envelope(live_ability, svc_cfg, target_chat=row["chat_id"])
+                if live_ability is not None
+                else {}
+            )
+            route, preserved_grant = await self.plugin._prepare_console_resume(
+                row, "console-approve"
+            )
+            issuer_actor = str(preserved_grant.get("issuer_admin") or "console")
+            bridge = getattr(self.plugin, "bridge", None)
+            try:
+                await engine.resume_thread(
+                    tid,
+                    resume_msg,
+                    chat_id=row["chat_id"],
+                    wait_seconds=0,
+                    return_route=route,
+                    input_context={
+                        "grant": {
+                            **preserved_grant,
+                            "console_admin": True,
+                            "admin_verified": True,
+                            "issuer_admin": issuer_actor,
+                            "envelope": app_env,
+                        },
+                        "approval_resolved": resolved,
+                    },
+                    background=True,
+                )
+            finally:
+                if route is not None and bridge is not None:
+                    await bridge.submitted(route)
+            grants = getattr(self.plugin, "grants", None)
+            if grants is not None:
+                src_chat = str(preserved_grant.get("source_chat_id") or row["chat_id"] or "")
+                intents_obj = getattr(self.plugin, "intents", None)
+                await completed_thread(
+                    record_delegation,
+                    grants,
+                    subject_kind="thread",
+                    subject_id=tid,
+                    issuer=issuer_actor,
+                    chat_id=src_chat,
+                    target_chat=row["chat_id"],
+                    profile_id=row["profile"],
+                    envelope=app_env,
+                    clock=intents_obj.clock if intents_obj else None,
+                )
             resumed = True
         return {**resolved, "resumed": resumed}
 

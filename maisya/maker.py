@@ -13,7 +13,7 @@ import sys
 import time
 import uuid
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .abilities import Profile, _has_relative_link
 from .authz import check_hot_edit_expansion
@@ -154,6 +154,7 @@ class AgentRuntime(Scout):
         )
         self.sessions = {}
         self.attachments = {}
+        self._attachment_by_path = {}
         self.attachment_attempts = {}
         self.memory = None
         self.learning = None
@@ -477,6 +478,7 @@ class AgentRuntime(Scout):
     def begin_turn(self, thread_id: str) -> None:
         """在新一轮线程执行开始时清理上一轮残留的附件与重试计数。"""
         self.attachments.pop(thread_id, None)
+        self._attachment_by_path.pop(thread_id, None)
         self.attachment_attempts.pop(thread_id, None)
 
     def effective_mode(self, profile):
@@ -1327,9 +1329,22 @@ class AgentRuntime(Scout):
                 return {
                     "error": "本轮附件已尝试修正一次，请直接返回可用文字与具体附件错误"
                 }
+            raw_paths = arguments["paths"]
+            dedup_paths = (
+                list(
+                    dict.fromkeys(
+                        PurePosixPath(p).as_posix()
+                        if isinstance(p, str) and p.startswith("out/")
+                        else p
+                        for p in raw_paths
+                    )
+                )
+                if isinstance(raw_paths, list) and raw_paths
+                else raw_paths
+            )
             try:
                 attachments = await completed_thread(
-                    self.files.attach, context, work, arguments["paths"]
+                    self.files.attach, context, work, dedup_paths
                 )
             except (ValueError, OSError) as exc:
                 next_attempts = attempts + 1
@@ -1340,6 +1355,23 @@ class AgentRuntime(Scout):
                     }
                 raise
             existing = list(self.attachments.get(context["thread_id"], ()))
+            by_path = self._attachment_by_path.setdefault(context["thread_id"], {})
+            for norm_path, item in zip(dedup_paths, attachments):
+                if not isinstance(item, dict) or not isinstance(norm_path, str):
+                    continue
+                old_handle = by_path.get(norm_path)
+                if old_handle:
+                    existing = [
+                        cur
+                        for cur in existing
+                        if not (
+                            isinstance(cur, dict)
+                            and cur.get("handle") == old_handle
+                        )
+                    ]
+                handle = str(item.get("handle") or "")
+                if handle:
+                    by_path[norm_path] = handle
             seen_keys = {
                 (item.get("handle"), item.get("path"))
                 for item in existing
