@@ -1204,58 +1204,69 @@ class MemoryLayers:
             elif child.is_dir():
                 rmtree_safe(child)
 
-    def _collect_skill_companions(self, directory: Path) -> list[tuple[str, bytes]]:
+    def _collect_skill_companions(
+        self,
+        directory: Path,
+        *,
+        allowed_roots: tuple[str, ...] | None = None,
+    ) -> list[tuple[str, bytes]]:
         if not directory.is_dir() or path_is_link_like(directory):
             return []
         collected: list[tuple[str, bytes]] = []
         total = 0
-        for root_dir, dirs, files in os.walk(directory, followlinks=False):
-            dirs[:] = sorted(
-                d
-                for d in dirs
-                if not d.startswith(".")
-                and d not in _ARCHIVE_JUNK_PARTS
-                and not path_is_link_like(Path(root_dir) / d)
-            )
-            for name in sorted(files):
-                if name.startswith(".") or name in _ARCHIVE_JUNK_FILES:
-                    continue
-                full = Path(root_dir) / name
-                rel = full.relative_to(directory).as_posix()
-                if rel == "SKILL.md":
-                    continue
-                if path_is_link_like(full):
-                    continue
-                try:
-                    rel_clean = self._validate_companion_rel(rel)
-                except ValueError:
-                    continue
-                if has_dir_fd():
-                    fd = os.open(
-                        full,
-                        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
-                    )
-                else:
+        scan_dirs = (
+            [directory / sub for sub in allowed_roots if (directory / sub).is_dir() and not path_is_link_like(directory / sub)]
+            if allowed_roots is not None
+            else [directory]
+        )
+        for scan_root in scan_dirs:
+            for root_dir, dirs, files in os.walk(scan_root, followlinks=False):
+                dirs[:] = sorted(
+                    d
+                    for d in dirs
+                    if not d.startswith(".")
+                    and d not in _ARCHIVE_JUNK_PARTS
+                    and not path_is_link_like(Path(root_dir) / d)
+                )
+                for name in sorted(files):
+                    if name.startswith(".") or name in _ARCHIVE_JUNK_FILES:
+                        continue
+                    full = Path(root_dir) / name
+                    rel = full.relative_to(directory).as_posix()
+                    if rel == "SKILL.md":
+                        continue
+                    if path_is_link_like(full):
+                        continue
                     try:
-                        fd = open_read_fd(full)
-                    except (ValueError, OSError):
+                        rel_clean = self._validate_companion_rel(rel)
+                    except ValueError:
                         continue
-                with os.fdopen(fd, "rb") as src:
-                    info = os.fstat(src.fileno())
-                    invalid_nlink = info.st_nlink > 1 or (
-                        os.name != "nt" and info.st_nlink != 1
-                    )
-                    if not stat.S_ISREG(info.st_mode) or invalid_nlink:
+                    if has_dir_fd():
+                        fd = os.open(
+                            full,
+                            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                        )
+                    else:
+                        try:
+                            fd = open_read_fd(full)
+                        except (ValueError, OSError):
+                            continue
+                    with os.fdopen(fd, "rb") as src:
+                        info = os.fstat(src.fileno())
+                        invalid_nlink = info.st_nlink > 1 or (
+                            os.name != "nt" and info.st_nlink != 1
+                        )
+                        if not stat.S_ISREG(info.st_mode) or invalid_nlink:
+                            continue
+                        if info.st_size > _SKILL_FILE_MAX_BYTES:
+                            continue
+                        data = src.read(_SKILL_FILE_MAX_BYTES + 1)
+                    if len(data) > _SKILL_FILE_MAX_BYTES:
                         continue
-                    if info.st_size > _SKILL_FILE_MAX_BYTES:
-                        continue
-                    data = src.read(_SKILL_FILE_MAX_BYTES + 1)
-                if len(data) > _SKILL_FILE_MAX_BYTES:
-                    continue
-                total += len(data)
-                if len(collected) >= _SKILL_MAX_FILES or total > 4 * 1024 * 1024:
-                    break
-                collected.append((rel_clean, data))
+                    total += len(data)
+                    if len(collected) >= _SKILL_MAX_FILES or total > 4 * 1024 * 1024:
+                        break
+                    collected.append((rel_clean, data))
         return collected
 
     def _resolve_preset_skill_dir(
@@ -1322,6 +1333,70 @@ class MemoryLayers:
             for rel, data in self.read_skill_companions(target, profile_id=profile_id)
         ]
 
+    def _read_companion_from_dir(self, target: str, base_dir: Path, rel: str) -> dict:
+        parts = rel.split("/")
+        if has_dir_fd():
+            cur_fd = os.open(base_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                for seg in parts[:-1]:
+                    next_fd = os.open(
+                        seg, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur_fd
+                    )
+                    os.close(cur_fd)
+                    cur_fd = next_fd
+                file_fd = os.open(
+                    parts[-1],
+                    os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=cur_fd,
+                )
+            except FileNotFoundError:
+                raise ValueError("附属文件不存在") from None
+            except OSError:
+                raise ValueError("无法读取附属文件") from None
+            finally:
+                os.close(cur_fd)
+        else:
+            try:
+                parent = ensure_dirs(base_dir, parts[:-1], create=False)
+                file_fd = open_read_fd(parent / parts[-1], rel)
+                try:
+                    ensure_dirs(base_dir, parts[:-1], create=False)
+                except BaseException:
+                    os.close(file_fd)
+                    raise
+            except FileNotFoundError:
+                raise ValueError("附属文件不存在") from None
+            except (ValueError, OSError):
+                raise ValueError("无法读取附属文件") from None
+        with os.fdopen(file_fd, "rb") as src:
+            info = os.fstat(src.fileno())
+            invalid_nlink = info.st_nlink > 1 or (
+                os.name != "nt" and info.st_nlink != 1
+            )
+            if not stat.S_ISREG(info.st_mode) or invalid_nlink:
+                raise ValueError("附属文件无效")
+            sample = src.read(32768)
+            size = info.st_size
+        if self.vault.contains_secret(sample) or _SECRET_RE.search(
+            sample.decode("utf-8", errors="ignore")
+        ):
+            raise ValueError("附属文件包含凭据，已拒绝读取")
+        is_binary = b"\x00" in sample
+        content = ""
+        if not is_binary:
+            try:
+                content = sample.decode("utf-8")
+            except UnicodeDecodeError:
+                is_binary = True
+        return {
+            "target": target,
+            "path": rel,
+            "bytes": size,
+            "is_binary": is_binary,
+            "content": content,
+            "truncated": size > len(sample),
+        }
+
     def read_skill_file(
         self, target: str, rel_path: str, *, profile_id: str = ""
     ) -> dict:
@@ -1345,70 +1420,7 @@ class MemoryLayers:
             if preset_dir is None or path_is_link_like(preset_dir) or not preset_dir.is_dir():
                 raise ValueError("技能不存在")
             skill_dir = preset_dir
-        parts = rel.split("/")
-        if has_dir_fd():
-            cur_fd = os.open(skill_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                for seg in parts[:-1]:
-                    next_fd = os.open(
-                        seg, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur_fd
-                    )
-                    os.close(cur_fd)
-                    cur_fd = next_fd
-                file_fd = os.open(
-                    parts[-1],
-                    os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
-                    dir_fd=cur_fd,
-                )
-            except FileNotFoundError:
-                raise ValueError("技能附属文件不存在") from None
-            except OSError:
-                raise ValueError("无法读取技能附属文件") from None
-            finally:
-                os.close(cur_fd)
-        else:
-            try:
-                parent = ensure_dirs(skill_dir, parts[:-1], create=False)
-                file_fd = open_read_fd(parent / parts[-1], rel)
-                try:
-                    ensure_dirs(skill_dir, parts[:-1], create=False)
-                except BaseException:
-                    os.close(file_fd)
-                    raise
-            except FileNotFoundError:
-                raise ValueError("技能附属文件不存在") from None
-            except ValueError:
-                raise ValueError("无法读取技能附属文件") from None
-            except OSError:
-                raise ValueError("无法读取技能附属文件") from None
-        with os.fdopen(file_fd, "rb") as src:
-            info = os.fstat(src.fileno())
-            invalid_nlink = info.st_nlink > 1 or (
-                os.name != "nt" and info.st_nlink != 1
-            )
-            if not stat.S_ISREG(info.st_mode) or invalid_nlink:
-                raise ValueError("技能附属文件无效")
-            sample = src.read(32768)
-            size = info.st_size
-        if self.vault.contains_secret(sample) or _SECRET_RE.search(
-            sample.decode("utf-8", errors="ignore")
-        ):
-            raise ValueError("技能附属文件包含凭据，已拒绝读取")
-        is_binary = b"\x00" in sample
-        content = ""
-        if not is_binary:
-            try:
-                content = sample.decode("utf-8")
-            except UnicodeDecodeError:
-                is_binary = True
-        return {
-            "target": target,
-            "path": rel,
-            "bytes": size,
-            "is_binary": is_binary,
-            "content": content,
-            "truncated": size > len(sample),
-        }
+        return self._read_companion_from_dir(target, skill_dir, rel)
 
     def _guard_companion_bytes(self, rel: str, data: bytes):
         if len(data) > _SKILL_FILE_MAX_BYTES:
@@ -1719,6 +1731,87 @@ class MemoryLayers:
                 raise ValueError(f"附属文件不存在: {clean_rel}")
             target_file.unlink()
         return {"ok": True, "skill": target, "removed": clean_rel}
+
+    def _validate_profile_companion_rel(self, rel_path: str) -> str:
+        clean_rel = self._validate_companion_rel(rel_path)
+        if clean_rel.split("/", 1)[0] not in {"references", "templates", "scripts", "assets"}:
+            raise ValueError("附属文件必须位于 references/、templates/、scripts/ 或 assets/ 目录下")
+        return clean_rel
+
+    def read_profile_companions(self, target: str) -> list[tuple[str, bytes]]:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("角色编号无效")
+        prof_dir = self.profiles.path / target
+        if path_is_link_like(prof_dir) or not prof_dir.is_dir() or _has_relative_link(self.profiles.path, prof_dir):
+            return []
+        roots = ("references", "templates", "scripts", "assets")
+        merged: dict[str, bytes] = {}
+        preset_dir = prof_dir / "preset"
+        if preset_dir.is_dir() and not path_is_link_like(preset_dir):
+            for rel, data in self._collect_skill_companions(preset_dir, allowed_roots=roots):
+                merged[rel] = data
+        for rel, data in self._collect_skill_companions(prof_dir, allowed_roots=roots):
+            merged[rel] = data
+        return sorted(merged.items())
+
+    def profile_files(self, target: str) -> list[dict]:
+        return [
+            {"path": rel, "bytes": len(data)}
+            for rel, data in self.read_profile_companions(target)
+        ]
+
+    def read_profile_file(self, target: str, rel_path: str) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("角色编号无效")
+        rel = self._validate_profile_companion_rel(rel_path)
+        prof_dir = self.profiles.path / target
+        if path_is_link_like(prof_dir) or not prof_dir.is_dir() or _has_relative_link(self.profiles.path, prof_dir):
+            raise ValueError("角色不存在")
+        base_dir = prof_dir
+        if not (prof_dir / rel).exists() and (prof_dir / "preset" / rel).exists():
+            base_dir = prof_dir / "preset"
+        return self._read_companion_from_dir(target, base_dir, rel)
+
+    def write_profile_file(
+        self,
+        target: str,
+        rel_path: str,
+        content: str,
+        *,
+        author: str = "agent",
+    ) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("角色编号无效")
+        clean_rel = self._validate_profile_companion_rel(rel_path)
+        if not isinstance(content, str):
+            raise ValueError("附属文件内容必须为文本")
+        raw_bytes = content.encode("utf-8")
+        self._guard_companion_bytes(clean_rel, raw_bytes)
+        with self._lock():
+            prof_dir = self.profiles.path / target
+            if path_is_link_like(prof_dir) or not (prof_dir / "profile.toml").is_file() or _has_relative_link(self.profiles.path, prof_dir):
+                raise ValueError(f"目标角色不存在: {target}")
+            existing_comps = dict(self.read_profile_companions(target))
+            if clean_rel not in existing_comps and len(existing_comps) >= _SKILL_MAX_FILES:
+                raise ValueError("该角色附属文件数量已达上限")
+            target_file = prof_dir / clean_rel
+            _ensure_managed_dir(prof_dir, target_file.parent)
+            atomic_private_write(target_file, raw_bytes)
+        return {"ok": True, "profile": target, "file_path": clean_rel, "bytes": len(raw_bytes)}
+
+    def remove_profile_file(self, target: str, rel_path: str) -> dict:
+        if not isinstance(target, str) or not SKILL_ID_RE.fullmatch(target):
+            raise ValueError("角色编号无效")
+        clean_rel = self._validate_profile_companion_rel(rel_path)
+        with self._lock():
+            prof_dir = self.profiles.path / target
+            if path_is_link_like(prof_dir) or not prof_dir.is_dir():
+                raise ValueError("目标角色目录不存在")
+            target_file = prof_dir / clean_rel
+            if path_is_link_like(target_file) or not target_file.is_file():
+                raise ValueError(f"附属文件不存在: {clean_rel}")
+            target_file.unlink()
+        return {"ok": True, "profile": target, "removed": clean_rel}
 
     def seed_profile(self, target: str) -> dict[str, int]:
         versions = {
@@ -2191,6 +2284,13 @@ class MemoryLayers:
                     pieces.append(f"### 当前会话角色记忆\n{chat_rm}")
         notes_txt = self.read("notes", target=profile.id)["content"]
         pieces.append(notes_txt)
+        has_references = False
+        prof_companions = self.profile_files(profile.id)
+        if prof_companions:
+            listed_prof = ", ".join(c["path"] for c in prof_companions[:20])
+            pieces.append(f"[角色附属文件（工作区只读路径 in/profile/）：{listed_prof}]")
+            if any(c["path"].startswith("references/") for c in prof_companions):
+                has_references = True
         for skill in profile.skills:
             content = self.read("skill", target=skill)["content"]
             if not content.strip():
@@ -2214,7 +2314,13 @@ class MemoryLayers:
                     content.rstrip()
                     + f"\n\n[技能附属文件（工作区只读路径 in/skills/{skill}/）：{listed}]"
                 )
+                if any(c["path"].startswith("references/") for c in companions):
+                    has_references = True
             pieces.append(content)
+        if has_references:
+            pieces.append(
+                "[内部资料边界：references/ 下的文档仅供内部核对与判断，禁止原样复制到 out/ 外发或逐字泄露底稿全文]"
+            )
         return "\n\n".join(pieces)[:16000]
 
     def search(

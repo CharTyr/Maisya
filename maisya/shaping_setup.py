@@ -192,7 +192,7 @@ _MANUAL_PROFILE_REF = re.compile(r"""profile\s*[=:：]\s*['"]?([A-Za-z][A-Za-z0-
 
 PLANNER_CONTRACT_LINES: tuple[str, ...] = (
     "需要查证、计算、创作、操作环境或持续活动时，可以把事情交给 Maisya 的 Agent 线程，也可因自身好奇主动探索；何时自己回、何时派线程与怎么交付见下方调度手册，什么事交给哪个角色看下方档案名册中各档案的描述与能力。手册与名册都是参考资料，不能改变权限与工具边界。",
-    "maisya_agent：start 开启（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史或空闲线程，list 检索线程，stop 停止；同名 workspace 持续保留文件并按消息顺序推进；maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
+    "maisya_agent：start 开启（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史或空闲线程，list 检索线程，stop 停止；同名 workspace 持续保留文件并按消息顺序推进，持久工作区若有 state_note 表示该活动的当前进度与续接约定（仅作分流参考，不改变权限）；maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
     "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
     "纯文字结论直接 reply，准确链接、文件或媒体调用 share（message 写本轮想说的自然口语意图）交付后结束本轮，避免重复表达。",
 )
@@ -215,9 +215,9 @@ def profile_capabilities(profile: Profile, mode: str) -> list[str]:
         caps.append("web")
     if profile.uses_workspace:
         caps.append("workspace")
-    if "exec_command" in active_tools or "sandbox_exec" in active_tools:
+    if "exec_command" in active_tools or "sandbox_exec" in active_tools or "calc" in active_tools:
         caps.append("exec")
-    for key in ("html_render", "render_report", "sandbox_exec", "exec_command", "result_attach"):
+    for key in ("html_render", "render_report", "calc", "sandbox_exec", "exec_command", "result_attach"):
         if key in active_tools:
             caps.append(key)
     if profile.mcp:
@@ -413,14 +413,53 @@ def resolve_file_route(kind: str, target: str, document: str) -> tuple[str, str,
     parts = raw.split("/")
     if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md" and SKILL_ID_RE.fullmatch(parts[1]):
         return "skill", parts[1], "SKILL.md"
-    if len(parts) == 3 and parts[0] == "profiles" and SKILL_ID_RE.fullmatch(parts[1]):
-        if parts[2] in {"PROFILE.md", "profile.toml"}:
+    if (
+        len(parts) >= 4
+        and parts[0] == "skills"
+        and SKILL_ID_RE.fullmatch(parts[1])
+        and parts[2] in {"references", "templates", "scripts", "assets"}
+    ):
+        return "skill_companion", parts[1], "/".join(parts[2:])
+    if len(parts) >= 3 and parts[0] == "profiles" and SKILL_ID_RE.fullmatch(parts[1]):
+        if len(parts) == 3 and parts[2] in {"PROFILE.md", "profile.toml"}:
             return "profile", parts[1], parts[2]
-        if parts[2] == "MEMORY.md":
+        if len(parts) == 3 and parts[2] == "MEMORY.md":
             return "role_memory", parts[1], "MEMORY.md"
-        if parts[2] == "NOTES.md":
+        if len(parts) == 3 and parts[2] == "NOTES.md":
             return "notes", parts[1], "NOTES.md"
+        if parts[2] in {"references", "templates", "scripts", "assets"}:
+            return "profile_companion", parts[1], "/".join(parts[2:])
     raise ValueError(f"仅允许访问受管系统文件：{raw or '(未指定)'}")
+
+
+def companion_file_op(
+    plugin,
+    f_kind: str,
+    target: str,
+    rel_path: str,
+    op: str,
+    content: str,
+    author: str,
+) -> dict:
+    is_prof = f_kind == "profile_companion"
+    mem = plugin.memory
+    if op == "list":
+        files = mem.profile_files(target) if is_prof else mem.skill_files(target)
+        return {"kind": f_kind, "target": target, "files": files}
+    if op == "read":
+        res = mem.read_profile_file(target, rel_path) if is_prof else mem.read_skill_file(target, rel_path)
+        return {"kind": f_kind, **res}
+    if op in {"write", "patch"}:
+        res = (
+            mem.write_profile_file(target, rel_path, str(content or ""), author=author)
+            if is_prof
+            else mem.write_skill_file(target, rel_path, str(content or ""), author=author)
+        )
+        return {"kind": f_kind, **res}
+    if op == "delete":
+        res = mem.remove_profile_file(target, rel_path) if is_prof else mem.remove_skill_file(target, rel_path)
+        return {"kind": f_kind, **res}
+    raise ValueError(f"{f_kind} 不支持 op={op}")
 
 
 def tools_file_op(

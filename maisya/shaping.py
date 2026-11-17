@@ -24,6 +24,7 @@ from .shaping_setup import (
     import_profile_bundle,
     planner_manual_check,
     profile_summary as _profile_summary,
+    companion_file_op as _companion_file_op,
     resolve_file_route as _resolve_file_route,
     tools_file_op as _tools_file_op,
 )
@@ -41,7 +42,7 @@ _PROFILE_TOML_KEYS = {
     "title", "description", "enabled", "base", "session_mode", "access", "allow_chats", "allow_users",
     "share_credentials", "model", "model_name", "fallback_models", "task", "toolsets", "tools", "skills",
     "connectors", "mcp", "apis", "secrets", "sandbox_targets", "network", "environment", "max_tokens",
-    "context_tokens", "temperature", "max_steps", "web_provider", "bound", "fish_seed",
+    "context_tokens", "temperature", "max_steps", "web_provider", "bound", "fish_seed", "coalesce_window_ms",
 }
 DEFAULT_DIGEST_SCHEDULE_PROMPT = (
     "结合 <memory_context> 中记录的关注主题、已订阅资讯源与读者反馈，先调用 chat_read(limit=80, hours=168) 与宽泛 memory_read 校对近期真实多元兴趣比例（不因旧标签锁死单一品类），"
@@ -476,6 +477,8 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
     f_kind, f_target, f_doc = _resolve_file_route(kind, target, document)
     if f_kind == "tools":
         return await completed_thread(_tools_file_op, plugin, op, content, version, expected_version, author, _assert_no_secret)
+    if f_kind in {"profile_companion", "skill_companion"}:
+        return await completed_thread(_companion_file_op, plugin, f_kind, f_target, f_doc, op, content, author)
     chat_id = current_chat_id
     if target_chat and str(target_chat).strip():
         if f_kind == "role_memory" and str(target_chat).strip().lower() == "global":

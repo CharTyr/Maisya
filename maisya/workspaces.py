@@ -252,6 +252,28 @@ class WorkingCopy:
     def __init__(self, owner, row, path, durable):
         self.owner, self.row, self.path, self.durable = owner, row, path, durable
         self.quarantined = False
+        self.protected_references = {"digests": set(), "texts": []}
+
+    def _read_state_note(self) -> str:
+        state_path = self.path / "project" / "STATE.md"
+        if path_is_link_like(self.path / "project") or path_is_link_like(state_path) or not state_path.is_file():
+            return ""
+        try:
+            with regular_open(self.path, "project/STATE.md") as src:
+                raw = src.read(2400)
+        except (OSError, ValueError):
+            return ""
+        text = raw.decode("utf-8", errors="replace")
+        text = "".join(ch for ch in text if ch in "\n\t" or ord(ch) >= 32)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        if not text:
+            return ""
+        redact_fn = getattr(self.owner, "redact", None)
+        if callable(redact_fn):
+            text = str(redact_fn(text) or "")
+        if self.owner.contains_secret(text.encode("utf-8")):
+            return ""
+        return text[:600].strip()
 
     def read(self, path, offset=0):
         if type(offset) is not int or offset < 0:
@@ -276,6 +298,8 @@ class WorkingCopy:
     def write_bytes(self, path, data):
         if not isinstance(path, str):
             raise ValueError("工作区路径无效")
+        if path.startswith(("in/profile/", "in/skills/")):
+            raise PermissionError("只读附属参考与模板目录不可写入")
         if path.startswith("in/"):
             raise PermissionError("引用输入只读")
         _validate_workspace_rel(path)
@@ -307,6 +331,7 @@ class WorkingCopy:
 
     def commit(self):
         files, _used = self.owner.inventory(self.path)
+        state_note = self._read_state_note()
         with self.owner.capacity_lock():
             total = self.owner.usage()
             incoming = sum(size for _path, size in files)
@@ -324,6 +349,14 @@ class WorkingCopy:
                     ).fetchone()
                     if not current or current["state"] == "closed":
                         raise RuntimeError("线程已停止，文件检查点未提交")
+                    updater = getattr(self.owner.store, "update_state_note", None)
+                    if callable(updater):
+                        updater(
+                            self.row["thread_id"],
+                            str(self.row.get("workspace_id") or ""),
+                            state_note,
+                            db=db,
+                        )
                     atomic_private_write(
                         self.durable / "current.json",
                         json.dumps({"version": version}).encode("utf-8"),
@@ -364,6 +397,7 @@ class Workspaces:
         total_bytes=1024**3,
         volume=None,
         contains_secret=lambda content: False,
+        redact=lambda value: value,
     ):
         self.root = private_directory(Path(root))
         self.store, self.max_bytes, self.max_files, self.total_bytes = (
@@ -374,6 +408,7 @@ class Workspaces:
         )
         self.volume = volume
         self.contains_secret = contains_secret
+        self.redact = redact
         self.runtime = private_directory(self.root / "runtime")
         self.artifacts = private_directory(self.root / "attachments")
         self.quarantines = {}
@@ -533,8 +568,31 @@ class Workspaces:
                     or self.usage() + size > self.total_bytes
                 ):
                     raise ValueError("附件为空或超过配额")
-                if self.contains_secret(source.read(self.max_bytes + 1)):
+                raw_bytes = source.read(self.max_bytes + 1)
+                if len(raw_bytes) > self.max_bytes:
+                    raise ValueError("附件为空或超过配额")
+                if self.contains_secret(raw_bytes):
                     raise ValueError("附件包含已登记凭据，已拒绝导出")
+                refs = getattr(work, "protected_references", None)
+                if isinstance(refs, dict):
+                    digests = refs.get("digests") or ()
+                    if hashlib.sha256(raw_bytes).hexdigest() in digests:
+                        raise ValueError("附件包含角色内部参考资料（references/），禁止直接外发原文件")
+                    ref_texts = refs.get("texts") or ()
+                    if ref_texts:
+                        compact = re.sub(r"\s+", "", raw_bytes.decode("utf-8", errors="ignore"))
+                        if len(compact) >= 32:
+                            for ref_compact in ref_texts:
+                                if len(ref_compact) >= 32 and ref_compact in compact:
+                                    raise ValueError("附件包含角色内部参考资料（references/），禁止直接外发原文件")
+                                if len(ref_compact) >= 200:
+                                    hits = [
+                                        ref_compact[i : i + 200]
+                                        for i in range(0, len(ref_compact) - 199, 100)
+                                    ]
+                                    hits.append(ref_compact[-200:])
+                                    if any(chunk in compact for chunk in hits):
+                                        raise ValueError("附件包含角色内部参考资料（references/），禁止直接外发原文件")
                 source.seek(0)
                 with destination.open("xb") as output:
                     shutil.copyfileobj(source, output, 65536)

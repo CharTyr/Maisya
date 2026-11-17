@@ -67,6 +67,8 @@ def _merge_grant_dict(existing_grant: dict, incoming_grant: dict) -> dict:
             elif key not in merged:
                 merged[key] = value
             continue
+        if key == "speaker":
+            continue
         if key == "admin_direct":
             if value is False:
                 merged["admin_direct"] = False
@@ -113,11 +115,19 @@ def public(row, *, reveal_result: bool = False):
     }
     if not reveal_result:
         out["result"] = _effective_public_result(row, out["result"])
+    if isinstance(row, sqlite3.Row):
+        note = str(row["state_note"] or "").strip() if "state_note" in row.keys() else ""
+    elif isinstance(row, dict):
+        note = str(row.get("state_note") or "").strip()
+    else:
+        note = ""
+    if note:
+        out["state_note"] = note[:600]
     return out
 
 
 _INPUT_TAG_RE = re.compile(
-    r"\s*<(?:reference_ids|previous_result|maisya_temperament|recent_journal|previous_runs)>[\s\S]*?</(?:reference_ids|previous_result|maisya_temperament|recent_journal|previous_runs)>\s*"
+    r"\s*(?:<speaker\b[^>]*/>|<(?:reference_ids|previous_result|maisya_temperament|recent_journal|previous_runs)>[\s\S]*?</(?:reference_ids|previous_result|maisya_temperament|recent_journal|previous_runs)>)\s*"
 )
 _HEARTBEAT_TITLE_PREFIX = "按自身节奏做一次轻量公开探索并记录近况"
 _HEARTBEAT_TRAILER_RE = re.compile(r"\s*以下为近期已记录的手账[\s\S]*$")
@@ -378,8 +388,40 @@ class ThreadStore:
                     db.execute(
                         f"ALTER TABLE {tbl} ADD COLUMN visibility_scope TEXT NOT NULL DEFAULT ''"
                     )
+                if "state_note" not in cols:
+                    db.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN state_note TEXT NOT NULL DEFAULT ''"
+                    )
             ensure_scope_tables(db)
         safe_chmod(path, 0o600)
+
+    def update_state_note(
+        self, thread_id: str, workspace_id: str, note: str, *, db=None
+    ) -> None:
+        clean_note = str(note or "").strip()[:600]
+
+        def _apply(conn) -> None:
+            if thread_id:
+                conn.execute(
+                    "UPDATE agent_threads SET state_note=? WHERE thread_id=?",
+                    (clean_note, thread_id),
+                )
+            if workspace_id:
+                conn.execute(
+                    "UPDATE agent_workspaces SET state_note=? WHERE workspace_id=?",
+                    (clean_note, workspace_id),
+                )
+                conn.execute(
+                    "UPDATE agent_threads SET state_note=? "
+                    "WHERE thread_id IN (SELECT thread_id FROM thread_context WHERE workspace_id=?)",
+                    (clean_note, workspace_id),
+                )
+
+        if db is not None:
+            _apply(db)
+        else:
+            with self.connect() as conn, conn:
+                _apply(conn)
 
     def narrow_scope(self, thread_id: str, *extra_scopes: str) -> str:
         clean = [str(s or "").strip() for s in extra_scopes if str(s or "").strip()]
@@ -630,7 +672,10 @@ class ThreadStore:
                         )
                         db.execute(
                             "UPDATE thread_context SET grant=? WHERE thread_id=?",
-                            (encode(grant or {}), binding["thread_id"]),
+                            (
+                                encode({k: v for k, v in grant_dict.items() if k != "speaker"}),
+                                binding["thread_id"],
+                            ),
                         )
                         db.commit()
                         return self.get(
@@ -639,7 +684,12 @@ class ThreadStore:
                             allow_any_chat=binding["chat_id"] != chat_id,
                         )
                     workspace_id = binding["workspace_id"]
+                    ws_state_note = str(
+                        (binding["state_note"] if "state_note" in binding.keys() else "")
+                        or ""
+                    ).strip()[:600]
                 else:
+                    ws_state_note = ""
                     workspace_id = (
                         "ws_"
                         + hashlib.sha256(
@@ -662,15 +712,26 @@ class ThreadStore:
                 )
                 ws_vis = merge_scopes([b_vis_old, vis_scope]) if binding else vis_scope
                 db.execute(
-                    "INSERT INTO agent_workspaces (workspace_id, owner, chat_id, name, profile, thread_id, visibility_scope) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(workspace_id) DO UPDATE SET chat_id=excluded.chat_id, thread_id=excluded.thread_id, visibility_scope=excluded.visibility_scope",
-                    (workspace_id, owner, chat_id, ws_name_to_bind, profile.id, thread_id, ws_vis),
+                    "INSERT INTO agent_workspaces (workspace_id, owner, chat_id, name, profile, thread_id, visibility_scope, state_note) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(workspace_id) DO UPDATE SET chat_id=excluded.chat_id, thread_id=excluded.thread_id, visibility_scope=excluded.visibility_scope, state_note=excluded.state_note",
+                    (
+                        workspace_id,
+                        owner,
+                        chat_id,
+                        ws_name_to_bind,
+                        profile.id,
+                        thread_id,
+                        ws_vis,
+                        ws_state_note,
+                    ),
                 )
+            else:
+                ws_state_note = ""
             db.execute(
                 "INSERT INTO agent_threads "
-                "(thread_id, profile, profile_snapshot, chat_id, platform, user_id, owner, state, result, history, summary, revision, processed_revision, completed_revision, questions, updated, visibility_scope) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(thread_id, profile, profile_snapshot, chat_id, platform, user_id, owner, state, result, history, summary, revision, processed_revision, completed_revision, questions, updated, visibility_scope, state_note) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     profile.id,
@@ -689,12 +750,17 @@ class ThreadStore:
                     0,
                     time.time(),
                     vis_scope,
+                    ws_state_note,
                 ),
             )
             db.execute("INSERT INTO thread_search VALUES (?, ?)", (thread_id, message))
             db.execute(
                 "INSERT INTO thread_context VALUES (?, ?, ?)",
-                (thread_id, workspace_id, encode(grant or {})),
+                (
+                    thread_id,
+                    workspace_id,
+                    encode({k: v for k, v in grant_dict.items() if k != "speaker"}),
+                ),
             )
             self.event(
                 db,
@@ -714,11 +780,27 @@ class ThreadStore:
                 "SELECT workspace_id,grant FROM thread_context WHERE thread_id=?",
                 (thread_id,),
             ).fetchone()
+            ws_note_row = (
+                db.execute(
+                    "SELECT state_note FROM agent_workspaces WHERE workspace_id=?",
+                    (context["workspace_id"],),
+                ).fetchone()
+                if context and context["workspace_id"]
+                else None
+            )
         if row is None:
             raise ValueError("线程不存在")
         result = dict(row)
         result["workspace_id"] = context["workspace_id"] if context else ""
         result["grant"] = json.loads(context["grant"]) if context else {}
+        result["state_note"] = str(
+            (
+                ws_note_row["state_note"]
+                if ws_note_row and ws_note_row["state_note"]
+                else result.get("state_note")
+            )
+            or ""
+        ).strip()[:600]
         if not str(result.get("visibility_scope") or "").strip():
             result["visibility_scope"] = initial_thread_scope(
                 owner=result.get("owner") or "chat",
@@ -848,6 +930,62 @@ class ThreadStore:
                 (thread_id, processed),
             ).fetchall()
         return [(row["revision"], json.loads(row["payload"])["text"]) for row in rows]
+
+    def pending_with_meta(self, thread_id, processed):
+        with self.connect() as db:
+            rows = db.execute(
+                'SELECT revision, payload FROM thread_events WHERE thread_id=? AND kind="input" '
+                "AND revision>? ORDER BY revision",
+                (thread_id, processed),
+            ).fetchall()
+        out = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            out.append(
+                (
+                    int(row["revision"]),
+                    str(payload.get("text") or ""),
+                    payload.get("context") if isinstance(payload.get("context"), dict) else {},
+                    payload.get("return_route") if isinstance(payload.get("return_route"), dict) else None,
+                )
+            )
+        return out
+
+    def retire_coalesced_returns(self, thread_id: str, revisions: list[int]) -> None:
+        revs = [int(r) for r in revisions if isinstance(r, int) and r > 0]
+        if not revs:
+            return
+        with self.connect() as db, db:
+            tables = {
+                r[0]
+                for r in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            placeholders = ",".join("?" for _ in revs)
+            if "return_intents" in tables:
+                db.execute(
+                    f"UPDATE return_intents SET consumed=1 WHERE thread_id=? AND revision IN ({placeholders})",
+                    (thread_id, *revs),
+                )
+            if "return_members" in tables and "return_groups" in tables:
+                grp_rows = db.execute(
+                    f"SELECT DISTINCT group_id FROM return_members WHERE thread_id=? AND revision IN ({placeholders})",
+                    (thread_id, *revs),
+                ).fetchall()
+                for gr in grp_rows:
+                    gid = gr["group_id"]
+                    active_left = db.execute(
+                        "SELECT COUNT(*) AS c FROM return_members m "
+                        "WHERE m.group_id=? AND NOT (m.thread_id=? AND m.revision IN (" + placeholders + "))",
+                        (gid, thread_id, *revs),
+                    ).fetchone()["c"]
+                    if not active_left:
+                        db.execute(
+                            "UPDATE return_groups SET wake_status='coalesced' "
+                            "WHERE group_id=? AND (wake_status IS NULL OR wake_status='')",
+                            (gid,),
+                        )
 
     def boundary(self, thread_id, processed):
         with self.connect() as db:
@@ -2067,11 +2205,20 @@ class ThreadStore:
                     break
                 tid = row["thread_id"]
                 ws_row = db.execute(
-                    "SELECT w.name FROM thread_context c JOIN agent_workspaces w "
+                    "SELECT w.name, COALESCE(w.state_note, '') AS state_note "
+                    "FROM thread_context c JOIN agent_workspaces w "
                     "ON w.workspace_id=c.workspace_id WHERE c.thread_id=?",
                     (tid,),
                 ).fetchone()
                 ws_name = str(ws_row["name"]) if ws_row and ws_row["name"] else ""
+                s_note = str(
+                    (
+                        ws_row["state_note"]
+                        if ws_row and ws_row["state_note"]
+                        else (row["state_note"] if "state_note" in row.keys() else "")
+                    )
+                    or ""
+                ).strip()[:600]
                 first_in = db.execute(
                     'SELECT payload FROM thread_events WHERE thread_id=? AND kind="input" '
                     "ORDER BY seq ASC LIMIT 1",
@@ -2101,6 +2248,7 @@ class ThreadStore:
                     "title": title,
                     "workspace": ws_name,
                     "result": _effective_public_result(row, json.loads(row["result"])),
+                    **({"state_note": s_note} if s_note else {}),
                 }
                 if row["state"] in {"active", "waiting"}:
                     latest_ev = db.execute(
@@ -2261,11 +2409,20 @@ class ThreadStore:
             for row in rows:
                 tid = row["thread_id"]
                 ws_row = db.execute(
-                    "SELECT w.name FROM thread_context c JOIN agent_workspaces w "
+                    "SELECT w.name, COALESCE(w.state_note, '') AS state_note "
+                    "FROM thread_context c JOIN agent_workspaces w "
                     "ON w.workspace_id=c.workspace_id WHERE c.thread_id=?",
                     (tid,),
                 ).fetchone()
                 ws_name = str(ws_row["name"]) if ws_row and ws_row["name"] else ""
+                s_note = str(
+                    (
+                        ws_row["state_note"]
+                        if ws_row and ws_row["state_note"]
+                        else (row["state_note"] if "state_note" in row.keys() else "")
+                    )
+                    or ""
+                ).strip()[:600]
                 first_in = db.execute(
                     'SELECT payload FROM thread_events WHERE thread_id=? AND kind="input" ORDER BY seq ASC LIMIT 1',
                     (tid,),
@@ -2297,9 +2454,58 @@ class ThreadStore:
                         "workspace": ws_name,
                         "result": _effective_public_result(row, json.loads(row["result"])),
                         "updated": row["updated"],
+                        **({"state_note": s_note} if s_note else {}),
                     }
                 )
         return items
+
+
+def _batch_compat_key(meta: dict, route: dict | None, default_chat: str) -> tuple:
+    g = meta.get("grant") if isinstance(meta.get("grant"), dict) else {}
+    return (
+        bool(g.get("admin_verified")),
+        bool(g.get("scheduled_admin")),
+        bool(g.get("console_admin")),
+        bool(g.get("admin_direct")),
+        str(g.get("issuer_admin") or ""),
+        str(g.get("source_chat_id") or default_chat or ""),
+    )
+
+
+def _format_speaker_text(text: str, meta: dict) -> str:
+    g = meta.get("grant") if isinstance(meta.get("grant"), dict) else {}
+    spk = (
+        meta.get("speaker")
+        if isinstance(meta.get("speaker"), dict)
+        else (g.get("speaker") if isinstance(g.get("speaker"), dict) else {})
+    )
+    if spk.get("chat_type") != "group":
+        return text
+    uid = str(spk.get("user_id") or "").strip()
+    sname = str(spk.get("sender_name") or "").strip()
+    mid = str(spk.get("message_id") or "").strip()
+    if not (uid or sname) or text.lstrip().startswith("<speaker "):
+        return text
+    return (
+        f'<speaker id="{html.escape(uid, quote=True)}" '
+        f'name="{html.escape(sname, quote=True)}" '
+        f'msg_id="{html.escape(mid, quote=True)}" />\n{text}'
+    )
+
+
+def _is_group_pending(row: dict, pending_full: list) -> bool:
+    if ":group:" in str(row.get("chat_id") or ""):
+        return True
+    for _rev, _txt, meta, _rt in pending_full:
+        g = meta.get("grant") if isinstance(meta.get("grant"), dict) else {}
+        spk = (
+            meta.get("speaker")
+            if isinstance(meta.get("speaker"), dict)
+            else (g.get("speaker") if isinstance(g.get("speaker"), dict) else {})
+        )
+        if spk.get("chat_type") == "group":
+            return True
+    return False
 
 
 class ThreadEngine:
@@ -2349,6 +2555,7 @@ class ThreadEngine:
         self.chats = {}
         self.locks = {}
         self.waiters = {}
+        self._coalesced_into: dict[str, dict[int, int]] = {}
         self._finishing: set[str] = set()
         self._deferred_queue: list[tuple[str, str, bool]] = []
         self._starting = 0
@@ -2419,6 +2626,7 @@ class ThreadEngine:
         if self.waiters.get(thread_id):
             return
         self.waiters.pop(thread_id, None)
+        self._coalesced_into.pop(thread_id, None)
         self.chats.pop(thread_id, None)
         lock_obj = self.locks.get(thread_id)
         if lock_obj is not None and not lock_obj.locked():
@@ -2875,8 +3083,27 @@ class ThreadEngine:
             row["state"] in {"idle", "archived", "done"}
             and self.store.is_stopped(thread_id, state=row["state"])
         )
+        c_map = self._coalesced_into.get(thread_id) or {}
         remaining = []
         for revision, future in waiters:
+            if (
+                not stopped_now
+                and revision in c_map
+                and c_map[revision] <= row["completed_revision"]
+            ):
+                target_rev = c_map.pop(revision)
+                if not c_map:
+                    self._coalesced_into.pop(thread_id, None)
+                if not future.done():
+                    base = public(row, reveal_result=False)
+                    base["result"] = {}
+                    base["coalesced_into"] = target_rev
+                    base["superseded"] = True
+                    base["delivery_hint"] = (
+                        "该条补充已与后续消息合并由最新轮次统一交付，请结束本轮避免重复回复"
+                    )
+                    future.set_result(base)
+                continue
             if stopped_now or revision <= row["completed_revision"] or row["state"] in {"closed", "archived"}:
                 if not future.done():
                     future.set_result(
@@ -3064,6 +3291,18 @@ class ThreadEngine:
             )
         return tokens
 
+    async def _pending_inputs(self, thread_id: str, processed: int) -> list:
+        if hasattr(self.store, "pending_with_meta"):
+            return await asyncio.to_thread(
+                self.store.pending_with_meta, thread_id, processed
+            )
+        raw_pending = await asyncio.to_thread(self.store.pending, thread_id, processed)
+        out = []
+        for rev, text in raw_pending:
+            meta = await completed_thread(self.store.input_context, thread_id, rev)
+            out.append((rev, text, meta if isinstance(meta, dict) else {}, None))
+        return out
+
     async def _drive(self, thread_id, chat_id):
         current_task = asyncio.current_task()
         row = None
@@ -3090,26 +3329,41 @@ class ThreadEngine:
             overflow_retried = False
             async with asyncio.timeout(self.timeout):
                 for step_index in range(profile.max_steps or self.max_steps):
-                    pending = await asyncio.to_thread(
-                        self.store.pending, thread_id, processed
-                    )
-                    if pending:
+                    metadata = None
+                    pending_full = await self._pending_inputs(thread_id, processed)
+                    if (
+                        step_index == 0
+                        and pending_full
+                        and getattr(profile, "coalesce_window_ms", 0) > 0
+                        and row.get("owner") == "chat"
+                        and _is_group_pending(row, pending_full)
+                    ):
+                        await asyncio.sleep(
+                            min(8.0, float(profile.coalesce_window_ms) / 1000.0)
+                        )
+                        alive, _changed = await self._boundary(
+                            thread_id, processed, deadline
+                        )
+                        if not alive:
+                            return
+                        pending_full = await self._pending_inputs(thread_id, processed)
+                    if pending_full:
                         if hasattr(self.runtime, "resolve_profile"):
                             profile = await asyncio.to_thread(
                                 self.runtime.resolve_profile, raw_profile
                             )
                         if hasattr(self.runtime, "begin_turn"):
                             self.runtime.begin_turn(thread_id)
-                    if row["workspace_id"]:
-                        steering = []
-                        for index, (revision, _text) in enumerate(pending):
-                            metadata = await completed_thread(
-                                self.store.input_context, thread_id, revision
-                            )
-                            if metadata.get("steer"):
-                                steering.append(index)
+                    batch = pending_full
+                    retired_revs: list[int] = []
+                    if pending_full and row["workspace_id"]:
+                        steering = [
+                            idx
+                            for idx, (_r, _t, m, _rt) in enumerate(pending_full)
+                            if m.get("steer")
+                        ]
                         selected = steering[-1] if steering else 0
-                        for revision, text in pending[:selected]:
+                        for revision, text, _m, _rt in pending_full[:selected]:
                             history.append(
                                 {
                                     "role": "user",
@@ -3119,13 +3373,50 @@ class ThreadEngine:
                                 }
                             )
                             processed = revision
-                        pending = pending[selected : selected + 1]
-                    for revision, text in pending:
-                        history.append({"role": "user", "content": text})
-                        processed = revision
-                        metadata = await asyncio.to_thread(
-                            self.store.input_context, thread_id, processed
+                            retired_revs.append(revision)
+                        base_key = _batch_compat_key(
+                            pending_full[selected][2],
+                            pending_full[selected][3],
+                            store_chat,
                         )
+                        batch = [pending_full[selected]]
+                        for cand in pending_full[selected + 1 : selected + 8]:
+                            if (
+                                cand[2].get("steer")
+                                or _batch_compat_key(cand[2], cand[3], store_chat)
+                                != base_key
+                            ):
+                                break
+                            batch.append(cand)
+                    elif len(pending_full) > 1:
+                        base_key = _batch_compat_key(
+                            pending_full[0][2], pending_full[0][3], store_chat
+                        )
+                        batch = [pending_full[0]]
+                        if not pending_full[0][2].get("steer"):
+                            for cand in pending_full[1:8]:
+                                if (
+                                    cand[2].get("steer")
+                                    or _batch_compat_key(cand[2], cand[3], store_chat)
+                                    != base_key
+                                ):
+                                    break
+                                batch.append(cand)
+                    if len(batch) > 1:
+                        last_rev = batch[-1][0]
+                        cmap = self._coalesced_into.setdefault(thread_id, {})
+                        for rev_item, *_rest in batch[:-1]:
+                            cmap[rev_item] = last_rev
+                            retired_revs.append(rev_item)
+                    if retired_revs and hasattr(self.store, "retire_coalesced_returns"):
+                        await asyncio.to_thread(
+                            self.store.retire_coalesced_returns, thread_id, retired_revs
+                        )
+                    for revision, text, item_meta, _rt in batch:
+                        formatted_text = _format_speaker_text(text, item_meta)
+                        history.append({"role": "user", "content": formatted_text})
+                        processed = revision
+                        metadata = item_meta
                         if hasattr(self.runtime, "prepare"):
                             prepared = await self.runtime.prepare(
                                 {

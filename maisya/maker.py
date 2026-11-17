@@ -15,7 +15,7 @@ import uuid
 from dataclasses import replace
 from pathlib import Path
 
-from .abilities import Profile
+from .abilities import Profile, _has_relative_link
 from .authz import check_hot_edit_expansion
 from .data_scope import STEP_METHODS_CONTEXT, initial_thread_scope
 from .pathsafe import minimal_subprocess_env, path_is_link_like
@@ -52,6 +52,18 @@ _EXECUTION_RANK = {"host": 0, "auto": 1, "sandbox": 2}
 _PERMISSION_RANK = {"autonomous": 0, "ask_risky": 1, "always_ask": 2}
 _NETWORK_RANK = {"public": 0, "restricted": 1, "none": 2}
 _SHELL_META_RE = re.compile(r"[\n\r|&;><$`\\]")
+_TRUSTED_SCRIPT_BOOT = (
+    "import os, runpy, socket, sys\n"
+    "def _deny_net(*_a, **_kw):\n"
+    "    raise PermissionError('无容器受控脚本禁止访问网络')\n"
+    "socket.socket = _deny_net\n"
+    "socket.socketpair = _deny_net\n"
+    "socket.create_connection = _deny_net\n"
+    "socket.create_server = _deny_net\n"
+    "sys.argv = sys.argv[1:]\n"
+    "sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0])))\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
 
 
 def _stricter_choice(first: str, second: str, ranks: dict[str, int], *, default_rank: int) -> str:
@@ -138,6 +150,7 @@ class AgentRuntime(Scout):
             store,
             volume=self.sandbox.volume if settings.enabled else None,
             contains_secret=vault.contains_secret,
+            redact=vault.redact,
         )
         self.sessions = {}
         self.attachments = {}
@@ -458,6 +471,7 @@ class AgentRuntime(Scout):
             apis=_intersect_bound(tuple(profile.apis), tuple(live.apis)),
             secrets=_intersect_bound(tuple(profile.secrets), tuple(live.secrets)),
             fish_seed=live.fish_seed,
+            coalesce_window_ms=live.coalesce_window_ms,
         )
 
     def begin_turn(self, thread_id: str) -> None:
@@ -578,7 +592,7 @@ class AgentRuntime(Scout):
                         if name not in {"sandbox_exec", "exec_command"}
                     ),
                     instructions=profile.instructions
-                    + "\n<runtime_mode>当前容器沙箱未就绪，自动运行于无容器轻量工作区模式：可使用 workspace_file、html_render、result_attach 及已授权的只读/联网工具完成整理、排版与出图（开启 Docker 沙箱后恢复容器执行）。</runtime_mode>",
+                    + "\n<runtime_mode>当前容器沙箱未就绪，自动运行于无容器轻量工作区模式：可使用 calc 进行精确计算与随机抽样，以及 workspace_file、html_render、result_attach 和已授权的只读/联网工具完成整理、排版与出图（开启 Docker 沙箱后恢复容器执行）。</runtime_mode>",
                 )
             elif "sandbox_exec" in profile.tools:
                 profile = replace(
@@ -587,6 +601,11 @@ class AgentRuntime(Scout):
                         name for name in profile.tools if name != "sandbox_exec"
                     ),
                 )
+        if (
+            "workspace_file" not in profile.tools
+            and await completed_thread(self._has_companions, profile)
+        ):
+            profile = replace(profile, tools=(*profile.tools, "workspace_file"))
         if self.services and profile.mcp:
             descriptions = await completed_thread(self.services.describe, profile)
             profile = replace(
@@ -637,6 +656,50 @@ class AgentRuntime(Scout):
                     ctx_data = {**ctx_data, **meta}
         return ctx_data
 
+    def _has_companions(self, profile: Profile) -> bool:
+        if self.memory is None:
+            return False
+        try:
+            if self.memory.profile_files(profile.id):
+                return True
+        except (ValueError, OSError):
+            pass
+        for skill_id in profile.skills:
+            try:
+                if self.memory.skill_files(skill_id, profile_id=profile.id):
+                    return True
+            except (ValueError, OSError):
+                continue
+        return False
+
+    @staticmethod
+    def _record_protected_reference(work, rel_sub: str, raw_data: bytes) -> None:
+        if not rel_sub.startswith("references/"):
+            return
+        refs = getattr(work, "protected_references", None)
+        if not isinstance(refs, dict):
+            refs = {"digests": set(), "texts": []}
+            work.protected_references = refs
+        refs["digests"].add(hashlib.sha256(raw_data).hexdigest())
+        if b"\x00" not in raw_data[:4096]:
+            compact = re.sub(
+                r"\s+", "", raw_data.decode("utf-8", errors="ignore")
+            )
+            if len(compact) >= 32:
+                refs["texts"].append(compact)
+
+    def _sync_profile_companions(self, row, work):
+        if self.memory is None:
+            return
+        try:
+            companions = self.memory.read_profile_companions(str(row.get("profile") or ""))
+        except (ValueError, OSError):
+            return
+        for rel_sub, raw_data in companions:
+            rel = f"in/profile/{rel_sub}"
+            write_workspace_bytes(work.path, rel, raw_data, overwrite=True)
+            self._record_protected_reference(work, rel_sub, raw_data)
+
     def _sync_skill_companions(self, row, work):
         if self.memory is None:
             return
@@ -655,6 +718,7 @@ class AgentRuntime(Scout):
             for rel_sub, raw_data in companions:
                 rel = f"in/skills/{skill_id}/{rel_sub}"
                 write_workspace_bytes(work.path, rel, raw_data, overwrite=True)
+                self._record_protected_reference(work, rel_sub, raw_data)
 
     async def _work(self, row):
         thread_id = row["thread_id"]
@@ -663,6 +727,7 @@ class AgentRuntime(Scout):
             def enter():
                 manager = self.files.activity(row)
                 work = manager.__enter__()
+                self._sync_profile_companions(row, work)
                 self._sync_skill_companions(row, work)
                 self.sessions[thread_id] = manager, work
                 return work
@@ -1073,6 +1138,10 @@ class AgentRuntime(Scout):
             self.authorized, context
         ):
             raise PermissionError("本次活动的管理员授权已失效")
+        if name == "calc":
+            from .calc_engine import run_calc_tool
+
+            return await completed_thread(run_calc_tool, arguments)
         if name in {
             "workspace_file",
             "html_render",
@@ -1082,7 +1151,13 @@ class AgentRuntime(Scout):
             "package_export",
         }:
             if not profile.uses_workspace:
-                raise PermissionError("当前角色未启用工作区工具")
+                if name == "workspace_file" and await completed_thread(self._has_companions, profile):
+                    ws_act = arguments.get("action")
+                    ws_path = str(arguments.get("path") or "")
+                    if ws_act != "list" and not (ws_act == "read" and ws_path.startswith("in/")):
+                        raise PermissionError("当前角色未启用工作区工具，只读角色仅可查阅 in/ 下的附属资料")
+                else:
+                    raise PermissionError("当前角色未启用工作区工具")
             work = await self._work(context)
             if name == "package_export":
                 from .packages import export_package
@@ -1294,6 +1369,73 @@ class AgentRuntime(Scout):
             return await self.services.call_api(profile, arguments, service_ctx, self)
         return await super().call(name, arguments, context)
 
+    def _resolve_trusted_script_path(
+        self, profile: Profile, script_arg: str
+    ) -> Path | None:
+        if (
+            not script_arg
+            or script_arg.startswith("-")
+            or not script_arg.endswith(".py")
+            or self.memory is None
+        ):
+            return None
+        profiles = getattr(self.memory, "profiles", None)
+        if profiles is None:
+            return None
+        candidate_rel = Path(script_arg)
+        if (
+            candidate_rel.is_absolute()
+            or ".." in candidate_rel.parts
+            or len(candidate_rel.parts) > 8
+        ):
+            return None
+
+        roots_to_try: list[tuple[Path, Path]] = []
+        parts = candidate_rel.parts
+        if len(parts) >= 5 and parts[:2] == ("in", "skills") and parts[3] == "scripts":
+            skill_id = parts[2]
+            if skill_id in set(profile.skills):
+                rel_sub = Path(*parts[4:])
+                roots_to_try.append(
+                    (self.memory.root / "abilities/skills" / skill_id / "scripts", rel_sub)
+                )
+                preset_sk = self.memory._resolve_preset_skill_dir(
+                    skill_id, profile_id=profile.id
+                )
+                if preset_sk is not None:
+                    roots_to_try.append((preset_sk / "scripts", rel_sub))
+        elif len(parts) >= 4 and parts[:3] == ("in", "profile", "scripts"):
+            rel_sub = Path(*parts[3:])
+            roots_to_try.append((Path(profiles.path) / profile.id / "scripts", rel_sub))
+            roots_to_try.append(
+                (Path(profiles.path) / profile.id / "preset/scripts", rel_sub)
+            )
+        else:
+            rel_sub = (
+                Path(*parts[2:])
+                if parts[:2] == ("preset", "scripts")
+                else (Path(*parts[1:]) if parts[:1] == ("scripts",) else candidate_rel)
+            )
+            roots_to_try.append((Path(profiles.path) / profile.id / "scripts", rel_sub))
+            roots_to_try.append(
+                (Path(profiles.path) / profile.id / "preset/scripts", rel_sub)
+            )
+
+        for allowed_dir, sub_path in roots_to_try:
+            if path_is_link_like(allowed_dir) or not allowed_dir.is_dir():
+                continue
+            target_file = allowed_dir / sub_path
+            if path_is_link_like(target_file) or _has_relative_link(allowed_dir, target_file):
+                continue
+            try:
+                allowed_root = allowed_dir.resolve()
+                resolved_script = target_file.resolve()
+            except OSError:
+                continue
+            if resolved_script.is_relative_to(allowed_root) and resolved_script.is_file():
+                return resolved_script
+        return None
+
     def _run_trusted_preset_script(
         self, profile: Profile, raw_cmd: str, work, timeout: float
     ) -> ExecutionResult | None:
@@ -1308,40 +1450,22 @@ class AgentRuntime(Scout):
         exe = os.path.basename(tokens[0]).lower()
         if exe not in {"python", "python3"}:
             return None
-        script_arg = tokens[1]
-        if not script_arg or script_arg.startswith("-") or not script_arg.endswith(".py"):
-            return None
-        profiles = getattr(self.memory, "profiles", None) if self.memory else None
-        if profiles is None:
-            return None
-        preset_dir = Path(profiles.path) / profile.id / "preset" / "scripts"
-        if path_is_link_like(preset_dir) or not preset_dir.is_dir():
-            return None
-        preset_root = preset_dir.resolve()
-        candidate_rel = Path(script_arg)
-        if candidate_rel.is_absolute() or ".." in candidate_rel.parts:
-            return None
-        # Accept either `preset/scripts/<name>.py` or `<name>.py`
-        rel_name = (
-            Path(*candidate_rel.parts[2:])
-            if candidate_rel.parts[:2] == ("preset", "scripts")
-            else candidate_rel
-        )
-        script_path = preset_dir / rel_name
-        if path_is_link_like(script_path):
-            return None
-        try:
-            resolved_script = script_path.resolve()
-        except OSError:
-            return None
-        if not resolved_script.is_relative_to(preset_root) or not resolved_script.is_file():
+        resolved_script = self._resolve_trusted_script_path(profile, tokens[1])
+        if resolved_script is None:
             return None
         extra_args = tokens[2:]
         if _has_path_escape([sys.executable, *extra_args], work.path, shell=False):
             return None
         clamped_timeout = max(1.0, min(float(timeout), 60.0))
         proc = subprocess.Popen(
-            [sys.executable, str(resolved_script), *extra_args],
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                _TRUSTED_SCRIPT_BOOT,
+                str(resolved_script),
+                *extra_args,
+            ],
             cwd=str(work.path),
             env=minimal_subprocess_env(),
             stdin=subprocess.DEVNULL,

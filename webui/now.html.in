@@ -436,6 +436,12 @@
         <!-- 右侧详情视图：总览（含 Token Treemap）或 单步命令与脱敏输出 -->
         <div class="now-inspector-card">
           <div id="now-view-overview">
+            <div class="now-summary-box" id="now-state-note-box" style="margin-bottom:10px" hidden>
+              <div class="now-card-head">
+                <span class="mil-label">当前活动状态便签 (STATE.md)</span>
+              </div>
+              <div id="now-state-note" class="mil-hint" style="white-space:pre-wrap"></div>
+            </div>
             <div class="now-summary-box" style="margin-bottom:12px">
               <div class="now-card-head">
                 <span class="mil-label">一句话结论与交付</span>
@@ -1506,6 +1512,10 @@
       if (stepsWrap) stepsWrap.innerHTML = `<div class="mil-hint">暂无步骤事件</div>`;
       $("#now-conclusion").textContent = "选中线程后在这里汇总结论与生成产物。";
       $("#now-attachments").innerHTML = "";
+      const snBox = $("#now-state-note-box");
+      if (snBox) snBox.hidden = true;
+      const snEl = $("#now-state-note");
+      if (snEl) snEl.textContent = "";
       return;
     }
 
@@ -1581,6 +1591,13 @@
     // 结论与附件芯片
     const resText = sel.result?.error ? `错误：${sel.result.error}` : (sel.result?.text || sel.summary || sel.excerpt || "线程准备就绪或执行中，尚未产出最终文字结论。");
     $("#now-conclusion").textContent = resText;
+    const snBox = $("#now-state-note-box");
+    const snEl = $("#now-state-note");
+    const sNote = String(sel.state_note || "").trim();
+    if (snBox && snEl) {
+      snBox.hidden = !sNote;
+      snEl.textContent = sNote;
+    }
     const atts = Array.isArray(sel.artifacts) && sel.artifacts.length ? sel.artifacts : (sel.attachments || []);
     $("#now-attachments").innerHTML = atts.map((att) =>
       `<button type="button" class="mil-key mil-key--sm" data-jump-lib="${esc(att.handle || att.id || att.path || "")}">${esc(att.title || att.name || "查看产物")}</button>`

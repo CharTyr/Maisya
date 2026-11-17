@@ -302,6 +302,19 @@
                   </div>
                   <textarea class="mil-textarea mil-textarea--code m-ab-textarea" id="pr-md" rows="8" placeholder="留空自动生成默认规则；也可在这里补充角色职责与交付格式…"></textarea>
                 </div>
+
+                <details class="mil-field" id="pr-companions-box" hidden>
+                  <summary class="mil-label" style="cursor:pointer">内部参考与附属文件 <span class="mil-tag num" id="pr-comp-count">0</span></summary>
+                  <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+                    <div class="onb-chip-row" id="pr-companions-list"></div>
+                    <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+                      <input type="text" class="mil-input mono" id="pr-comp-path" placeholder="references/handbook.md" style="flex:1 1 180px" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
+                      <button type="button" class="mil-key mil-key--sm" id="pr-comp-save">保存附属文件</button>
+                      <button type="button" class="mil-key mil-key--sm mil-key--danger" id="pr-comp-del" hidden>删除此文件</button>
+                    </div>
+                    <textarea class="mil-textarea mil-textarea--code" id="pr-comp-editor" rows="5" placeholder="填写 references/... 内部资料（禁止外发），或 templates/...、scripts/... 附属文件…"></textarea>
+                  </div>
+                </details>
               </div>
 
               <div class="pr-pane" id="pr-pane-abilities" role="tabpanel" aria-labelledby="pr-tab-abilities" hidden>

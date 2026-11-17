@@ -3413,6 +3413,19 @@ class MaisyaPlugin(MaiBotPlugin):
                     if (is_admin_caller or effective_admin)
                     else None
                 )
+                speaker_meta = (
+                    {
+                        "user_id": str(identity.user_id or ""),
+                        "sender_name": str(getattr(identity, "sender_name", "") or ""),
+                        "message_id": str(identity.message_id or ""),
+                        "chat_type": str(caller_arena or ""),
+                    }
+                    if identity is not None
+                    and not identity.is_plugin_relayed
+                    and owner == "chat"
+                    and not cross_chat
+                    else None
+                )
                 start_grant = {
                     "source_msg_id": identity.message_id
                     if identity and owner == "chat"
@@ -3420,6 +3433,7 @@ class MaisyaPlugin(MaiBotPlugin):
                     "source_chat_id": chat_id,
                     "source_platform": platform,
                     "admin_verified": bool(is_admin_caller),
+                    **({"speaker": speaker_meta} if speaker_meta is not None else {}),
                     **(
                         {"scheduled_admin": True}
                         if is_admin_caller and cross_chat
@@ -3871,6 +3885,21 @@ class MaisyaPlugin(MaiBotPlugin):
                             if (is_admin_caller or effective_admin)
                             else None
                         )
+                        send_speaker = (
+                            {
+                                "user_id": str(identity.user_id or ""),
+                                "sender_name": str(
+                                    getattr(identity, "sender_name", "") or ""
+                                ),
+                                "message_id": str(identity.message_id or ""),
+                                "chat_type": str(thread_arena or caller_arena or ""),
+                            }
+                            if identity is not None
+                            and not identity.is_plugin_relayed
+                            and row["owner"] == "chat"
+                            and not cross_chat
+                            else None
+                        )
                         result = await submit(
                             thread_id,
                             message,
@@ -3912,6 +3941,11 @@ class MaisyaPlugin(MaiBotPlugin):
                                         else {}
                                     ),
                                 },
+                                **(
+                                    {"speaker": send_speaker}
+                                    if send_speaker is not None
+                                    else {}
+                                ),
                                 "references": ref_msg_ids or [],
                                 "from_threads": from_threads or [],
                             },

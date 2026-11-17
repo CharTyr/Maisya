@@ -1032,6 +1032,9 @@
       roleMemVersion: null,
       roleMemProfileId: "",
       roleMemDirty: false,
+      compProfileId: "",
+      compFiles: [],
+      activeCompPath: "",
       allowChats: [],
       knownChats: [],
       chatSources: {},
@@ -1574,7 +1577,38 @@
       const expBtn = $("#pr-btn-export");
       if (delBtn) delBtn.disabled = isNew || BUILTIN_PROFILE_IDS.has(obj.id);
       if (expBtn) expBtn.disabled = isNew || !obj.id;
+      const showComp = !isNew && Boolean(obj.id);
+      const compFiles = showComp ? (Array.isArray(obj.companion_files) ? obj.companion_files : []) : [];
+      const activeComp = showComp && obj.id === pState.compProfileId ? pState.activeCompPath : "";
+      if (showComp && obj.id !== pState.compProfileId) pState.compProfileId = obj.id;
+      else if (!showComp) { pState.compProfileId = ""; pState.activeCompPath = ""; }
+      renderProfileCompanions(compFiles, { visible: showComp, activePath: activeComp });
       renderDigestGuide(isNew ? "" : obj.id);
+    }
+
+    function renderProfileCompanions(files = [], { visible = true, activePath = "" } = {}) {
+      const box = $("#pr-companions-box");
+      const cnt = $("#pr-comp-count");
+      const listEl = $("#pr-companions-list");
+      const pathEl = $("#pr-comp-path");
+      const edEl = $("#pr-comp-editor");
+      const delBtn = $("#pr-comp-del");
+      if (!box) return;
+      box.hidden = !visible;
+      if (!visible) { box.open = false; return; }
+      pState.compFiles = Array.isArray(files) ? [...files] : [];
+      if (cnt) cnt.textContent = String(pState.compFiles.length);
+      if (listEl) {
+        listEl.innerHTML = pState.compFiles.length
+          ? pState.compFiles.map((f) => `<button type="button" class="mil-key mil-key--sm mono${f === activePath ? " mil-key--hot" : ""}" data-pr-comp-open="${esc(f)}">${esc(f)}</button>`).join("")
+          : `<span class="mil-hint">暂无附属文件；可在下方填入 references/handbook.md 挂入内部资料，或填写 templates/...、scripts/... 路径新建附属文件。</span>`;
+      }
+      if (!activePath) {
+        pState.activeCompPath = "";
+        if (pathEl) pathEl.value = "";
+        if (edEl) { edEl.value = ""; edEl.textContent = ""; }
+        if (delBtn) delBtn.hidden = true;
+      }
     }
 
     function renderDigestGuide(profileId) {
@@ -1627,11 +1661,15 @@
       if (!pid || pState.creating) return;
       const seq = ++pState.detailSeq;
       const det = await hostRpc("read", "profile_detail", { profile_id: pid });
-      if (disposed || sig?.aborted || pid !== pState.selectedId || seq !== pState.detailSeq) return;
+      if (disposed || sig?.aborted || pState.creating || pid !== pState.selectedId || seq !== pState.detailSeq) return;
       if (det?.success && det.profile) {
         if (det.connectors) pState.connectors = normalizeConnectors(det.connectors);
         if (Array.isArray(det.skills) && det.skills.length) pState.skills = det.skills;
-        const merged = { ...det.profile, profile_md: det.profile_md ?? det.profile.profile_md ?? det.profile.instructions ?? "" };
+        const merged = {
+          ...det.profile,
+          companion_files: Array.isArray(det.companion_files) ? det.companion_files : (det.profile.companion_files || []),
+          profile_md: det.profile_md ?? det.profile.profile_md ?? det.profile.instructions ?? "",
+        };
         const idx = pState.profiles.findIndex((x) => x.id === pid);
         if (idx >= 0) pState.profiles[idx] = { ...pState.profiles[idx], ...merged };
         fillEditorFromProfile(merged, false, { fromAsyncDetail: true });
@@ -1758,7 +1796,7 @@
         return;
       }
       const cur = getCur();
-      if (cur) {
+      if (cur && !pState.creating) {
         const keepModelDrop = Boolean($("#pr-model-dropdown") && !$("#pr-model-dropdown").hidden);
         fillEditorFromProfile(cur, false);
         if (keepModelDrop && $("#pr-model-dropdown")) {
@@ -1968,6 +2006,7 @@
       }
 
       if (ev.target.closest("#pr-btn-new")) {
+        pState.detailSeq++;
         say("");
         fillEditorFromProfile(null, true);
         $("#pr-id")?.focus();
@@ -2325,6 +2364,7 @@
           apis: [...pState.apisSet],
         };
         const act = wasNew ? "profile_create" : "profile_update";
+        say("正在保存…");
         const res = await hostRpc("write", act, payload);
         if (!res?.success) { say(res?.error || "档案保存失败", true); return; }
         if (rmemChanged || (wasNew && rmemTxt.trim())) {
@@ -2362,6 +2402,50 @@
         say(`已删除自定义档案 ${cur.id}`);
         abCtrl?.markSkillsStale?.();
         await loadProfiles();
+        return;
+      }
+
+      const prCompOpenBtn = ev.target.closest("[data-pr-comp-open]");
+      if (prCompOpenBtn && pState.selectedId && !pState.creating && !isPlannerSelected()) {
+        const rel = prCompOpenBtn.dataset.prCompOpen || "";
+        const r = await hostRpc("read", "profile_file", { target: pState.selectedId, path: rel });
+        if (!r?.success) { say(r?.error || "读取角色附属文件失败", true); return; }
+        const txt = String(r.content || "");
+        pState.activeCompPath = rel;
+        if ($("#pr-comp-path")) $("#pr-comp-path").value = rel;
+        const ed = $("#pr-comp-editor");
+        if (ed) { ed.value = txt; ed.textContent = txt; }
+        if ($("#pr-comp-del")) $("#pr-comp-del").hidden = false;
+        renderProfileCompanions(pState.compFiles, { visible: true, activePath: rel });
+        return;
+      }
+
+      if (ev.target.closest("#pr-comp-save") && pState.selectedId && !pState.creating && !isPlannerSelected()) {
+        const rel = ($("#pr-comp-path")?.value || "").trim();
+        const content = $("#pr-comp-editor")?.value || "";
+        if (!rel) { say("请填写角色附属文件路径，例如 references/handbook.md", true); return; }
+        const r = await hostRpc("write", "save_profile_file", { target: pState.selectedId, path: rel, content });
+        if (!r?.success) { say(r?.error || "保存角色附属文件失败", true); return; }
+        const nextFiles = Array.isArray(r.companion_files) ? r.companion_files : [...new Set([...pState.compFiles, rel])];
+        const cur = getCur();
+        if (cur) cur.companion_files = nextFiles;
+        pState.activeCompPath = rel;
+        renderProfileCompanions(nextFiles, { visible: true, activePath: rel });
+        if ($("#pr-comp-del")) $("#pr-comp-del").hidden = false;
+        say(`已保存角色附属文件 ${rel}`);
+        return;
+      }
+
+      if (ev.target.closest("#pr-comp-del") && pState.selectedId && !pState.creating && !isPlannerSelected()) {
+        const rel = ($("#pr-comp-path")?.value || pState.activeCompPath || "").trim();
+        if (!rel) return;
+        const r = await hostRpc("write", "delete_profile_file", { target: pState.selectedId, path: rel });
+        if (!r?.success) { say(r?.error || "删除角色附属文件失败", true); return; }
+        const nextFiles = Array.isArray(r.companion_files) ? r.companion_files : pState.compFiles.filter((f) => f !== rel);
+        const cur = getCur();
+        if (cur) cur.companion_files = nextFiles;
+        renderProfileCompanions(nextFiles, { visible: true });
+        say(`已删除角色附属文件 ${rel}`);
         return;
       }
 
@@ -5006,6 +5090,8 @@
     }
 
     function savePartialSettings(patch, adminErrSlot = false) {
+      if (adminErrSlot) sayAdminErr("");
+      saySet("正在保存…");
       const run = async () => {
         if (sState.version === null && sState.initLoadPromise) {
           try { await sState.initLoadPromise; } catch (_) {}
@@ -5070,6 +5156,9 @@
       if (ev.target.closest("#set-chat-add")) {
         const built = window.MaisyaUI.readStructStreamBuilder("set-chat");
         if (!built.rawId || !built.spec) { saySet("请填写要添加的群号或用户 ID", true); return; }
+        if (sState.version === null && sState.initLoadPromise) {
+          try { await sState.initLoadPromise; } catch (_) {}
+        }
         const next = [...new Set([...sState.enabledChats, built.spec])];
         const r = await savePartialSettings({ enabled_chats: next });
         if (r?.success) {
@@ -5090,6 +5179,9 @@
       if (ev.target.closest("#set-admin-add")) {
         const built = window.MaisyaUI.readStructStreamBuilder("set-adm");
         if (!built.rawId || !built.spec) { sayAdminErr("请先填写管理员用户 ID"); return; }
+        if (sState.version === null && sState.initLoadPromise) {
+          try { await sState.initLoadPromise; } catch (_) {}
+        }
         const next = [...new Set([...sState.pluginAdmins, built.spec])];
         const r = await savePartialSettings({ admins: next }, true);
         if (r?.success) {
@@ -5277,7 +5369,20 @@
 
     view.addEventListener("change", async (ev) => {
       if (ev.target.id === "set-plugin-enabled") {
-        const plgOn = Boolean(ev.target.checked);
+        let plgOn = Boolean(ev.target.checked);
+        if (sState.version === null && sState.initLoadPromise) {
+          try { await sState.initLoadPromise; } catch (_) {}
+          const curSet = sState.data?.settings || sState.data || {};
+          const wasOn = Boolean(
+            sState.data?.plugin_enabled
+            ?? sState.data?.plugin?.enabled
+            ?? curSet.plugin_enabled
+            ?? curSet.plugin?.enabled
+            ?? sState.data?.pulse?.enabled
+          );
+          plgOn = !wasOn;
+          ev.target.checked = plgOn;
+        }
         const plgTxt = $("#set-plugin-enabled-txt");
         if (plgTxt) plgTxt.textContent = plgOn ? "已启用（总开关开启）" : "未启用（暂停所有调度与注入）";
         const r = await savePartialSettings({ plugin_enabled: plgOn, plugin: { enabled: plgOn } });
@@ -5286,7 +5391,19 @@
       } else if (ev.target.id === "set-perm-mode") {
         await savePartialSettings({ permission_mode: ev.target.value });
       } else if (ev.target.id === "set-sandbox-enabled") {
-        const sbOn = Boolean(ev.target.checked);
+        let sbOn = Boolean(ev.target.checked);
+        if (sState.version === null && sState.initLoadPromise) {
+          try { await sState.initLoadPromise; } catch (_) {}
+          const curSet = sState.data?.settings || sState.data || {};
+          const wasSb = Boolean(
+            sState.data?.sandbox_enabled
+            ?? sState.data?.sandbox?.enabled
+            ?? curSet.sandbox_enabled
+            ?? curSet.sandbox?.enabled
+          );
+          sbOn = !wasSb;
+          ev.target.checked = sbOn;
+        }
         if ($("#set-sandbox-txt")) $("#set-sandbox-txt").textContent = sbOn ? "已启用" : "未启用";
         const r = await savePartialSettings({ sandbox_enabled: sbOn, sandbox: { enabled: sbOn } });
         if (!r?.success) {

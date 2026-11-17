@@ -386,6 +386,7 @@ def snapshot(
     with store.connect() as db:
         rows = db.execute(
             "SELECT t.thread_id,t.chat_id,t.profile,t.owner,t.state,t.result,t.updated,"
+            "COALESCE(t.state_note, '') AS state_note,"
             "COALESCE(length(t.history), 0) AS hist_len,"
             "(SELECT MIN(e0.at) FROM thread_events e0 WHERE e0.thread_id=t.thread_id) AS created_at,"
             "COALESCE("
@@ -399,15 +400,19 @@ def snapshot(
             (chat_id,) if chat_id else (),
         ).fetchall()
         pending_map = _pending_approval_map(db, redact)
+        ws_note_map: dict[str, str] = {}
         try:
-            ws_map = {
-                r["thread_id"]: r["name"]
-                for r in db.execute(
-                    "SELECT thread_id,name FROM agent_workspaces WHERE thread_id IS NOT NULL "
-                    "UNION SELECT c.thread_id,w.name FROM thread_context c "
-                    "JOIN agent_workspaces w ON w.workspace_id=c.workspace_id "
-                    "WHERE c.thread_id IS NOT NULL"
-                ).fetchall()
+            ws_rows = db.execute(
+                "SELECT thread_id,name,COALESCE(state_note,'') AS state_note FROM agent_workspaces WHERE thread_id IS NOT NULL "
+                "UNION SELECT c.thread_id,w.name,COALESCE(w.state_note,'') AS state_note FROM thread_context c "
+                "JOIN agent_workspaces w ON w.workspace_id=c.workspace_id "
+                "WHERE c.thread_id IS NOT NULL"
+            ).fetchall()
+            ws_map = {r["thread_id"]: r["name"] for r in ws_rows}
+            ws_note_map = {
+                r["thread_id"]: str(r["state_note"] or "")
+                for r in ws_rows
+                if str(r["state_note"] or "").strip()
             }
         except sqlite3.OperationalError:
             ws_map = {}
@@ -447,6 +452,9 @@ def snapshot(
                 "title": redact(_clean_input_title(str(row["title"] or "")) or str(row["thread_id"]))[:120],
                 "has_error": "error" in json.loads(row["result"]),
                 "excerpt": _excerpt_of(row["result"], redact),
+                "state_note": str(
+                    redact(ws_note_map.get(row["thread_id"]) or row["state_note"] or "")
+                ).strip()[:600],
                 "workspace": ws_map.get(row["thread_id"], ""),
                 "delivered": row["thread_id"] in delivered_ids,
                 "pending_approval": pending_map.get(row["thread_id"]),
@@ -511,6 +519,9 @@ def snapshot(
                 raw_sel_title = str((srch_row["title"] if srch_row else "") or row["summary"] or "")
                 selected["title"] = redact(_clean_input_title(raw_sel_title) or thread_id)[:120]
             selected["workspace"] = ws_map.get(thread_id, "")
+            selected["state_note"] = str(
+                redact(row.get("state_note") or ws_note_map.get(thread_id) or "")
+            ).strip()[:600]
             selected["can_delete"] = (
                 row["state"] not in {"active", "waiting"}
                 and thread_id not in named_ws_ids

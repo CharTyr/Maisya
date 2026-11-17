@@ -134,7 +134,7 @@ TOOL_DEFINITIONS = {
         {
             "action": {"type": "string", "enum": ["read", "write", "list"]},
             "path": STRING,
-            "content": {"type": "string", "maxLength": 65536},
+            "content": {"type": "string", "minLength": 0, "maxLength": 65536},
             "offset": {"type": "integer", "minimum": 0, "maximum": 1000000000},
         },
         ["action"],
@@ -201,6 +201,47 @@ TOOL_DEFINITIONS = {
             },
         },
         ["command"],
+    ),
+    "calc": definition(
+        "calc",
+        "无容器也可运行的精确数值计算、数组统计（求和/均值/中位数/极值/标准差）与密码学真随机抽签、洗牌、掷骰工具（不接触文件或网络，结果完全可信）。",
+        {
+            "expression": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "精确十进制四则/幂/数学函数表达式，如 (a + b) * 3 / 2、round(sqrt(18), 2)。",
+            },
+            "variables": {
+                "type": "object",
+                "maxProperties": 32,
+                "description": "可选数值变量字典（最多 32 项）。",
+            },
+            "precision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 12,
+                "description": "可选四舍五入小数位数（0..12）。",
+            },
+            "numbers": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 1,
+                "maxItems": 1000,
+                "description": "待汇总统计的有限实数列表。",
+            },
+            "roll": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 32,
+                "description": "标准骰点表达式或列表（如 '1d20+5'、['2d20kh1+3', '4d6dl1']）。",
+            },
+            "draw": {
+                "type": "object",
+                "description": "真随机抽样：{mode:'pick'|'shuffle'|'weighted', items:[...], count:1, weights:[...]}。",
+            },
+        },
     ),
     "result_attach": definition(
         "result_attach",
@@ -392,6 +433,10 @@ def validate_arguments(name, arguments):
         if prop["type"] == "boolean" and type(value) is not bool:
             raise ValueError("工具布尔参数无效")
         if prop["type"] == "array":
+            if name == "calc" and key == "roll" and isinstance(value, str):
+                if not value.strip() or len(value) > 128:
+                    raise ValueError("骰点表达式长度无效")
+                continue
             item_type = (
                 prop.get("items", {}).get("type", "string")
                 if isinstance(prop.get("items"), dict)
@@ -404,6 +449,12 @@ def validate_arguments(name, arguments):
                     json.dumps(value, ensure_ascii=False)
                 ) > prop.get("maxBytes", 262144):
                     raise ValueError("工具列表参数无效")
+            elif item_type == "number":
+                if not all(
+                    type(item) in (int, float) and type(item) is not bool
+                    for item in value
+                ):
+                    raise ValueError("工具数值列表参数无效")
             elif not all(isinstance(item, str) and len(item) <= 512 for item in value):
                 raise ValueError("工具列表参数无效")
         if prop["type"] == "object":

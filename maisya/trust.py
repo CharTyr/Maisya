@@ -146,18 +146,29 @@ class Message:
     group_id: str = ""
     account_id: str = ""
     scope: str = ""
+    sender_name: str = ""
 
     @classmethod
     def from_event(cls, event: dict) -> "Message":
         info = event.get("message_info") or {}
         config = info.get("additional_config") or {}
         group_info = info.get("group_info")
+        user_info = info.get("user_info") if isinstance(info.get("user_info"), dict) else {}
         platform = str(event.get("platform") or "").strip().lower()
+        raw_sname = (
+            user_info.get("user_cardname")
+            or user_info.get("user_nickname")
+            or event.get("sender_name")
+            or ""
+        )
+        clean_sname = clean_display_name(
+            re.sub(r"[\x00-\x1f\x7f]+", " ", str(raw_sname)), ""
+        )[:64]
         return cls(
             str(event.get("message_id") or "").strip(),
             str(event.get("session_id") or "").strip(),
             platform,
-            str((info.get("user_info") or {}).get("user_id") or "").strip(),
+            str(user_info.get("user_id") or "").strip(),
             bool(config.get("relayed_by_plugin")),
             platform == "bot_console" and config.get("is_local_operator") is True,
             str((group_info or {}).get("group_id") or "").strip()
@@ -165,6 +176,7 @@ class Message:
             else "",
             str(info.get("account_id") or config.get("account_id") or "").strip(),
             str(info.get("scope") or config.get("scope") or "").strip(),
+            clean_sname,
         )
 
 
@@ -259,8 +271,17 @@ class MessageStore:
                 "CREATE TABLE IF NOT EXISTS trusted_sources ("
                 "message_id TEXT, alias TEXT, session_id TEXT, platform TEXT, "
                 "user_id TEXT, relayed INTEGER, local_operator INTEGER, received REAL, "
+                "sender_name TEXT NOT NULL DEFAULT '', "
                 "PRIMARY KEY (message_id, session_id, platform))"
             )
+            ts_cols = {
+                row[1]
+                for row in db.execute("PRAGMA table_info(trusted_sources)").fetchall()
+            }
+            if "sender_name" not in ts_cols:
+                db.execute(
+                    "ALTER TABLE trusted_sources ADD COLUMN sender_name TEXT NOT NULL DEFAULT ''"
+                )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trusted_alias ON trusted_sources(alias, session_id, platform)"
             )
@@ -388,11 +409,15 @@ class MessageStore:
                     else None
                 )
                 db.execute(
-                    "INSERT INTO trusted_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO trusted_sources "
+                    "(message_id, alias, session_id, platform, user_id, relayed, local_operator, received, sender_name) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(message_id, session_id, platform) DO UPDATE SET "
                     "relayed = CASE WHEN trusted_sources.user_id != excluded.user_id "
                     "OR trusted_sources.local_operator != excluded.local_operator "
-                    "THEN 1 ELSE MAX(trusted_sources.relayed, excluded.relayed) END",
+                    "THEN 1 ELSE MAX(trusted_sources.relayed, excluded.relayed) END, "
+                    "sender_name = CASE WHEN excluded.sender_name != '' "
+                    "THEN excluded.sender_name ELSE trusted_sources.sender_name END",
                     (
                         message.message_id,
                         alias(message.message_id),
@@ -402,6 +427,7 @@ class MessageStore:
                         message.is_plugin_relayed,
                         message.is_local_operator,
                         now,
+                        str(message.sender_name or "")[:64],
                     ),
                 )
                 if not message.is_plugin_relayed:
@@ -463,7 +489,7 @@ class MessageStore:
     ) -> Message | None:
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(
-                "SELECT message_id, session_id, platform, user_id, relayed, local_operator "
+                "SELECT message_id, session_id, platform, user_id, relayed, local_operator, sender_name "
                 "FROM trusted_sources WHERE session_id=? AND platform=? "
                 "AND (message_id=? OR alias=?) AND received >= ?",
                 (
@@ -477,8 +503,16 @@ class MessageStore:
             ).fetchall()
         if len(rows) != 1:
             return None
-        raw, session, platform, user, relayed, local = rows[0]
-        return Message(raw, session, platform, user, bool(relayed), bool(local))
+        raw, session, platform, user, relayed, local, sender_name = rows[0]
+        return Message(
+            raw,
+            session,
+            platform,
+            user,
+            bool(relayed),
+            bool(local),
+            sender_name=str(sender_name or ""),
+        )
 
     def platform_for(self, session_id: str) -> str:
         route = self.route_for(session_id)

@@ -72,7 +72,7 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
         "result_attach",
         "package_export",
     ),
-    "exec": ("exec_command", "sandbox_exec"),
+    "exec": ("exec_command", "sandbox_exec", "calc"),
     "schedule": ("thread_later",),
 }
 
@@ -80,7 +80,7 @@ _TOOLSET_LABELS = {
     "context": "会话与记忆感知（context）：读取消息、记忆、人物与历史线程，必要时提问",
     "web": "联网搜索与抓取（web）：检索公开网页并核实原始出处",
     "workspace": "工作区与产物制作（workspace）：读写工作区文件、打包导出与附上交付物",
-    "exec": "代码与终端执行（exec）：在工作区或隔离沙箱中运行脚本与命令",
+    "exec": "代码、计算与终端执行（exec）：在工作区或无容器环境中做精确计算/随机抽样，或运行受控脚本",
     "schedule": "定时与条件延续（schedule）：安排后续自动唤醒与追踪复核",
 }
 
@@ -131,6 +131,7 @@ HOST_TOOLS = (
         "plugin_api",
         "exec_command",
         "sandbox_exec",
+        "calc",
     }
 )
 SANDBOX_TOOLS = HOST_TOOLS
@@ -198,6 +199,7 @@ _ALLOWED_PROFILE_TOML_KEYS = frozenset(
         "allow_chats",
         "enabled_chats",
         "fish_seed",
+        "coalesce_window_ms",
     }
 )
 
@@ -331,8 +333,11 @@ def _runtime_exec_tools() -> tuple[str, ...]:
         from . import scout as scout_mod
 
         defs = getattr(scout_mod, "TOOL_DEFINITIONS", {})
-        if isinstance(defs, dict) and "exec_command" in defs:
-            return ("exec_command", "sandbox_exec")
+        if isinstance(defs, dict):
+            if "exec_command" in defs and "calc" in defs:
+                return ("exec_command", "sandbox_exec", "calc")
+            if "exec_command" in defs:
+                return ("exec_command", "sandbox_exec")
     except ImportError:
         pass
     return ("sandbox_exec",)
@@ -488,6 +493,7 @@ class Profile:
     web_provider: str = ""
     sandbox_targets: tuple[str, ...] = ()
     fish_seed: str = ""
+    coalesce_window_ms: int = 0
 
     def __post_init__(self):
         tuple_fields = (
@@ -545,6 +551,10 @@ class Profile:
             self, "permission_mode", _normalize_permission_mode(self.permission_mode)
         )
         object.__setattr__(self, "shared_secrets", bool(self.shared_secrets))
+        cw = 0 if self.coalesce_window_ms is None else self.coalesce_window_ms
+        if type(cw) is not int or not 0 <= cw <= 8000:
+            raise ValueError("coalesce_window_ms 必须在 0 到 8000 之间")
+        object.__setattr__(self, "coalesce_window_ms", cw)
 
         merged_mcp = self.mcp_servers or self.mcp
         object.__setattr__(self, "mcp", merged_mcp)
@@ -696,6 +706,8 @@ def _serialize_profile_dict(config: dict) -> str:
         if value is None:
             continue
         if key == "fish_seed" and value == "":
+            continue
+        if key == "coalesce_window_ms" and value == 0:
             continue
         lines.append(f"{key} = {_format_profile_toml_value(value)}")
     return "\n".join(lines) + "\n"
@@ -1051,6 +1063,9 @@ class Profiles:
         fish_seed = config.get("fish_seed", "")
         if not isinstance(fish_seed, str) or not FISH_SEED_RE.fullmatch(fish_seed):
             raise ValueError("角色小鱼头像种子格式无效")
+        coalesce_window_ms = config.get("coalesce_window_ms", 0)
+        if type(coalesce_window_ms) is not int or not 0 <= coalesce_window_ms <= 8000:
+            raise ValueError("coalesce_window_ms 必须在 0 到 8000 之间")
 
         raw_name = str(config.get("name", "") or "").strip()
         raw_title = str(config.get("title", "") or "").strip()
@@ -1098,6 +1113,7 @@ class Profiles:
             web_provider=web_provider,
             sandbox_targets=tuple(sandbox_targets),
             fish_seed=fish_seed,
+            coalesce_window_ms=coalesce_window_ms,
         )
 
     def create(
@@ -1142,6 +1158,7 @@ class Profiles:
         fish_seed: str = "",
         template: str = "",
         sandbox_targets: list[str] | tuple[str, ...] = (),
+        coalesce_window_ms: int = 0,
     ) -> Profile:
         _validate_profile_id(profile_id)
         directory = self.path / profile_id
@@ -1242,6 +1259,10 @@ class Profiles:
             config["temperature"] = temperature
         if max_steps is not None:
             config["max_steps"] = max_steps
+        if coalesce_window_ms:
+            if type(coalesce_window_ms) is not int or not 0 <= coalesce_window_ms <= 8000:
+                raise ValueError("coalesce_window_ms 必须在 0 到 8000 之间")
+            config["coalesce_window_ms"] = coalesce_window_ms
 
         stage = Path(tempfile.mkdtemp(prefix="create-", dir=self.path))
         try:
@@ -1426,7 +1447,13 @@ class Profiles:
                 if (
                     not path.is_file()
                     or path.name not in {"PROFILE.md", "profile.toml", "NOTES.md"}
-                    and relative.parts[0] != "preset"
+                    and relative.parts[0]
+                    not in {"preset", "references", "templates", "scripts", "assets"}
+                ):
+                    continue
+                if sanitize and (
+                    relative.parts[0] == "references"
+                    or relative.parts[:2] == ("preset", "references")
                 ):
                     continue
                 if path.stat().st_size > 8 * 1024**2:
@@ -1486,6 +1513,8 @@ class Profiles:
                         raise ValueError("技能路径不能经过链接")
                     rel_extra = extra_path.relative_to(skill_dir)
                     if any(part.startswith(".") for part in rel_extra.parts):
+                        continue
+                    if sanitize and rel_extra.parts[:1] == ("references",):
                         continue
                     extra_bytes = MemoryLayers._bytes(
                         extra_path, max_bytes=_SKILL_FILE_MAX_BYTES
@@ -1587,7 +1616,15 @@ class Profiles:
                     if (
                         relative.as_posix()
                         not in {"PROFILE.md", "profile.toml", "NOTES.md"}
-                        and relative.parts[0] not in {"preset", "skills"}
+                        and relative.parts[0]
+                        not in {
+                            "preset",
+                            "skills",
+                            "references",
+                            "templates",
+                            "scripts",
+                            "assets",
+                        }
                     ):
                         raise ValueError("档案包含未允许的文件")
                     out_relative = (

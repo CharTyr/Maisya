@@ -288,6 +288,21 @@ def _validate_archive_bytes(plugin, content: bytes, label: str = "内容") -> by
     return content
 
 
+def _sanitize_companion_bytes(
+    plugin,
+    raw_bytes: bytes,
+    label: str,
+    *,
+    extra_ids: tuple[str, ...] = (),
+) -> bytes:
+    try:
+        decoded = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return _validate_archive_bytes(plugin, raw_bytes, label)
+    clean_text = sanitize_export_text(plugin, decoded, extra_ids=extra_ids)
+    return _validate_archive_bytes(plugin, clean_text.encode("utf-8"), label)
+
+
 def _collect_profile_schedules(
     plugin,
     profile_id: str,
@@ -528,11 +543,30 @@ def export_package(
                 else None
             ),
             "temperature": profile.temperature,
+            **(
+                {"coalesce_window_ms": int(profile.coalesce_window_ms)}
+                if getattr(profile, "coalesce_window_ms", 0)
+                else {}
+            ),
         }
         toml_text = _format_toml(profile_settings)
         archive_files["profile/settings.toml"] = _validate_archive_bytes(
             plugin, toml_text.encode("utf-8"), "settings.toml"
         )
+        if getattr(plugin, "memory", None) is not None and hasattr(
+            plugin.memory, "read_profile_companions"
+        ):
+            for rel_comp, raw_comp in plugin.memory.read_profile_companions(pid):
+                if not is_admin and rel_comp.startswith("references/"):
+                    continue
+                archive_files[f"profile_companions/{rel_comp}"] = (
+                    _sanitize_companion_bytes(
+                        plugin,
+                        raw_comp,
+                        f"profile/{rel_comp}",
+                        extra_ids=extra_tuple,
+                    )
+                )
 
     skill_summaries: list[dict[str, str]] = []
     if pkg_kind in {"capability_pack", "template"}:
@@ -592,21 +626,17 @@ def export_package(
                 rel_extra = extra_path.relative_to(s_dir)
                 if any(part.startswith(".") for part in rel_extra.parts):
                     continue
+                if not is_admin and rel_extra.parts[:1] == ("references",):
+                    continue
                 raw_extra = MemoryLayers._bytes(extra_path)
-                try:
-                    decoded = raw_extra.decode("utf-8")
-                except UnicodeDecodeError:
-                    final_extra = _validate_archive_bytes(
-                        plugin, raw_extra, f"{sid}/{rel_extra.as_posix()}"
+                archive_files[f"skills/{sid}/{rel_extra.as_posix()}"] = (
+                    _sanitize_companion_bytes(
+                        plugin,
+                        raw_extra,
+                        f"{sid}/{rel_extra.as_posix()}",
+                        extra_ids=extra_tuple,
                     )
-                else:
-                    clean_extra = sanitize_export_text(
-                        plugin, decoded, extra_ids=extra_tuple
-                    )
-                    final_extra = _validate_archive_bytes(
-                        plugin, clean_extra.encode("utf-8"), f"{sid}/{rel_extra.as_posix()}"
-                    )
-                archive_files[f"skills/{sid}/{rel_extra.as_posix()}"] = final_extra
+                )
 
     manifest = {
         "format": PACKAGE_FORMAT,
@@ -782,6 +812,7 @@ def _parse_package_map(plugin, files: dict[str, bytes], hint_kind: str = "") -> 
             else {}
         )
         skills: dict[str, dict[str, Any]] = {}
+        profile_companions: dict[str, bytes] = {}
         for arc, raw in files.items():
             parts = Path(arc).parts
             if len(parts) >= 3 and parts[0] == "skills":
@@ -794,6 +825,8 @@ def _parse_package_map(plugin, files: dict[str, bytes], hint_kind: str = "") -> 
                     bucket["skill_md"] = raw.decode("utf-8")
                 else:
                     bucket["companions"][rel] = raw
+            elif len(parts) >= 3 and parts[0] == "profile_companions":
+                profile_companions["/".join(parts[1:])] = raw
         pid = str(manifest.get("profile_id") or profile_settings.get("id") or "").strip()
         return {
             "legacy": False,
@@ -805,6 +838,7 @@ def _parse_package_map(plugin, files: dict[str, bytes], hint_kind: str = "") -> 
             "description": str(manifest.get("description") or profile_settings.get("description") or ""),
             "profile_md": profile_md,
             "profile_settings": profile_settings,
+            "profile_companions": profile_companions,
             "pack": pack_data if isinstance(pack_data, dict) else {},
             "skills": skills,
             "raw_files": files,
@@ -1140,6 +1174,11 @@ def import_package_bundle(
         _validate_instructions(md_text)
         toml_text = _serialize_profile_dict(settings_cfg)
         tomllib.loads(toml_text)
+        valid_prof_companions: dict[str, bytes] = {}
+        for rel_sub, comp_bytes in (parsed.get("profile_companions") or {}).items():
+            clean_sub = plugin.memory._validate_profile_companion_rel(rel_sub)
+            plugin.memory._guard_companion_bytes(clean_sub, comp_bytes)
+            valid_prof_companions[clean_sub] = comp_bytes
 
     # 2. 按事务日志提交技能与角色目录/能力包，任何一步或崩溃均支持原子恢复并暴露回滚故障
     imported_skills: list[str] = []
@@ -1225,6 +1264,12 @@ def import_package_bundle(
             stage = Path(tempfile.mkdtemp(prefix="pkg-import-", dir=plugin.profiles.path))
             atomic_private_write(stage / "PROFILE.md", md_text.encode("utf-8"))
             atomic_private_write(stage / "profile.toml", toml_text.encode("utf-8"))
+            for rel_sub, comp_bytes in valid_prof_companions.items():
+                rel_parts = Path(rel_sub).parts
+                parent = ensure_dirs(stage, rel_parts[:-1], create=True, mode=0o700)
+                dest = parent / rel_parts[-1]
+                if not path_is_link_like(dest):
+                    atomic_private_write(dest, comp_bytes)
             if target_dir.exists():
                 backup_dir = Path(tempfile.mkdtemp(prefix="pkg-backup-", dir=plugin.profiles.path))
                 shutil.rmtree(backup_dir)

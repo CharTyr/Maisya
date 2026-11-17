@@ -383,6 +383,7 @@ class Management:
             "allow_users",
             "allow_chats",
             "fish_seed",
+            "coalesce_window_ms",
         }
         data = {
             key: (list(value) if isinstance(value, tuple) else value)
@@ -1864,6 +1865,7 @@ class Management:
             notes_text = ""
         history = self.plugin.memory.history("profile", target=prof.id, document="PROFILE.md")
         assets = self._assets()
+        companions = self.plugin.memory.profile_files(prof.id) if getattr(self.plugin, "memory", None) else []
         return {
             "profile": self._serialize_profile(prof),
             "profile_md": md_text,
@@ -1871,6 +1873,8 @@ class Management:
             "profile_md_version": md_res.get("version"),
             "notes": notes_text,
             "history": history,
+            "companion_count": len(companions),
+            "companion_files": [c["path"] for c in companions[:20]],
             "toolsets": assets["toolsets"],
             "skills": assets["skill_items"],
             "connectors": self._connectors_info(),
@@ -3692,9 +3696,11 @@ class Management:
                 "limit": self.plugin.runtime.files.total_bytes,
                 "web": await self.plugin.runtime.web.status(),
             }
-        elif section == "skill_file":
+        elif section in {"skill_file", "profile_file"}:
+            mem = self.plugin.memory
+            reader = mem.read_profile_file if section == "profile_file" else mem.read_skill_file
             result = await completed_thread(
-                self.plugin.memory.read_skill_file,
+                reader,
                 str(options.get("target") or "").strip(),
                 str(options.get("path") or "").strip(),
             )
@@ -4392,6 +4398,7 @@ class Management:
             "temperature",
             "max_steps",
             "fish_seed",
+            "coalesce_window_ms",
             "template",
             "sandbox_targets",
         }
@@ -5213,29 +5220,33 @@ class Management:
                 "manifest": pkg["manifest"],
                 "desensitized": True,
             }
-        elif action == "save_skill_file":
-            sk_id = str(options.get("target") or options.get("skill") or "").strip()
+        elif action in {"save_skill_file", "delete_skill_file", "save_profile_file", "delete_profile_file"}:
+            is_prof = action.endswith("_profile_file")
+            is_del = action.startswith("delete_")
+            tgt = str(options.get("target") or options.get("profile" if is_prof else "skill") or "").strip()
             rel_path = str(options.get("path") or "").strip()
-            if not sk_id or not rel_path:
-                raise ValueError("save_skill_file 需要提供 target 与 path")
-            wr = await completed_thread(
-                plugin.memory.write_skill_file,
-                sk_id,
-                rel_path,
-                str(options.get("content") or ""),
-            )
-            files = await completed_thread(plugin.memory.skill_files, sk_id)
-            comp_paths = [c["path"] for c in files[:20] if isinstance(c, dict) and c.get("path")]
-            result = {**wr, "target": sk_id, "path": wr.get("file_path", rel_path), "companion_files": comp_paths}
-        elif action == "delete_skill_file":
-            sk_id = str(options.get("target") or options.get("skill") or "").strip()
-            rel_path = str(options.get("path") or "").strip()
-            if not sk_id or not rel_path:
-                raise ValueError("delete_skill_file 需要提供 target 与 path")
-            rm = await completed_thread(plugin.memory.remove_skill_file, sk_id, rel_path)
-            files = await completed_thread(plugin.memory.skill_files, sk_id)
-            comp_paths = [c["path"] for c in files[:20] if isinstance(c, dict) and c.get("path")]
-            result = {**rm, "target": sk_id, "path": rm.get("removed", rel_path), "companion_files": comp_paths}
+            if not tgt or not rel_path:
+                raise ValueError(f"{action} 需要提供 target 与 path")
+            mem = plugin.memory
+            if is_del:
+                rm = await completed_thread(
+                    mem.remove_profile_file if is_prof else mem.remove_skill_file,
+                    tgt,
+                    rel_path,
+                )
+                files = await completed_thread(mem.profile_files if is_prof else mem.skill_files, tgt)
+                comp_paths = [c["path"] for c in files[:20] if isinstance(c, dict) and c.get("path")]
+                result = {**rm, "target": tgt, "path": rm.get("removed", rel_path), "companion_files": comp_paths}
+            else:
+                wr = await completed_thread(
+                    mem.write_profile_file if is_prof else mem.write_skill_file,
+                    tgt,
+                    rel_path,
+                    str(options.get("content") or ""),
+                )
+                files = await completed_thread(mem.profile_files if is_prof else mem.skill_files, tgt)
+                comp_paths = [c["path"] for c in files[:20] if isinstance(c, dict) and c.get("path")]
+                result = {**wr, "target": tgt, "path": wr.get("file_path", rel_path), "companion_files": comp_paths}
         elif action == "delete_skill":
             target = str(options.get("target") or "").strip()
             if target in plugin.memory.preset_skills():
