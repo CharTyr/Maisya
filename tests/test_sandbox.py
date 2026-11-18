@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from maisya.sandbox import NetworkPolicy, SandboxSettings
 
@@ -344,3 +345,67 @@ async def test_probe_ready_when_runtime_and_image_available(tmp_path, monkeypatc
     sandbox = probe_sandbox(tmp_path, settings=SandboxSettings(enabled=True))
     assert await sandbox.probe() is True
     assert sandbox.error == ""
+
+
+class FailingCreateRunner:
+    """create 阶段直接失败，用来确认 chown 发生在容器创建之前。"""
+
+    def __init__(self):
+        self.commands = []
+
+    async def __call__(self, arguments, **kwargs):
+        from maisya.sandbox import ProcessResult
+
+        self.commands.append(list(arguments))
+        return ProcessResult(1, "", "boom")
+
+
+@pytest.mark.asyncio
+async def test_docker_runner_hands_workspace_to_container_uid(tmp_path, monkeypatch):
+    """容器以非 root 10000:10000 运行，执行前必须先把宿主工作区交给同一 uid。"""
+    from maisya.runner import ExecutionRequest
+    from maisya.sandbox import DockerRunner
+
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    (workspace / "note.txt").write_text("hi", encoding="utf-8")
+
+    chowned = []
+
+    def fake_chown(target, uid, gid, *, follow_symlinks=True):
+        chowned.append((Path(target).name, uid, gid))
+
+    monkeypatch.setattr("maisya.sandbox.os.chown", fake_chown)
+    runner = FailingCreateRunner()
+    docker = DockerRunner(SandboxSettings(enabled=True), cli_runner=runner)
+    result = await docker.execute(
+        ExecutionRequest(command=["true"], workspace=workspace)
+    )
+
+    assert result.status == "error"
+    assert any(name == "project" and uid == 10000 and gid == 10000 for name, uid, gid in chowned)
+    assert any(name == "note.txt" for name, _uid, _gid in chowned)
+    assert any("create" in cmd for cmd in runner.commands)
+
+
+@pytest.mark.asyncio
+async def test_docker_runner_tolerates_chown_failure_like_docker_desktop(tmp_path, monkeypatch):
+    """宿主与容器不共享 uid 映射（如 Docker Desktop）时，chown 失败不应阻断执行。"""
+
+    from maisya.runner import ExecutionRequest
+    from maisya.sandbox import DockerRunner
+
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+
+    def denied(target, uid, gid, *, follow_symlinks=True):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("maisya.sandbox.os.chown", denied)
+    runner = FailingCreateRunner()
+    result = await DockerRunner(
+        SandboxSettings(enabled=True), cli_runner=runner
+    ).execute(ExecutionRequest(command=["true"], workspace=workspace))
+
+    assert any("create" in cmd for cmd in runner.commands)
+    assert "10000:10000" not in result.error

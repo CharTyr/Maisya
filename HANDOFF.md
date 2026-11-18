@@ -172,4 +172,6 @@ python3 tests_sandbox/run_isolated.py --execute
 - 镜像：`maisya-sandbox:local` 与 `maisya-sandbox:latest` 均构建完成（377MB，`python 3.13.18` + `node v24.22.3`，非 root `10000:10000`），`--network none --read-only --cap-drop ALL` 下实测可运行。
 - 真实探测：在插件 venv 中对线上 `Docker` 跑 `Sandbox.probe()`，`probe_ready = True`、`probe_error = ''`。
 
+**上线后补记（同一晚修复）**：真机冒烟发现 `DockerRunner`（`exec_command`/`sandbox_exec` 的容器路径）没有把宿主工作区交给容器执行用户，工作区是 `700 root:root` 而容器以 `UID 10000` 运行，容器内读工作区会 `Permission denied`。现已把 `Sandbox._own` 的逻辑提取为模块级 `own_container_tree(root, *, strict=True)`，`DockerRunner.execute` 建容器前以 `strict=False` 调用（Docker Desktop 这类宿主/容器 uid 不共享映射的环境里 chown 失败不阻断），并改用真实容器实测 `cat a.txt` / `touch b.txt` / `python3 --version` 全部 `ok`、宿主侧可见新文件、工作区属主变为 `10000`。
+
 **本机新发现（待后续处理）**：该宿主 `docker0` 网桥不存在（`ip -br addr show docker0` 报 `Device "docker0" does not exist`），默认 `bridge` 网络 `docker run` 会报 `adding interface veth... to bridge docker0 failed: Device does not exist`，因此镜像构建改用 `docker build --network host` 才通过。沙箱默认 `network_mode = "none"` 不受影响；若要把 `network_mode` 调成 `bridge`，需先修复/重建 `docker0`（属宿主 Docker 服务层面，需用户另行授权）。

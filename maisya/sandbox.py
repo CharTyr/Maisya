@@ -266,6 +266,44 @@ async def process(arguments, *, timeout=20, output_bytes=2097152, stdin=None):
     )
 
 
+def own_container_tree(root, *, strict=True) -> None:
+    """把工作区改归容器执行用户（10000:10000），否则非 root 容器进不去宿主目录。
+
+    `strict=False` 用于 Docker Desktop 等宿主与容器 uid 不共享映射的场景：
+    chown 失败不阻断执行，容器内能否读写交给挂载实现决定。
+    """
+
+    def ensure_owner(target: Path, *, follow_symlinks: bool) -> None:
+        info = os.lstat(target)
+        if info.st_uid == 10000 and info.st_gid == 10000:
+            return
+        try:
+            os.chown(target, 10000, 10000, follow_symlinks=follow_symlinks)
+        except PermissionError as error:
+            if not strict:
+                return
+            raise PermissionError(
+                "无法将沙箱工作区权限调整为 10000:10000（当前宿主进程缺少 chown 权限）"
+            ) from error
+        except OSError as error:
+            if error.errno == errno.EROFS:
+                return
+            if error.errno == errno.EPERM:
+                if not strict:
+                    return
+                raise PermissionError(
+                    "无法将沙箱工作区权限调整为 10000:10000（当前宿主进程缺少 chown 权限）"
+                ) from error
+            raise
+
+    root = Path(root)
+    ensure_owner(root, follow_symlinks=False)
+    for directory, _children, files in os.walk(root):
+        ensure_owner(Path(directory), follow_symlinks=False)
+        for name in files:
+            ensure_owner(Path(directory) / name, follow_symlinks=False)
+
+
 class Sandbox:
     def __init__(
         self,
@@ -784,29 +822,7 @@ class Sandbox:
         return normalized
 
     def _own(self, work):
-        def _ensure_owner(target: Path, *, follow_symlinks: bool) -> None:
-            info = os.lstat(target)
-            if info.st_uid == 10000 and info.st_gid == 10000:
-                return
-            try:
-                os.chown(target, 10000, 10000, follow_symlinks=follow_symlinks)
-            except PermissionError as error:
-                raise PermissionError(
-                    "无法将沙箱工作区权限调整为 10000:10000（当前宿主进程缺少 chown 权限）"
-                ) from error
-            except OSError as error:
-                if error.errno == errno.EROFS:
-                    return
-                if error.errno == errno.EPERM:
-                    raise PermissionError(
-                        "无法将沙箱工作区权限调整为 10000:10000（当前宿主进程缺少 chown 权限）"
-                    ) from error
-                raise
-
-        for directory, _children, files in os.walk(work.path):
-            _ensure_owner(Path(directory), follow_symlinks=False)
-            for name in files:
-                _ensure_owner(Path(directory) / name, follow_symlinks=False)
+        own_container_tree(work.path)
 
     async def execute(
         self,
@@ -1331,6 +1347,16 @@ class DockerRunner:
                 status="approval_required",
                 approval_required=approval,
                 error=approval.reason,
+                runner_name=self.name,
+            )
+
+        # 容器以非 root（10000:10000）运行，宿主工作区需先交给同一 uid 才能读写
+        try:
+            await completed_thread(own_container_tree, ws, strict=False)
+        except OSError as exc:
+            return ExecutionResult(
+                status="error",
+                error=str(exc),
                 runner_name=self.name,
             )
 
