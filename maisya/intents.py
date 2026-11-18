@@ -52,6 +52,50 @@ def _parse_payload(raw) -> dict:
     return _parse_payload_strict(raw)[0]
 
 
+def _nonneg_int_token(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value)) if math.isfinite(value) else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None
+
+
+def _tokens_from_mapping(mapping: dict) -> int:
+    total = _nonneg_int_token(mapping.get("total_tokens"))
+    if total is None:
+        total = _nonneg_int_token(mapping.get("tokens_used"))
+    if total is not None and total > 0:
+        return total
+    prompt = _nonneg_int_token(mapping.get("prompt_tokens"))
+    if prompt is None:
+        prompt = _nonneg_int_token(mapping.get("input_tokens"))
+    completion = _nonneg_int_token(mapping.get("completion_tokens"))
+    if completion is None:
+        completion = _nonneg_int_token(mapping.get("output_tokens"))
+    if prompt is not None or completion is not None:
+        return (prompt or 0) + (completion or 0)
+    return total if total is not None else 0
+
+
+def extract_llm_tokens(payload: object) -> int:
+    """从宿主 LLMServiceResult 载荷或测试替身 usage 结构提取总 Token 用量。"""
+    if not isinstance(payload, dict):
+        return 0
+    top = _tokens_from_mapping(payload)
+    if top > 0:
+        return top
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        return _tokens_from_mapping(usage)
+    return 0
+
+
 def is_profileless_daily(source: str, payload: dict | None) -> bool:
     if not isinstance(payload, dict) or not payload.get("daily_at"):
         return False
@@ -276,6 +320,56 @@ class Intents:
                 ).fetchall()
         return [self._intent(row) for row in rows]
 
+    def _cancel_matching_workflows_in_tx(
+        self,
+        db,
+        targets,
+        *,
+        profile: str,
+        workspace: str = "",
+        is_admin: bool | None = None,
+        match_all_for_profile: bool = False,
+        now: float | None = None,
+    ) -> list[str]:
+        clean_targets = [str(t).strip() for t in targets if str(t or "").strip()]
+        dedup_targets = list(dict.fromkeys(clean_targets))
+        if not dedup_targets or not profile:
+            return []
+        cur_now = self.clock() if now is None else float(now)
+        placeholders = ",".join("?" for _ in dedup_targets)
+        rows = db.execute(
+            f"SELECT intent_id, payload FROM intents WHERE target IN ({placeholders}) "
+            "AND status IN ('pending', 'paused', 'error_paused', 'budget_paused')",
+            dedup_targets,
+        ).fetchall()
+        cancelled: list[str] = []
+        for row in rows:
+            payload = _parse_payload(row["payload"])
+            if not payload:
+                continue
+            if is_admin is False and payload.get("scheduled_admin") is True:
+                continue
+            if not match_all_for_profile and not (
+                payload.get("every_seconds") or payload.get("daily_at")
+            ):
+                continue
+            if payload.get("profile") != profile:
+                continue
+            if (
+                not match_all_for_profile
+                and workspace
+                and str(payload.get("workspace") or "") != workspace
+            ):
+                continue
+            cur = db.execute(
+                "UPDATE intents SET status='cancelled', handled=? "
+                "WHERE intent_id=? AND status IN ('pending', 'paused', 'error_paused', 'budget_paused')",
+                (cur_now, row["intent_id"]),
+            )
+            if cur.rowcount == 1:
+                cancelled.append(row["intent_id"])
+        return cancelled
+
     def cancel_matching_workflows(
         self,
         target: str,
@@ -287,35 +381,21 @@ class Intents:
         if not target or not profile:
             return []
         now = self.clock()
-        cancelled = []
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
-            rows = db.execute(
-                "SELECT intent_id, payload FROM intents WHERE target=? AND status IN ('pending', 'paused')",
-                (target,),
-            ).fetchall()
-            for row in rows:
-                payload = _parse_payload(row["payload"])
-                if not payload:
-                    continue
-                if is_admin is False and payload.get("scheduled_admin") is True:
-                    continue
-                if not (payload.get("every_seconds") or payload.get("daily_at")):
-                    continue
-                if payload.get("profile") != profile:
-                    continue
-                if workspace and str(payload.get("workspace") or "") != workspace:
-                    continue
-                db.execute(
-                    "UPDATE intents SET status='cancelled', handled=? WHERE intent_id=? AND status IN ('pending', 'paused')",
-                    (now, row["intent_id"]),
-                )
-                cancelled.append(row["intent_id"])
-        return cancelled
+            return self._cancel_matching_workflows_in_tx(
+                db,
+                [target],
+                profile=profile,
+                workspace=workspace,
+                is_admin=is_admin,
+                now=now,
+            )
 
-    def schedule(
+    def _prepare_schedule_item(
         self,
         *,
+        now: float,
         kind,
         source,
         target,
@@ -328,7 +408,8 @@ class Intents:
         condition="",
         last_checked_at=None,
         last_triggered_at=None,
-    ):
+        preserve_recurring=False,
+    ) -> dict:
         if kind not in KINDS or source not in SOURCES or not CHAT_TARGET.fullmatch(target):
             raise ValueError("意图类型、来源或目标无效")
         if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
@@ -346,50 +427,214 @@ class Intents:
             raise ValueError("盯梢条件需在 500 字符以内")
         checked_ts = float(last_checked_at) if last_checked_at is not None else None
         triggered_ts = float(last_triggered_at) if last_triggered_at is not None else None
-        now = self.clock()
         try:
-            due_at = float(due_at)
+            due_ts = float(due_at)
         except (TypeError, ValueError):
             raise ValueError("到期时间无效") from None
-        if not now - 5 <= due_at <= now + 365 * 86400:
+        if not now - 5 <= due_ts <= now + 365 * 86400:
             raise ValueError("到期时间应在现在到一年之间")
+        payload_dict = dict(payload) if isinstance(payload, dict) else {}
+        effective_bypass = bool(bypass_limits) and not is_profileless_daily(
+            source, payload_dict
+        )
+        return {
+            "kind": kind,
+            "source": source,
+            "target": target,
+            "due_at": due_ts,
+            "reason": reason.strip(),
+            "thread_id": str(thread_id or ""),
+            "payload": payload_dict,
+            "effective_bypass": effective_bypass,
+            "mode": norm_mode,
+            "condition": norm_condition,
+            "checked_ts": checked_ts,
+            "triggered_ts": triggered_ts,
+            "preserve_recurring": bool(preserve_recurring),
+        }
+
+    def _insert_schedule_item_in_tx(self, db, prepared: dict, *, now: float) -> str:
         intent_id = "in_" + uuid.uuid4().hex[:16]
+        kind = prepared["kind"]
+        source = prepared["source"]
+        target = prepared["target"]
+        final_due_at = float(prepared["due_at"])
+        payload_dict = dict(prepared["payload"])
+        effective_bypass = prepared["effective_bypass"]
+        norm_mode = prepared["mode"]
+        status = "pending"
+        wake_status = ""
+
+        if kind == "proactive" and not effective_bypass and norm_mode != "watch":
+            tz_val = payload_dict.get("tz_offset_minutes")
+            tz_arg = (
+                tz_val
+                if (isinstance(tz_val, int) and not isinstance(tz_val, bool))
+                else None
+            )
+            eff_tz = self._tz_offset_minutes(tz_arg)
+            state = self.proactive_quota_state(
+                target,
+                now=final_due_at,
+                payload=payload_dict or None,
+                tz_offset_minutes=tz_arg,
+                db=db,
+            )
+            quota_full = state["used"] >= state["limit"] or (
+                bool(target) and state["chat_used"] >= state["chat_limit"]
+            )
+            if quota_full:
+                if not prepared["preserve_recurring"]:
+                    if state["used"] >= state["limit"]:
+                        raise ValueError("普通惦记已达到每日上限")
+                    raise ValueError("该会话今日主动次数已达上限")
+                if state["limit"] <= 0 or (bool(target) and state["chat_limit"] <= 0):
+                    status = "budget_paused"
+                    wake_status = "daily_proactive_limit"
+                else:
+                    daily_at = str(payload_dict.get("daily_at") or "").strip()
+                    every_sec = int(payload_dict.get("every_seconds") or 0)
+                    cand_due = final_due_at
+                    resolved = False
+                    if daily_at or every_sec >= 300:
+                        for _ in range(366):
+                            _, cur_day_end = self._day_bounds(
+                                cand_due, tz_offset_minutes=tz_arg
+                            )
+                            if daily_at:
+                                cand_due, _ = next_daily_due(
+                                    float(cur_day_end) - 10.0, daily_at, eff_tz
+                                )
+                            else:
+                                k = max(1, int((cur_day_end - cand_due) // every_sec))
+                                cand_due = cand_due + k * every_sec
+                                if cand_due < cur_day_end:
+                                    cand_due += every_sec
+                            if cand_due > now + 365 * 86400:
+                                break
+                            probe_state = self.proactive_quota_state(
+                                target,
+                                now=cand_due,
+                                payload=payload_dict or None,
+                                tz_offset_minutes=tz_arg,
+                                db=db,
+                            )
+                            if probe_state["used"] < probe_state["limit"] and (
+                                not target
+                                or probe_state["chat_used"] < probe_state["chat_limit"]
+                            ):
+                                final_due_at = cand_due
+                                wake_status = "quota_deferred"
+                                resolved = True
+                                break
+                    if not resolved:
+                        status = "budget_paused"
+                        wake_status = "daily_proactive_limit"
+
+        db.execute(
+            "INSERT INTO intents (intent_id, kind, source, target, due_at, reason, thread_id, payload, status, wake_status, created, handled, bypass_limits, mode, condition, last_checked_at, last_triggered_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+            (
+                intent_id,
+                kind,
+                source,
+                target,
+                final_due_at,
+                prepared["reason"],
+                prepared["thread_id"],
+                encode(payload_dict),
+                status,
+                wake_status,
+                now,
+                1 if effective_bypass else 0,
+                norm_mode,
+                prepared["condition"],
+                prepared["checked_ts"],
+                prepared["triggered_ts"],
+            ),
+        )
+        return intent_id
+
+    def schedule_batch(
+        self,
+        items: list[dict],
+        *,
+        replace_workflows: dict | None = None,
+    ) -> dict:
+        if not isinstance(items, list) or not items:
+            raise ValueError("至少需要一条待安排的计划")
+        now = self.clock()
+        prepared_items = [
+            self._prepare_schedule_item(now=now, **item) for item in items
+        ]
+        cancelled_ids: list[str] = []
+        created_ids: list[str] = []
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
-            payload_dict = payload if isinstance(payload, dict) else {}
-            effective_bypass = bool(bypass_limits) and not is_profileless_daily(
-                source, payload_dict
-            )
-            if kind == "proactive" and not effective_bypass and norm_mode != "watch":
-                start, end = self._day_bounds(due_at)
-                counts = self._proactive_counts(
-                    db, start, end, target=target, payload=payload_dict or None
+            if isinstance(replace_workflows, dict):
+                cancelled_ids = self._cancel_matching_workflows_in_tx(
+                    db,
+                    replace_workflows.get("targets") or (),
+                    profile=str(replace_workflows.get("profile") or ""),
+                    workspace=str(replace_workflows.get("workspace") or ""),
+                    is_admin=replace_workflows.get("is_admin"),
+                    match_all_for_profile=bool(
+                        replace_workflows.get("match_all_for_profile")
+                    ),
+                    now=now,
                 )
-                if counts["total"] >= int(self.daily_proactive_limit):
-                    raise ValueError("普通惦记已达到每日上限")
-                if counts["chat"] >= int(self.per_chat_daily_proactive_limit):
-                    raise ValueError("该会话今日主动次数已达上限")
-            db.execute(
-                "INSERT INTO intents (intent_id, kind, source, target, due_at, reason, thread_id, payload, status, wake_status, created, handled, bypass_limits, mode, condition, last_checked_at, last_triggered_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, NULL, ?, ?, ?, ?, ?)",
-                (
-                    intent_id,
-                    kind,
-                    source,
-                    target,
-                    due_at,
-                    reason.strip(),
-                    thread_id,
-                    encode(payload or {}),
-                    now,
-                    1 if effective_bypass else 0,
-                    norm_mode,
-                    norm_condition,
-                    checked_ts,
-                    triggered_ts,
-                ),
-            )
-        return self.get(intent_id)
+            for prep in prepared_items:
+                created_ids.append(
+                    self._insert_schedule_item_in_tx(db, prep, now=now)
+                )
+            placeholders = ",".join("?" for _ in created_ids)
+            rows = db.execute(
+                f"SELECT * FROM intents WHERE intent_id IN ({placeholders})",
+                created_ids,
+            ).fetchall()
+        by_id = {row["intent_id"]: self._intent(row) for row in rows}
+        return {
+            "intents": [by_id[iid] for iid in created_ids if iid in by_id],
+            "cancelled_ids": cancelled_ids,
+        }
+
+    def schedule(
+        self,
+        *,
+        kind,
+        source,
+        target,
+        due_at,
+        reason,
+        thread_id="",
+        payload=None,
+        bypass_limits=False,
+        mode="",
+        condition="",
+        last_checked_at=None,
+        last_triggered_at=None,
+        preserve_recurring=False,
+    ):
+        batch_res = self.schedule_batch(
+            [
+                {
+                    "kind": kind,
+                    "source": source,
+                    "target": target,
+                    "due_at": due_at,
+                    "reason": reason,
+                    "thread_id": thread_id,
+                    "payload": payload,
+                    "bypass_limits": bypass_limits,
+                    "mode": mode,
+                    "condition": condition,
+                    "last_checked_at": last_checked_at,
+                    "last_triggered_at": last_triggered_at,
+                    "preserve_recurring": preserve_recurring,
+                }
+            ]
+        )
+        return batch_res["intents"][0]
 
     def _require_modifiable_intent(self, db, intent_id: str, target: str, *, statuses: tuple[str, ...], is_admin: bool | None):
         placeholders = ",".join("?" for _ in statuses)
@@ -485,6 +730,59 @@ class Intents:
             )
         return self.get(intent_id)
 
+    def claim_for_run_now(
+        self,
+        intent_id: str,
+        target: str | None = None,
+        *,
+        is_admin: bool | None = None,
+        claim: bool = True,
+        payload_patch: dict | None = None,
+        resume_patch: dict | None = None,
+    ) -> tuple[dict, bool]:
+        """在单一 IMMEDIATE 事务内原子认领待执行或暂停计划用于立即执行。"""
+        with self.store.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM intents WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("意图不存在或已处理")
+            if target is not None and row["target"] != target:
+                raise PermissionError("目标会话与该计划不匹配，无权操作")
+            payload, valid_payload = _parse_payload_strict(row["payload"])
+            if not valid_payload:
+                payload = {}
+            if is_admin is False and payload.get("scheduled_admin") is True:
+                raise PermissionError("管理员创建的计划任务仅限管理员操作")
+            cur_status = str(row["status"] or "")
+            if cur_status == "claimed":
+                raise ValueError("该计划正在执行中，请勿重复触发")
+            if cur_status not in {"pending", "paused", "error_paused", "budget_paused"}:
+                raise ValueError("意图不存在或已处理")
+            was_paused = cur_status in {"paused", "error_paused", "budget_paused"}
+            next_payload = dict(payload)
+            if was_paused:
+                next_payload.pop("pause_error", None)
+                if isinstance(resume_patch, dict) and resume_patch:
+                    next_payload.update(resume_patch)
+            if isinstance(payload_patch, dict) and payload_patch:
+                next_payload.update(payload_patch)
+            due_ts = float(self.clock()) - 1.0
+            next_st = "claimed" if claim else "pending"
+            cursor = db.execute(
+                "UPDATE intents SET due_at=?, status=?, wake_status='', payload=?, "
+                "failure_count=0, last_error='' "
+                "WHERE intent_id=? AND status IN ('pending', 'paused', 'error_paused', 'budget_paused')",
+                (due_ts, next_st, encode(next_payload), intent_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("该计划正在执行或已处理，请勿重复触发")
+            fresh_row = db.execute(
+                "SELECT * FROM intents WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+            return self._intent(fresh_row), was_paused
+
     def record_watch_check(
         self,
         intent_id: str,
@@ -557,9 +855,39 @@ class Intents:
             if not self.bg_budget_state(now=now, db=db)["exhausted"]:
                 db.execute(
                     "UPDATE intents SET status='pending', wake_status='' "
-                    "WHERE status='budget_paused' AND due_at<=?",
+                    "WHERE status='budget_paused' AND wake_status!='daily_proactive_limit' AND due_at<=?",
                     (now,),
                 )
+            paused_proactive = db.execute(
+                "SELECT intent_id, target, payload FROM intents "
+                "WHERE status='budget_paused' AND wake_status='daily_proactive_limit' AND due_at<=? "
+                "ORDER BY due_at LIMIT 32",
+                (now,),
+            ).fetchall()
+            for pr in paused_proactive:
+                p_payload = _parse_payload(pr["payload"])
+                tz_val = p_payload.get("tz_offset_minutes")
+                tz_arg = (
+                    tz_val
+                    if (isinstance(tz_val, int) and not isinstance(tz_val, bool))
+                    else None
+                )
+                q_state = self.proactive_quota_state(
+                    str(pr["target"] or ""),
+                    now=now,
+                    exclude_intent_id=pr["intent_id"],
+                    payload=p_payload or None,
+                    tz_offset_minutes=tz_arg,
+                    db=db,
+                )
+                if q_state["remaining"] > 0 and (
+                    not pr["target"] or q_state["chat_remaining"] > 0
+                ):
+                    db.execute(
+                        "UPDATE intents SET status='pending', wake_status='' "
+                        "WHERE intent_id=? AND status='budget_paused'",
+                        (pr["intent_id"],),
+                    )
             rows = db.execute(
                 "SELECT * FROM intents WHERE status='pending' AND due_at<=? "
                 "ORDER BY due_at LIMIT 64",
@@ -590,12 +918,16 @@ class Intents:
                 )
             if claimed:
                 db.execute(
-                    "UPDATE intents SET status='claimed' WHERE intent_id IN ("
+                    "UPDATE intents SET status='claimed' WHERE status='pending' AND intent_id IN ("
                     + ",".join("?" for _ in claimed)
                     + ")",
                     claimed,
                 )
-            return [self._intent(row) for row in rows if row["intent_id"] in claimed]
+            return [
+                {**self._intent(row), "status": "claimed"}
+                for row in rows
+                if row["intent_id"] in claimed
+            ]
 
     def update_thread(self, intent_id, thread_id, payload=None):
         with self.store.connect() as db, db:
@@ -1111,20 +1443,38 @@ class Intents:
             "exhausted_reason": reason,
         }
 
+    @staticmethod
+    def _split_ephemeral_thread_state(row) -> tuple[str, str]:
+        payload = _parse_payload(row["payload"])
+        is_ephemeral = str(row["source"] or "") != "thread" and bool(
+            payload.get("wait_thread")
+            or payload.get("already_started")
+            or payload.get("return_routed_queued")
+        )
+        if not is_ephemeral:
+            return str(row["thread_id"] or ""), encode(payload)
+        for key in ("wait_thread", "already_started", "return_routed_queued"):
+            payload.pop(key, None)
+        return "", encode(payload)
+
     def pause_for_budget(self, intent_id: str, reason: str = "", *, now=None) -> dict:
         cur = self.clock() if now is None else float(now)
         _, next_day_start = self._day_bounds(cur)
         clean_reason = str(reason or "daily_bg_runs_limit")[:120]
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT due_at FROM intents WHERE intent_id=?", (intent_id,)).fetchone()
+            row = db.execute(
+                "SELECT source, due_at, thread_id, payload FROM intents WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
             if row is None:
                 raise ValueError("意图不存在")
             next_due = max(float(row["due_at"] or 0.0), float(next_day_start))
+            next_tid, next_payload = self._split_ephemeral_thread_state(row)
             db.execute(
-                "UPDATE intents SET status='budget_paused', wake_status=?, due_at=?, thread_id='' "
+                "UPDATE intents SET status='budget_paused', wake_status=?, due_at=?, thread_id=?, payload=? "
                 "WHERE intent_id=?",
-                (clean_reason, next_due, intent_id),
+                (clean_reason, next_due, next_tid, next_payload, intent_id),
             )
         return self.get(intent_id)
 
@@ -1143,25 +1493,27 @@ class Intents:
         with self.store.connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT failure_count, due_at FROM intents WHERE intent_id=?", (intent_id,)
+                "SELECT source, failure_count, due_at, thread_id, payload FROM intents WHERE intent_id=?",
+                (intent_id,),
             ).fetchone()
             if row is None:
                 raise ValueError("意图不存在")
+            next_tid, next_payload = self._split_ephemeral_thread_state(row)
             fails = int(row["failure_count"] or 0) + 1
             if fails >= cap:
                 db.execute(
                     "UPDATE intents SET status='error_paused', wake_status='error_paused', "
-                    "failure_count=?, last_error=?, last_checked_at=?, thread_id='' "
+                    "failure_count=?, last_error=?, last_checked_at=?, thread_id=?, payload=? "
                     "WHERE intent_id=?",
-                    (fails, err_text, cur, intent_id),
+                    (fails, err_text, cur, next_tid, next_payload, intent_id),
                 )
             else:
                 delay = min(3600.0, float(base_backoff) * (2 ** (fails - 1)))
                 next_due = cur + delay
                 db.execute(
                     "UPDATE intents SET status='pending', wake_status='retry_backoff', "
-                    "due_at=?, failure_count=?, last_error=?, last_checked_at=?, thread_id='' "
+                    "due_at=?, failure_count=?, last_error=?, last_checked_at=?, thread_id=?, payload=? "
                     "WHERE intent_id=?",
-                    (next_due, fails, err_text, cur, intent_id),
+                    (next_due, fails, err_text, cur, next_tid, next_payload, intent_id),
                 )
         return self.get(intent_id)

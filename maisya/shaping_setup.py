@@ -829,24 +829,26 @@ async def handle_setup(
             prof_id or "digest" if (topics_in or feeds_in) else (prof_id or "default")
         )
         sched_prof_obj = await completed_thread(plugin.profiles.get, sched_prof)
-        if not sched_prof_obj.enabled:
-            await handle_profile_fn(
-                plugin, op="patch", target=sched_prof_obj.id, base="", patch={"enabled": True}, content="", author=author
-            )
         now_ts = plugin.intents.clock()
         tz_min = int(getattr(plugin.settings, "tz_offset_minutes", 480))
         daily_at = str(opts.get("daily_at") or "").strip()
         every_sec = int(opts.get("every_seconds") or (86400 if daily_at else 0))
-        due_ts = next_daily_due(now_ts, daily_at, tz_min)[0] if daily_at else (now_ts + int(opts.get("in_seconds") or 60))
+        if every_sec and not 300 <= every_sec <= 2592000:
+            raise ValueError("循环周期 every_seconds 应在 300 到 2592000 秒之间")
+        in_sec = int(opts.get("in_seconds") or 60)
+        if not daily_at and not 1 <= in_sec <= 2592000:
+            raise ValueError("首次触发延迟 in_seconds 应在 1 到 2592000 秒之间")
+        due_ts = next_daily_due(now_ts, daily_at, tz_min)[0] if daily_at else (now_ts + in_sec)
         prompt = str(
             opts.get("prompt") or (default_digest_prompt if sched_prof_obj.id == "digest" else "执行定时任务")
         ).strip()
         reason = str(opts.get("reason") or (f"每日 {daily_at} 资讯简报" if daily_at else prompt[:60])).strip()
         ws = normalize_workspace_fn(sched_prof_obj.id, str(opts.get("workspace") or ""))
-        target_key = "self" if resolved_cid == "self" else f"chat:{resolved_cid}"
-        for old_it in plugin.intents.list_all(status="pending", limit=60):
-            if old_it.get("target") == target_key and (old_it.get("payload") or {}).get("profile") == sched_prof_obj.id:
-                plugin.intents.cancel(old_it["intent_id"], target_key, is_admin=True)
+        target_key = f"chat:{resolved_cid}"
+        if not sched_prof_obj.enabled:
+            await handle_profile_fn(
+                plugin, op="patch", target=sched_prof_obj.id, base="", patch={"enabled": True}, content="", author=author
+            )
         svc_cfg = (
             plugin.runtime.services.load()
             if (getattr(plugin, "runtime", None) and getattr(plugin.runtime, "services", None))
@@ -854,27 +856,38 @@ async def handle_setup(
         )
         sched_env = approved_envelope(sched_prof_obj, svc_cfg, target_chat=resolved_cid)
         issuer_actor = str(caller_ident or "").strip() or "console"
-        row_it = await completed_thread(
-            plugin.intents.schedule,
-            kind="return",
-            source="workflow",
-            target=target_key,
-            due_at=due_ts,
-            reason=reason,
-            payload={
-                "platform": resolved_plat or "qq",
+        batch_res = await completed_thread(
+            plugin.intents.schedule_batch,
+            [
+                {
+                    "kind": "return",
+                    "source": "workflow",
+                    "target": target_key,
+                    "due_at": due_ts,
+                    "reason": reason,
+                    "payload": {
+                        "platform": resolved_plat or "qq",
+                        "profile": sched_prof_obj.id,
+                        "workspace": ws,
+                        "prompt": prompt,
+                        "every_seconds": every_sec,
+                        "daily_at": daily_at,
+                        "tz_offset_minutes": tz_min,
+                        "scheduled_admin": True,
+                        "issuer_admin": issuer_actor,
+                        "envelope": sched_env,
+                    },
+                    "bypass_limits": True,
+                }
+            ],
+            replace_workflows={
+                "targets": [target_key],
                 "profile": sched_prof_obj.id,
-                "workspace": ws,
-                "prompt": prompt,
-                "every_seconds": every_sec,
-                "daily_at": daily_at,
-                "tz_offset_minutes": tz_min,
-                "scheduled_admin": True,
-                "issuer_admin": issuer_actor,
-                "envelope": sched_env,
+                "is_admin": True,
+                "match_all_for_profile": True,
             },
-            bypass_limits=True,
         )
+        row_it = batch_res["intents"][0]
         if getattr(plugin, "grants", None) is not None and row_it.get("intent_id"):
             await completed_thread(
                 record_delegation,

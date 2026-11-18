@@ -5145,56 +5145,7 @@ class MaisyaPlugin(MaiBotPlugin):
                             clock=self.intents.clock,
                         )
                 else:
-                    if existing.get("status") not in {
-                        "pending",
-                        "paused",
-                        "error_paused",
-                        "budget_paused",
-                    }:
-                        raise ValueError("意图不存在或已处理")
-                    if existing.get("status") in {
-                        "paused",
-                        "error_paused",
-                        "budget_paused",
-                    }:
-                        issuer_actor = ""
-                        if is_admin_caller and source_msg_id:
-                            r_max = await asyncio.to_thread(
-                                self._admin_source_max_age, chat_id, platform
-                            )
-                            r_ident = await asyncio.to_thread(
-                                self._lookup_message, source_msg_id, chat_id, platform, max_age=r_max
-                            )
-                            issuer_actor = self._admin_actor_id(r_ident, fallback="console")
-                        elif is_admin_caller or is_admin_dm:
-                            issuer_actor = "console"
-                        ep = existing.get("payload") or {}
-                        p_patch = (
-                            {"issuer_admin": issuer_actor}
-                            if issuer_actor and (ep.get("scheduled_admin") or ep.get("admin_direct"))
-                            else None
-                        )
-                        await asyncio.to_thread(
-                            self.intents.resume,
-                            intent_id,
-                            op_target,
-                            is_admin=is_admin_caller,
-                            payload_patch=p_patch,
-                        )
-                        if p_patch and self.grants is not None:
-                            await asyncio.to_thread(
-                                record_delegation,
-                                self.grants,
-                                subject_kind="intent",
-                                subject_id=intent_id,
-                                issuer=issuer_actor,
-                                chat_id=chat_id,
-                                target_chat=op_target.split(":", 1)[1],
-                                profile_id=str(ep.get("profile") or ""),
-                                envelope=ep.get("envelope") if isinstance(ep.get("envelope"), dict) else None,
-                                clock=self.intents.clock,
-                            )
-
+                    issuer_actor = ""
                     run_issuer = ""
                     if is_admin_caller and source_msg_id:
                         r_max = await asyncio.to_thread(
@@ -5203,7 +5154,16 @@ class MaisyaPlugin(MaiBotPlugin):
                         r_ident = await asyncio.to_thread(
                             self._lookup_message, source_msg_id, chat_id, platform, max_age=r_max
                         )
+                        issuer_actor = self._admin_actor_id(r_ident, fallback="console")
                         run_issuer = self._admin_actor_id(r_ident, fallback="")
+                    elif is_admin_caller or is_admin_dm:
+                        issuer_actor = "console"
+                    ep = existing.get("payload") or {}
+                    p_patch = (
+                        {"issuer_admin": issuer_actor}
+                        if issuer_actor and (ep.get("scheduled_admin") or ep.get("admin_direct"))
+                        else None
+                    )
                     caller_arena = (
                         await asyncio.to_thread(self._chat_arena, chat_id, platform)
                         if chat_id
@@ -5222,44 +5182,28 @@ class MaisyaPlugin(MaiBotPlugin):
                             run_patch["run_now_issuer"] = run_issuer
 
                     has_pulse = getattr(self, "pulse", None) is not None
-
-                    def _mark_due():
-                        due_ts = self.intents.clock() - 1.0
-                        next_st = "claimed" if has_pulse else "pending"
-                        with self.intents.store.connect() as db, db:
-                            if run_patch:
-                                cur_row = db.execute(
-                                    "SELECT payload FROM intents WHERE intent_id=?",
-                                    (intent_id,),
-                                ).fetchone()
-                                try:
-                                    cur_payload = (
-                                        json.loads(cur_row["payload"] or "{}")
-                                        if cur_row is not None
-                                        else {}
-                                    )
-                                except (TypeError, ValueError):
-                                    cur_payload = {}
-                                if not isinstance(cur_payload, dict):
-                                    cur_payload = {}
-                                merged_payload = {**cur_payload, **run_patch}
-                                db.execute(
-                                    "UPDATE intents SET due_at=?, status=?, payload=? WHERE intent_id=?",
-                                    (
-                                        due_ts,
-                                        next_st,
-                                        json.dumps(merged_payload, ensure_ascii=False),
-                                        intent_id,
-                                    ),
-                                )
-                            else:
-                                db.execute(
-                                    "UPDATE intents SET due_at=?, status=? WHERE intent_id=?",
-                                    (due_ts, next_st, intent_id),
-                                )
-                        return self.intents.get(intent_id)
-
-                    fresh = await asyncio.to_thread(_mark_due)
+                    fresh, was_paused = await asyncio.to_thread(
+                        self.intents.claim_for_run_now,
+                        intent_id,
+                        op_target,
+                        is_admin=is_admin_caller,
+                        claim=has_pulse,
+                        payload_patch=run_patch or None,
+                        resume_patch=p_patch,
+                    )
+                    if was_paused and p_patch and self.grants is not None:
+                        await asyncio.to_thread(
+                            record_delegation,
+                            self.grants,
+                            subject_kind="intent",
+                            subject_id=intent_id,
+                            issuer=issuer_actor,
+                            chat_id=chat_id,
+                            target_chat=op_target.split(":", 1)[1],
+                            profile_id=str(ep.get("profile") or ""),
+                            envelope=ep.get("envelope") if isinstance(ep.get("envelope"), dict) else None,
+                            clock=self.intents.clock,
+                        )
                     if has_pulse:
                         try:
                             await self.pulse._dispatch(fresh)
@@ -5390,7 +5334,7 @@ class MaisyaPlugin(MaiBotPlugin):
 
             if type(replace) is not bool:
                 raise ValueError("replace 必须是布尔值")
-            cancelled_ids: list[str] = []
+            replace_spec: dict | None = None
             if replace:
                 if not is_admin_caller:
                     raise PermissionError("覆盖替换已有工作流需要真实管理员消息授权")
@@ -5399,19 +5343,17 @@ class MaisyaPlugin(MaiBotPlugin):
                 replace_aliases = await asyncio.to_thread(
                     self.chat_aliases_for, effective_chat_id, effective_platform
                 )
-                seen_cancelled: set[str] = set()
-                for cand in sorted(set(replace_aliases) | {effective_chat_id}):
-                    if not cand:
-                        continue
-                    for cid in await asyncio.to_thread(
-                        self.intents.cancel_matching_workflows,
-                        f"chat:{cand}",
-                        profile=profile,
-                        workspace=workspace,
-                    ):
-                        if cid not in seen_cancelled:
-                            seen_cancelled.add(cid)
-                            cancelled_ids.append(cid)
+                replace_targets = [
+                    f"chat:{cand}"
+                    for cand in sorted(set(replace_aliases) | {effective_chat_id})
+                    if cand
+                ]
+                replace_spec = {
+                    "targets": replace_targets,
+                    "profile": profile,
+                    "workspace": workspace,
+                    "is_admin": is_admin_caller,
+                }
 
             if norm_mode == "watch":
                 intent_source = "watch"
@@ -5428,7 +5370,27 @@ class MaisyaPlugin(MaiBotPlugin):
                     else "later"
                 )
 
-            if daily_at is not None and len(daily_at) > 0:
+            base_payload: dict = {"platform": effective_platform}
+            if profile:
+                base_payload["profile"] = profile
+            if workspace:
+                base_payload["workspace"] = workspace
+            if prompt:
+                base_payload["prompt"] = prompt
+            if clean_condition:
+                base_payload["condition"] = clean_condition
+            if scheduled_admin:
+                base_payload["scheduled_admin"] = True
+            if admin_direct:
+                base_payload["admin_direct"] = True
+            if (scheduled_admin or admin_direct) and issuer_actor:
+                base_payload["issuer_admin"] = issuer_actor
+            if sched_envelope is not None:
+                base_payload["envelope"] = sched_envelope
+
+            is_daily_list = daily_at is not None and len(daily_at) > 0
+            batch_items: list[dict] = []
+            if is_daily_list:
                 if not isinstance(daily_at, list) or len(daily_at) > 12:
                     raise ValueError("daily_at 需为最多 12 个 HH:MM 字符串的列表")
                 if not is_admin_caller and profile:
@@ -5444,75 +5406,101 @@ class MaisyaPlugin(MaiBotPlugin):
                 if type(tz_offset_minutes) is not int:
                     raise ValueError("tz_offset_minutes 必须是整数")
                 now_ts = self.intents.clock()
-                slots: list[tuple[float, str]] = []
                 seen_hhmm: set[str] = set()
                 for raw_slot in daily_at:
                     due_ts, norm_hhmm = next_daily_due(
                         now_ts, str(raw_slot or ""), tz_offset_minutes
                     )
-                    if norm_hhmm not in seen_hhmm:
-                        seen_hhmm.add(norm_hhmm)
-                        slots.append((due_ts, norm_hhmm))
-                created_rows: list[dict] = []
-                for due_ts, norm_hhmm in slots:
-                    payload = {
-                        "platform": effective_platform,
+                    if norm_hhmm in seen_hhmm:
+                        continue
+                    seen_hhmm.add(norm_hhmm)
+                    slot_payload = {
+                        **base_payload,
                         "every_seconds": 86400,
                         "daily_at": norm_hhmm,
                         "tz_offset_minutes": tz_offset_minutes,
                     }
-                    if profile:
-                        payload["profile"] = profile
-                    if workspace:
-                        payload["workspace"] = workspace
-                    if prompt:
-                        payload["prompt"] = prompt
-                    if clean_condition:
-                        payload["condition"] = clean_condition
-                    if scheduled_admin:
-                        payload["scheduled_admin"] = True
-                    if admin_direct:
-                        payload["admin_direct"] = True
-                    if (scheduled_admin or admin_direct) and issuer_actor:
-                        payload["issuer_admin"] = issuer_actor
-                    if sched_envelope is not None:
-                        payload["envelope"] = sched_envelope
-                    scheduled_row = await asyncio.to_thread(
-                        self.intents.schedule,
-                        kind=intent_kind,
-                        source=intent_source,
-                        target=target,
-                        due_at=due_ts,
-                        reason=reason or clean_condition or (f"每日 {norm_hhmm} {profile or '定时任务'}"),
-                        thread_id=thread_id,
-                        payload=payload,
-                        bypass_limits=(
-                            intent_kind != "proactive"
-                            or bool(profile or intent_source in {"workflow", "watch"})
-                        ),
-                        mode=norm_mode,
-                        condition=clean_condition,
+                    batch_items.append(
+                        {
+                            "kind": intent_kind,
+                            "source": intent_source,
+                            "target": target,
+                            "due_at": due_ts,
+                            "reason": reason
+                            or clean_condition
+                            or (f"每日 {norm_hhmm} {profile or '定时任务'}"),
+                            "thread_id": thread_id,
+                            "payload": slot_payload,
+                            "bypass_limits": (
+                                intent_kind != "proactive"
+                                or bool(profile or intent_source in {"workflow", "watch"})
+                            ),
+                            "mode": norm_mode,
+                            "condition": clean_condition,
+                        }
                     )
-                    if (scheduled_admin or admin_direct) and self.grants is not None:
-                        await asyncio.to_thread(
-                            record_delegation,
-                            self.grants,
-                            subject_kind="intent",
-                            subject_id=scheduled_row["intent_id"],
-                            issuer=issuer_actor or "console",
-                            chat_id=chat_id,
-                            target_chat=effective_chat_id,
-                            profile_id=profile,
-                            envelope=sched_envelope,
-                            clock=self.intents.clock,
-                        )
-                    created_rows.append(self.vault.redact(scheduled_row))
+            else:
+                if every_seconds and (
+                    type(every_seconds) is not int or not 300 <= every_seconds <= 2592000
+                ):
+                    raise ValueError("循环周期 every_seconds 应在 300 到 2592000 秒之间")
+                effective_in = (
+                    (int(every_seconds) if every_seconds else 60)
+                    if in_seconds in (0, None, "")
+                    else in_seconds
+                )
+                if type(effective_in) is not int or not 30 <= effective_in <= 2592000:
+                    raise ValueError("首次触发延迟 in_seconds 应在 30 到 2592000 秒之间")
+                due = self.intents.clock() + effective_in
+                single_payload = dict(base_payload)
+                if every_seconds:
+                    single_payload["every_seconds"] = every_seconds
+                batch_items.append(
+                    {
+                        "kind": intent_kind,
+                        "source": intent_source,
+                        "target": target,
+                        "due_at": due,
+                        "reason": reason or clean_condition,
+                        "thread_id": thread_id,
+                        "payload": single_payload,
+                        "bypass_limits": (
+                            intent_kind != "proactive"
+                            or bool(profile or every_seconds or norm_mode == "watch")
+                        ),
+                        "mode": norm_mode,
+                        "condition": clean_condition,
+                    }
+                )
+
+            batch_res = await asyncio.to_thread(
+                self.intents.schedule_batch,
+                batch_items,
+                replace_workflows=replace_spec,
+            )
+            cancelled_ids = list(batch_res.get("cancelled_ids") or [])
+            created_rows = [self.vault.redact(item) for item in batch_res["intents"]]
+            if (scheduled_admin or admin_direct) and self.grants is not None:
+                for created_item in batch_res["intents"]:
+                    await asyncio.to_thread(
+                        record_delegation,
+                        self.grants,
+                        subject_kind="intent",
+                        subject_id=created_item["intent_id"],
+                        issuer=issuer_actor or "console",
+                        chat_id=chat_id,
+                        target_chat=effective_chat_id,
+                        profile_id=profile,
+                        envelope=sched_envelope,
+                        clock=self.intents.clock,
+                    )
+            if is_admin_caller:
+                self._record_ops_receipt(chat_id, "later:schedule")
+            if is_daily_list:
                 summary_payload = {
                     "intents": created_rows,
                     "cancelled_ids": cancelled_ids,
                 }
-                if is_admin_caller:
-                    self._record_ops_receipt(chat_id, "later:schedule")
                 return {
                     "success": True,
                     **created_rows[0],
@@ -5520,69 +5508,9 @@ class MaisyaPlugin(MaiBotPlugin):
                     "cancelled_ids": cancelled_ids,
                     "content": json.dumps(summary_payload, ensure_ascii=False),
                 }
-
-            if every_seconds and (
-                type(every_seconds) is not int or not 300 <= every_seconds <= 2592000
-            ):
-                raise ValueError("循环周期 every_seconds 应在 300 到 2592000 秒之间")
-            effective_in = (
-                (int(every_seconds) if every_seconds else 60)
-                if in_seconds in (0, None, "")
-                else in_seconds
-            )
-            if type(effective_in) is not int or not 30 <= effective_in <= 2592000:
-                raise ValueError("首次触发延迟 in_seconds 应在 30 到 2592000 秒之间")
-            due = self.intents.clock() + effective_in
-            payload = {"platform": effective_platform}
-            if profile:
-                payload["profile"] = profile
-            if workspace:
-                payload["workspace"] = workspace
-            if prompt:
-                payload["prompt"] = prompt
-            if clean_condition:
-                payload["condition"] = clean_condition
-            if every_seconds:
-                payload["every_seconds"] = every_seconds
-            if scheduled_admin:
-                payload["scheduled_admin"] = True
-            if admin_direct:
-                payload["admin_direct"] = True
-            if (scheduled_admin or admin_direct) and issuer_actor:
-                payload["issuer_admin"] = issuer_actor
-            if sched_envelope is not None:
-                payload["envelope"] = sched_envelope
-            row = await asyncio.to_thread(
-                self.intents.schedule,
-                kind=intent_kind,
-                source=intent_source,
-                target=target,
-                due_at=due,
-                reason=reason or clean_condition,
-                thread_id=thread_id,
-                payload=payload,
-                bypass_limits=intent_kind != "proactive" or bool(profile or every_seconds or norm_mode == "watch"),
-                mode=norm_mode,
-                condition=clean_condition,
-            )
-            if (scheduled_admin or admin_direct) and self.grants is not None:
-                await asyncio.to_thread(
-                    record_delegation,
-                    self.grants,
-                    subject_kind="intent",
-                    subject_id=row["intent_id"],
-                    issuer=issuer_actor or "console",
-                    chat_id=chat_id,
-                    target_chat=effective_chat_id,
-                    profile_id=profile,
-                    envelope=sched_envelope,
-                    clock=self.intents.clock,
-                )
-            result = self.vault.redact(row)
+            result = dict(created_rows[0])
             if cancelled_ids:
                 result["cancelled_ids"] = cancelled_ids
-            if is_admin_caller:
-                self._record_ops_receipt(chat_id, "later:schedule")
             return {
                 "success": True,
                 **result,

@@ -7,6 +7,7 @@ import re
 import sqlite3
 
 from .abilities import is_autonomous_snapshot
+from .intents import extract_llm_tokens
 from .scout import TOOL_DEFINITIONS, call_capability, checked
 from .workspaces import completed_thread
 
@@ -28,11 +29,23 @@ def _parse_json_object(raw: str) -> dict:
 
 
 class Learning:
-    def __init__(self, host, memory):
-        self.host, self.memory = host, memory
+    def __init__(self, host, memory, *, intents=None):
+        self.host, self.memory, self.intents = host, memory, intents
         self.tasks = {}
         self.slot = asyncio.Semaphore(1)
         self.closed = False
+
+    async def _record_llm_tokens(self, response: object) -> None:
+        toks = extract_llm_tokens(response)
+        rec_fn = (
+            getattr(self.intents, "record_bg_usage", None)
+            if self.intents is not None
+            else None
+        )
+        if toks > 0 and callable(rec_fn):
+            await completed_thread(
+                lambda: rec_fn(source="learning", target="self", runs=0, tokens=toks)
+            )
 
     def _trace(self, row):
         with self.memory.store.connect() as db:
@@ -182,28 +195,28 @@ class Learning:
                     },
                     ensure_ascii=False,
                 )
-                response = checked(
-                    await call_capability(
-                        self.host,
-                        "llm.generate_with_tools",
-                        timeout_ms=40000,
-                        prompt=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "你是 MaiBot 调度手册复盘提炼器。仅根据给定的抽象调度轨迹与可用角色描述，"
-                                    "提炼一条跨会话通用的调度经验草稿。严禁猜测或包含任何聊天原文、群号、人名、路径、具体数值或凭据。\n"
-                                    '仅输出 JSON：{"title":"4到12字短标题","lesson":"一句祈使句通用调度方法（无值得沉淀之处则留空字符串）","rationale":"一句话说明原因"}。'
-                                ),
-                            },
-                            {"role": "user", "content": user_payload},
-                        ],
-                        tools=[],
-                        task_name="utils",
-                        model_name="",
-                        max_tokens=500,
-                    )
+                raw_resp = await call_capability(
+                    self.host,
+                    "llm.generate_with_tools",
+                    timeout_ms=40000,
+                    prompt=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是 MaiBot 调度手册复盘提炼器。仅根据给定的抽象调度轨迹与可用角色描述，"
+                                "提炼一条跨会话通用的调度经验草稿。严禁猜测或包含任何聊天原文、群号、人名、路径、具体数值或凭据。\n"
+                                '仅输出 JSON：{"title":"4到12字短标题","lesson":"一句祈使句通用调度方法（无值得沉淀之处则留空字符串）","rationale":"一句话说明原因"}。'
+                            ),
+                        },
+                        {"role": "user", "content": user_payload},
+                    ],
+                    tools=[],
+                    task_name="utils",
+                    model_name="",
+                    max_tokens=500,
                 )
+                await self._record_llm_tokens(raw_resp)
+                response = checked(raw_resp)
                 candidate = _parse_json_object(response["response"])
                 lesson = str(candidate.get("lesson") or "").strip()
                 if not 1 <= len(lesson) <= 400:
@@ -302,33 +315,33 @@ class Learning:
                     )
                 else:
                     user_payload = json.dumps(trace, ensure_ascii=False)
-                response = checked(
-                    await call_capability(
-                        self.host,
-                        "llm.generate_with_tools",
-                        timeout_ms=40000,
-                        prompt=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "从工具执行与恢复轨迹提炼通用程序性经验。仅可使用给定的角色名、工具轨迹与已有技能公开摘要，严禁推测或包含人物、会话、主机、路径、资产、具体数值或凭据。\n"
-                                    "严禁把单一会话或特定用户的题材偏好、兴趣领域或内容口味写入全局 note（NOTES.md）或 skill（SKILL.md）；全局笔记与技能只保留跨领域通用的工具用法与排障步骤。\n"
-                                    '1) 若 existing_skills 或 bound_skills 中已有同领域技能可承接新经验，优先返回 {"op":"patch","skill_id":"已有技能ID","lesson":"一句祈使句避坑规则","note":"通用方法"}；\n'
-                                    '2) 若确无覆盖技能且属全新可复用多步工作流，返回 {"op":"create","skill_id":"英文短横线ID","title":"类级中文名","description":"适用时机：...","rules":["规则1","规则2"],"pitfalls":["避坑1"],"rationale":"一句话说明为何新建"}（也可直接给 content）；\n'
-                                    '3) 若仅适合写角色短笔记，返回 {"note":"通用方法"}；无可提炼内容返回 {"note":""}。'
-                                ),
-                            },
-                            {
-                                "role": "user",
-                                "content": user_payload,
-                            },
-                        ],
-                        tools=[],
-                        task_name="utils",
-                        model_name="",
-                        max_tokens=500,
-                    )
+                raw_resp = await call_capability(
+                    self.host,
+                    "llm.generate_with_tools",
+                    timeout_ms=40000,
+                    prompt=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "从工具执行与恢复轨迹提炼通用程序性经验。仅可使用给定的角色名、工具轨迹与已有技能公开摘要，严禁推测或包含人物、会话、主机、路径、资产、具体数值或凭据。\n"
+                                "严禁把单一会话或特定用户的题材偏好、兴趣领域或内容口味写入全局 note（NOTES.md）或 skill（SKILL.md）；全局笔记与技能只保留跨领域通用的工具用法与排障步骤。\n"
+                                '1) 若 existing_skills 或 bound_skills 中已有同领域技能可承接新经验，优先返回 {"op":"patch","skill_id":"已有技能ID","lesson":"一句祈使句避坑规则","note":"通用方法"}；\n'
+                                '2) 若确无覆盖技能且属全新可复用多步工作流，返回 {"op":"create","skill_id":"英文短横线ID","title":"类级中文名","description":"适用时机：...","rules":["规则1","规则2"],"pitfalls":["避坑1"],"rationale":"一句话说明为何新建"}（也可直接给 content）；\n'
+                                '3) 若仅适合写角色短笔记，返回 {"note":"通用方法"}；无可提炼内容返回 {"note":""}。'
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": user_payload,
+                        },
+                    ],
+                    tools=[],
+                    task_name="utils",
+                    model_name="",
+                    max_tokens=500,
                 )
+                await self._record_llm_tokens(raw_resp)
+                response = checked(raw_resp)
                 candidate = _parse_json_object(response["response"])
                 did_work = False
                 op = str(candidate.get("op") or "").strip().lower()

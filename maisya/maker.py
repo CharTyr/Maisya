@@ -1741,7 +1741,8 @@ class AgentRuntime(Scout):
         if self.learning is None and self.memory is not None:
             from .learning import Learning
 
-            self.learning = Learning(self.host, self.memory)
+            intents = getattr(getattr(self, "_plugin_ref", None), "intents", None)
+            self.learning = Learning(self.host, self.memory, intents=intents)
         return self.learning
 
     async def finished(self, row):

@@ -43,8 +43,9 @@ from .context_budget import (
     prune_tool_outputs,
     resolve_context_budget,
 )
+from .intents import extract_llm_tokens
 from .pathsafe import rmtree_safe, safe_chmod
-from .scout import TOOL_DEFINITIONS, validate_arguments
+from .scout import BG_COMPACTION_TOKENS, TOOL_DEFINITIONS, validate_arguments
 from .workspaces import completed_thread, file_lock
 
 
@@ -3260,6 +3261,31 @@ class ThreadEngine:
     def _current_model_catalog(self):
         return self.model_catalog() if callable(self.model_catalog) else self.model_catalog
 
+    async def _record_bg_tokens(
+        self, thread_id: str, row: dict | None, grant: dict | None, tokens: int
+    ) -> None:
+        if tokens <= 0 or thread_id not in self.background_tasks:
+            return
+        rec_fn = (
+            getattr(self.intents, "record_bg_usage", None)
+            if self.intents is not None
+            else None
+        )
+        if not callable(rec_fn):
+            return
+        g = grant if isinstance(grant, dict) else {}
+        src = str(g.get("bg_source") or "").strip()
+        if not src:
+            src = "heartbeat" if (row and row.get("owner") == "self") else "workflow"
+        tgt = str(g.get("bg_target") or "").strip()
+        if not tgt:
+            tgt = (
+                "self"
+                if (not row or row.get("owner") == "self")
+                else f"chat:{row.get('chat_id') or ''}"
+            )
+        await asyncio.to_thread(rec_fn, source=src, target=tgt, runs=0, tokens=int(tokens))
+
     async def _run_tier2_compact(
         self,
         thread_id,
@@ -3271,6 +3297,7 @@ class ThreadEngine:
         *,
         overhead_tokens=0,
         force=False,
+        bg_grant=None,
     ):
         cur_row = await asyncio.to_thread(self.store.get, thread_id, store_chat)
         cur_tokens = estimate_messages_tokens(history)
@@ -3321,6 +3348,12 @@ class ThreadEngine:
         _, _, prev_handoff, _, _ = ThreadStore._parse_prior_summary(cur_row.get("summary"))
         handoff_summary = None
         if archived_turns and hasattr(self.runtime, "summarize_compaction"):
+            compact_acc = [0] if thread_id in self.background_tasks else None
+            tok_compact = (
+                BG_COMPACTION_TOKENS.set(compact_acc)
+                if compact_acc is not None
+                else None
+            )
             try:
                 handoff_summary = await self.runtime.summarize_compaction(
                     archived_turns,
@@ -3329,6 +3362,16 @@ class ThreadEngine:
                 )
             except Exception:
                 handoff_summary = None
+            finally:
+                if tok_compact is not None:
+                    BG_COMPACTION_TOKENS.reset(tok_compact)
+            if compact_acc is not None and compact_acc[0] > 0:
+                await self._record_bg_tokens(
+                    thread_id,
+                    cur_row,
+                    bg_grant if isinstance(bg_grant, dict) else cur_row.get("grant"),
+                    compact_acc[0],
+                )
         context_index = await asyncio.to_thread(
             self.store.compact,
             thread_id,
@@ -3722,6 +3765,7 @@ class ThreadEngine:
                                 budget,
                                 overhead_tokens=overhead_tokens,
                                 force=False,
+                                bg_grant=cur_grant,
                             )
                         alive, changed = await self._boundary(
                             thread_id, processed, deadline
@@ -3749,57 +3793,70 @@ class ThreadEngine:
                         ),
                     }
                     tok_step = STEP_METHODS_CONTEXT.set(step_meta)
+                    response = None
                     try:
-                        response = await self.runtime.step(profile, request_history)
-                    except (
-                        RuntimeError,
-                        ValueError,
-                        TypeError,
-                        KeyError,
-                        OSError,
-                        TimeoutError,
-                    ) as step_exc:
-                        if (
-                            not overflow_retried
-                            and self._legacy_char_budget is None
-                            and is_context_overflow_error(step_exc)
-                        ):
-                            overflow_retried = True
-                            if budget is None:
-                                budget = resolve_context_budget(
+                        try:
+                            response = await self.runtime.step(profile, request_history)
+                        except (
+                            RuntimeError,
+                            ValueError,
+                            TypeError,
+                            KeyError,
+                            OSError,
+                            TimeoutError,
+                        ) as step_exc:
+                            if (
+                                not overflow_retried
+                                and self._legacy_char_budget is None
+                                and is_context_overflow_error(step_exc)
+                            ):
+                                overflow_retried = True
+                                if budget is None:
+                                    budget = resolve_context_budget(
+                                        profile,
+                                        default_context_tokens=self.context_tokens,
+                                        model_catalog=self._current_model_catalog(),
+                                    )
+                                retry_overhead = self._estimate_prompt_overhead_tokens(
                                     profile,
-                                    default_context_tokens=self.context_tokens,
-                                    model_catalog=self._current_model_catalog(),
+                                    context_index,
+                                    memory_context=memory_context,
+                                    methods_text=methods_text,
                                 )
-                            retry_overhead = self._estimate_prompt_overhead_tokens(
-                                profile,
-                                context_index,
-                                memory_context=memory_context,
-                                methods_text=methods_text,
-                            )
-                            context_index, history = await self._run_tier2_compact(
-                                thread_id,
-                                store_chat,
-                                profile,
-                                history,
-                                processed,
-                                budget,
-                                overhead_tokens=retry_overhead,
-                                force=True,
-                            )
-                            request_history = self._assemble_request_history(
-                                history,
-                                context_index=context_index,
-                                memory_context=memory_context,
-                                legacy_escape=False,
-                            )
-                            response = await self.runtime.step(
-                                profile, request_history
-                            )
-                        else:
-                            raise
+                                context_index, history = await self._run_tier2_compact(
+                                    thread_id,
+                                    store_chat,
+                                    profile,
+                                    history,
+                                    processed,
+                                    budget,
+                                    overhead_tokens=retry_overhead,
+                                    force=True,
+                                    bg_grant=step_grant_cur,
+                                )
+                                request_history = self._assemble_request_history(
+                                    history,
+                                    context_index=context_index,
+                                    memory_context=memory_context,
+                                    legacy_escape=False,
+                                )
+                                response = await self.runtime.step(
+                                    profile, request_history
+                                )
+                            else:
+                                raise
                     finally:
                         STEP_METHODS_CONTEXT.reset(tok_step)
+                    if isinstance(response, dict) and thread_id in self.background_tasks:
+                        raw_step_toks = response.pop("_maisya_step_tokens", None)
+                        step_toks = (
+                            int(raw_step_toks)
+                            if raw_step_toks is not None
+                            else extract_llm_tokens(response)
+                        )
+                        await self._record_bg_tokens(
+                            thread_id, row, step_grant_cur, step_toks
+                        )
                     alive, changed = await self._boundary(
                         thread_id, processed, deadline
                     )

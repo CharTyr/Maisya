@@ -6,11 +6,18 @@ import ipaddress
 import json
 import re
 import time
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from .abilities import Profile
 from .context_budget import is_context_overflow_error
+from .intents import extract_llm_tokens
+
+
+BG_COMPACTION_TOKENS: ContextVar[list[int] | None] = ContextVar(
+    "maisya_bg_compaction_tokens", default=None
+)
 
 
 def definition(name, description, properties, required=()):
@@ -820,6 +827,9 @@ class Scout:
                 model_name=model_name,
                 max_tokens=1600,
             )
+            acc_toks = BG_COMPACTION_TOKENS.get()
+            if isinstance(acc_toks, list) and isinstance(result, dict):
+                acc_toks[0] += extract_llm_tokens(result)
             if not isinstance(result, dict) or result.get("success") is False:
                 return None
             if str(result.get("finish_reason") or "").strip().lower() == "length":
@@ -907,7 +917,10 @@ class Scout:
             if name in TOOL_DEFINITIONS
         ]
 
+        step_tokens = 0
+
         async def _invoke_once(model_name: str, extra_kwargs: dict) -> dict:
+            nonlocal step_tokens
             result = await call_capability(
                 self.host,
                 "llm.generate_with_tools",
@@ -919,6 +932,8 @@ class Scout:
                 max_tokens=max_tokens,
                 **extra_kwargs,
             )
+            if isinstance(result, dict):
+                step_tokens += extract_llm_tokens(result)
             checked(result, redact=self.redact)
             if not isinstance(result, dict):
                 raise TypeError("模型响应格式无效")
@@ -950,8 +965,11 @@ class Scout:
                     else:
                         raise
                 redacted = self.redact(result)
-                if isinstance(redacted, dict) and model and "used_model" not in redacted:
-                    redacted = {**redacted, "used_model": model}
+                if isinstance(redacted, dict):
+                    if model and "used_model" not in redacted:
+                        redacted = {**redacted, "used_model": model}
+                    if step_tokens > extract_llm_tokens(redacted):
+                        redacted = {**redacted, "_maisya_step_tokens": step_tokens}
                 if model:
                     self._model_cooldown.pop(model, None)
                 return redacted

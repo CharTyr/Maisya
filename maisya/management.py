@@ -5470,49 +5470,34 @@ class Management:
         elif action == "intent_run_now":
             iid = str(options.get("intent_id") or "").strip()
             row = await completed_thread(plugin.intents.get, iid)
-            if row["status"] not in {"pending", "paused"}:
-                raise ValueError("意图不存在或已处理")
-            if row["status"] == "paused":
-                ep = row.get("payload") or {}
-                patch = (
-                    {"issuer_admin": "console"}
-                    if ep.get("scheduled_admin") or ep.get("admin_direct")
-                    else None
-                )
-                await completed_thread(
-                    plugin.intents.resume,
-                    iid,
-                    row["target"],
-                    is_admin=True,
-                    payload_patch=patch,
-                )
-                if patch and getattr(plugin, "grants", None) is not None:
-                    await completed_thread(
-                        record_delegation,
-                        plugin.grants,
-                        subject_kind="intent",
-                        subject_id=iid,
-                        issuer="console",
-                        chat_id=row["target"].split(":", 1)[-1],
-                        target_chat=row["target"].split(":", 1)[-1],
-                        profile_id=str(ep.get("profile") or ""),
-                        envelope=ep.get("envelope") if isinstance(ep.get("envelope"), dict) else None,
-                        clock=plugin.intents.clock,
-                    )
-
+            ep = row.get("payload") or {}
+            patch = (
+                {"issuer_admin": "console"}
+                if ep.get("scheduled_admin") or ep.get("admin_direct")
+                else None
+            )
             has_pulse = getattr(plugin, "pulse", None) is not None
-
-            def _mark_due_now():
-                now_ts = plugin.intents.clock() - 1.0
-                next_st = "claimed" if has_pulse else "pending"
-                with plugin.intents.store.connect() as db, db:
-                    db.execute(
-                        "UPDATE intents SET due_at=?, status=? WHERE intent_id=?",
-                        (now_ts, next_st, iid),
-                    )
-                return plugin.intents.get(iid)
-
-            fresh = await completed_thread(_mark_due_now)
+            fresh, was_paused = await completed_thread(
+                plugin.intents.claim_for_run_now,
+                iid,
+                row["target"],
+                is_admin=True,
+                claim=has_pulse,
+                resume_patch=patch,
+            )
+            if was_paused and patch and getattr(plugin, "grants", None) is not None:
+                await completed_thread(
+                    record_delegation,
+                    plugin.grants,
+                    subject_kind="intent",
+                    subject_id=iid,
+                    issuer="console",
+                    chat_id=row["target"].split(":", 1)[-1],
+                    target_chat=row["target"].split(":", 1)[-1],
+                    profile_id=str(ep.get("profile") or ""),
+                    envelope=ep.get("envelope") if isinstance(ep.get("envelope"), dict) else None,
+                    clock=plugin.intents.clock,
+                )
             if has_pulse:
                 try:
                     await plugin.pulse._dispatch(fresh)

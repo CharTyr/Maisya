@@ -15,6 +15,7 @@ from .abilities import is_autonomous_snapshot
 from .bridge import _grant_admin_direct
 from .intents import (
     _validate_tz_offset_minutes,
+    extract_llm_tokens,
     is_profileless_daily,
     next_daily_due,
 )
@@ -105,17 +106,42 @@ class Pulse:
         tz_offset_minutes=None,
         watch_evaluator=None,
         authority_check=None,
-        daily_bg_runs_limit=48,
-        daily_bg_tokens_limit=200000,
-        bg_max_consecutive_failures=3,
+        daily_bg_runs_limit=None,
+        daily_bg_tokens_limit=None,
+        bg_max_consecutive_failures=None,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
         self.watch_evaluator = watch_evaluator
         self.authority_check = authority_check
+        if daily_bg_runs_limit is None:
+            daily_bg_runs_limit = getattr(intents, "daily_bg_runs_limit", 48)
+        elif intents is not None and hasattr(intents, "daily_bg_runs_limit"):
+            intents.daily_bg_runs_limit = max(0, int(daily_bg_runs_limit))
+        if daily_bg_tokens_limit is None:
+            daily_bg_tokens_limit = getattr(intents, "daily_bg_tokens_limit", 200000)
+        elif intents is not None and hasattr(intents, "daily_bg_tokens_limit"):
+            intents.daily_bg_tokens_limit = max(0, int(daily_bg_tokens_limit))
+        if bg_max_consecutive_failures is None:
+            bg_max_consecutive_failures = getattr(
+                intents, "bg_max_consecutive_failures", 3
+            )
+        elif intents is not None and hasattr(intents, "bg_max_consecutive_failures"):
+            intents.bg_max_consecutive_failures = max(
+                1, int(bg_max_consecutive_failures)
+            )
         self.daily_bg_runs_limit = max(0, int(daily_bg_runs_limit))
         self.daily_bg_tokens_limit = max(0, int(daily_bg_tokens_limit))
         self.bg_max_consecutive_failures = max(1, int(bg_max_consecutive_failures))
+        self._last_synced_bg_runs = self.daily_bg_runs_limit
+        self._last_synced_bg_tokens = self.daily_bg_tokens_limit
+        self._last_heartbeat_tokens = 0
+        if (
+            self.engine is not None
+            and self.intents is not None
+            and getattr(self.engine, "intents", None) is None
+        ):
+            self.engine.intents = self.intents
         self.sleep_window, self.redact = sleep_window, redact
         if tz_offset_minutes is not None and not callable(tz_offset_minutes):
             tz_offset_minutes = _validate_tz_offset_minutes(tz_offset_minutes)
@@ -616,6 +642,7 @@ class Pulse:
                                 await res
 
     async def _intents(self):
+        self._sync_bg_limits()
         rows = await asyncio.to_thread(self.intents.due, self.enabled)
         for row in rows:
             if self.closing:
@@ -697,8 +724,15 @@ class Pulse:
             or next_payload.get("scheduled_admin")
         )
         try:
+            sched_fn = self.intents.schedule
+            sched_params = inspect.signature(sched_fn).parameters
+            extra_sched_kw = {}
+            if "preserve_recurring" in sched_params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sched_params.values()
+            ):
+                extra_sched_kw["preserve_recurring"] = True
             created = await asyncio.to_thread(
-                self.intents.schedule,
+                sched_fn,
                 kind=row["kind"],
                 source=row["source"],
                 target=row["target"],
@@ -709,6 +743,7 @@ class Pulse:
                 bypass_limits=bypass,
                 mode=row.get("mode", "schedule"),
                 condition=row.get("condition", ""),
+                **extra_sched_kw,
             )
             if error and created and created.get("intent_id"):
                 new_id = created["intent_id"]
@@ -817,7 +852,34 @@ class Pulse:
             return False
         return True
 
+    def _sync_bg_limits(self) -> None:
+        if self.intents is None:
+            return
+        for field, cache_attr, fallback in (
+            ("daily_bg_runs_limit", "_last_synced_bg_runs", 48),
+            ("daily_bg_tokens_limit", "_last_synced_bg_tokens", 200000),
+        ):
+            p_val = max(0, int(getattr(self, field, fallback)))
+            last_val = getattr(self, cache_attr, p_val)
+            if hasattr(self.intents, field):
+                i_raw = getattr(self.intents, field)
+                if isinstance(i_raw, int) and not isinstance(i_raw, bool):
+                    i_val = max(0, int(i_raw))
+                    if i_val != last_val and p_val == last_val:
+                        setattr(self, field, i_val)
+                        setattr(self, cache_attr, i_val)
+                        continue
+                    if p_val != last_val:
+                        setattr(self.intents, field, p_val)
+                        setattr(self, cache_attr, p_val)
+                        continue
+                    if i_val != p_val:
+                        setattr(self, field, p_val)
+                        setattr(self.intents, field, p_val)
+            setattr(self, cache_attr, p_val)
+
     def _bg_budget_exhausted(self, now=None) -> tuple[bool, str]:
+        self._sync_bg_limits()
         fn = getattr(self.intents, "bg_budget_state", None)
         if not callable(fn):
             return False, ""
@@ -924,7 +986,7 @@ class Pulse:
                     )
                 return
             dur_ms = int((time.monotonic() - t0) * 1000)
-            toks = int(ev_res.get("tokens_used") or 0) if isinstance(ev_res, dict) else 0
+            toks = extract_llm_tokens(ev_res) if isinstance(ev_res, dict) else 0
             await asyncio.to_thread(
                 self._record_bg_usage_sync,
                 source="watch",
@@ -1016,7 +1078,9 @@ class Pulse:
                 workspace = str(
                     payload.get("workspace") or f"watch_{row['intent_id']}"
                 ).strip()
-                grant = self._delegated_grant(payload)
+                grant = self._delegated_grant(
+                    payload, base={"bg_source": "watch", "bg_target": target}
+                )
                 started = await self._start_workflow_thread(
                     ability,
                     self._watch_prompt(row, condition),
@@ -1368,6 +1432,8 @@ class Pulse:
                                 "source_chat_id": chat_id,
                                 "source_platform": platform or "qq",
                                 "source_msg_id": source_msg_id,
+                                "bg_source": str(row.get("source") or "workflow"),
+                                "bg_target": target,
                             },
                         ),
                         return_route=route,
@@ -1411,7 +1477,13 @@ class Pulse:
                 platform="self" if chat_id == "self" else (platform or "qq"),
                 owner="self" if chat_id == "self" else "chat",
                 workspace=row["payload"].get("workspace", ""),
-                grant=self._delegated_grant(row["payload"]),
+                grant=self._delegated_grant(
+                    row["payload"],
+                    base={
+                        "bg_source": str(row.get("source") or "workflow"),
+                        "bg_target": target,
+                    },
+                ),
             )
             updated_payload = {**row["payload"], "wait_thread": True}
             row = {**row, "thread_id": started["thread_id"], "payload": updated_payload}
@@ -1832,25 +1904,37 @@ class Pulse:
                             delay=15,
                         )
                         return
+            await asyncio.to_thread(
+                self._record_bg_usage_sync,
+                source=row["source"],
+                target=row["target"],
+                runs=1,
+            )
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
             await self._reschedule_recurring(row, thread=thread)
             return
-        if (
+        starts_new_workflow = bool(
             row["payload"].get("profile")
             and not row.get("thread_id")
             and self.engine is not None
             and self.profiles is not None
-        ):
-            exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted)
-            if exhausted:
-                pause_fn = getattr(self.intents, "pause_for_budget", None)
-                if callable(pause_fn):
-                    await asyncio.to_thread(pause_fn, row["intent_id"], b_reason)
-                else:
-                    await asyncio.to_thread(
-                        self.intents.finish, row["intent_id"], "deferred"
-                    )
-                return
+        )
+        if not starts_new_workflow and not row.get("thread_id"):
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "failed", "thread_missing"
+            )
+            return
+        exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted)
+        if exhausted:
+            pause_fn = getattr(self.intents, "pause_for_budget", None)
+            if callable(pause_fn):
+                await asyncio.to_thread(pause_fn, row["intent_id"], b_reason)
+            else:
+                await asyncio.to_thread(
+                    self.intents.finish, row["intent_id"], "deferred"
+                )
+            return
+        if starts_new_workflow:
             platform = row["payload"].get("platform", "")
             if not platform and parse_stream_spec(raw_target_chat):
                 platform = parse_stream_spec(raw_target_chat)[0]
@@ -1901,7 +1985,13 @@ class Pulse:
                 platform="self" if target_chat == "self" else (platform or "qq"),
                 owner="self" if target_chat == "self" else "chat",
                 workspace=row["payload"].get("workspace", ""),
-                grant=self._delegated_grant(row["payload"]),
+                grant=self._delegated_grant(
+                    row["payload"],
+                    base={
+                        "bg_source": str(row.get("source") or "workflow"),
+                        "bg_target": row["target"],
+                    },
+                ),
             )
             started_tid = str((started or {}).get("thread_id") or "")
             _, is_queued, started_thread = await self._thread_state_after_dispatch(
@@ -2044,7 +2134,13 @@ class Pulse:
                 chat_id=chat_id,
                 wait_seconds=0,
                 input_context={
-                    "grant": self._delegated_grant(row.get("payload")),
+                    "grant": self._delegated_grant(
+                        row.get("payload"),
+                        base={
+                            "bg_source": str(row.get("source") or "thread"),
+                            "bg_target": row["target"],
+                        },
+                    ),
                 },
                 background=True,
                 defer_if_full=True,
@@ -2067,6 +2163,12 @@ class Pulse:
                 self.intents.finish, row["intent_id"], "deferred", delay=15
             )
             return
+        await asyncio.to_thread(
+            self._record_bg_usage_sync,
+            source=row["source"],
+            target=row["target"],
+            runs=1,
+        )
         await asyncio.to_thread(self.intents.finish, row["intent_id"], "done")
         await self._reschedule_recurring(row, thread=updated_thread or thread)
 
@@ -2315,6 +2417,7 @@ class Pulse:
             {"candidates": public, "explore_directions": plan, "recent_journal": journal_tail},
             ensure_ascii=False,
         )
+        self._last_heartbeat_tokens = 0
         try:
             async with asyncio.timeout(20):
                 response = await call_capability(
@@ -2330,6 +2433,7 @@ class Pulse:
                     model_name="",
                     max_tokens=200,
                 )
+            self._last_heartbeat_tokens = extract_llm_tokens(response)
             raw = str((response or {}).get("response") or "")
             match = re.search(r"\{[\s\S]*\}", raw)
             decision = json.loads(match.group(0)) if match else None
@@ -2703,6 +2807,7 @@ class Pulse:
                 source="heartbeat",
                 target="self",
                 runs=1,
+                tokens=int(getattr(self, "_last_heartbeat_tokens", 0) or 0),
                 duration_ms=int((time.monotonic() - hb_t0) * 1000),
                 now=now,
             )
@@ -2751,6 +2856,7 @@ class Pulse:
                 owner="self",
                 wait_seconds=0,
                 workspace="heartbeat",
+                grant={"bg_source": "heartbeat", "bg_target": "self"},
                 background=True,
                 defer_if_full=True,
             )
