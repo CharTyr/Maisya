@@ -6,7 +6,7 @@
 
 **以 MaiBot 自身决策模型为唯一调度中枢，通过全能默认能力与可渐进定制的 Agent 档案，为 MaiBot 提供可信赖的探索、创作、执行与条件盯梢能力**
 
-[![Version](https://img.shields.io/badge/version-v0.3.0-5ec4b8.svg)](https://github.com/CharTyr/Maisya)
+[![Version](https://img.shields.io/badge/version-v0.3.1-5ec4b8.svg)](https://github.com/CharTyr/Maisya)
 [![MaiBot](https://img.shields.io/badge/MaiBot-1.0.0--1.4.99-green.svg)](https://github.com/Mai-with-u/MaiBot)
 [![SDK](https://img.shields.io/badge/插件%20SDK-2.8.1--2.23.99-green.svg)](https://github.com/Mai-with-u/MaiBot)
 [![License](https://img.shields.io/badge/license-GPL--3.0-orange.svg)](LICENSE)
@@ -99,7 +99,7 @@
 - **全平台免容器开箱即用**：直接复用 MaiBot 已配好的模型和联网来源；管理员触发时默认在独立线程工作区安全执行脚本与工具。
 - **缺浏览器内核时补装一次**：若精简镜像或新系统首次做图卡提示缺少 Chromium，在**运行 MaiBot 的宿主**执行 `playwright install chromium` 即可（Linux 环境按需补充 `playwright install-deps chromium`）。
 - **Docker + NapCat 跨容器传群文件**：若 MaiBot 与 NapCat 不共享磁盘目录，群文件发送会自动触发 `base64://` 兜底上传。
-- **可选 Docker 沙箱按需开启**：若希望群友也能在群聊安全运行自由 Python/Node 脚本，再按 [运行环境、沙箱与连接器指南](docs/guide/sandbox-and-services.md) 开启轻量 Docker 隔离层（系统会自动探测 `runsc`，无 `runsc` 时使用无特权隔离容器）。
+- **可选 Docker 沙箱按需开启**：若希望群友也能在群聊安全运行自由 Python/Node 脚本，再按 [运行环境、沙箱与连接器指南](docs/guide/sandbox-and-services.md) 开启轻量 Docker 隔离层（系统会自动探测 `runsc`，无 `runsc` 时使用无特权隔离容器）。升级用户可参考 [更新日志](CHANGELOG.md) 的升级须知，老配置里的空镜像与旧运行时无需手改。
 
 ---
 

@@ -5079,6 +5079,25 @@
       return hbHasPlan ? "想念 + 逛逛 · 约每 180 分钟 · 72 小时静默想念" : "只会想念（未填逛逛方向） · 约每 180 分钟 · 72 小时静默想念";
     }
 
+    function renderSandboxHint(enabled) {
+      const hint = $("#set-sandbox-hint");
+      if (!hint) return;
+      const docker = sState.data?.docker || {};
+      if (!enabled) {
+        hint.hidden = true;
+        hint.textContent = "";
+        return;
+      }
+      const err = String(docker.error || "").trim();
+      hint.hidden = false;
+      hint.classList.toggle("mil-hint--warn", Boolean(err) || docker.ready === false);
+      hint.textContent = err
+        ? `沙箱未就绪：${err}`
+        : docker.ready === false
+          ? "已开启，但尚未探测到可用的本机 Docker"
+          : "沙箱已就绪";
+    }
+
     function renderRuntime() {
       const set = sState.data?.settings || sState.data || {};
       const curModel = $("#set-default-model")?.value || set.default_model || sState.models[0]?.name || "utils";
@@ -5118,6 +5137,7 @@
       const sbOn = Boolean(sState.data?.docker?.enabled ?? sState.data?.sandbox_enabled ?? set.sandbox_enabled ?? set.sandbox?.enabled);
       $("#set-sandbox-enabled").checked = sbOn;
       $("#set-sandbox-txt").textContent = sbOn ? "已启用" : "未启用";
+      renderSandboxHint(sbOn);
       const curTheme = normalizeThemePref(sState.data?.ui_style || set.ui_style || savedUiStyle);
       $$("#set-theme-seg [data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === curTheme)));
     }
@@ -5493,7 +5513,8 @@
         }
         if ($("#set-sandbox-txt")) $("#set-sandbox-txt").textContent = sbOn ? "已启用" : "未启用";
         const r = await savePartialSettings({ sandbox_enabled: sbOn, sandbox: { enabled: sbOn } });
-        if (!r?.success) {
+        if (r?.success) await loadSettings();
+        else {
           ev.target.checked = !sbOn;
           if ($("#set-sandbox-txt")) $("#set-sandbox-txt").textContent = !sbOn ? "已启用" : "未启用";
         }

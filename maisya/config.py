@@ -168,7 +168,18 @@ class Settings(PluginConfigBase):
     @model_validator(mode="before")
     @classmethod
     def _migrate_legacy(cls, data):
-        return _migrate_legacy_heartbeat(data)
+        data = _migrate_legacy_heartbeat(data)
+        if isinstance(data, dict) and isinstance(data.get("sandbox"), dict):
+            # 嵌套沙箱配置按默认值补齐：管理台与引导只发 {enabled} 局部补丁时
+            # 不能丢掉镜像、socket 等默认项，旧版空镜像也由沙箱校验回落默认值。
+            data = {
+                **data,
+                "sandbox": {
+                    **SandboxSettings().model_dump(),
+                    **data["sandbox"],
+                },
+            }
+        return data
 
     @field_validator("heartbeat_mode", mode="before")
     @classmethod

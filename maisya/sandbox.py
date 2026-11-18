@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .pathsafe import (
     acquire_lock_handle,
@@ -73,12 +73,13 @@ MINIMAL_ENV = {
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     "LANG": "C.UTF-8",
 }
+DEFAULT_SANDBOX_IMAGE = "maisya-sandbox:latest"
 
 
 class SandboxSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     enabled: bool = False
-    image: str = "maisya-sandbox:latest"
+    image: str = DEFAULT_SANDBOX_IMAGE
     socket: str = "unix:///var/run/docker.sock"
     runtime: str = ""
     privileged_sandbox_mode: bool = False
@@ -92,6 +93,16 @@ class SandboxSettings(BaseModel):
     timeout: int = Field(default=60, ge=1, le=180)
     output_bytes: int = Field(default=2097152, ge=1024, le=8388608)
     max_concurrent: int = Field(default=2, ge=1, le=8)
+
+    @field_validator("image", mode="before")
+    @classmethod
+    def _backfill_blank_image(cls, value):
+        """旧版 config.toml 写入的 `image = ""` 视同未配置，回落默认镜像。"""
+        if value is None:
+            return DEFAULT_SANDBOX_IMAGE
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_SANDBOX_IMAGE
+        return value
 
     @model_validator(mode="after")
     def validate_boundary(self):
@@ -402,10 +413,14 @@ class Sandbox:
             info = json.loads(
                 (await self.docker("info", "--format", "{{json .}}")).output
             )
-            if self.settings.runtime and self.settings.runtime not in info.get(
-                "Runtimes", {}
-            ):
-                raise RuntimeError(f"缺少指定容器运行时：{self.settings.runtime}")
+            runtimes = info.get("Runtimes") or {}
+            if self.settings.runtime and self.settings.runtime not in runtimes:
+                available = "、".join(sorted(runtimes)) or "无"
+                raise RuntimeError(
+                    f"指定的容器运行时 {self.settings.runtime} 未安装"
+                    f"（当前 Docker 可用：{available}）。"
+                    '请把 config.toml 的 [sandbox] runtime 改为 "" 或已安装的运行时'
+                )
             if self.settings.privileged_sandbox_mode:
                 if info.get("CgroupVersion") != "2":
                     raise RuntimeError("严格沙箱需要 cgroup v2")
@@ -414,7 +429,15 @@ class Sandbox:
             await self._recover_resources()
             if not self.settings.enabled:
                 return False
-            await self.docker("image", "inspect", self.settings.image)
+            missing = await self.docker(
+                "image", "inspect", self.settings.image, checked=False
+            )
+            if missing.code:
+                raise RuntimeError(
+                    f"沙箱镜像 {self.settings.image} 在本机不存在。"
+                    "请先在插件目录执行 ./sandbox/build_image.sh --execute 构建，"
+                    "或把 config.toml 的 [sandbox] image 改为已有镜像"
+                )
             self.ready, self.error = True, ""
         except (RuntimeError, OSError, ValueError) as error:
             self.ready, self.error = False, str(error)

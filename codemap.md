@@ -1,6 +1,6 @@
 # Maisya 代码地图（Codemap）
 
-> 描述 `Maisya v0.3` 插件仓（`chartyr.maisya v0.3.0`）的真实文件布局、职责边界、Tool / API / Hook 入口、WebUI 架构与运行期 29 张 SQLite 表映射（均对照工作区源码核实，最后校验：`2026-11-18`）。
+> 描述 `Maisya v0.3` 插件仓（`chartyr.maisya v0.3.1`）的真实文件布局、职责边界、Tool / API / Hook 入口、WebUI 架构与运行期 29 张 SQLite 表映射（均对照工作区源码核实，最后校验：`2026-11-18`）。
 
 ---
 
@@ -10,7 +10,7 @@
 Maisya/
 ├── .github/workflows/tests.yml   # 3-OS（Ubuntu / macOS / Windows）Python 3.13 CI，锁定 SDK <= 2.23.99
 ├── __init__.py                   # 插件包导出（export plugin_class）
-├── _manifest.json                # 宿主 manifest v2：chartyr.maisya v0.3.0、宿主 1.0.0~1.4.99、SDK 2.8.1~2.23.99、26 项 capabilities
+├── _manifest.json                # 宿主 manifest v2：chartyr.maisya v0.3.1、宿主 1.0.0~1.4.99、SDK 2.8.1~2.23.99、26 项 capabilities
 ├── plugin.py                     # 宿主装配根（7,740 行）：生命周期、4 个 @Tool、5 个 Hook、1 个 @Command、6 个静态 @API
 ├── webui.json                    # 宿主 WebUI v2 单页声明：id="now" 指向 webui/now.html，3 组查询 + 3 组写入 RPC
 ├── config.example.toml           # 最简默认配置模板（admins=[]、permission_mode="ask_risky"、enabled=false）

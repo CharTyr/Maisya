@@ -267,3 +267,80 @@ async def test_process_timeout_and_output_limit_terminate_the_process():
         )
     with pytest.raises(RuntimeError, match="输出"):
         await process([sys.executable, "-c", 'print("x"*100000)'], output_bytes=1000)
+
+
+class ProbeFixture:
+    """只回答 probe 关心的 docker 子命令；可切换运行时列表与镜像是否存在。"""
+
+    def __init__(self, *, runtimes=None, image_present=True, cgroup="2"):
+        import json
+
+        self.runtimes = runtimes if runtimes is not None else {"runc": {}}
+        self.image_present = image_present
+        self.cgroup = cgroup
+        self._json = json
+
+    async def __call__(self, arguments, **kwargs):
+        from maisya.sandbox import ProcessResult
+
+        operation = arguments[3]
+        if operation == "info":
+            return ProcessResult(
+                0,
+                self._json.dumps(
+                    {"Runtimes": self.runtimes, "CgroupVersion": self.cgroup}
+                ),
+            )
+        if operation == "image":
+            return ProcessResult(0 if self.image_present else 1, "")
+        if operation == "ps":
+            return ProcessResult(0, "")
+        raise AssertionError(arguments)
+
+
+def probe_sandbox(tmp_path, *, settings=None, **fixture):
+    from maisya.sandbox import Sandbox
+    from maisya.threads import ThreadStore
+
+    store = ThreadStore(tmp_path / "state.db")
+    return Sandbox(
+        settings or SandboxSettings(),
+        store,
+        runner=ProbeFixture(**fixture),
+        redact=lambda value: value,
+    )
+
+
+@pytest.mark.asyncio
+async def test_probe_missing_runtime_lists_available(tmp_path, monkeypatch):
+    monkeypatch.setattr("maisya.sandbox.shutil.which", lambda name: "/usr/bin/docker")
+    sandbox = probe_sandbox(
+        tmp_path,
+        settings=SandboxSettings(enabled=True, runtime="runsc"),
+        runtimes={"runc": {}, "io.containerd.runc.v2": {}},
+    )
+    assert await sandbox.probe() is False
+    assert "runsc" in sandbox.error
+    assert "未安装" in sandbox.error
+    assert "runc" in sandbox.error
+    assert "runtime" in sandbox.error
+
+
+@pytest.mark.asyncio
+async def test_probe_missing_image_points_at_build_script(tmp_path, monkeypatch):
+    monkeypatch.setattr("maisya.sandbox.shutil.which", lambda name: "/usr/bin/docker")
+    sandbox = probe_sandbox(
+        tmp_path, settings=SandboxSettings(enabled=True), image_present=False
+    )
+    assert await sandbox.probe() is False
+    assert "maisya-sandbox:latest" in sandbox.error
+    assert "不存在" in sandbox.error
+    assert "build_image.sh" in sandbox.error
+
+
+@pytest.mark.asyncio
+async def test_probe_ready_when_runtime_and_image_available(tmp_path, monkeypatch):
+    monkeypatch.setattr("maisya.sandbox.shutil.which", lambda name: "/usr/bin/docker")
+    sandbox = probe_sandbox(tmp_path, settings=SandboxSettings(enabled=True))
+    assert await sandbox.probe() is True
+    assert sandbox.error == ""

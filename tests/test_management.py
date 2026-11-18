@@ -1,7 +1,13 @@
 import asyncio
 import json
+import logging
+from types import SimpleNamespace
 
 import pytest
+from maibot_sdk.context import PluginPaths
+
+from maisya.config import Settings
+from plugin import create_plugin
 from test_foundation import loaded
 
 
@@ -849,3 +855,49 @@ async def test_management_undo_learning_note(tmp_path):
         assert plugin.memory.read("notes", target="maker")["content"] == ""
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_legacy_config_blank_image_still_lets_sandbox_switch_on(tmp_path):
+    """旧版 config.toml 的 image = "" 不能让「轻量 Docker 沙箱」开关报校验错误。"""
+    plugin = create_plugin()
+    legacy = Settings().model_dump()
+    legacy["sandbox"]["image"] = ""
+    plugin._ctx = SimpleNamespace(
+        config=SimpleNamespace(get=_dummy_get),
+        paths=PluginPaths(
+            data_dir=tmp_path / "host/data/plugins/chartyr.maisya",
+            runtime_dir=tmp_path / "runtime",
+        ),
+        logger=logging.getLogger("test.maisya"),
+    )
+    plugin.set_plugin_config(legacy)
+    await plugin.on_load()
+    try:
+        assert plugin.settings.sandbox.image == "maisya-sandbox:latest"
+
+        # 引导第 4 步只发 sandbox {enabled}
+        turned_on = await plugin.manage_write(
+            "settings_update", json.dumps({"sandbox_enabled": True, "sandbox": {"enabled": True}})
+        )
+        assert turned_on["success"], turned_on
+        assert plugin.settings.sandbox.enabled
+        assert plugin.settings.sandbox.image == "maisya-sandbox:latest"
+
+        # 设置页勾选开关也只发 enabled
+        turned_off = await plugin.manage_write(
+            "settings_update", json.dumps({"sandbox_enabled": False, "sandbox": {"enabled": False}})
+        )
+        assert turned_off["success"], turned_off
+        assert not plugin.settings.sandbox.enabled
+
+        persisted = json.loads((plugin.data_root / "settings.json").read_text(encoding="utf-8"))
+        assert persisted["sandbox"]["image"] == "maisya-sandbox:latest"
+        saved_sandbox = plugin.get_plugin_config_data()["sandbox"]
+        assert saved_sandbox["image"] == "maisya-sandbox:latest"
+    finally:
+        await plugin.on_unload()
+
+
+async def _dummy_get(key, default=None):
+    return default

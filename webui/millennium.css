@@ -1350,6 +1350,10 @@ pre, code, .mono, .num {
   word-break: break-word;
 }
 
+.mil-hint--warn {
+  color: var(--mil-warn-ink);
+}
+
 .mil-feedback {
   min-height: 20px;
   padding: 10px 14px;

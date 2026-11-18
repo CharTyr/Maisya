@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from maisya.config import Settings
-from maisya.sandbox import ProcessResult, SandboxSettings
+from maisya.sandbox import DEFAULT_SANDBOX_IMAGE, ProcessResult, SandboxSettings
 from maisya.trust import Message, MessageStore, normalize_admins
 from maisya.vault import Vault, VaultError
 
@@ -96,13 +96,18 @@ def test_sandbox_settings_lowered_defaults_and_boundary():
     assert digest_sb.runtime == "runc"
 
     with pytest.raises(ValueError):
-        SandboxSettings(enabled=True, image="")
-
-    with pytest.raises(ValueError):
         SandboxSettings(enabled=True, image="python:latest", socket="tcp://host:2375")
 
     with pytest.raises(ValueError):
         SandboxSettings(enabled=True, image="python:latest", privileged_sandbox_mode=True)
+
+
+def test_sandbox_settings_blank_or_null_image_falls_back_to_default():
+    """旧版 config.toml 的 image = "" 视同未配置，开启开关不再报镜像校验错误。"""
+    for blank in ("", "   ", None):
+        cfg = SandboxSettings(enabled=True, image=blank)
+        assert cfg.image == DEFAULT_SANDBOX_IMAGE
+        assert cfg.enabled
 
 
 def test_dual_source_admins_anti_lockout_and_admin_dm(tmp_path: Path):

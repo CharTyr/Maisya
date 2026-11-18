@@ -53,6 +53,10 @@
 
 构建完成后，在管理台 **`设置 → 基础运行`** 打开 Docker 隔离开关，或在 `config.toml` `[sandbox]` 中设置 `enabled = true` 并填写你构建好的 `image`（如 `"maisya-sandbox:local"`）及 `max_concurrent`（默认 `2`，范围 `1..8`）。
 
+> **镜像留空不会挡住开关**：`[sandbox].image` 留空或留旧版默认的 `""` 时按 `maisya-sandbox:latest` 处理，管理台与引导只提交 `enabled` 局部补丁也不会再报「启用容器执行需要指定有效镜像」；真正运行时会在探测阶段明确提示镜像不存在。镜像必须事先在 Docker 里存在（脚本构建，或自行 `docker tag`），插件不会联网拉取。
+>
+> **运行时留空也没有问题**：`[sandbox].runtime = ""` 表示跟随 Docker 默认运行时（通常是 `runc`）。如果机器上没装 gVisor，填了 `[sandbox].runtime = "runsc"` 会在探测时报「指定的容器运行时 runsc 未安装」并列出当前可用的运行时，此时删掉这行或改回 `""` 即可；开启 `privileged_sandbox_mode = true` 才强制要求 `runsc` 与 digest 镜像。
+
 ---
 
 ## 三、临时密码与可选密码保险箱（`/vault`）

@@ -40,6 +40,7 @@ config_version = "0.1.0"
 [sandbox]
 # 可选 Docker 隔离执行层（开启后主要用于非管理员轮次隔离）
 enabled = false
+# 留空等同默认镜像 maisya-sandbox:latest（旧版配置的 image = "" 会自动回落）
 image = "maisya-sandbox:latest"
 socket = "unix:///var/run/docker.sock"
 # 留空使用默认容器运行时，也可填 "runc" / "runsc"
