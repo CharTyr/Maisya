@@ -1215,3 +1215,331 @@ async def test_share_upgrades_stale_reply_receipt_and_allows_same_thread_prior_r
         assert "附件不属于当前版本的线程结果" in foreign["error"]
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_workflow_reclaims_hijacked_workspace_preserving_digest_files(
+    tmp_path: Path,
+) -> None:
+    wakes: list[tuple[str, dict]] = []
+
+    def _cap(name: str, kwargs: dict):
+        if name == "maisaka.proactive.trigger":
+            wakes.append((str(kwargs.get("stream_id") or ""), dict(kwargs)))
+            return {"success": True, "queued": True}
+        if name == "llm.generate_with_tools":
+            return {"success": True, "response": "早间简报已生成。", "tool_calls": []}
+        return None
+
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+        capability_fn=_cap,
+    )
+    try:
+        await _enable_digest_profile(plugin)
+        # 1. Seed original archived digest workspace holding rss_sources.json & digest_history.json
+        orig_row = plugin.threads.create(
+            plugin.profiles.get("digest"),
+            "初始简报工作区",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id="",
+            workspace="digest",
+        )
+        with plugin.runtime.files.activity(orig_row) as orig_work:
+            orig_work.write(
+                "project/rss_sources.json",
+                json.dumps(
+                    {
+                        "feeds": [{"url": "https://example.com/rss.xml", "title": "Indie Feed"}],
+                        "topics": ["独立游戏"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            orig_work.write(
+                "project/digest_history.json",
+                json.dumps({"items": [{"url": "https://example.com/1"}]}, ensure_ascii=False),
+            )
+            orig_work.commit()
+        rev_orig = plugin.threads.enqueue(orig_row["thread_id"], "初版简报", TEST_GROUP_SID)
+        assert plugin.threads.finish(
+            orig_row["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "初版完成", "attachments": []},
+            [],
+            rev_orig,
+        )
+        with plugin.threads.connect() as db, db:
+            db.execute(
+                "UPDATE agent_threads SET state='archived' WHERE thread_id=?",
+                (orig_row["thread_id"],),
+            )
+
+        # 2. Hijack workspace name="digest" with an ad-hoc default thread using fresh=True
+        hijack_row = plugin.threads.create(
+            plugin.profiles.get("default"),
+            "临时重跑简报",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id=TEST_ADMIN_ID,
+            workspace="digest",
+            fresh_workspace=True,
+        )
+        assert (
+            plugin.threads.workspace_profile_for(
+                "chat", TEST_GROUP_SID, "digest", platform="qq"
+            )
+            == "default"
+        )
+        rev_h = plugin.threads.enqueue(hijack_row["thread_id"], "出图", TEST_GROUP_SID)
+        with plugin.runtime.files.activity(hijack_row) as h_work:
+            h_work.write_bytes("out/digest.png", base64.b64decode(PNG_1X1_B64))
+            h_work.commit()
+            atts_h = plugin.runtime.files.attach(
+                plugin.threads.get(hijack_row["thread_id"], TEST_GROUP_SID),
+                h_work,
+                ["out/digest.png"],
+            )
+        assert plugin.threads.finish(
+            hijack_row["thread_id"],
+            TEST_GROUP_SID,
+            {"text": "临时出图", "attachments": atts_h},
+            [],
+            rev_h,
+        )
+
+        # 3. Trigger due recurring digest workflow -> must reclaim digest workspace (no deadlock)
+        clock = [plugin.intents.clock()]
+        plugin.intents.clock = lambda: clock[0]
+        sched = plugin.intents.schedule(
+            kind="return",
+            source="workflow",
+            target=f"chat:{TEST_GROUP_SID}",
+            due_at=clock[0] - 2,
+            reason="早间独立游戏资讯简报图卡",
+            payload={
+                "platform": "qq",
+                "every_seconds": 86400,
+                "daily_at": "08:30",
+                "tz_offset_minutes": 480,
+                "profile": "digest",
+                "workspace": "digest",
+                "prompt": "早间简报",
+                "scheduled_admin": True,
+            },
+            bypass_limits=True,
+        )
+        await plugin.pulse.tick()
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        clock[0] += 5.0
+        await plugin.pulse.tick()
+
+        done_intent = plugin.intents.get(sched["intent_id"])
+        assert done_intent["status"] == "done", done_intent
+        assert done_intent["failure_count"] == 0
+        assert done_intent["last_error"] == ""
+        assert len(wakes) >= 1 and wakes[0][0] == TEST_GROUP_SID
+        pending_next = [
+            it
+            for it in plugin.intents.list(f"chat:{TEST_GROUP_SID}")
+            if it["status"] == "pending" and it["payload"].get("daily_at") == "08:30"
+        ]
+        assert len(pending_next) == 1
+
+        new_digest_row = plugin.threads.get(done_intent["thread_id"], TEST_GROUP_SID)
+        assert new_digest_row["profile"] == "digest"
+        with plugin.runtime.files.activity(new_digest_row) as restored_work:
+            assert "https://example.com/rss.xml" in restored_work.read("project/rss_sources.json")["text"]
+            assert "https://example.com/1" in restored_work.read("project/digest_history.json")["text"]
+        assert plugin.runtime.files.resolve(atts_h[0]["handle"], TEST_GROUP_SID) is not None
+
+        # 4. Also verify maisya_shape(digest_sources) recovers even when hijacked again
+        hijack2 = plugin.threads.create(
+            plugin.profiles.get("default"),
+            "再次错占工作区",
+            chat_id=TEST_GROUP_SID,
+            platform="qq",
+            user_id=TEST_ADMIN_ID,
+            workspace="digest",
+            fresh_workspace=True,
+        )
+        rev_h2 = plugin.threads.enqueue(hijack2["thread_id"], "完成", TEST_GROUP_SID)
+        assert plugin.threads.finish(hijack2["thread_id"], TEST_GROUP_SID, {"text": "ok", "attachments": []}, [], rev_h2)
+
+        await plugin.after_receive(message=_dm_message("查简报源", msg_id="m-dm-ds-1"))
+        ds_res = await plugin.shape_tool(
+            action="digest_sources",
+            op="read",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-ds-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert ds_res["success"] is True, ds_res
+        assert any(f.get("url") == "https://example.com/rss.xml" for f in ds_res.get("feeds") or []), ds_res
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_pulse_intents_exception_logs_and_records_backoff_to_error_paused(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+    )
+    try:
+        clock = [1795000000.0]
+        plugin.intents.clock = lambda: clock[0]
+        sched = plugin.intents.schedule(
+            kind="return",
+            source="workflow",
+            target=f"chat:{TEST_GROUP_SID}",
+            due_at=clock[0] - 5,
+            reason="巡检定时",
+            payload={
+                "platform": "qq",
+                "profile": "scout",
+                "prompt": "巡检",
+                "scheduled_admin": True,
+            },
+            bypass_limits=True,
+        )
+
+        orig_start = plugin.engine.start
+
+        async def broken_start(*args, **kwargs):
+            raise ValueError("simulated broken config")
+
+        plugin.engine.start = broken_start
+
+        # 1st failure -> warning logged + retry_backoff +60s
+        with caplog.at_level(logging.WARNING, logger="maisya.pulse"):
+            await plugin.pulse.tick()
+        assert "意图执行异常" in caplog.text
+        assert "simulated broken config" in caplog.text
+
+        r1 = plugin.intents.get(sched["intent_id"])
+        assert r1["status"] == "pending"
+        assert r1["wake_status"] == "retry_backoff"
+        assert r1["failure_count"] == 1
+        assert "simulated broken config" in r1["last_error"]
+        assert r1["due_at"] == pytest.approx(clock[0] + 60.0)
+
+        # 2nd failure -> failure_count=2, backed off further
+        clock[0] = r1["due_at"] + 1.0
+        await plugin.pulse.tick()
+        r2 = plugin.intents.get(sched["intent_id"])
+        assert r2["status"] == "pending"
+        assert r2["failure_count"] == 2
+        assert r2["due_at"] > clock[0] + 60.0
+
+        # 3rd failure -> hits default max failures (3) and transitions to error_paused
+        clock[0] = r2["due_at"] + 1.0
+        await plugin.pulse.tick()
+        r3 = plugin.intents.get(sched["intent_id"])
+        assert r3["status"] == "error_paused"
+        assert r3["wake_status"] == "error_paused"
+        assert r3["failure_count"] == 3
+
+        # Admin list all exposes error_paused intents, and run_now resumes & executes cleanly
+        await plugin.after_receive(message=_dm_message("查所有定时并重试", msg_id="m-dm-err-1"))
+        listed = await plugin.later_tool(
+            action="list",
+            target_chat="all",
+            source_msg_id="m-dm-err-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert listed["success"] is True, listed
+        assert any(
+            it["intent_id"] == sched["intent_id"] and it["status"] == "error_paused"
+            for it in listed["intents"]
+        ), listed
+
+        plugin.engine.start = orig_start
+        resumed = await plugin.later_tool(
+            action="run_now",
+            intent_id=sched["intent_id"],
+            source_msg_id="m-dm-err-1",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert resumed["success"] is True, resumed
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+        clock[0] += 5.0
+        await plugin.pulse.tick()
+        assert plugin.intents.get(sched["intent_id"])["status"] == "done"
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_integer_source_msg_id_and_later_update_hint_work_in_unenabled_admin_dm(
+    tmp_path: Path,
+) -> None:
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+    )
+    try:
+        await plugin.after_receive(
+            message=_dm_message("改一下早上定时", msg_id="-2139870001")
+        )
+        sched = await plugin.later_tool(
+            action="schedule",
+            mode="recurring",
+            daily_at=["08:30"],
+            profile="scout",
+            workspace="scout_daily",
+            prompt="旧提示词",
+            reason="每日巡检",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id=-2139870001,
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert sched["success"] is True, sched
+
+        upd = await plugin.later_tool(
+            action="update",
+            intent_id=sched["intent_id"],
+            source_msg_id=-2139870001,
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert upd["success"] is False
+        assert "replace=True" in upd["error"]
+
+        ov = await plugin.shape_tool(
+            action="overview",
+            source_msg_id=-2139870001,
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert ov["success"] is True, ov
+
+        rec = await plugin.recall_tool(
+            kind="threads",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id=-2139870001,
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert rec["success"] is True, rec
+
+        cancelled = await plugin.later_tool(
+            action="cancel",
+            intent_id=sched["intent_id"],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id=-2139870001,
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert cancelled["success"] is True, cancelled
+    finally:
+        await plugin.on_unload()

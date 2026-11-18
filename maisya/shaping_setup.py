@@ -536,12 +536,25 @@ async def handle_digest_sources(
 
     def _sync_op():
         target_row = None
+        if hasattr(plugin.threads, "reclaim_workspace_for_profile"):
+            plugin.threads.reclaim_workspace_for_profile(
+                owner,
+                chat_id,
+                "digest",
+                "digest",
+                platform=current_platform or "qq",
+            )
         with plugin.threads.connect() as db:
-            ws_row = db.execute(
-                "SELECT thread_id, chat_id FROM agent_workspaces WHERE owner=? AND chat_id=? AND name='digest' ORDER BY rowid DESC LIMIT 1",
-                (owner, chat_id),
-            ).fetchone()
-        if ws_row and ws_row["thread_id"]:
+            if hasattr(plugin.threads, "_find_workspace_binding"):
+                ws_row = plugin.threads._find_workspace_binding(
+                    db, owner, chat_id, "digest", current_platform or "qq"
+                )
+            else:
+                ws_row = db.execute(
+                    "SELECT thread_id, chat_id, profile FROM agent_workspaces WHERE owner=? AND chat_id=? AND name='digest' ORDER BY rowid DESC LIMIT 1",
+                    (owner, chat_id),
+                ).fetchone()
+        if ws_row and ws_row["thread_id"] and str(ws_row["profile"] or "").strip() == "digest":
             try:
                 cand_row = plugin.threads.get(
                     ws_row["thread_id"], ws_row["chat_id"], allow_self=True, allow_any_chat=True

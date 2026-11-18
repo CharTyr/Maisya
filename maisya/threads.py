@@ -552,6 +552,104 @@ class ThreadStore:
             )
         return str(binding["profile"] or "").strip() if binding is not None else ""
 
+    @staticmethod
+    def _unique_archived_ws_name(
+        db, owner: str, chat_id: str, name: str, thread_id: str
+    ) -> str:
+        base = f"{name}#archived_{str(thread_id)[-6:]}"
+        cand = base
+        while (
+            db.execute(
+                "SELECT 1 FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=?",
+                (owner, chat_id, cand),
+            ).fetchone()
+            is not None
+        ):
+            cand = f"{base}_{uuid.uuid4().hex[:4]}"
+        return cand
+
+    def reclaim_workspace_for_profile(
+        self,
+        owner: str,
+        chat_id: str,
+        workspace: str,
+        profile_id: str,
+        *,
+        platform: str = "",
+    ) -> dict:
+        """若工作区当前被其他角色占名，归档异构绑定并优先恢复同角色历史工作区。"""
+        clean_ws = str(workspace or "").strip()
+        clean_prof = str(profile_id or "").strip()
+        if owner not in {"chat", "self"} or not clean_ws or not clean_prof:
+            return {"reclaimed": False}
+        chat_ids = [chat_id]
+        if owner == "chat" and callable(getattr(self, "chat_aliases", None)):
+            try:
+                for alias in self.chat_aliases(chat_id, platform):
+                    if isinstance(alias, str) and alias and alias not in chat_ids:
+                        chat_ids.append(alias)
+            except (TypeError, ValueError):
+                pass
+        with self.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            binding = self._find_workspace_binding(
+                db, owner, chat_id, clean_ws, platform
+            )
+            if binding is not None and str(binding["profile"] or "").strip() == clean_prof:
+                return {"reclaimed": False, "workspace_id": str(binding["workspace_id"])}
+            archived_ws_id = ""
+            archived_prof = ""
+            if binding is not None:
+                prev_t = db.execute(
+                    "SELECT state FROM agent_threads WHERE thread_id=?",
+                    (binding["thread_id"],),
+                ).fetchone()
+                if prev_t and prev_t["state"] == "active":
+                    raise RuntimeError("工作区正在运行中，请稍候再试")
+                arch_name = self._unique_archived_ws_name(
+                    db,
+                    str(binding["owner"]),
+                    str(binding["chat_id"]),
+                    str(binding["name"]),
+                    str(binding["thread_id"]),
+                )
+                db.execute(
+                    "UPDATE agent_workspaces SET name=? WHERE workspace_id=?",
+                    (arch_name, binding["workspace_id"]),
+                )
+                archived_ws_id = str(binding["workspace_id"])
+                archived_prof = str(binding["profile"] or "")
+            placeholders = ",".join("?" for _ in chat_ids)
+            escaped_ws = clean_ws.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            prefix = f"{clean_ws}#archived_"
+            cand_rows = db.execute(
+                f"SELECT * FROM agent_workspaces WHERE owner=? AND chat_id IN ({placeholders}) "
+                "AND profile=? AND name LIKE ? ESCAPE '\\' ORDER BY rowid DESC",
+                (owner, *chat_ids, clean_prof, f"{escaped_ws}#archived\\_%"),
+            ).fetchall()
+            restored_ws_id = ""
+            for own_ws in cand_rows:
+                if not str(own_ws["name"] or "").startswith(prefix):
+                    continue
+                conflict = db.execute(
+                    "SELECT 1 FROM agent_workspaces WHERE owner=? AND chat_id=? AND name=? AND workspace_id!=?",
+                    (owner, own_ws["chat_id"], clean_ws, own_ws["workspace_id"]),
+                ).fetchone()
+                if conflict is not None:
+                    continue
+                db.execute(
+                    "UPDATE agent_workspaces SET name=? WHERE workspace_id=?",
+                    (clean_ws, own_ws["workspace_id"]),
+                )
+                restored_ws_id = str(own_ws["workspace_id"])
+                break
+        return {
+            "reclaimed": bool(archived_ws_id or restored_ws_id),
+            "archived_profile": archived_prof,
+            "archived_workspace_id": archived_ws_id,
+            "restored_workspace_id": restored_ws_id,
+        }
+
     def create(
         self,
         profile,
@@ -604,7 +702,13 @@ class ThreadStore:
                     db, owner, chat_id, workspace, platform
                 )
                 if binding and fresh_workspace:
-                    archived_name = f"{binding['name']}#archived_{str(binding['thread_id'])[-6:]}"
+                    archived_name = self._unique_archived_ws_name(
+                        db,
+                        str(binding["owner"]),
+                        str(binding["chat_id"]),
+                        str(binding["name"]),
+                        str(binding["thread_id"]),
+                    )
                     db.execute(
                         "UPDATE agent_workspaces SET name=? WHERE workspace_id=?",
                         (archived_name, binding["workspace_id"]),

@@ -204,6 +204,92 @@ class Pulse:
         is_queued = isinstance(started, dict) and started.get("state") == "active"
         return False, is_queued, None
 
+    async def _start_workflow_thread(
+        self,
+        ability,
+        prompt: str,
+        *,
+        chat_id: str,
+        platform: str,
+        owner: str,
+        workspace: str,
+        grant: dict | None = None,
+        return_route=None,
+    ):
+        clean_ws = str(workspace or "").strip()
+        store = getattr(self.bridge, "store", None) if self.bridge is not None else None
+        if clean_ws and store is not None and hasattr(store, "reclaim_workspace_for_profile"):
+            reclaimed = await asyncio.to_thread(
+                store.reclaim_workspace_for_profile,
+                owner,
+                chat_id,
+                clean_ws,
+                ability.id,
+                platform="" if owner == "self" else platform,
+            )
+            if isinstance(reclaimed, dict) and reclaimed.get("reclaimed"):
+                logger.info(
+                    "工作区 %s 已切换回角色 %s (archived=%s restored=%s)",
+                    clean_ws,
+                    ability.id,
+                    reclaimed.get("archived_workspace_id") or "",
+                    reclaimed.get("restored_workspace_id") or "",
+                )
+        common_kwargs = {
+            "chat_id": chat_id,
+            "platform": platform,
+            "user_id": "",
+            "owner": owner,
+            "wait_seconds": 0,
+            "workspace": clean_ws,
+            "grant": grant,
+            "background": True,
+            "defer_if_full": True,
+            **({"return_route": return_route} if return_route is not None else {}),
+        }
+        try:
+            return await self._engine_call("start", ability, prompt, **common_kwargs)
+        except ValueError as exc:
+            if clean_ws and "已绑定另一个角色" in str(exc):
+                return await self._engine_call(
+                    "start", ability, prompt, fresh=True, **common_kwargs
+                )
+            raise
+
+    async def _handle_intent_dispatch_error(
+        self, row: dict, exc: Exception, *, context: str = "dispatch"
+    ) -> None:
+        err_msg = self.redact(str(exc or type(exc).__name__))
+        if isinstance(exc, RuntimeError) and "正在运行中" in err_msg:
+            logger.info(
+                "意图等待忙碌工作区 (%s) intent=%s: %s",
+                context,
+                row.get("intent_id"),
+                err_msg,
+            )
+            await asyncio.to_thread(
+                self.intents.finish, row["intent_id"], "deferred", delay=15
+            )
+            return
+        logger.warning(
+            "意图执行异常 (%s) intent=%s source=%s target=%s error=%s",
+            context,
+            row.get("intent_id"),
+            row.get("source"),
+            row.get("target"),
+            err_msg,
+        )
+        fail_fn = getattr(self.intents, "record_bg_failure", None)
+        if callable(fail_fn):
+            await asyncio.to_thread(
+                fail_fn,
+                row["intent_id"],
+                err_msg,
+                max_failures=getattr(self, "bg_max_consecutive_failures", 3),
+            )
+        else:
+            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+
     def _configured_tz_offset_minutes(self) -> int | None:
         raw = getattr(self, "tz_offset_minutes", None)
         if raw is None:
@@ -528,10 +614,8 @@ class Pulse:
                 continue
             try:
                 await self._dispatch(row)
-            except (RuntimeError, OSError, ValueError, TypeError, sqlite3.Error):
-                await asyncio.to_thread(
-                    self.intents.finish, row["intent_id"], "deferred"
-                )
+            except (RuntimeError, OSError, ValueError, TypeError, sqlite3.Error) as exc:
+                await self._handle_intent_dispatch_error(row, exc, context="intents")
 
     async def _reschedule_recurring(
         self, row, *, thread=None, record_run: bool = True, error: str = ""
@@ -924,19 +1008,14 @@ class Pulse:
                     payload.get("workspace") or f"watch_{row['intent_id']}"
                 ).strip()
                 grant = self._delegated_grant(payload)
-                started = await self._engine_call(
-                    "start",
+                started = await self._start_workflow_thread(
                     ability,
                     self._watch_prompt(row, condition),
                     chat_id=chat_id,
                     platform=platform or "qq",
-                    user_id="",
                     owner="chat",
-                    wait_seconds=0,
                     workspace=workspace,
                     grant=grant,
-                    background=True,
-                    defer_if_full=True,
                 )
                 started_tid = str((started or {}).get("thread_id") or "")
                 _, is_queued, thread = await self._thread_state_after_dispatch(
@@ -1265,16 +1344,12 @@ class Pulse:
                 source_msg_id = str(row["payload"].get("source_msg_id") or "admin-preview")
                 route = await self.bridge.route(chat_id, source_msg_id, 0)
                 try:
-                    started = await self._engine_call(
-                        "start",
+                    started = await self._start_workflow_thread(
                         ability,
                         prompt,
                         chat_id=thread_chat_id,
                         platform=platform or "qq",
-                        user_id="",
                         owner="chat",
-                        wait_seconds=0,
-                        return_route=route,
                         workspace=row["payload"].get("workspace", ""),
                         grant=self._delegated_grant(
                             row["payload"],
@@ -1286,8 +1361,7 @@ class Pulse:
                                 "source_msg_id": source_msg_id,
                             },
                         ),
-                        background=True,
-                        defer_if_full=True,
+                        return_route=route,
                     )
                 finally:
                     await self.bridge.submitted(route)
@@ -1321,19 +1395,14 @@ class Pulse:
                 )
                 await self._reschedule_recurring(row, thread=thread)
                 return
-            started = await self._engine_call(
-                "start",
+            started = await self._start_workflow_thread(
                 ability,
                 prompt,
                 chat_id="self" if chat_id == "self" else chat_id,
                 platform="self" if chat_id == "self" else (platform or "qq"),
-                user_id="",
                 owner="self" if chat_id == "self" else "chat",
-                wait_seconds=0,
                 workspace=row["payload"].get("workspace", ""),
                 grant=self._delegated_grant(row["payload"]),
-                background=True,
-                defer_if_full=True,
             )
             updated_payload = {**row["payload"], "wait_thread": True}
             row = {**row, "thread_id": started["thread_id"], "payload": updated_payload}
@@ -1811,19 +1880,14 @@ class Pulse:
                 row["payload"],
             )
             thread_chat = "self" if target_chat == "self" else target_chat
-            started = await self._engine_call(
-                "start",
+            started = await self._start_workflow_thread(
                 ability,
                 prompt,
                 chat_id=thread_chat,
                 platform="self" if target_chat == "self" else (platform or "qq"),
-                user_id="",
                 owner="self" if target_chat == "self" else "chat",
-                wait_seconds=0,
                 workspace=row["payload"].get("workspace", ""),
                 grant=self._delegated_grant(row["payload"]),
-                background=True,
-                defer_if_full=True,
             )
             started_tid = str((started or {}).get("thread_id") or "")
             _, is_queued, started_thread = await self._thread_state_after_dispatch(
@@ -1971,8 +2035,8 @@ class Pulse:
                 background=True,
                 defer_if_full=True,
             )
-        except (ValueError, PermissionError, RuntimeError, sqlite3.Error):
-            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+        except (ValueError, PermissionError, RuntimeError, sqlite3.Error) as exc:
+            await self._handle_intent_dispatch_error(row, exc, context="silent_send")
             return
         _, is_queued, updated_thread = await self._thread_state_after_dispatch(
             thread_id, chat_id, sent

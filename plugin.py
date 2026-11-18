@@ -1907,9 +1907,22 @@ class MaisyaPlugin(MaiBotPlugin):
             return bool(ctx["grant"].get("admin_direct"))
         return False
 
+    @staticmethod
+    def _clean_source_msg_id(value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        if isinstance(value, str):
+            return value.strip()
+        if value is None or isinstance(value, bool):
+            return ""
+        return value
+
     def _lookup_message(
         self, message_id: str, session_id: str, platform: str, *, max_age: float = 300
     ) -> Message | None:
+        message_id = self._clean_source_msg_id(message_id)
+        if not isinstance(message_id, str) or not message_id:
+            return None
         found = (
             self.messages.lookup(message_id, session_id, platform, max_age=max_age)
             if self.messages
@@ -1929,7 +1942,8 @@ class MaisyaPlugin(MaiBotPlugin):
         return matches[0] if len(matches) == 1 else None
 
     def authorize_admin_source(self, source_msg_id, session_id, platform) -> bool:
-        if not self.settings.plugin.enabled or not source_msg_id:
+        source_msg_id = self._clean_source_msg_id(source_msg_id)
+        if not self.settings.plugin.enabled or not isinstance(source_msg_id, str) or not source_msg_id:
             return False
         max_age = self._admin_source_max_age(session_id, platform)
         if (
@@ -1951,7 +1965,8 @@ class MaisyaPlugin(MaiBotPlugin):
         return self.is_verified_admin_identity(msg)
 
     def is_verified_admin_dm(self, source_msg_id, session_id, platform) -> bool:
-        if not self.settings.plugin.enabled or not source_msg_id:
+        source_msg_id = self._clean_source_msg_id(source_msg_id)
+        if not self.settings.plugin.enabled or not isinstance(source_msg_id, str) or not source_msg_id:
             return False
         max_age = self._admin_source_max_age(session_id, platform)
         if self.messages is not None and admin_dm_allowed(
@@ -2986,6 +3001,7 @@ class MaisyaPlugin(MaiBotPlugin):
     ):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
+        source_msg_id = self._clean_source_msg_id(source_msg_id)
         route = None
         planned_source = str(source_msg_id or "")
         raw_deliver_to = str(deliver_to or "auto").strip()
@@ -4174,6 +4190,7 @@ class MaisyaPlugin(MaiBotPlugin):
     ):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
+        source_msg_id = self._clean_source_msg_id(source_msg_id)
         try:
             if not self.threads or not self.settings.plugin.enabled:
                 raise PermissionError("Maisya 尚未就绪或已停用")
@@ -4765,6 +4782,7 @@ class MaisyaPlugin(MaiBotPlugin):
     ):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
+        source_msg_id = self._clean_source_msg_id(source_msg_id)
         try:
             if not self.memory or not await asyncio.to_thread(
                 self.authorize_admin_source, source_msg_id, chat_id, platform
@@ -4974,6 +4992,7 @@ class MaisyaPlugin(MaiBotPlugin):
     ):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
+        source_msg_id = self._clean_source_msg_id(source_msg_id)
         try:
             if not self.intents or not self.settings.plugin.enabled:
                 raise PermissionError("Maisya 尚未就绪或已停用")
@@ -4994,15 +5013,16 @@ class MaisyaPlugin(MaiBotPlugin):
                 if raw_target_chat.lower() == "all":
                     if not is_admin_caller:
                         raise PermissionError("列出全部会话待办需要真实管理员消息授权")
-                    pending_rows = await asyncio.to_thread(
-                        self.intents.list_all, status="pending", limit=50
-                    )
-                    paused_rows = await asyncio.to_thread(
-                        self.intents.list_all, status="paused", limit=50
-                    )
+                    listed_rows: list[dict] = []
+                    for st in ("pending", "paused", "error_paused", "budget_paused"):
+                        listed_rows.extend(
+                            await asyncio.to_thread(
+                                self.intents.list_all, status=st, limit=50
+                            )
+                        )
                     rows = self.vault.redact(
                         sorted(
-                            [*pending_rows, *paused_rows],
+                            listed_rows,
                             key=lambda item: float(item.get("due_at") or 0.0),
                         )[:50]
                     )
@@ -5047,7 +5067,12 @@ class MaisyaPlugin(MaiBotPlugin):
             if action in {"cancel", "pause", "resume", "run_now"}:
                 existing = await asyncio.to_thread(self.intents.get, intent_id)
                 if (existing.get("payload") or {}).get("scheduled_admin") is True and not is_admin_caller:
-                    raise PermissionError("管理员创建的计划任务仅限管理员操作")
+                    raise PermissionError(
+                        self._cross_chat_auth_error(
+                            "管理员创建的计划任务仅限管理员操作",
+                            str(source_msg_id or ""),
+                        )
+                    )
                 if raw_target_chat:
                     effective_chat_id, _ = await self.resolve_chat_id(
                         raw_target_chat,
@@ -5120,9 +5145,18 @@ class MaisyaPlugin(MaiBotPlugin):
                             clock=self.intents.clock,
                         )
                 else:
-                    if existing.get("status") not in {"pending", "paused"}:
+                    if existing.get("status") not in {
+                        "pending",
+                        "paused",
+                        "error_paused",
+                        "budget_paused",
+                    }:
                         raise ValueError("意图不存在或已处理")
-                    if existing.get("status") == "paused":
+                    if existing.get("status") in {
+                        "paused",
+                        "error_paused",
+                        "budget_paused",
+                    }:
                         issuer_actor = ""
                         if is_admin_caller and source_msg_id:
                             r_max = await asyncio.to_thread(
@@ -5189,7 +5223,10 @@ class MaisyaPlugin(MaiBotPlugin):
                     self._record_ops_receipt(chat_id, f"later:{action}")
                 return {"success": True, **self.vault.redact(result)}
             if action != "schedule":
-                raise ValueError("未知的意图动作")
+                raise ValueError(
+                    "未知的意图动作（可用动作：schedule / list / pause / resume / run_now / cancel；"
+                    "修改已有计划请用 action='schedule', replace=True, profile=..., workspace=... 覆盖替换，或先 cancel 再 schedule）"
+                )
 
             norm_mode = str(mode or "once").strip().lower()
             if norm_mode not in {"once", "recurring", "watch"}:
