@@ -41,7 +41,7 @@
 
 ### 2. 构建镜像与开启方法
 
-仓库提供了 [`sandbox/Dockerfile`](../../sandbox/Dockerfile) 与辅助构建脚本 [`sandbox/build_image.sh`](../../sandbox/build_image.sh)（包含 Python 3.13、Node 24 与非 root 运行用户 `65532:65532`）：
+仓库提供了 [`sandbox/Dockerfile`](../../sandbox/Dockerfile) 与辅助构建脚本 [`sandbox/build_image.sh`](../../sandbox/build_image.sh)（包含 Python 3.13、Node 24 与非 root 运行用户 `10000:10000`）：
 
 ```bash
 # 1. 先预览构建计划（默认 dry-run）
@@ -49,6 +49,9 @@
 
 # 2. 实际构建本地镜像 maisya-sandbox:local（也可按需自行打 tag 如 maisya-sandbox:latest）
 ./sandbox/build_image.sh --execute
+
+# 3. 让默认镜像名直接可用（默认 [sandbox].image 指向 latest）
+docker tag maisya-sandbox:local maisya-sandbox:latest
 ```
 
 构建完成后，在管理台 **`设置 → 基础运行`** 打开 Docker 隔离开关，或在 `config.toml` `[sandbox]` 中设置 `enabled = true` 并填写你构建好的 `image`（如 `"maisya-sandbox:local"`）及 `max_concurrent`（默认 `2`，范围 `1..8`）。

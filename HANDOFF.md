@@ -2,7 +2,7 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [管理台与接入](docs/04-管理台与接入.md)。
 
-最后更新：2026-11-18。**架构收口方案（`B0`～`B7`）、GPT 4 项代码审查修复、`docs/archive/08` 心跳恢复、`docs/archive/09` 调度手册、`docs/archive/10` 多人持续活动底座、线上简报并行采编与定时私聊故障直报、跨会话私聊回传路由，以及 WebUI 12 处破坏性操作原生 `<dialog>` 统一二次确认（`2112bc6`）已全部落地、通过全量 + Playwright + 真实宿主隔离契约验收并上线运行。** 当前分支 `main`。
+最后更新：2026-11-19（v0.3.1 沙箱老配置兼容，见第 7 节）。**架构收口方案（`B0`～`B7`）、GPT 4 项代码审查修复、`docs/archive/08` 心跳恢复、`docs/archive/09` 调度手册、`docs/archive/10` 多人持续活动底座、线上简报并行采编与定时私聊故障直报、跨会话私聊回传路由，以及 WebUI 12 处破坏性操作原生 `<dialog>` 统一二次确认（`2112bc6`）已全部落地、通过全量 + Playwright + 真实宿主隔离契约验收并上线运行。** 当前分支 `main`。
 
 全量验收实测结果：`tests/` 共 **640 passed**（0 failed / 0 skipped）；`tests_host/run_contract.py` 共 **23 tests OK**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；`python3 webui/build.py --check` 返回 `0`；`wc -l maisya/shaping.py` = **595**（`<= 600`）。
 
@@ -150,3 +150,26 @@ python3 tests_sandbox/run_isolated.py --execute
 | 多人持续活动 P1 通用底座（4 模块，`docs/archive/10`） | ✅（`f6dc7a3`，已部署） | 设计文档 [`docs/archive/10-多人持续活动底座方案.md`](docs/archive/10-多人持续活动底座方案.md) + 7 项端到端测试 [`tests/test_multi_party_foundation.py`](tests/test_multi_party_foundation.py)：① [`maisya/trust.py`](maisya/trust.py)、[`plugin.py`](plugin.py)、[`maisya/abilities.py`](maisya/abilities.py) 与 [`maisya/threads.py`](maisya/threads.py) 增加群 `<speaker>` 发言归属信封、`coalesce_window_ms` 与同权并发队列合并批处理及跨权限边界拆批；② [`maisya/workspaces.py`](maisya/workspaces.py)、[`maisya/threads.py`](maisya/threads.py)、[`maisya/bridge.py`](maisya/bridge.py)、[`maisya/console.py`](maisya/console.py)、[`webui/now.html.in`](webui/now.html.in) 与 [`maisya/scout.py`](maisya/scout.py) 落地 `project/STATE.md` 脱敏 `state_note`、`<=600` 字动态 `<maisya_threads>` 注入（保持 KV 稳定前缀不变）与结果数字归属保真提示；③ [`maisya/memory.py`](maisya/memory.py)、[`maisya/maker.py`](maisya/maker.py)、[`maisya/packages.py`](maisya/packages.py)、[`maisya/shaping.py`](maisya/shaping.py)、[`maisya/management.py`](maisya/management.py) 与 [`webui/management.html.in`](webui/management.html.in) 落地角色附属目录（`references/templates/scripts/assets`）、只读 `in/` 开放、`references/` 外发硬锁与非管理员打包剥离；④ 新增 [`maisya/calc_engine.py`](maisya/calc_engine.py) 注册 `calc`（`TOOLSETS["exec"]`）提供无容器 `Decimal` 运算、数组统计与 `secrets.SystemRandom` 掷骰/抽签，并将无网只读 `python -I` 脚本扩展至角色与已绑定技能 `scripts/` |
 | 实机瓶颈、私聊回传与退避熔断（`85775b1` / `98f4a99` / `f65178a` / `f8760cc`） | ✅（已部署） | 修复跨群私聊回传路由（`issuer_chat_id`）与陈旧投递 `share` 语音重发校验；新增 `reclaim_workspace_for_profile` 回收被异常占用的工作区、`Pulse` `record_bg_failure` 指数退避、`run_now` 超时/失败直报管理员私聊（`run_now_notify`）、`digest.collect` 并发检索抓取（`Semaphore(8)` + 池缓存复用）、`maisaka.replyer.before_request` 中止填充 `custom_result.reason` 及宿主 1.4.6 `chat.get_avatar` 顶层 `status` 兼容 |
 | WebUI 破坏性操作统一二次确认（`2112bc6`） | ✅（已同步线上 `webui/`） | 在 [`webui/now.html.in`](webui/now.html.in) 与 [`webui/millennium.css`](webui/millennium.css) 实现原生 `<dialog id="ms-confirm-dialog">` Top-Layer 共享确认组件（默认聚焦安全「取消」键、兼容 `form-action 'none'` CSP 与 `Escape` 防穿透），覆盖现场/能力/外部连接/保险箱/授权撤销全部 12 处删除与重置入口；顺手修复 `#now-prune-btn` 清理后若当前线程已被批删的选中态残留 |
+
+## 7. 已完成：v0.3.1 沙箱老配置兼容与开箱可诊断（2026-11-19）
+
+线上反馈「开轻量 Docker 沙箱报 `1 validation error for Settings sandbox ... 启用容器执行需要指定有效镜像`」，根因是线上 `config.toml` 保留了早期版本的 `image = ""`（以及 `runtime = "runsc"`），而 v0.3 把默认镜像改成 `maisya-sandbox:latest` 却没兼容空串；管理台与首次引导只提交 `{sandbox: {enabled}}` 局部补丁，于是整份配置校验失败。
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| 空镜像回落 | [`maisya/sandbox.py`](maisya/sandbox.py) | `DEFAULT_SANDBOX_IMAGE` 常量 + `image` 字段 `mode="before"` 校验，空串 / 纯空白 / `None` 视同未配置 |
+| 沙箱嵌套补齐 | [`maisya/config.py`](maisya/config.py) | `Settings._migrate_legacy` 对 `sandbox` 用默认值打底，局部补丁不再挤掉 `socket` / `max_concurrent` / `subnet` 等 |
+| 探测提示可操作 | [`maisya/sandbox.py`](maisya/sandbox.py) | 运行时缺失时列出 Docker 实际可用运行时；镜像缺失时改用 `checked=False` 自查并给出 `./sandbox/build_image.sh --execute` 与改写 `image` 两条修法 |
+| 设置页状态行 | [`webui/fragments/settings.html`](webui/fragments/settings.html)、[`webui/management.html.in`](webui/management.html.in)、[`webui/millennium.css`](webui/millennium.css) | `#set-sandbox-hint` 显示已就绪 / 未探测到 Docker / 具体未就绪原因；开关保存成功后重新拉取状态 |
+| 回归测试 | [`tests/test_sandbox.py`](tests/test_sandbox.py)、[`tests/test_management.py`](tests/test_management.py)、[`tests/test_v03_runner_and_permissions.py`](tests/test_v03_runner_and_permissions.py) | 空镜像回落、局部补丁保字段、运行时/镜像缺失提示、探测就绪共 5 项 |
+
+**发布与上线（2026-11-19）**：
+
+- 版本 `0.3.0 -> 0.3.1`（[`_manifest.json`](_manifest.json)），新增 [`CHANGELOG.md`](CHANGELOG.md) 与升级须知；本地 `main` 已推送 `origin/main`（`a239f61`）。
+- 备份：`/root/backups/maisya-0.3.0-20261119-011432/`（整个插件目录 + `settings.json` + `settings.base.json` + SQLite 只读 `.backup()`，共 16M；另有 `config.toml.before-runtime-fix` / `.before-image-fix` / `.before-enable` 三份快照）。
+- 部署：61 个运行文件原子覆盖，线上 `config.toml` 内容调整仅限 `[sandbox]` 段（`image` 由 `""` 显式写成 `maisya-sandbox:latest`、`runtime` 由 `runsc` 改为 `""`、`enabled` 改为 `true`，其余字节不动）；文件属主统一 `root:root`，`__pycache__` 已清理。
+- 热重载：日志确认 `chartyr.maisya v0.3.1 加载成功` → `注入 PluginContext` → `注册完成`，`plugin_on_load` `outcome=completed`（1.909s），0 报错；`settings.base.json` / `settings.json` 已回写规范化后的沙箱配置。
+- 镜像：`maisya-sandbox:local` 与 `maisya-sandbox:latest` 均构建完成（377MB，`python 3.13.18` + `node v24.22.3`，非 root `10000:10000`），`--network none --read-only --cap-drop ALL` 下实测可运行。
+- 真实探测：在插件 venv 中对线上 `Docker` 跑 `Sandbox.probe()`，`probe_ready = True`、`probe_error = ''`。
+
+**本机新发现（待后续处理）**：该宿主 `docker0` 网桥不存在（`ip -br addr show docker0` 报 `Device "docker0" does not exist`），默认 `bridge` 网络 `docker run` 会报 `adding interface veth... to bridge docker0 failed: Device does not exist`，因此镜像构建改用 `docker build --network host` 才通过。沙箱默认 `network_mode = "none"` 不受影响；若要把 `network_mode` 调成 `bridge`，需先修复/重建 `docker0`（属宿主 Docker 服务层面，需用户另行授权）。
