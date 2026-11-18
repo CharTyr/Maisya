@@ -138,6 +138,8 @@ DIGEST_POOL_FILE = "project/digest_pool.json"
 POOL_RETENTION_SECS = 6.0 * 3600.0
 POOL_MAX_ENTRIES = 200
 UNRENDERED_DRAFT_TTL_SECS = 1800.0
+COLLECT_QUERY_TIMEOUT_SECS = 18.0
+COLLECT_FETCH_TIMEOUT_SECS = 6.0
 
 
 def _is_public_ip(raw_ip: str) -> bool:
@@ -2813,7 +2815,7 @@ class DigestWorkspace:
         broad: bool = True,
     ) -> dict[str, Any]:
         cap_items = max(1, min(int(max_items or 18), 20))
-        clean_queries = [str(q).strip() for q in (queries or ()) if str(q).strip()][:16]
+        clean_queries = [str(q).strip() for q in (queries or ()) if str(q).strip()][:12]
         if isinstance(topics, str):
             clean_topics = [t.strip() for t in re.split(r"[,，、;；\s]+", topics) if t.strip()]
         else:
@@ -2833,7 +2835,39 @@ class DigestWorkspace:
             except Exception:
                 seeded_urls = []
 
-        poll_res = await self.poll(lookback_days=float(lookback_days or 7))
+        async def _run_search_queries() -> list[Any]:
+            if web is None or not clean_queries:
+                return []
+            sem_search = asyncio.Semaphore(6)
+            use_broad = bool(broad and hasattr(web, "search_broad"))
+
+            async def _run_one_query(q: str) -> list[dict[str, Any]]:
+                async with sem_search:
+                    coro = (
+                        web.search_broad(q, max_results=8, context=context)
+                        if use_broad
+                        else web.search(q, max_results=8, context=context)
+                    )
+                    res = await asyncio.wait_for(
+                        coro, timeout=COLLECT_QUERY_TIMEOUT_SECS
+                    )
+                    if isinstance(res, dict) and isinstance(res.get("results"), list):
+                        return list(res["results"])
+                    if isinstance(res, list):
+                        return list(res)
+                    return []
+
+            return list(
+                await asyncio.gather(
+                    *(_run_one_query(q) for q in clean_queries),
+                    return_exceptions=True,
+                )
+            )
+
+        poll_res, query_results = await asyncio.gather(
+            self.poll(lookback_days=float(lookback_days or 7)),
+            _run_search_queries(),
+        )
         rss_raw = list(poll_res.get("candidates") or [])
 
         now = self.clock()
@@ -2880,58 +2914,38 @@ class DigestWorkspace:
         search_raw_count = 0
         search_errors = 0
         search_kept: list[dict[str, Any]] = []
-        if web is not None and clean_queries:
-            sem_search = asyncio.Semaphore(4)
-            use_broad = bool(broad and hasattr(web, "search_broad"))
-
-            async def _run_one_query(q: str) -> list[dict[str, Any]]:
-                async with sem_search:
-                    if use_broad:
-                        res = await web.search_broad(q, max_results=8, context=context)
-                    else:
-                        res = await web.search(q, max_results=8, context=context)
-                    if isinstance(res, dict) and isinstance(res.get("results"), list):
-                        return list(res["results"])
-                    if isinstance(res, list):
-                        return list(res)
-                    return []
-
-            query_results = await asyncio.gather(
-                *(_run_one_query(q) for q in clean_queries),
-                return_exceptions=True,
-            )
-            for q_res in query_results:
-                if isinstance(q_res, Exception):
-                    search_errors += 1
+        for q_res in query_results:
+            if isinstance(q_res, Exception):
+                search_errors += 1
+                continue
+            for row in q_res:
+                if not isinstance(row, dict):
                     continue
-                for row in q_res:
-                    if not isinstance(row, dict):
-                        continue
-                    search_raw_count += 1
-                    s_url = str(row.get("url") or "").strip()
-                    s_title = str(row.get("title") or "").strip()
-                    reason = prefilter_search_item(
-                        s_url, s_title, seen_urls, seen_titles, blocked_domains
-                    )
-                    if reason is not None:
-                        prefilter_reasons[reason] = prefilter_reasons.get(reason, 0) + 1
-                        continue
-                    seen_urls.add(_normalize_url_key(s_url))
-                    seen_titles.append(s_title)
-                    cand: dict[str, Any] = {
-                        "title": s_title,
-                        "url": s_url,
-                        "source": _host_of(s_url),
-                        "snippet": str(row.get("snippet") or row.get("summary") or "").strip(),
-                        "summary": str(row.get("summary") or row.get("snippet") or "").strip(),
-                        "origin": "search",
-                    }
-                    if row.get("published_at"):
-                        cand["published"] = str(row["published_at"])
-                        cand["published_at"] = str(row["published_at"])
-                    if row.get("engines"):
-                        cand["engines"] = list(row["engines"])
-                    search_kept.append(cand)
+                search_raw_count += 1
+                s_url = str(row.get("url") or "").strip()
+                s_title = str(row.get("title") or "").strip()
+                reason = prefilter_search_item(
+                    s_url, s_title, seen_urls, seen_titles, blocked_domains
+                )
+                if reason is not None:
+                    prefilter_reasons[reason] = prefilter_reasons.get(reason, 0) + 1
+                    continue
+                seen_urls.add(_normalize_url_key(s_url))
+                seen_titles.append(s_title)
+                cand: dict[str, Any] = {
+                    "title": s_title,
+                    "url": s_url,
+                    "source": _host_of(s_url),
+                    "snippet": str(row.get("snippet") or row.get("summary") or "").strip(),
+                    "summary": str(row.get("summary") or row.get("snippet") or "").strip(),
+                    "origin": "search",
+                }
+                if row.get("published_at"):
+                    cand["published"] = str(row["published_at"])
+                    cand["published_at"] = str(row["published_at"])
+                if row.get("engines"):
+                    cand["engines"] = list(row["engines"])
+                search_kept.append(cand)
 
         # Balance RSS and search quotas with round-robin scatter so aggregator RSS feeds never starve search results
         def _scatter_by(items: list[dict[str, Any]], key_fn) -> list[dict[str, Any]]:
@@ -2983,23 +2997,58 @@ class DigestWorkspace:
 
         working_pool = [dict(c) for c in scattered[:cap_items]]
 
-        # Fetch pages missing body text concurrently (max concurrency 5)
+        # Load fresh pool before fetching so recently cached full body text is reused without redundant HTTP round-trips
+        existing_pool = await asyncio.to_thread(self._load_pool)
+        existing_updated = float(existing_pool.get("updated_at", 0.0) or 0.0)
+        pool_by_url: dict[str, dict[str, Any]] = {}
+        had_fresh_pool = False
+        prev_discovered = 0
+        if 0.0 <= now - existing_updated <= POOL_RETENTION_SECS:
+            raw_by_url = existing_pool.get("by_url")
+            if isinstance(raw_by_url, dict):
+                for u_key, entry in raw_by_url.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    cached_at = float(entry.get("cached_at", existing_updated) or existing_updated)
+                    if 0.0 <= now - cached_at <= POOL_RETENTION_SECS:
+                        pool_by_url[str(u_key)] = dict(entry)
+                if pool_by_url:
+                    had_fresh_pool = True
+                    prev_discovered = int(existing_pool.get("total_discovered") or 0)
+
+        # Fetch pages missing body text concurrently (max concurrency 8)
         fetched_count = 0
         fetch_errors = 0
         discovered_feed_candidates: list[tuple[str, str]] = []
 
         if web is not None and hasattr(web, "fetch"):
-            sem_fetch = asyncio.Semaphore(5)
+            sem_fetch = asyncio.Semaphore(8)
 
             async def _fetch_candidate(cand: dict[str, Any]) -> None:
                 nonlocal fetched_count, fetch_errors
                 existing_body = str(cand.get("source_text") or cand.get("body") or "").strip()
                 if len(existing_body) >= 200:
                     return
+                cand_url = str(cand.get("url") or "").strip()
+                cached = pool_by_url.get(_normalize_url_key(cand_url)) if cand_url else None
+                cached_text = (
+                    str(cached.get("source_text") or "").strip()
+                    if isinstance(cached, dict)
+                    else ""
+                )
+                if len(cached_text) >= 200:
+                    cand["source_text"] = cached_text[:30000]
+                    if not cand.get("published") and cached.get("published"):
+                        cand["published"] = str(cached["published"])
+                        cand["published_at"] = str(cached["published"])
+                    if not cand.get("image_url") and cached.get("image_url"):
+                        cand["image_url"] = str(cached["image_url"])
+                    return
                 async with sem_fetch:
                     try:
                         page = await asyncio.wait_for(
-                            web.fetch(cand["url"], context=context), timeout=8.0
+                            web.fetch(cand_url, context=context),
+                            timeout=COLLECT_FETCH_TIMEOUT_SECS,
                         )
                     except Exception:
                         fetch_errors += 1
@@ -3091,24 +3140,6 @@ class DigestWorkspace:
             cand.pop("body", None)
             cand.pop("feed_links", None)
             final_candidates.append(cand)
-
-        existing_pool = await asyncio.to_thread(self._load_pool)
-        existing_updated = float(existing_pool.get("updated_at", 0.0) or 0.0)
-        pool_by_url: dict[str, dict[str, Any]] = {}
-        had_fresh_pool = False
-        prev_discovered = 0
-        if 0.0 <= now - existing_updated <= POOL_RETENTION_SECS:
-            raw_by_url = existing_pool.get("by_url")
-            if isinstance(raw_by_url, dict):
-                for u_key, entry in raw_by_url.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    cached_at = float(entry.get("cached_at", existing_updated) or existing_updated)
-                    if 0.0 <= now - cached_at <= POOL_RETENTION_SECS:
-                        pool_by_url[str(u_key)] = dict(entry)
-                if pool_by_url:
-                    had_fresh_pool = True
-                    prev_discovered = int(existing_pool.get("total_discovered") or 0)
 
         for cand in [*combined, *final_candidates]:
             c_url = str(cand.get("url") or "").strip()

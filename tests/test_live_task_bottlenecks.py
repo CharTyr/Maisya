@@ -1543,3 +1543,268 @@ async def test_integer_source_msg_id_and_later_update_hint_work_in_unenabled_adm
         assert cancelled["success"] is True, cancelled
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_digest_collect_parallel_poll_search_query_timeout_and_pool_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import maisya.digest as digest_mod
+    from maisya.digest import DigestWorkspace
+    from maisya.shaping import DEFAULT_DIGEST_SCHEDULE_PROMPT
+
+    class _LocalDigestWork:
+        def __init__(self) -> None:
+            self.files: dict[str, str] = {}
+            self.commits = 0
+
+        def read(self, path: str, offset: int = 0) -> dict:
+            if path not in self.files:
+                raise FileNotFoundError(path)
+            raw = self.files[path].encode("utf-8")
+            chunk = raw[offset : offset + 12000]
+            next_off = offset + len(chunk) if offset + len(chunk) < len(raw) else None
+            return {"text": chunk.decode("utf-8"), "next_offset": next_off, "bytes": len(raw)}
+
+        def write(self, path: str, content: str) -> dict:
+            self.files[path] = content
+            return {"path": path, "bytes": len(content.encode("utf-8"))}
+
+        def commit(self) -> str:
+            self.commits += 1
+            return f"v_{self.commits}"
+
+    work = _LocalDigestWork()
+    now_ts = time.time()
+    rss_xml = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<rss version="2.0"><channel><title>Indie Feed</title>'
+        b"<item><title>Recent RSS Entry</title>"
+        b"<link>https://rss.example.com/item-1</link>"
+        b"<description>Summary from feed</description></item>"
+        b"</channel></rss>"
+    )
+    work.write(
+        "project/rss_sources.json",
+        json.dumps(
+            {
+                "version": 1,
+                "feeds": [
+                    {
+                        "id": "feed_indie",
+                        "url": "https://rss.example.com/feed.xml",
+                        "title": "Indie Feed",
+                        "status": "active",
+                        "added_at": now_ts - 86400,
+                        "trial_until": 0.0,
+                        "kept_total": 1,
+                        "candidates_14d": [],
+                        "candidate_urls_14d": {},
+                        "down": 0,
+                        "up": 1,
+                        "reply": 0,
+                        "fail_count": 0,
+                        "first_fail_at": 0.0,
+                    }
+                ],
+                "rejected": [],
+            }
+        ),
+    )
+
+    async def _slow_fetcher(url: str):
+        await asyncio.sleep(0.25)
+        return {
+            "body": rss_xml,
+            "content_type": "application/xml",
+            "status": 200,
+            "url": url,
+            "error": "",
+        }
+
+    fetch_calls = 0
+
+    class _MockWeb:
+        async def search_broad(self, q: str, max_results: int = 8, context=None):
+            if q == "hung query":
+                await asyncio.sleep(5.0)
+                return {"results": []}
+            await asyncio.sleep(0.25)
+            return {
+                "results": [
+                    {
+                        "title": "Fast Indie Post",
+                        "url": "https://indie.example.com/post-1",
+                        "snippet": "short",
+                    }
+                ]
+            }
+
+        async def fetch(self, url: str, context=None):
+            nonlocal fetch_calls
+            if "post-1" in url:
+                fetch_calls += 1
+                return {
+                    "title": "Fast Indie Post",
+                    "content": "A" * 260,
+                    "published_at": "2026-11-18T01:00:00Z",
+                }
+            return {
+                "title": "Recent RSS Entry",
+                "content": "RSS full body text " * 20,
+                "published_at": "2026-11-18T01:00:00Z",
+            }
+
+    monkeypatch.setattr(digest_mod, "COLLECT_QUERY_TIMEOUT_SECS", 0.35)
+    dw = DigestWorkspace(work, fetcher=_slow_fetcher, clock=lambda: now_ts)
+    mock_web = _MockWeb()
+
+    t0 = time.perf_counter()
+    res1 = await dw.collect(web=mock_web, queries=["fast indie", "hung query"], max_items=10)
+    elapsed = time.perf_counter() - t0
+
+    assert elapsed < 0.50, f"poll and search should overlap concurrently, took {elapsed:.3f}s"
+    assert res1["stats"]["search_errors"] == 1
+    assert "https://indie.example.com/post-1" in [c["url"] for c in res1["candidates"]]
+    assert fetch_calls == 1
+
+    res2 = await dw.collect(web=mock_web, queries=["fast indie"], max_items=10)
+    assert fetch_calls == 1, "should reuse cached source_text from digest_pool.json"
+    c2 = next(c for c in res2["candidates"] if c["url"] == "https://indie.example.com/post-1")
+    assert "AAA" in (c2.get("source_text") or "")
+
+    assert "6~8" in DEFAULT_DIGEST_SCHEDULE_PROMPT
+    assert "不足 3 条" in DEFAULT_DIGEST_SCHEDULE_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_later_run_now_thread_error_notifies_admin_dm_and_strips_transient_keys_on_reschedule(
+    tmp_path: Path,
+) -> None:
+    wake_calls: list[dict] = []
+
+    def _cap(name: str, kwargs: dict):
+        if name == "maisaka.proactive.trigger":
+            wake_calls.append(dict(kwargs))
+            return {"success": True, "queued": True}
+        if name == "llm.generate_with_tools":
+            async def _slow_llm():
+                await asyncio.sleep(0.30)
+                return {"success": True, "response": "late", "tool_calls": []}
+
+            return _slow_llm()
+        return None
+
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+        capability_fn=_cap,
+    )
+    try:
+        clock = [time.time()]
+        plugin._message_now = lambda: clock[0]
+        plugin.messages.clock = lambda: clock[0]
+        plugin.bridge.clock = lambda: clock[0]
+        plugin.intents.clock = lambda: clock[0]
+        await _enable_digest_profile(plugin)
+
+        await plugin.after_receive(
+            message=_dm_message("手动补发一次早报", msg_id="m-dm-runnow-err")
+        )
+        sched = await plugin.later_tool(
+            action="schedule",
+            mode="recurring",
+            daily_at=["08:30"],
+            profile="digest",
+            workspace="digest",
+            prompt="早报",
+            reason="每日早间简报",
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-runnow-err",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert sched["success"] is True, sched
+
+        plugin.engine.timeout = 0.08
+
+        run_res = await plugin.later_tool(
+            action="run_now",
+            intent_id=sched["intent_id"],
+            target_chat=f"qq:group:{TEST_GROUP_ID}",
+            source_msg_id="m-dm-runnow-err",
+            chat_id=TEST_PRIV_SID,
+            platform="qq",
+        )
+        assert run_res["success"] is True, run_res
+        await asyncio.wait_for(plugin.engine.drain(), timeout=3.0)
+
+        clock[0] += 5.0
+        await plugin.pulse.tick()
+
+        failed = plugin.intents.get(sched["intent_id"])
+        assert failed["status"] == "failed"
+        assert failed["wake_status"] == "thread_error"
+
+        assert wake_calls, "expected maisaka.proactive.trigger to notify admin DM"
+        assert all(call.get("stream_id") == TEST_PRIV_SID for call in wake_calls), wake_calls
+        assert any(
+            call.get("reason") == "maisya:workflow_error"
+            and "<maisya_thread_error>本轮探索超过运行时限" in str(call.get("intent") or "")
+            for call in wake_calls
+        ), wake_calls
+        assert plugin.bridge.has_admin_direct_for(TEST_PRIV_SID) is True
+
+        pending_rows = [
+            it
+            for it in plugin.intents.list(f"chat:{TEST_GROUP_SID}", include_paused=True)
+            if it["status"] == "pending"
+        ]
+        assert len(pending_rows) == 1, pending_rows
+        next_payload = pending_rows[0]["payload"]
+        for k in (
+            "run_now_notify",
+            "run_now_source_chat_id",
+            "run_now_source_platform",
+            "run_now_issuer",
+        ):
+            assert k not in next_payload, next_payload
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_share_reply_abort_exposes_custom_result_reason_and_clears_block_on_no_tool_turn_or_pulse_wake(
+    tmp_path: Path,
+) -> None:
+    plugin = await _boot_plugin(
+        tmp_path,
+        enabled_chats=[f"qq:group:{TEST_GROUP_ID}", TEST_GROUP_SID],
+    )
+    try:
+        plugin.bridge.block_reply(TEST_GROUP_SID)
+        res = await plugin.before_replyer(
+            session_id=TEST_GROUP_SID,
+            request_type="maisaka.replyer",
+        )
+        assert res["action"] == "abort"
+        assert res.get("reason")
+        assert res.get("custom_result") == {"reason": res["reason"]}
+
+        await plugin.after_planner(
+            session_id=TEST_GROUP_SID,
+            output_items=[{"type": "text", "text": "静默结束"}],
+        )
+        assert TEST_GROUP_SID not in plugin.bridge._blocked
+
+        plugin.bridge.block_reply(TEST_GROUP_SID)
+        await plugin.pulse._wake(
+            TEST_GROUP_SID,
+            "<maisya_proactive>hi</maisya_proactive>",
+            reason="maisya:proactive",
+            metadata={},
+        )
+        assert TEST_GROUP_SID not in plugin.bridge._blocked
+    finally:
+        await plugin.on_unload()

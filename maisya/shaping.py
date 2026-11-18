@@ -46,7 +46,7 @@ _PROFILE_TOML_KEYS = {
 }
 DEFAULT_DIGEST_SCHEDULE_PROMPT = (
     "结合 <memory_context> 中记录的关注主题、已订阅资讯源与读者反馈，先调用 chat_read(limit=80, hours=168) 与宽泛 memory_read 校对近期真实多元兴趣比例（不因旧标签锁死单一品类），"
-    "按实际关注分布拆分为 3~4 个具体子方向并构造 8~12 组中英文短词调用 digest_feed(action='collect', max_items=20) 广搜（兼顾官方一手发布与权威垂直媒体的深度报道、专访与数据盘点），"
+    "按实际关注分布拆分为 3~4 个具体子方向并构造 6~8 组中英文具体短词调用 digest_feed(action='collect', max_items=20) 广搜（兼顾官方一手发布与权威垂直媒体的深度报道、专访与数据盘点；单轮默认只调 1 次 collect，仅当有效候选不足 3 条时才最多补搜 1 次 <= 4 组短词，严禁反复补搜超时），"
     "向 digest_feed(action='score_select', max_items=5) 一次提交 5~7 条高分候选以精选出 4~5 条丰富内容（quote 必须从 source_text 原语言逐字复制，严禁跨语言翻译；无需重复粘贴长段 source_text），"
     "每条生成纯正中文标题、2~4 句扎实口语化中文摘要（110~180 字）与 1 句入选看点（仅在无封面配图且有 >= 2 项可对比数据时附带含 unit/display 的 viz 图解）后，"
     "用会话名或中性抬头（如「近期关注简报」）调用 digest_feed(action='render_card_html', group_title=..., max_items=5, output_path='out/digest-card.html') 输出卡片 HTML，"

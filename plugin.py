@@ -5195,16 +5195,68 @@ class MaisyaPlugin(MaiBotPlugin):
                                 clock=self.intents.clock,
                             )
 
+                    run_issuer = ""
+                    if is_admin_caller and source_msg_id:
+                        r_max = await asyncio.to_thread(
+                            self._admin_source_max_age, chat_id, platform
+                        )
+                        r_ident = await asyncio.to_thread(
+                            self._lookup_message, source_msg_id, chat_id, platform, max_age=r_max
+                        )
+                        run_issuer = self._admin_actor_id(r_ident, fallback="")
+                    caller_arena = (
+                        await asyncio.to_thread(self._chat_arena, chat_id, platform)
+                        if chat_id
+                        else ""
+                    )
+                    run_patch = {}
+                    if (is_admin_caller or is_admin_dm) and (
+                        caller_arena == "private"
+                        or (chat_id and f"chat:{chat_id}" != op_target)
+                    ):
+                        run_patch["run_now_notify"] = True
+                        if chat_id:
+                            run_patch["run_now_source_chat_id"] = chat_id
+                            run_patch["run_now_source_platform"] = platform
+                        if run_issuer:
+                            run_patch["run_now_issuer"] = run_issuer
+
                     has_pulse = getattr(self, "pulse", None) is not None
 
                     def _mark_due():
                         due_ts = self.intents.clock() - 1.0
                         next_st = "claimed" if has_pulse else "pending"
                         with self.intents.store.connect() as db, db:
-                            db.execute(
-                                "UPDATE intents SET due_at=?, status=? WHERE intent_id=?",
-                                (due_ts, next_st, intent_id),
-                            )
+                            if run_patch:
+                                cur_row = db.execute(
+                                    "SELECT payload FROM intents WHERE intent_id=?",
+                                    (intent_id,),
+                                ).fetchone()
+                                try:
+                                    cur_payload = (
+                                        json.loads(cur_row["payload"] or "{}")
+                                        if cur_row is not None
+                                        else {}
+                                    )
+                                except (TypeError, ValueError):
+                                    cur_payload = {}
+                                if not isinstance(cur_payload, dict):
+                                    cur_payload = {}
+                                merged_payload = {**cur_payload, **run_patch}
+                                db.execute(
+                                    "UPDATE intents SET due_at=?, status=?, payload=? WHERE intent_id=?",
+                                    (
+                                        due_ts,
+                                        next_st,
+                                        json.dumps(merged_payload, ensure_ascii=False),
+                                        intent_id,
+                                    ),
+                                )
+                            else:
+                                db.execute(
+                                    "UPDATE intents SET due_at=?, status=? WHERE intent_id=?",
+                                    (due_ts, next_st, intent_id),
+                                )
                         return self.intents.get(intent_id)
 
                     fresh = await asyncio.to_thread(_mark_due)
@@ -6017,6 +6069,11 @@ class MaisyaPlugin(MaiBotPlugin):
             (item.get("tool_call") or {}).get("func_name") in {"stop", "wait"}
             for item in output
         )
+        has_tool_call = any(
+            bool(item.get("tool_call"))
+            for item in output
+            if isinstance(item, dict)
+        )
         had_turn_sources = bool(self._turn_sources.get(chat_id))
         has_agent_call = any(
             (item.get("tool_call") or {}).get("func_name") == "maisya_agent"
@@ -6140,7 +6197,7 @@ class MaisyaPlugin(MaiBotPlugin):
             )
             if can_plan:
                 await self.bridge.plan(chat_id, calls)
-        if has_wait_stop:
+        if has_wait_stop or not has_tool_call:
             self._continuing_turn_chats.discard(chat_id)
             self._turn_sources.pop(chat_id, None)
             if not has_reply:
@@ -6201,9 +6258,11 @@ class MaisyaPlugin(MaiBotPlugin):
         ):
             return {"action": "continue"}
         if await self.bridge.suppress_reply(chat_id):
+            abort_reason = "本轮准确载荷已由 share 发送完毕；请勿再调用 reply，直接调用无时间参数的 wait 静默结束本轮。"
             return {
                 "action": "abort",
-                "reason": "本轮准确载荷已由 share 处理，请结束本轮，避免重复交付。",
+                "reason": abort_reason,
+                "custom_result": {"reason": abort_reason},
             }
         ops_entry = self._match_ops_receipt(
             chat_id,

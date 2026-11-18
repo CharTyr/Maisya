@@ -41,6 +41,17 @@ _SERENDIPITY_FILLERS = (
 _SERENDIPITY_FILLER_SET = set(_SERENDIPITY_FILLERS)
 
 
+_TRANSIENT_INTENT_PAYLOAD_KEYS = (
+    "wait_thread",
+    "already_started",
+    "return_routed_queued",
+    "run_now_notify",
+    "run_now_source_chat_id",
+    "run_now_source_platform",
+    "run_now_issuer",
+)
+
+
 def _pending_approval_of(result_obj) -> dict | None:
     """Return pending approval payload when a waiting thread paused for admin confirmation."""
     if not isinstance(result_obj, dict):
@@ -626,9 +637,8 @@ class Pulse:
         if (every < 300 and not daily_at) or self.intents is None:
             return
         next_payload = dict(payload)
-        next_payload.pop("wait_thread", None)
-        next_payload.pop("already_started", None)
-        next_payload.pop("return_routed_queued", None)
+        for key in _TRANSIENT_INTENT_PAYLOAD_KEYS:
+            next_payload.pop(key, None)
         now = self.intents.clock()
         result_obj = thread.get("result") if isinstance(thread, dict) else None
         if (
@@ -765,9 +775,8 @@ class Pulse:
 
     def _append_watch_summary(self, payload: dict, summary: str, now: float) -> dict:
         next_payload = dict(payload or {})
-        next_payload.pop("wait_thread", None)
-        next_payload.pop("already_started", None)
-        next_payload.pop("return_routed_queued", None)
+        for key in _TRANSIENT_INTENT_PAYLOAD_KEYS:
+            next_payload.pop(key, None)
         clean = self.redact(str(summary or "").strip())
         if clean:
             next_payload["last_watch_summary"] = clean[:360]
@@ -1470,12 +1479,14 @@ class Pulse:
             payload_obj = row.get("payload") or {}
             t_grant = (thread.get("grant") or {}) if isinstance(thread, dict) else {}
             src_chat = str(
-                payload_obj.get("source_chat_id")
+                payload_obj.get("run_now_source_chat_id")
+                or payload_obj.get("source_chat_id")
                 or t_grant.get("source_chat_id")
                 or ""
             ).strip()
             issuer = str(
-                payload_obj.get("issuer_admin")
+                payload_obj.get("run_now_issuer")
+                or payload_obj.get("issuer_admin")
                 or t_grant.get("issuer_admin")
                 or ""
             ).strip()
@@ -1508,9 +1519,12 @@ class Pulse:
                     record_run=False,
                     error=err_text,
                 )
+                is_run_now_notify = bool(payload_obj.get("run_now_notify"))
                 if (
-                    row.get("kind") == "return"
-                    and payload_obj.get("already_started")
+                    (
+                        (row.get("kind") == "return" and payload_obj.get("already_started"))
+                        or is_run_now_notify
+                    )
                     and (src_chat or issuer)
                 ):
                     err_notify = await self._resolve_approval_notify_chat(
@@ -1520,7 +1534,7 @@ class Pulse:
                     )
                     if (
                         err_notify
-                        and err_notify != chat_id
+                        and (err_notify != chat_id or is_run_now_notify)
                         and self._chat_arena(err_notify) == "private"
                     ):
                         await asyncio.to_thread(
@@ -2341,6 +2355,8 @@ class Pulse:
         return "ok", None, "ok:model", ""
 
     async def _wake(self, chat_id, intent, *, reason, metadata):
+        if self.bridge is not None and chat_id:
+            self.bridge.new_input(chat_id)
         try:
             result = await call_capability(
                 self.host,
