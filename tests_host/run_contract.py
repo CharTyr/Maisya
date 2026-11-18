@@ -80,7 +80,7 @@ def main():
     paths += [path for path in (ROOT / "presets").rglob("*") if path.is_file()]
     paths += [
         ROOT / "tests_host/test_contract.py",
-        *list((ROOT / "webui").glob("*.html")),
+        ROOT / "webui/now.html",
     ]
     with tarfile.open(fileobj=archive, mode="w:gz") as target:
         for path in paths:

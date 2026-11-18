@@ -1020,6 +1020,7 @@
       fishTouched: false,
       modelTouched: false,
       mdTouched: false,
+      scopeTouched: false,
       toolsets: new Set(ALL_TOOLSETS),
       skillsSet: new Set(),
       mcpSet: new Set(),
@@ -1472,6 +1473,7 @@
         pState.fishTouched = false;
         pState.modelTouched = false;
         pState.mdTouched = false;
+        pState.scopeTouched = false;
       }
       pState.creating = isNew;
       const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "auto", session_mode: "persistent", fish_seed: "" };
@@ -1480,15 +1482,20 @@
       $("#pr-id").readOnly = !isNew;
       $("#pr-name").value = obj.name || obj.title || "";
       $("#pr-desc").value = obj.description || "";
-      const rawAccess = obj.access || "everyone";
-      const normAccess = rawAccess === "all" ? "everyone" : rawAccess === "chats" ? "listed" : rawAccess;
-      $("#pr-access").value = normAccess;
-      $("#pr-enabled").checked = obj.enabled !== false;
-      $("#pr-enabled-txt").textContent = obj.enabled !== false ? "已启用" : "已停用";
-      const chatsWrap = $("#pr-chats-wrap");
-      if (chatsWrap) chatsWrap.hidden = ($("#pr-access").value !== "listed");
-      pState.allowChats = [...new Set((obj.allow_chats || obj.enabled_chats || obj.allowed_chats || []).map((x) => String(x || "").trim()).filter(Boolean))];
-      renderProfileAllowChats();
+      if (!asyncDetail || !pState.scopeTouched) {
+        const rawAccess = obj.access || "everyone";
+        const normAccess = rawAccess === "all" ? "everyone" : rawAccess === "chats" ? "listed" : rawAccess;
+        $("#pr-access").value = normAccess;
+        $("#pr-enabled").checked = obj.enabled !== false;
+        $("#pr-enabled-txt").textContent = obj.enabled !== false ? "已启用" : "已停用";
+        const chatsWrap = $("#pr-chats-wrap");
+        if (chatsWrap) chatsWrap.hidden = ($("#pr-access").value !== "listed");
+        pState.allowChats = [...new Set((obj.allow_chats || obj.enabled_chats || obj.allowed_chats || []).map((x) => String(x || "").trim()).filter(Boolean))];
+        renderProfileAllowChats();
+      } else {
+        $("#pr-enabled").checked = obj.enabled !== false;
+        $("#pr-enabled-txt").textContent = obj.enabled !== false ? "已启用" : "已停用";
+      }
       if (!isNew && obj.id) {
         const switchedProfile = obj.id !== pState.notesProfileId;
         if (switchedProfile) {
@@ -2145,6 +2152,7 @@
       }
       const addAllowBtn = ev.target.closest("[data-pr-add-allow]");
       if (addAllowBtn) {
+        pState.scopeTouched = true;
         const cid = addAllowBtn.dataset.prAddAllow;
         if (cid && !pState.allowChats.includes(cid)) pState.allowChats.push(cid);
         renderProfileAllowChats();
@@ -2152,12 +2160,14 @@
       }
       const delAllowBtn = ev.target.closest("[data-pr-del-allow]");
       if (delAllowBtn) {
+        pState.scopeTouched = true;
         const cid = delAllowBtn.dataset.prDelAllow;
         pState.allowChats = pState.allowChats.filter((x) => x !== cid);
         renderProfileAllowChats();
         return;
       }
       if (ev.target.closest("#pr-allow-struct-add")) {
+        pState.scopeTouched = true;
         const built = window.MaisyaUI.readStructStreamBuilder("pr-alw");
         if (!built?.spec) { say("请填写会话群号或用户 ID", true); return; }
         if (!pState.allowChats.includes(built.spec)) pState.allowChats.push(built.spec);
@@ -2581,6 +2591,7 @@
         if (copyWrap) copyWrap.hidden = ev.target.value !== "copy";
         if (ev.target.value === "copy") $("#pkg-copy-id")?.focus();
       } else if (ev.target.id === "pr-access") {
+        pState.scopeTouched = true;
         $("#pr-chats-wrap").hidden = ev.target.value !== "listed";
       } else if (ev.target.id === "pr-enabled") {
         $("#pr-enabled-txt").textContent = ev.target.checked ? "已启用" : "已停用";

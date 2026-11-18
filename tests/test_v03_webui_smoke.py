@@ -53,6 +53,8 @@ def test_build_check_and_static_redlines():
     assert (WEBUI / "fragments" / "settings.html").exists()
     for legacy in ("profiles.html", "skills.html", "outputs.html"):
         assert not (WEBUI / "fragments" / legacy).exists(), f"废旧 fragment 未清理: {legacy}"
+    for legacy_root in ("abilities.html", "memory.html", "outputs.html", "settings.html"):
+        assert not (WEBUI / legacy_root).exists(), f"旧版顶层 HTML 未清理: {legacy_root}"
 
 
 def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_admins: bool = False) -> str:

@@ -34,7 +34,7 @@ jobs:
       - name: Install test dependencies
         run: >-
           python -m pip install
-          "maibot-plugin-sdk>=2.8.1,<=2.21.0"
+          "maibot-plugin-sdk>=2.8.1,<=2.23.99"
           pytest pytest-asyncio
           "cryptography>=46,<51" "jsonschema>=4.23,<5"
           pydantic playwright pillow

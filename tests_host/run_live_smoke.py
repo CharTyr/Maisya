@@ -329,7 +329,7 @@ def main():
     paths += list((ROOT / "maisya").glob("*.py"))
     paths += list((ROOT / "maisya").glob("*.css"))
     paths += [path for path in (ROOT / "presets").rglob("*") if path.is_file()]
-    paths += list((ROOT / "webui").glob("*.html"))
+    paths += [ROOT / "webui/now.html"]
     with tarfile.open(fileobj=archive, mode="w:gz") as target:
         for path in paths:
             if path.is_symlink():

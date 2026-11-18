@@ -2,9 +2,9 @@
 
 写给下一位接手者（人或 agent）。只记录需要上手才知道的状态、事实、红线、验证命令与上线前核查项；设计与规则的权威来源是根目录 [AGENTS.md](AGENTS.md)、[codemap.md](codemap.md)、[架构蓝图](docs/01-架构蓝图.md) 与 [管理台与接入](docs/04-管理台与接入.md)。
 
-最后更新：2026-11-17。**架构收口方案（`B0`～`B7`）、GPT 4 项代码审查修复、`docs/08` 心跳恢复、`docs/09` 调度手册、线上简报与通用上下文抽样优化、眉标去重/漏存回补/高活跃群分桶补采（`93a9119`），以及 `docs/10` 多人持续活动 P1 通用底座 4 大模块（`f6dc7a3`）已全部落地、通过全量 + Playwright + 真实宿主隔离契约验收，并已先备份后原子部署上线且热重载成功。** 当前分支 `main`。
+最后更新：2026-11-18。**架构收口方案（`B0`～`B7`）、GPT 4 项代码审查修复、`docs/archive/08` 心跳恢复、`docs/archive/09` 调度手册、`docs/archive/10` 多人持续活动底座、线上简报并行采编与定时私聊故障直报、跨会话私聊回传路由，以及 WebUI 12 处破坏性操作原生 `<dialog>` 统一二次确认（`2112bc6`）已全部落地、通过全量 + Playwright + 真实宿主隔离契约验收并上线运行。** 当前分支 `main`。
 
-全量验收实测结果：`tests/` 共 **623 passed**（0 failed / 0 skipped）；`tests_host/run_contract.py` 共 **23 tests OK**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；`python3 webui/build.py --check` 返回 `0`；`wc -l maisya/shaping.py` = **595**（`<= 600`）。
+全量验收实测结果：`tests/` 共 **640 passed**（0 failed / 0 skipped）；`tests_host/run_contract.py` 共 **23 tests OK**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；`python3 webui/build.py --check` 返回 `0`；`wc -l maisya/shaping.py` = **595**（`<= 600`）。
 
 ---
 
@@ -45,7 +45,7 @@
 ## 2. 最新全量验收状态（v0.3 + 08/09 + 架构收口 B0～B7）
 
 - **全量本地与 Playwright Chromium UI 单测**：
-  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`623 passed`**（`0 failed / 0 skipped`）。
+  - `PYTHONPATH=.:tests:.local-checks/deps ~/.venvs/maiwork/bin/python -m pytest tests -q -rs -p no:cacheprovider`：**`640 passed`**（`0 failed / 0 skipped`）。
 - **独立宿主隔离契约（真实 MaiBot SDK）**：
   - `python3 tests_host/run_contract.py`：**`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）。
 - **前端构建与语法校验**：
@@ -91,7 +91,7 @@ python3 tests_sandbox/run_isolated.py --execute
    - 线上已完成最新一次先备份后原子部署（`f6dc7a3`，61 个运行文件 + 保留线上 `config.toml` 与 38 个 `.pyc`；旧插件、运行期数据与 SQLite `.backup()` 只读 `quick_check: ok` 备份位于 `/root/backups/maisya-deploy-20261117-171120/`；前序备份保留在 `/root/backups/maisya-deploy-20261117-152729/`、`/root/backups/maisya-deploy-20261117-144307/` 等目录），线上 `config.toml`（`mode 600`，`[plugin] enabled = true`）逐字节原样保留，宿主核心代码零改动且未重启 MaiBot；
    - 轻触 `_manifest.json` 触发热重载后，日志确认 `chartyr.maisya v0.3.0` 加载、注入与注册全部成功且 `0` 报错；只读查库确认 `trusted_sources.sender_name`、`agent_threads.state_note`、`agent_workspaces.state_note` 已就绪且 `abilities/skills/ongoing-workspace/SKILL.md` 已同步。
 2. **已收口文档基准**：
-   - [`docs/01-架构蓝图.md`](docs/01-架构蓝图.md)、[`docs/guide/configuration.md`](docs/guide/configuration.md) 与 [`codemap.md`](codemap.md)（36 个模块）已同步更新；[`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md)、[`docs/09-调度手册方案.md`](docs/09-调度手册方案.md) 与 [`docs/10-多人持续活动底座方案.md`](docs/10-多人持续活动底座方案.md) 已完成并入库。
+   - [`docs/01-架构蓝图.md`](docs/01-架构蓝图.md)、[`docs/guide/configuration.md`](docs/guide/configuration.md) 与 [`codemap.md`](codemap.md)（36 个 Python 模块 + 29 张 SQLite 表）已同步更新；[`docs/archive/03-M3执行方案.md`](docs/archive/03-M3执行方案.md)、[`docs/archive/07-极简高权收敛计划.md`](docs/archive/07-极简高权收敛计划.md)、[`docs/archive/08-心跳恢复方案.md`](docs/archive/08-心跳恢复方案.md)、[`docs/archive/09-调度手册方案.md`](docs/archive/09-调度手册方案.md) 与 [`docs/archive/10-多人持续活动底座方案.md`](docs/archive/10-多人持续活动底座方案.md) 已移入 `docs/archive/` 归档。
 3. **部署红线（来自 [AGENTS.md](AGENTS.md)）**：
    - `AGENTS.local.md`、`config.toml`、`.local-checks/` 与 `.trellis/` 只留本地，严禁写入或提交进仓库；测试夹具统一使用 `qq:group:100246809`、`qq:private:10001`。
    - 任何涉及线上 `plugins/` 的放入、覆盖或删除（会触发插件热重载）前，**必须取得用户当次明确同意**；
@@ -102,7 +102,7 @@ python3 tests_sandbox/run_isolated.py --execute
 
 ## 5. 已完成：心跳恢复（docs/08）与调度手册（docs/09）落地（2026-11-17）
 
-方案原文与已定决策见 [08 心跳恢复方案](docs/08-心跳恢复方案.md)、[09 调度手册方案](docs/09-调度手册方案.md)。两份方案全部步骤（含 08 第 1～7 步与 09 第 1～7 步）已全部完成、接入验证并准备提交上线。
+方案原文与已定决策见 [08 心跳恢复方案](docs/archive/08-心跳恢复方案.md)、[09 调度手册方案](docs/archive/09-调度手册方案.md)。两份方案全部步骤（含 08 第 1～7 步与 09 第 1～7 步）已全部完成、接入验证并准备提交上线。
 
 ### 5.1 已完成清单
 
@@ -121,7 +121,7 @@ python3 tests_sandbox/run_isolated.py --execute
 - 宿主 SDK 隔离契约：`python3 tests_host/run_contract.py` -> **`Ran 23 tests` `OK`**（`host_unchanged: true`，`isolated_directory_cleaned: true`）；
 - 构建与边界检查：`python3 webui/build.py --check` 返回 `0`，`wc -l maisya/shaping.py` 当时为 `588`（现为 `592`）。
 
-新增入库文件清单：[`docs/08-心跳恢复方案.md`](docs/08-心跳恢复方案.md)、[`docs/09-调度手册方案.md`](docs/09-调度手册方案.md)、[`presets/planner/PLANNER.md`](presets/planner/PLANNER.md)、[`tests/test_heartbeat_restore.py`](tests/test_heartbeat_restore.py)、[`tests/test_planner_manual.py`](tests/test_planner_manual.py)。
+新增入库文件清单（现已归档至 `docs/archive/`）：[`docs/archive/08-心跳恢复方案.md`](docs/archive/08-心跳恢复方案.md)、[`docs/archive/09-调度手册方案.md`](docs/archive/09-调度手册方案.md)、[`presets/planner/PLANNER.md`](presets/planner/PLANNER.md)、[`tests/test_heartbeat_restore.py`](tests/test_heartbeat_restore.py)、[`tests/test_planner_manual.py`](tests/test_planner_manual.py)。
 
 ### 5.3 已知坑
 
@@ -147,4 +147,6 @@ python3 tests_sandbox/run_isolated.py --execute
 | 简报图卡质检与画像采编 3 项修复 | ✅（`f448526`，已部署） | [`maisya/viz_spec.py`](maisya/viz_spec.py) 补齐 `stat`/`stats` 块级与单项 `unit`/`display` 渲染、防重复后缀及核数覆盖；[`maisya/digest.py`](maisya/digest.py) 过滤单指标 `stats`/`bars` 与无 `delta` `stat`（保留对比与 `report` 档案）；[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md) 明确 `chat_read(limit=80, hours=168)` 群画像抽样、仅无封面配图且 `>= 2` 项可比数据时加 `viz` 与纯正中文标题规范；[`tests/test_digest_live_fixes.py`](tests/test_digest_live_fixes.py) 新增 2 项回归测试（已备份并原子热重载上线） |
 | 通用上下文抽样、会话元数据与记忆层防偏收口 | ✅（`fe34d52`，已部署并清旧残留） | [`maisya/scout.py`](maisya/scout.py) 透传 `chat_read` 的 `hours`/全域搜索与跨天抗刷屏抽样（`mode` `auto`/`recent`/`sample`），并在线程系统提示写明 `<memory_context>`/`<methods>` 非工作区文件与实时查证优先；[`plugin.py`](plugin.py) 与 [`maisya/maker.py`](maisya/maker.py) 被动缓存群名称并仅向 `owner="chat"` 注入 `chat_type`/`chat_title`；[`maisya/learning.py`](maisya/learning.py)、[`presets/planner/PLANNER.md`](presets/planner/PLANNER.md)、[`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md)、[`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md)、[`maisya/shaping.py`](maisya/shaping.py) 与 [`maisya/digest.py`](maisya/digest.py) 强化记忆层隔离、领域中立多兴趣拼盘及跨领域精选源；[`docs/06-宿主接口事实.md`](docs/06-宿主接口事实.md) 补实 `message.get_recent` 参数事实，新增 [`tests/test_general_context_and_sampling.py`](tests/test_general_context_and_sampling.py)（已备份热重载并清理线上旧独立游戏测试残留） |
 | 眉标去重、漏存自动回补与高活跃群跨天补采 | ✅（`93a9119`，已部署） | [`maisya/digest_card.py`](maisya/digest_card.py) 新增 `_dedupe_eyebrow_slot_label` 自动剥离 `slot_label` 中重复的当天日期/星期与时段词；[`maisya/digest.py`](maisya/digest.py) 为 `score_select` 增设 `backfill_uncached_candidates` 自动抓存未入池公开链接原文并给出更清晰的缺正文报错，同步更新 [`presets/skills/news-digest/SKILL.md`](presets/skills/news-digest/SKILL.md) 与 [`presets/profiles/digest/PROFILE.md`](presets/profiles/digest/PROFILE.md)；[`_manifest.json`](_manifest.json)、[`maisya/scout.py`](maisya/scout.py) 与 [`docs/06-宿主接口事实.md`](docs/06-宿主接口事实.md) 声明并使用 `message.get_by_time_in_chat` 为高活跃大群分桶补采跨天样本，新增 3 项回归用例并补充 [`tests_host/test_contract.py`](tests_host/test_contract.py) 契约断言 |
-| 多人持续活动 P1 通用底座（4 模块，`docs/10`） | ✅（`f6dc7a3`，已部署） | 设计文档 [`docs/10-多人持续活动底座方案.md`](docs/10-多人持续活动底座方案.md) + 7 项端到端测试 [`tests/test_multi_party_foundation.py`](tests/test_multi_party_foundation.py)：① [`maisya/trust.py`](maisya/trust.py)、[`plugin.py`](plugin.py)、[`maisya/abilities.py`](maisya/abilities.py) 与 [`maisya/threads.py`](maisya/threads.py) 增加群 `<speaker>` 发言归属信封、`coalesce_window_ms` 与同权并发队列合并批处理及跨权限边界拆批；② [`maisya/workspaces.py`](maisya/workspaces.py)、[`maisya/threads.py`](maisya/threads.py)、[`maisya/bridge.py`](maisya/bridge.py)、[`maisya/console.py`](maisya/console.py)、[`webui/now.html.in`](webui/now.html.in) 与 [`maisya/scout.py`](maisya/scout.py) 落地 `project/STATE.md` 脱敏 `state_note`、`<=600` 字动态 `<maisya_threads>` 注入（保持 KV 稳定前缀不变）与结果数字归属保真提示；③ [`maisya/memory.py`](maisya/memory.py)、[`maisya/maker.py`](maisya/maker.py)、[`maisya/packages.py`](maisya/packages.py)、[`maisya/shaping.py`](maisya/shaping.py)、[`maisya/management.py`](maisya/management.py) 与 [`webui/management.html.in`](webui/management.html.in) 落地角色附属目录（`references/templates/scripts/assets`）、只读 `in/` 开放、`references/` 外发硬锁与非管理员打包剥离；④ 新增 [`maisya/calc_engine.py`](maisya/calc_engine.py) 注册 `calc`（`TOOLSETS["exec"]`）提供无容器 `Decimal` 运算、数组统计与 `secrets.SystemRandom` 掷骰/抽签，并将无网只读 `python -I` 脚本扩展至角色与已绑定技能 `scripts/` |
+| 多人持续活动 P1 通用底座（4 模块，`docs/archive/10`） | ✅（`f6dc7a3`，已部署） | 设计文档 [`docs/archive/10-多人持续活动底座方案.md`](docs/archive/10-多人持续活动底座方案.md) + 7 项端到端测试 [`tests/test_multi_party_foundation.py`](tests/test_multi_party_foundation.py)：① [`maisya/trust.py`](maisya/trust.py)、[`plugin.py`](plugin.py)、[`maisya/abilities.py`](maisya/abilities.py) 与 [`maisya/threads.py`](maisya/threads.py) 增加群 `<speaker>` 发言归属信封、`coalesce_window_ms` 与同权并发队列合并批处理及跨权限边界拆批；② [`maisya/workspaces.py`](maisya/workspaces.py)、[`maisya/threads.py`](maisya/threads.py)、[`maisya/bridge.py`](maisya/bridge.py)、[`maisya/console.py`](maisya/console.py)、[`webui/now.html.in`](webui/now.html.in) 与 [`maisya/scout.py`](maisya/scout.py) 落地 `project/STATE.md` 脱敏 `state_note`、`<=600` 字动态 `<maisya_threads>` 注入（保持 KV 稳定前缀不变）与结果数字归属保真提示；③ [`maisya/memory.py`](maisya/memory.py)、[`maisya/maker.py`](maisya/maker.py)、[`maisya/packages.py`](maisya/packages.py)、[`maisya/shaping.py`](maisya/shaping.py)、[`maisya/management.py`](maisya/management.py) 与 [`webui/management.html.in`](webui/management.html.in) 落地角色附属目录（`references/templates/scripts/assets`）、只读 `in/` 开放、`references/` 外发硬锁与非管理员打包剥离；④ 新增 [`maisya/calc_engine.py`](maisya/calc_engine.py) 注册 `calc`（`TOOLSETS["exec"]`）提供无容器 `Decimal` 运算、数组统计与 `secrets.SystemRandom` 掷骰/抽签，并将无网只读 `python -I` 脚本扩展至角色与已绑定技能 `scripts/` |
+| 实机瓶颈、私聊回传与退避熔断（`85775b1` / `98f4a99` / `f65178a` / `f8760cc`） | ✅（已部署） | 修复跨群私聊回传路由（`issuer_chat_id`）与陈旧投递 `share` 语音重发校验；新增 `reclaim_workspace_for_profile` 回收被异常占用的工作区、`Pulse` `record_bg_failure` 指数退避、`run_now` 超时/失败直报管理员私聊（`run_now_notify`）、`digest.collect` 并发检索抓取（`Semaphore(8)` + 池缓存复用）、`maisaka.replyer.before_request` 中止填充 `custom_result.reason` 及宿主 1.4.6 `chat.get_avatar` 顶层 `status` 兼容 |
+| WebUI 破坏性操作统一二次确认（`2112bc6`） | ✅（已同步线上 `webui/`） | 在 [`webui/now.html.in`](webui/now.html.in) 与 [`webui/millennium.css`](webui/millennium.css) 实现原生 `<dialog id="ms-confirm-dialog">` Top-Layer 共享确认组件（默认聚焦安全「取消」键、兼容 `form-action 'none'` CSP 与 `Escape` 防穿透），覆盖现场/能力/外部连接/保险箱/授权撤销全部 12 处删除与重置入口；顺手修复 `#now-prune-btn` 清理后若当前线程已被批删的选中态残留 |

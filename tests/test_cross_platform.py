@@ -502,39 +502,49 @@ async def test_telegram_topic_stream_spec_and_webui_whitelist(tmp_path):
         known = await collect_known_chats(plugin)
         assert any(item["stream_spec"] == topic_spec for item in known)
 
-        async def request(mode, arguments):
-            return await (
-                plugin.manage_read(**arguments)
-                if mode == "read"
-                else plugin.manage_write(**arguments)
-            )
+        await plugin.manage_write("onboarding_skip", "{}")
+
+        async def request(kind, name, arguments):
+            args = dict(arguments or {})
+            if kind == "query":
+                if name == "read":
+                    return await plugin.manage_read(**args)
+                if name == "event":
+                    return await plugin.console_event(**args)
+                return await plugin.console_query(**args)
+            if name == "write":
+                return await plugin.manage_write(**args)
+            if name == "note":
+                return await plugin.console_send(**args)
+            return await plugin.console_stop(**args)
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch()
             try:
-                page = await browser.new_page(viewport={"width": 1100, "height": 850})
+                page = await browser.new_page(viewport={"width": 1200, "height": 880})
                 errors = []
                 page.on("pageerror", lambda err: errors.append(str(err)))
-                await page.expose_function("backend", request)
+                await page.expose_function("hostRpc", request)
                 await page.evaluate(
-                    "window.maibot={ready:Promise.resolve(),context:{theme:'light'},"
-                    "query:(_,args)=>window.backend('read',args),"
-                    "action:(_,args)=>window.backend('write',args),"
+                    "window.maibot={ready:Promise.resolve(),context:{theme:'light',host:{plugins:{}}},"
+                    "page:{state:{tab:'settings'}},"
+                    "query:(name,args)=>window.hostRpc('query',name,args),"
+                    "action:(name,args)=>window.hostRpc('action',name,args),"
                     "navigate:()=>Promise.resolve()}"
                 )
-                doc = Path("webui/settings.html").read_text(encoding="utf-8").replace(
+                doc = Path("webui/now.html").read_text(encoding="utf-8").replace(
                     "<head>", CSP_META, 1
                 )
-                await page.set_content(doc)
-                await page.locator("#wl-add-platform").select_option("telegram")
-                await page.locator("#wl-add-type").select_option("group")
-                await page.locator("#wl-add-id").fill("-1003883593744::tg-topic::mt=587")
-                await page.locator("#wl-add-btn").click()
-                await expect(page.locator("#chat-whitelist-box")).to_contain_text(
-                    topic_spec
+                await page.set_content(doc, wait_until="domcontentloaded")
+                await expect(page.locator("#set-chat-plat")).to_be_visible()
+                await page.locator("#set-chat-plat").select_option("telegram")
+                await page.locator("#set-chat-type").select_option("group")
+                await page.locator("#set-chat-id").fill("-1003883593744::tg-topic::mt=587")
+                await page.locator("#set-chat-add").click()
+                await expect(page.locator("#set-feedback")).to_contain_text("设置已保存")
+                await expect(page.locator("#set-chat-list")).to_contain_text(
+                    "-1003883593744::tg-topic::mt=587"
                 )
-                await page.locator("#save-settings").click()
-                await expect(page.locator("#feedback")).to_contain_text("已保存")
                 assert topic_spec in plugin.settings.enabled_chats
                 assert not errors
             finally:
@@ -574,52 +584,65 @@ async def test_qq_official_case_sensitive_openid_and_webui_allow_users(tmp_path)
         profiles.get("qq_case")
 
     plugin = await loaded(tmp_path / "plugin", [f"QQ:private:{openid}"])
+    await plugin.manage_write("onboarding_skip", "{}")
     try:
         assert plugin.admins == {f"qq:{openid}"}
 
-        async def request(mode, arguments):
-            return await (
-                plugin.manage_read(**arguments)
-                if mode == "read"
-                else plugin.manage_write(**arguments)
-            )
+        async def request(kind, name, arguments):
+            args = dict(arguments or {})
+            if kind == "query":
+                if name == "read":
+                    return await plugin.manage_read(**args)
+                if name == "event":
+                    return await plugin.console_event(**args)
+                return await plugin.console_query(**args)
+            if name == "write":
+                return await plugin.manage_write(**args)
+            if name == "note":
+                return await plugin.console_send(**args)
+            return await plugin.console_stop(**args)
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch()
             try:
-                page = await browser.new_page(viewport={"width": 1100, "height": 850})
+                page = await browser.new_page(viewport={"width": 1200, "height": 880})
                 errors = []
                 page.on("pageerror", lambda err: errors.append(str(err)))
-                await page.expose_function("backend", request)
+                await page.expose_function("hostRpc", request)
                 await page.evaluate(
-                    "window.maibot={ready:Promise.resolve(),context:{theme:'light'},"
-                    "query:(_,args)=>window.backend('read',args),"
-                    "action:(_,args)=>window.backend('write',args),"
+                    "window.maibot={ready:Promise.resolve(),context:{theme:'light',host:{plugins:{}}},"
+                    "page:{state:{tab:'abilities'}},"
+                    "query:(name,args)=>window.hostRpc('query',name,args),"
+                    "action:(name,args)=>window.hostRpc('action',name,args),"
                     "navigate:()=>Promise.resolve()}"
                 )
-                doc = Path("webui/abilities.html").read_text(encoding="utf-8").replace(
+                doc = Path("webui/now.html").read_text(encoding="utf-8").replace(
                     "<head>", CSP_META, 1
                 )
-                await page.set_content(doc)
-                await page.locator('[data-profile="default"]').click()
-                await expect(page.locator("#editor-panel")).to_be_visible()
-                await page.locator('[data-doc-tab="config"]').click()
-                await expect(page.locator("#cfg-visual")).to_be_visible()
-                await expect(page.locator("#cfg-title")).to_have_value("全能默认助手")
-                await page.locator("#cfg-access").select_option("listed")
-                await expect(page.locator("#cfg-allow-scope-wrap")).to_be_visible()
-                await page.locator("#cfg-user-plat").select_option("qq")
-                await page.locator("#cfg-user-id").fill(f"QQ:private:{openid}")
-                await page.locator("#cfg-add-user-btn").click()
-                await expect(page.locator("#content")).to_have_value(
-                    re.compile(re.escape(f'"qq:private:{openid}"'))
+                await page.set_content(doc, wait_until="domcontentloaded")
+                await page.locator('[data-pick-profile-id="default"]').wait_for(
+                    state="visible"
                 )
-                await page.locator("#save").click()
-                await expect(page.locator("#feedback")).to_contain_text("已保存")
+                await page.locator('[data-pick-profile-id="default"]').click()
+                await expect(page.locator("#pr-id")).to_have_value("default")
+                await page.locator("#pr-access").select_option("listed")
+                await expect(page.locator("#pr-chats-wrap")).to_be_visible()
+                await page.locator("#pr-alw-plat").select_option("qq")
+                await page.locator("#pr-alw-type").select_option("private")
+                await page.locator("#pr-alw-id").fill(f"QQ:private:{openid}")
+                await page.locator("#pr-allow-struct-add").click()
+                await expect(page.locator("#pr-allow-chat-list")).to_contain_text(openid)
+                await page.locator("#pr-btn-save").click()
+                await expect(page.locator("#pr-feedback")).to_contain_text("档案已保存")
                 saved_default = plugin.profiles.get("default")
-                assert f"qq:private:{openid}" in saved_default.allow_users
-                assert saved_default.permits("chat", "qq", user_id=openid) is True
-                assert saved_default.permits("chat", "qq", user_id=openid.lower()) is False
+                assert f"qq:private:{openid}" in saved_default.allow_chats
+                assert saved_default.permits(f"qq:private:{openid}", "qq", user_id=openid) is True
+                assert (
+                    saved_default.permits(
+                        f"qq:private:{openid.lower()}", "qq", user_id=openid.lower()
+                    )
+                    is False
+                )
                 assert not errors
             finally:
                 await browser.close()
