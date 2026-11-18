@@ -561,6 +561,9 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         page.locator("#pkg-export-download").click()
         page.wait_for_timeout(50)
         page.locator("#pr-btn-delete").click()
+        page.locator("#ms-confirm-ok").wait_for(state="visible")
+        page.locator("#ms-confirm-ok").click()
+        page.locator("#ms-confirm-dialog").wait_for(state="hidden")
         page.wait_for_timeout(80)
 
         # 5. 产物页：无 <img>/<iframe> + CSS 图片舞台 + Markdown 阅读/源码双态切换（无冗余文件系统树）

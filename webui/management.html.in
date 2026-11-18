@@ -2396,10 +2396,19 @@
         if (isPlannerSelected()) { say("MaiBot（调度）为主脑常驻手册，不可删除", true); return; }
         const cur = getCur();
         if (!cur || BUILTIN_PROFILE_IDS.has(cur.id)) { say("内置角色受保护，不可删除（可停用或克隆修改）", true); return; }
-        const res = await hostRpc("write", "profile_delete", { profile_id: cur.id, id: cur.id });
+        const targetId = cur.id;
+        const targetName = cur.name || cur.title || cur.id;
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "删除角色",
+          title: `删除自定义角色「${targetName}」？`,
+          body: `将永久删除角色档案 ${targetId} 及其私有配置与历史记录，该操作不可恢复。`,
+          confirmText: "确认删除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
+        const res = await hostRpc("write", "profile_delete", { profile_id: targetId, id: targetId });
         if (!res?.success) { say(res?.error || "删除档案失败", true); return; }
         pState.selectedId = "default";
-        say(`已删除自定义档案 ${cur.id}`);
+        say(`已删除自定义档案 ${targetId}`);
         abCtrl?.markSkillsStale?.();
         await loadProfiles();
         return;
@@ -2437,9 +2446,17 @@
       }
 
       if (ev.target.closest("#pr-comp-del") && pState.selectedId && !pState.creating && !isPlannerSelected()) {
+        const profileId = pState.selectedId;
         const rel = ($("#pr-comp-path")?.value || pState.activeCompPath || "").trim();
         if (!rel) return;
-        const r = await hostRpc("write", "delete_profile_file", { target: pState.selectedId, path: rel });
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "删除文件",
+          title: `删除角色附属文件「${rel}」？`,
+          body: `将永久删除角色 ${profileId} 下的附属文件「${rel}」。`,
+          confirmText: "确认删除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
+        const r = await hostRpc("write", "delete_profile_file", { target: profileId, path: rel });
         if (!r?.success) { say(r?.error || "删除角色附属文件失败", true); return; }
         const nextFiles = Array.isArray(r.companion_files) ? r.companion_files : pState.compFiles.filter((f) => f !== rel);
         const cur = getCur();
@@ -2638,6 +2655,7 @@
 
     document.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape" || activePage !== "abilities" || abCtrl?.getSub?.() !== "profiles") return;
+      if (window.MaisyaUI?.isConfirmOpen?.() || ev.target?.closest?.("#ms-confirm-dialog")) return;
       if (!$("#pkg-scrim")?.hidden) { closePkgModal(); return; }
       const drop = $("#pr-model-dropdown");
       if (drop && !drop.hidden) {
@@ -3262,12 +3280,20 @@
       }
 
       if (ev.target.closest("#sk-comp-del") && skState.editing?.id) {
+        const skillId = skState.editing.id;
         const rel = ($("#sk-comp-path")?.value || skState.activeCompPath || "").trim();
         if (!rel) return;
-        const r = await hostRpc("write", "delete_skill_file", { target: skState.editing.id, path: rel });
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "删除文件",
+          title: `删除技能附属文件「${rel}」？`,
+          body: `将永久删除技能 ${skillId} 下的附属文件「${rel}」。`,
+          confirmText: "确认删除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
+        const r = await hostRpc("write", "delete_skill_file", { target: skillId, path: rel });
         if (!r?.success) { sayDrawer(r?.error || "删除附属文件失败", true); return; }
         const nextFiles = Array.isArray(r.companion_files) ? r.companion_files : skState.compFiles.filter((f) => f !== rel);
-        const sk = skState.skills.find((x) => x.id === skState.editing.id);
+        const sk = skState.skills.find((x) => x.id === skillId);
         if (sk) sk.companion_files = nextFiles;
         renderSkillCompanions(nextFiles, { visible: true });
         sayDrawer(`已删除附属文件 ${rel}`);
@@ -3359,16 +3385,33 @@
       }
 
       if (ev.target.closest("#sk-drawer-reset") && skState.editing?.id) {
-        const res = await hostRpc("write", "reset_skill", { target: skState.editing.id });
+        const tid = skState.editing.id;
+        const title = ($("#sk-edit-title")?.value || tid).trim();
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "恢复默认",
+          title: `恢复预设技能「${title}」？`,
+          body: `将用内置默认版本覆盖你对技能「${title}」（${tid}）的本地修改（历史记录仍可回滚查看）。`,
+          confirmText: "确认恢复",
+        });
+        if (!ok || disposed || sig?.aborted) return;
+        const res = await hostRpc("write", "reset_skill", { target: tid });
         if (!res?.success) { sayDrawer(res?.error || "恢复默认失败", true); return; }
         saySk("已恢复预设技能默认内容");
         await loadSkills();
-        await openSkillDrawer("skill", skState.editing.id, false);
+        await openSkillDrawer("skill", tid, false);
         return;
       }
 
       if (ev.target.closest("#sk-drawer-delete") && skState.editing?.id) {
         const tid = skState.editing.id;
+        const title = ($("#sk-edit-title")?.value || tid).trim();
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "删除技能",
+          title: `删除自定义技能「${title}」？`,
+          body: `将永久删除技能文档 ${tid} 及其附属文件，并解除在所有角色中的绑定。`,
+          confirmText: "确认删除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
         const res = await hostRpc("write", "delete_skill", { target: tid });
         if (!res?.success) { sayDrawer(res?.error || "删除技能失败", true); return; }
         closeSkillDrawer();
@@ -3479,6 +3522,7 @@
 
     document.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape" || activePage !== "abilities" || abCtrl?.getSub?.() !== "skills") return;
+      if (window.MaisyaUI?.isConfirmOpen?.() || ev.target?.closest?.("#ms-confirm-dialog")) return;
       if (!$("#sk-pkg-scrim")?.hidden) { $("#sk-pkg-scrim").hidden = true; return; }
       if (!$("#sk-drawer-scrim")?.hidden) closeSkillDrawer();
     }, { signal: sig });
@@ -3828,6 +3872,13 @@
       const delBtn = ev.target.closest("[data-conn-del]");
       if (delBtn) {
         const name = delBtn.dataset.connDel;
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "移除连接",
+          title: `移除外部 MCP 连接「${name}」？`,
+          body: "移除后已绑定该连接的角色将无法再调用它的工具。",
+          confirmText: "确认移除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
         const r = await hostRpc("write", "delete_service_item", { kind: "mcp", name, expected_version: cState.version });
         if (!r?.success) { sayConn(r?.error || "移除外部连接失败", true); return; }
         if (cState.editingOrigName === name) resetConnForm();
@@ -3856,6 +3907,13 @@
       const delApiBtn = ev.target.closest("[data-conn-del-api]");
       if (delApiBtn) {
         const name = delApiBtn.dataset.connDelApi;
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "移除接口",
+          title: `移除已登记插件接口「${name}」？`,
+          body: "移除后角色档案将无法再引用该插件接口配置。",
+          confirmText: "确认移除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
         const r = await hostRpc("write", "delete_service_item", { kind: "api", name, expected_version: cState.version });
         if (!r?.success) { sayConn(r?.error || "移除插件接口失败", true); return; }
         sayConn(`已移除插件接口 ${name}`);
@@ -5236,10 +5294,21 @@
       }
       const revBtn = ev.target.closest("[data-revoke-grant]");
       if (revBtn) {
+        const grantKey = revBtn.dataset.revokeGrant || undefined;
+        const grantScope = revBtn.dataset.revokeScope || undefined;
+        const grantAct = revBtn.dataset.revokeAct || undefined;
+        const grantTitle = revBtn.closest(".ms-entry-row")?.querySelector(".ms-entry-title")?.textContent?.trim() || grantAct || grantKey || "该条授权";
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "撤销授权",
+          title: `撤销运行授权「${grantTitle}」？`,
+          body: `撤销后相关动作${grantScope ? `（作用域 ${grantScope}）` : ""}将重新弹出权限审批。`,
+          confirmText: "确认撤销",
+        });
+        if (!ok || disposed || sig?.aborted) return;
         const r = await hostRpc("write", "grant_revoke", {
-          grant_key: revBtn.dataset.revokeGrant || undefined,
-          scope: revBtn.dataset.revokeScope || undefined,
-          action_key: revBtn.dataset.revokeAct || undefined,
+          grant_key: grantKey,
+          scope: grantScope,
+          action_key: grantAct,
         });
         if (!r?.success) saySet(r?.error || "撤销授权失败", true);
         else { saySet("已撤销授权"); await loadSettings(); }
@@ -5281,6 +5350,13 @@
       const vDel = ev.target.closest("[data-vault-del]");
       if (vDel) {
         const targetHandle = vDel.dataset.vaultDel;
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "销毁凭据",
+          title: `删除密码别名「${targetHandle}」？`,
+          body: `将从密码保险箱永久销毁「${targetHandle}」及其密文，引用该别名的外部服务或沙箱命令将无法再挂载。`,
+          confirmText: "确认删除",
+        });
+        if (!ok || disposed || sig?.aborted) return;
         const r = await hostRpc("write", "vault_delete", { handle: targetHandle });
         if (!r?.success) saySet(r?.error || "删除密码失败", true);
         else {
@@ -5442,6 +5518,7 @@
 
     document.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape" && activePage === "settings") {
+        if (window.MaisyaUI?.isConfirmOpen?.() || ev.target?.closest?.("#ms-confirm-dialog")) return;
         const mDrop = $("#set-model-drop");
         if (mDrop && !mDrop.hidden) {
           mDrop.hidden = true;

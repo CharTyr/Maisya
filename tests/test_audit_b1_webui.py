@@ -280,6 +280,9 @@ async def test_audit_b1_scheduled_admin_cancel_on_memory_and_settings(tmp_path):
             await expect(cancel_btn).to_be_visible()
             await expect(page.locator("#now-intents")).to_contain_text("每日例行巡检群消息")
             await cancel_btn.click()
+            await expect(page.locator("#ms-confirm-dialog")).to_be_visible()
+            await page.locator("#ms-confirm-ok").click()
+            await expect(page.locator("#ms-confirm-dialog")).to_be_hidden()
             await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
             fb_cls = await page.locator('[data-feedback-slot="now"]').get_attribute("class") or ""
             assert "mil-feedback--err" not in fb_cls
@@ -297,6 +300,9 @@ async def test_audit_b1_scheduled_admin_cancel_on_memory_and_settings(tmp_path):
             )
             await expect(cancel_btn2).to_be_visible()
             await cancel_btn2.click()
+            await expect(page.locator("#ms-confirm-dialog")).to_be_visible()
+            await page.locator("#ms-confirm-ok").click()
+            await expect(page.locator("#ms-confirm-dialog")).to_be_hidden()
             await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
             assert plugin.intents.get(i2)["status"] == "cancelled"
             assert await page.evaluate(

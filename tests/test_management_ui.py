@@ -171,6 +171,18 @@ async def test_management_pages_edit_assets_settings_and_vault_under_host_csp(tm
                 await expect(page.locator("#pr-feedback")).to_contain_text("已导出档案包")
 
                 await page.locator("#pr-btn-delete").click()
+                await expect(page.locator("#ms-confirm-dialog")).to_be_visible()
+                await expect(page.locator("#ms-confirm-dialog")).to_contain_text("ui_temp")
+                await expect(page.locator("#ms-confirm-cancel")).to_be_focused()
+                await page.locator("#ms-confirm-cancel").click()
+                await expect(page.locator("#ms-confirm-dialog")).to_be_hidden()
+                assert plugin.profiles.get("ui_temp") is not None
+                await expect(page.locator('#pr-roster [data-pick-profile-id="ui_temp"]')).to_be_visible()
+
+                await page.locator("#pr-btn-delete").click()
+                await expect(page.locator("#ms-confirm-dialog")).to_be_visible()
+                await page.locator("#ms-confirm-ok").click()
+                await expect(page.locator("#ms-confirm-dialog")).to_be_hidden()
                 await expect(page.locator("#pr-feedback")).to_contain_text("已删除自定义档案")
                 assert await page.locator('#pr-roster [data-pick-profile-id="ui_temp"]').count() == 0
 
@@ -629,6 +641,379 @@ async def test_outputs_preview_multichunk_card_and_styled_svg_html_under_concurr
                 await frame.locator("#lib-refresh").click()
                 await expect(frame.locator("#lib-gallery [data-lib-idx]").first).to_be_visible()
                 assert not errors and peak <= 2
+            finally:
+                await browser.close()
+    finally:
+        await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_unified_danger_confirmation_across_all_delete_surfaces(tmp_path):
+    plugin = await loaded(tmp_path, ["qq:Alice"])
+    await plugin.manage_write("onboarding_skip", "{}")
+    chat_id = "qq:group:100246809"
+    plugin.settings.enabled_chats = [chat_id]
+    try:
+        # 1) 角色附属文件 & 自定义技能/附属文件 & 预设技能修改（供恢复默认测试）
+        pf = await plugin.manage_write(
+            "save_profile_file",
+            json.dumps(
+                {
+                    "target": "default",
+                    "path": "references/temp_note.md",
+                    "content": "临时参考资料",
+                }
+            ),
+        )
+        assert pf["success"], pf
+
+        sk_c = await plugin.manage_write(
+            "create_skill",
+            json.dumps(
+                {
+                    "target": "ui_del_skill",
+                    "title": "待删除技能",
+                    "description": "测试技能二次确认",
+                    "content": "# 待删除技能\n\n测试正文\n",
+                }
+            ),
+        )
+        assert sk_c["success"], sk_c
+        sk_f = await plugin.manage_write(
+            "save_skill_file",
+            json.dumps(
+                {
+                    "target": "ui_del_skill",
+                    "path": "references/sk_ref.md",
+                    "content": "技能附属参考",
+                }
+            ),
+        )
+        assert sk_f["success"], sk_f
+
+        preset_before = await plugin.manage_read(
+            "asset", json.dumps({"kind": "skill", "target": "news-digest"})
+        )
+        assert preset_before["success"], preset_before
+        preset_upd = await plugin.manage_write(
+            "asset",
+            json.dumps(
+                {
+                    "kind": "skill",
+                    "target": "news-digest",
+                    "content": preset_before["content"] + "\n<!-- ui-temp-edit -->\n",
+                    "expected_version": preset_before["version"],
+                }
+            ),
+        )
+        assert preset_upd["success"], preset_upd
+
+        # 2) MCP + API 连接器
+        svc0 = await plugin.manage_read("services")
+        mcp_res = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "mcp",
+                    "expected_version": svc0["version"],
+                    "item": {
+                        "name": "mcp_to_del",
+                        "command": ["/bin/echo", "hi"],
+                        "description": "待移除测试连接",
+                        "readonly": True,
+                        "access": "everyone",
+                    },
+                }
+            ),
+        )
+        assert mcp_res["success"], mcp_res
+        api_res = await plugin.manage_write(
+            "upsert_service_item",
+            json.dumps(
+                {
+                    "kind": "api",
+                    "name": "api_to_del",
+                    "expected_version": mcp_res["version"],
+                    "item": {
+                        "api_name": "demo.read",
+                        "description": "待移除测试接口",
+                        "readonly": True,
+                        "access": "everyone",
+                    },
+                }
+            ),
+        )
+        assert api_res["success"], api_res
+
+        # 3) Vault + Grant
+        plugin.vault.set("vault_to_del", "secret-val-123")
+        grant_key = plugin.grants.grant(
+            scope="*",
+            action_key="exec:demo_grant",
+            tier="always",
+            actor="qq:Alice",
+            note="测试撤销二次确认",
+        )
+
+        # 4) Threads (deletable + prunable) & Intent
+        p_def = plugin.profiles.get("default")
+        th_done = plugin.threads.create(
+            p_def, "可删除单条记录", chat_id=chat_id, platform="qq", user_id="u1"
+        )
+        rev_d = plugin.threads.enqueue(th_done["thread_id"], "完成单条", chat_id)
+        plugin.threads.finish(
+            th_done["thread_id"], chat_id, {"text": "单条已完成结论"}, [], rev_d
+        )
+
+        th_junk = plugin.threads.create(
+            p_def, "可清理废记录", chat_id=chat_id, platform="qq", user_id="u1"
+        )
+        plugin.threads.stop(th_junk["thread_id"], chat_id)
+
+        sched = await plugin.manage_write(
+            "schedule_intent",
+            json.dumps(
+                {
+                    "chat_id": chat_id,
+                    "profile": "default",
+                    "in_seconds": 3600,
+                    "every_seconds": 86400,
+                    "prompt": "待取消测试计划",
+                }
+            ),
+        )
+        assert sched["success"], sched
+        all_intents = (await plugin.manage_read("intents"))["intents"]
+        intent_id = next(
+            it["intent_id"] for it in all_intents if "待取消测试计划" in it["reason"]
+        )
+
+        async def request(kind, name, arguments):
+            args = dict(arguments or {})
+            if kind == "query":
+                if name == "read":
+                    return await plugin.manage_read(**args)
+                if name == "event":
+                    return await plugin.console_event(**args)
+                return await plugin.console_query(**args)
+            if name == "write":
+                return await plugin.manage_write(**args)
+            if name == "note":
+                return await plugin.console_send(**args)
+            return await plugin.console_stop(**args)
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            try:
+                page = await browser.new_page(viewport={"width": 1280, "height": 900})
+                errors = []
+                page.on("pageerror", lambda err: errors.append(str(err)))
+                await page.expose_function("hostRpc", request)
+                await page.evaluate(
+                    """window.maibot={
+                        ready:Promise.resolve(),
+                        context:{theme:'light', host:{plugins:{}}},
+                        page:{state:{tab:'abilities'}},
+                        query:(name,args)=>window.hostRpc('query',name,args),
+                        action:(name,args)=>window.hostRpc('action',name,args),
+                        navigate:()=>Promise.resolve()
+                    }"""
+                )
+                csp_doc = _with_csp(Path("webui/now.html").read_text(encoding="utf-8"))
+                await page.set_content(csp_doc, wait_until="domcontentloaded")
+
+                dlg = page.locator("#ms-confirm-dialog")
+                btn_cancel = page.locator("#ms-confirm-cancel")
+                btn_ok = page.locator("#ms-confirm-ok")
+
+                # A. 角色附属文件删除：取消保留，确认删除（默认选中 __planner__，先切换到 default 并展开高级区）
+                await page.locator('#pr-roster [data-pick-profile-id="default"]').wait_for(state="visible")
+                await page.locator('#pr-roster [data-pick-profile-id="default"]').click()
+                await page.locator("#pr-adv-toggle").click()
+                await expect(page.locator("#pr-adv-body")).to_be_visible()
+                await page.locator("#pr-companions-box > summary").click()
+                await page.locator('[data-pr-comp-open="references/temp_note.md"]').click()
+                await expect(page.locator("#pr-comp-del")).to_be_visible()
+                await page.locator("#pr-comp-del").click()
+                await expect(dlg).to_be_visible()
+                await expect(dlg).to_contain_text("references/temp_note.md")
+                await btn_cancel.click()
+                await expect(dlg).to_be_hidden()
+                assert await page.locator('[data-pr-comp-open="references/temp_note.md"]').count() == 1
+                await page.locator("#pr-comp-del").click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#pr-feedback")).to_contain_text("已删除角色附属文件")
+                assert await page.locator('[data-pr-comp-open="references/temp_note.md"]').count() == 0
+
+                # B. 技能抽屉：技能附属文件 + 技能删除（Esc 不关抽屉！）+ 预设恢复默认
+                await page.locator("#ab-tab-skills").click()
+                await expect(page.locator("#sk-grid")).to_contain_text("待删除技能")
+                await page.locator('[data-open-sk-kind="skill"][data-open-sk-id="ui_del_skill"]').click()
+                await expect(page.locator("#sk-drawer-scrim")).to_be_visible()
+
+                # 技能附属文件删除
+                await page.locator("#sk-companions-box > summary").click()
+                await page.locator('[data-sk-comp-open="references/sk_ref.md"]').click()
+                await expect(page.locator("#sk-comp-del")).to_be_visible()
+                await page.locator("#sk-comp-del").click()
+                await expect(dlg).to_be_visible()
+                await expect(dlg).to_contain_text("references/sk_ref.md")
+                await btn_cancel.click()
+                await expect(dlg).to_be_hidden()
+                assert await page.locator('[data-sk-comp-open="references/sk_ref.md"]').count() == 1
+                await page.locator("#sk-comp-del").click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#sk-drawer-fb")).to_contain_text("已删除附属文件")
+                assert await page.locator('[data-sk-comp-open="references/sk_ref.md"]').count() == 0
+
+                # 技能删除：Esc 关闭确认弹窗，技能抽屉保持打开！
+                await page.locator("#sk-drawer-delete").click()
+                await expect(dlg).to_be_visible()
+                await page.keyboard.press("Escape")
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#sk-drawer-scrim")).to_be_visible()
+                assert any(
+                    s["id"] == "ui_del_skill"
+                    for s in (await plugin.manage_read("skills"))["skills"]
+                )
+                await page.locator("#sk-drawer-delete").click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#sk-feedback")).to_contain_text("已删除技能")
+                assert all(
+                    s["id"] != "ui_del_skill"
+                    for s in (await plugin.manage_read("skills"))["skills"]
+                )
+
+                # 预设技能恢复默认
+                await page.locator('[data-open-sk-kind="skill"][data-open-sk-id="news-digest"]').click()
+                await expect(page.locator("#sk-drawer-reset")).to_be_visible()
+                await page.locator("#sk-drawer-reset").click()
+                await expect(dlg).to_be_visible()
+                await btn_cancel.click()
+                await expect(dlg).to_be_hidden()
+                cur_preset = await plugin.manage_read(
+                    "asset", json.dumps({"kind": "skill", "target": "news-digest"})
+                )
+                assert "ui-temp-edit" in cur_preset["content"]
+                await page.locator("#sk-drawer-reset").click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#sk-feedback")).to_contain_text("已恢复预设技能默认内容")
+                reset_preset = await plugin.manage_read(
+                    "asset", json.dumps({"kind": "skill", "target": "news-digest"})
+                )
+                assert "ui-temp-edit" not in reset_preset["content"]
+                await page.locator("#sk-drawer-close").click()
+
+                # C. 外部连接 MCP & 插件 API 移除
+                await page.locator("#ab-tab-connectors").click()
+                await expect(page.locator('[data-conn-del="mcp_to_del"]')).to_be_visible()
+                await page.locator('[data-conn-del="mcp_to_del"]').click()
+                await expect(dlg).to_be_visible()
+                await expect(dlg).to_contain_text("mcp_to_del")
+                await btn_cancel.click()
+                assert "mcp_to_del" in plugin.runtime.services.load()["servers"]
+                await page.locator('[data-conn-del="mcp_to_del"]').click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#conn-feedback")).to_contain_text("已移除连接")
+                assert "mcp_to_del" not in plugin.runtime.services.load()["servers"]
+
+                await expect(page.locator('[data-conn-del-api="api_to_del"]')).to_be_visible()
+                await page.locator('[data-conn-del-api="api_to_del"]').click()
+                await expect(dlg).to_be_visible()
+                await expect(dlg).to_contain_text("api_to_del")
+                await btn_cancel.click()
+                assert "api_to_del" in plugin.runtime.services.load().get("apis", {})
+                await page.locator('[data-conn-del-api="api_to_del"]').click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#conn-feedback")).to_contain_text("已移除插件接口")
+                assert "api_to_del" not in plugin.runtime.services.load().get("apis", {})
+
+                # D. 设置页：授权撤销 & 密码保险箱删除
+                await page.locator('[data-nav="settings"]').click()
+                rev_btn = page.locator(f'[data-revoke-grant="{grant_key}"]')
+                await expect(rev_btn).to_be_visible()
+                await rev_btn.click()
+                await expect(dlg).to_be_visible()
+                await btn_cancel.click()
+                assert any(g["grant_key"] == grant_key for g in plugin.grants.list_grants())
+                await rev_btn.click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#set-feedback")).to_contain_text("已撤销授权")
+                assert all(g["grant_key"] != grant_key for g in plugin.grants.list_grants())
+
+                v_del_btn = page.locator('[data-vault-del="vault_to_del"]')
+                await expect(v_del_btn).to_be_visible()
+                await v_del_btn.click()
+                await expect(dlg).to_be_visible()
+                await expect(dlg).to_contain_text("vault_to_del")
+                await btn_cancel.click()
+                assert "vault_to_del" in plugin.vault.handles()
+                await v_del_btn.click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator("#set-feedback")).to_contain_text("已删除密码别名")
+                assert "vault_to_del" not in plugin.vault.handles()
+
+                # E. 现场页：单条删除、清理废记录、取消计划（非破坏性的暂停不弹窗）
+                await page.locator('[data-nav="now"]').click()
+                done_card = page.locator(f'#now-threads [data-thread-id="{th_done["thread_id"]}"]')
+                await expect(done_card).to_be_visible()
+                await done_card.click()
+                await expect(page.locator("#now-del-thread-btn")).to_be_visible()
+                await page.locator("#now-del-thread-btn").click()
+                await expect(dlg).to_be_visible()
+                await btn_cancel.click()
+                assert plugin.threads.get(th_done["thread_id"], chat_id) is not None
+                await page.locator("#now-del-thread-btn").click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("已删除该条活动记录")
+                with pytest.raises(ValueError, match="线程不存在"):
+                    plugin.threads.get(th_done["thread_id"], chat_id)
+
+                await page.locator("#now-prune-btn").click()
+                await expect(dlg).to_be_visible()
+                await btn_cancel.click()
+                assert plugin.threads.get(th_junk["thread_id"], chat_id) is not None
+                await page.locator("#now-prune-btn").click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("已清理")
+                with pytest.raises(ValueError, match="线程不存在"):
+                    plugin.threads.get(th_junk["thread_id"], chat_id)
+
+                # 非破坏性「暂停」直接生效，不弹窗；「取消」弹窗确认
+                pause_btn = page.locator(
+                    f'#now-intents [data-intent-act="intent_pause"][data-intent-id="{intent_id}"]'
+                )
+                await expect(pause_btn).to_be_visible()
+                await pause_btn.click()
+                await expect(dlg).to_be_hidden()
+                await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
+                assert plugin.intents.get(intent_id)["status"] == "paused"
+
+                del_int_btn = page.locator(
+                    f'#now-intents [data-intent-act="intent_delete"][data-intent-id="{intent_id}"]'
+                )
+                await del_int_btn.click()
+                await expect(dlg).to_be_visible()
+                await expect(dlg).to_contain_text("待取消测试计划")
+                await btn_cancel.click()
+                assert plugin.intents.get(intent_id)["status"] == "paused"
+                await del_int_btn.click()
+                await btn_ok.click()
+                await expect(dlg).to_be_hidden()
+                await expect(del_int_btn).to_have_count(0)
+                await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
+                assert plugin.intents.get(intent_id)["status"] == "cancelled"
+                assert errors == []
             finally:
                 await browser.close()
     finally:

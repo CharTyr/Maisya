@@ -498,6 +498,9 @@ async def test_b3_critical_e2e_paths_and_strict_concurrency_gate(tmp_path):
             )
             await expect(cancel_btn).to_be_visible()
             await cancel_btn.click()
+            await expect(page.locator("#ms-confirm-dialog")).to_be_visible()
+            await page.locator("#ms-confirm-ok").click()
+            await expect(page.locator("#ms-confirm-dialog")).to_be_hidden()
             await expect(page.locator('[data-feedback-slot="now"]')).to_contain_text("状态已更新")
             assert plugin.intents.get(sched_id)["status"] == "cancelled"
             assert not errors and get_peak() <= 2

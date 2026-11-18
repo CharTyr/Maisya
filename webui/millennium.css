@@ -1456,6 +1456,62 @@ pre, code, .mono, .num {
   box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 8px 0 var(--mil-drop);
 }
 
+dialog.mil-confirm-dialog {
+  width: min(440px, calc(100vw - 28px));
+  max-width: calc(100vw - 28px);
+  max-height: 86vh;
+  margin: auto;
+  padding: 20px 22px;
+  overflow-y: auto;
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  border: 1px solid var(--mil-line);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+dialog.mil-confirm-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+dialog.mil-confirm-dialog:modal {
+  overscroll-behavior: contain;
+}
+dialog.mil-confirm-dialog::backdrop {
+  background: rgba(14, 14, 16, 0.52);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+:root[data-ui-style="millennium"] dialog.mil-confirm-dialog {
+  background-color: var(--mil-panel);
+  background-image: var(--mil-grain-panel);
+  background-size: 5px 5px;
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 var(--mil-hi), inset -2px -2px 0 var(--mil-lo), 0 8px 0 var(--mil-drop);
+}
+.mil-confirm-heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--mil-ink);
+}
+.mil-confirm-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mil-ink-2);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.mil-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

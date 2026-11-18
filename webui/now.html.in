@@ -608,6 +608,20 @@
   </div>
 </div>
 
+<dialog class="mil-confirm-dialog" id="ms-confirm-dialog" closedby="any" aria-labelledby="ms-confirm-title" aria-describedby="ms-confirm-desc">
+  <div class="mil-head" style="margin-bottom:0">
+    <div class="mil-head-l" style="min-width:0">
+      <span class="mil-tag mil-tag--bad" id="ms-confirm-tag">危险操作</span>
+      <h2 class="mil-confirm-heading" id="ms-confirm-title">确认继续操作？</h2>
+    </div>
+  </div>
+  <p class="mil-confirm-body" id="ms-confirm-desc"></p>
+  <div class="mil-confirm-actions">
+    <button type="button" class="mil-key mil-key--sm" id="ms-confirm-cancel" autofocus>取消</button>
+    <button type="button" class="mil-key mil-key--sm mil-key--danger" id="ms-confirm-ok">确认删除</button>
+  </div>
+</dialog>
+
 <div class="onb-scrim" id="onb-scrim" hidden>
   <div class="onb-card" id="onb-card" role="dialog" aria-modal="true" aria-labelledby="onb-title">
     <div class="onb-head">
@@ -1123,10 +1137,88 @@
       </div>
     </div>`;
   }
+  let _confirmResolver = null;
+  let _confirmClosedAt = 0;
+  function closeConfirmDialog(result = "cancel") {
+    const dlg = $("#ms-confirm-dialog");
+    if (dlg && dlg.open) {
+      try { dlg.close(result); } catch (_) {}
+    } else if (_confirmResolver) {
+      const res = _confirmResolver;
+      _confirmResolver = null;
+      _confirmClosedAt = performance.now();
+      res(false);
+    }
+  }
+  function isConfirmOpen() {
+    const dlg = $("#ms-confirm-dialog");
+    return Boolean(dlg?.open) || (performance.now() - _confirmClosedAt < 120);
+  }
+  function initConfirmDialog() {
+    const dlg = $("#ms-confirm-dialog");
+    const cancelBtn = $("#ms-confirm-cancel");
+    const okBtn = $("#ms-confirm-ok");
+    if (!dlg || dlg.dataset.bound === "1") return;
+    dlg.dataset.bound = "1";
+    cancelBtn?.addEventListener("click", () => closeConfirmDialog("cancel"), { signal: shellSig });
+    okBtn?.addEventListener("click", () => closeConfirmDialog("confirm"), { signal: shellSig });
+    dlg.addEventListener("close", () => {
+      const accepted = dlg.returnValue === "confirm";
+      dlg.returnValue = "";
+      _confirmClosedAt = performance.now();
+      const res = _confirmResolver;
+      _confirmResolver = null;
+      if (res) res(accepted);
+    }, { signal: shellSig });
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      const outside = (ev) => {
+        const r = dlg.getBoundingClientRect();
+        return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+      };
+      let pressedOutside = false;
+      dlg.addEventListener("pointerdown", (ev) => { pressedOutside = dlg.open && outside(ev); }, { signal: shellSig });
+      dlg.addEventListener("pointerup", (ev) => {
+        if (pressedOutside && dlg.open && outside(ev)) closeConfirmDialog("cancel");
+        pressedOutside = false;
+      }, { signal: shellSig });
+    }
+  }
+  function confirmDanger({ tag = "危险操作", title = "确认继续操作？", body = "", confirmText = "确认删除", cancelText = "取消" } = {}) {
+    initConfirmDialog();
+    const dlg = $("#ms-confirm-dialog");
+    if (!dlg || typeof dlg.showModal !== "function" || disposed) return Promise.resolve(false);
+    if (_confirmResolver) closeConfirmDialog("cancel");
+    const tagEl = $("#ms-confirm-tag");
+    const titleEl = $("#ms-confirm-title");
+    const descEl = $("#ms-confirm-desc");
+    const cancelBtn = $("#ms-confirm-cancel");
+    const okBtn = $("#ms-confirm-ok");
+    if (tagEl) tagEl.textContent = String(tag || "危险操作");
+    if (titleEl) titleEl.textContent = String(title || "确认继续操作？");
+    if (descEl) {
+      const txt = String(body || "").trim();
+      descEl.textContent = txt;
+      descEl.hidden = !txt;
+    }
+    if (cancelBtn) cancelBtn.textContent = String(cancelText || "取消");
+    if (okBtn) okBtn.textContent = String(confirmText || "确认删除");
+    dlg.returnValue = "";
+    return new Promise((resolve) => {
+      _confirmResolver = resolve;
+      try {
+        dlg.showModal();
+        cancelBtn?.focus();
+      } catch (_) {
+        _confirmResolver = null;
+        resolve(false);
+      }
+    });
+  }
   window.MaisyaUI = {
     cleanUiName, parseStreamParts, resolveChatMeta, renderChatAvatarHtml, renderChatBadgeHtml,
     collectPlatformOptions, buildStreamSpec, renderStructStreamBuilder, readStructStreamBuilder,
     normalizeModelCatalog, renderModelGroupsHtml, renderSingleModelBoxHtml, PLAT_LABELS,
+    confirmDanger, isConfirmOpen,
   };
 
   function chatDisplayName(snap, cid) {
@@ -2414,21 +2506,45 @@
       return;
     }
     if (ev.target.closest("#now-prune-btn")) {
+      const ok = await window.MaisyaUI.confirmDanger({
+        tag: "批量清理",
+        title: "清理已结束的废记录？",
+        body: "将永久删除已结束、无持久工作区且无保留产物的旧活动记录，保留的产物文件不受影响。",
+        confirmText: "确认清理",
+      });
+      if (!ok || disposed) return;
       const r = await hostRpc("write", "prune_threads", {});
       if (!r?.success) setNowFeedback(r?.error || "清理失败", true);
       else {
-        const cnt = Array.isArray(r.deleted) ? r.deleted.length : Number(r.count || 0);
+        const deletedIds = new Set(Array.isArray(r.deleted) ? r.deleted : []);
+        const cnt = deletedIds.size || Number(r.count || 0);
+        if (state.threadId && deletedIds.has(state.threadId)) {
+          state.threadId = "";
+          state.selectedDetail = null;
+        }
         setNowFeedback(cnt > 0 ? `已清理 ${cnt} 条已结束废记录` : "暂无可清理的废记录");
         refresh(true);
       }
       return;
     }
     if (ev.target.closest("#now-del-thread-btn") && state.threadId) {
-      const r = await hostRpc("write", "delete_thread", { thread_id: state.threadId });
+      const tid = state.threadId;
+      const sel = selectedForView(state.lastSnap);
+      const thTitle = (sel?.title || $("#now-sel-title")?.textContent || tid).trim();
+      const ok = await window.MaisyaUI.confirmDanger({
+        tag: "删除记录",
+        title: "删除该条活动记录？",
+        body: `将永久删除活动「${thTitle}」（${tid}）及其步骤日志；已单独生成的产物文件仍保留在产物库。`,
+        confirmText: "确认删除",
+      });
+      if (!ok || disposed) return;
+      const r = await hostRpc("write", "delete_thread", { thread_id: tid });
       if (!r?.success) setNowFeedback(r?.error || "删除失败", true);
       else {
-        state.threadId = "";
-        state.selectedDetail = null;
+        if (state.threadId === tid) {
+          state.threadId = "";
+          state.selectedDetail = null;
+        }
         setNowFeedback("已删除该条活动记录");
         refresh(true);
       }
@@ -2439,6 +2555,16 @@
     if (intentActBtn) {
       const action = intentActBtn.dataset.intentAct;
       const intent_id = intentActBtn.dataset.intentId;
+      if (action === "intent_delete") {
+        const titleTxt = intentActBtn.closest(".now-intent-card")?.querySelector(".now-card-title-txt")?.textContent?.trim() || intent_id;
+        const ok = await window.MaisyaUI.confirmDanger({
+          tag: "取消计划",
+          title: "取消该条预定计划？",
+          body: `取消「${titleTxt}」后将不再按计划自动唤醒执行（仅暂停可点击“暂停”保留日程）。`,
+          confirmText: "确认取消",
+        });
+        if (!ok || disposed) return;
+      }
       const r = await hostRpc("write", action, { intent_id });
       if (!r?.success) setNowFeedback(r?.error || "操作失败", true);
       else { setNowFeedback("状态已更新"); refresh(true); }
@@ -2745,6 +2871,7 @@
 
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {
+      if (isConfirmOpen() || ev.target?.closest?.("#ms-confirm-dialog")) return;
       if (!$("#ctx-scrim")?.hidden) { closeCtxModal(); return; }
       const mDrop = $("#onb-model-drop");
       if (mDrop && !mDrop.hidden) {
@@ -2813,7 +2940,7 @@
       }
       if (!pop.hidden && !ev.target.closest("#mil-help-pop")) closePop();
     }, { signal: shellSig });
-    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !pop.hidden) closePop(); }, { signal: shellSig });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !isConfirmOpen() && !pop.hidden) closePop(); }, { signal: shellSig });
     return closePop;
   }
 
@@ -2844,6 +2971,7 @@
 
     closeHelpPop?.();
     hideCtxTip();
+    if ($("#ms-confirm-dialog")?.open) closeConfirmDialog("cancel");
     if (!isNow && !$("#ctx-scrim")?.hidden) closeCtxModal();
 
     if (isNow) {
@@ -2904,6 +3032,7 @@
 
   window.__maisyaDispose = () => {
     disposed = true;
+    closeConfirmDialog("cancel");
     if (timer) clearInterval(timer);
     if (mgmtAbort) mgmtAbort.abort();
     shellAbort.abort();
