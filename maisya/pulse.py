@@ -22,6 +22,7 @@ from .intents import (
 from .memory import MemoryLayers
 from .scout import call_capability
 from .trust import parse_stream_spec
+from .workspaces import completed_thread
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ _SERENDIPITY_FILLER_SET = set(_SERENDIPITY_FILLERS)
 
 _TRANSIENT_INTENT_PAYLOAD_KEYS = (
     "wait_thread",
+    "watch_run_reserved",
     "already_started",
     "return_routed_queued",
     "run_now_notify",
@@ -904,6 +906,25 @@ class Pulse:
                 now=now,
             )
 
+    async def _reserve_watch_run(self, row) -> str:
+        self._sync_bg_limits()
+        target = row["target"]
+        reservation = asyncio.create_task(
+            asyncio.to_thread(self.intents.reserve_bg_run, source="watch", target=target)
+        )
+        try:
+            day_key, reason = await asyncio.shield(reservation)
+        except asyncio.CancelledError:
+            day_key, _ = await reservation
+            if day_key:
+                await completed_thread(
+                    self.intents.refund_bg_run, day_key, source="watch", target=target
+                )
+            raise
+        if not day_key:
+            await completed_thread(self.intents.pause_for_budget, row["intent_id"], reason)
+        return day_key
+
     async def _handle_watch(self, row):
         if not await self._check_intent_authority(row):
             return
@@ -921,20 +942,6 @@ class Pulse:
         ):
             await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
             return
-        if row.get("kind") != "return" and not (
-            row.get("thread_id") and payload.get("wait_thread")
-        ):
-            exhausted, b_reason = await asyncio.to_thread(self._bg_budget_exhausted)
-            if exhausted:
-                pause_fn = getattr(self.intents, "pause_for_budget", None)
-                if callable(pause_fn):
-                    await asyncio.to_thread(pause_fn, row["intent_id"], b_reason)
-                else:
-                    await asyncio.to_thread(
-                        self.intents.finish, row["intent_id"], "deferred"
-                    )
-                return
-
         condition = str(
             row.get("condition") or payload.get("condition") or row.get("reason") or ""
         ).strip()
@@ -951,8 +958,10 @@ class Pulse:
                 "condition": condition,
                 "now": self.intents.clock(),
             }
-            t0 = time.monotonic()
             params = inspect.signature(self.watch_evaluator).parameters
+            if not await self._reserve_watch_run(row):
+                return
+            t0 = time.monotonic()
             try:
                 ev_res = (
                     self.watch_evaluator(row)
@@ -969,7 +978,7 @@ class Pulse:
                     self._record_bg_usage_sync,
                     source="watch",
                     target=target,
-                    runs=1,
+                    runs=0,
                     duration_ms=dur_ms,
                 )
                 fail_fn = getattr(self.intents, "record_bg_failure", None)
@@ -991,7 +1000,7 @@ class Pulse:
                 self._record_bg_usage_sync,
                 source="watch",
                 target=target,
-                runs=1,
+                runs=0,
                 tokens=toks,
                 duration_ms=dur_ms,
             )
@@ -1014,6 +1023,20 @@ class Pulse:
                     )
                 except (ValueError, PermissionError):
                     thread = None
+                if (
+                    thread is not None
+                    and payload.get("wait_thread")
+                    and not self.engine.tasks.get(row["thread_id"])
+                    and int(thread.get("processed_revision") or 0)
+                    < int(thread.get("revision") or 0)
+                ):
+                    await self._engine_call(
+                        "kick_queued", row["thread_id"], chat_id, background=True
+                    )
+                    await asyncio.to_thread(
+                        self.intents.finish, row["intent_id"], "deferred", delay=2
+                    )
+                    return
                 if thread is not None and (
                     (self.engine.tasks.get(row["thread_id"]))
                     or thread.get("state") == "active"
@@ -1022,6 +1045,14 @@ class Pulse:
                         self.intents.finish, row["intent_id"], "deferred", delay=2
                     )
                     return
+                if not payload.get("watch_run_reserved"):
+                    if payload.get("wait_thread"):
+                        # 旧版本已经派发的盯梢仍在回收时结算一次。
+                        await asyncio.to_thread(
+                            self._record_bg_usage_sync, source="watch", target=target, runs=1
+                        )
+                    elif not await self._reserve_watch_run(row):
+                        return
             else:
                 prof_id = str(payload.get("profile") or "").strip()
                 ability = None
@@ -1081,25 +1112,39 @@ class Pulse:
                 grant = self._delegated_grant(
                     payload, base={"bg_source": "watch", "bg_target": target}
                 )
-                started = await self._start_workflow_thread(
-                    ability,
-                    self._watch_prompt(row, condition),
-                    chat_id=chat_id,
-                    platform=platform or "qq",
-                    owner="chat",
-                    workspace=workspace,
-                    grant=grant,
-                )
-                started_tid = str((started or {}).get("thread_id") or "")
+                prompt = self._watch_prompt(row, condition)
+                day_key = await self._reserve_watch_run(row)
+                if not day_key:
+                    return
+                try:
+                    started = await self._start_workflow_thread(
+                        ability,
+                        prompt,
+                        chat_id=chat_id,
+                        platform=platform or "qq",
+                        owner="chat",
+                        workspace=workspace,
+                        grant=grant,
+                    )
+                    started_tid = str((started or {}).get("thread_id") or "")
+                    if not started_tid:
+                        raise RuntimeError("盯梢线程未提交")
+                except Exception:
+                    await completed_thread(
+                        self.intents.refund_bg_run, day_key, source="watch", target=target
+                    )
+                    raise
                 _, is_queued, thread = await self._thread_state_after_dispatch(
                     started_tid, chat_id, started
                 )
-                if started_tid and (
+                if (
                     is_queued
                     or (self.engine.tasks.get(started_tid))
                     or (thread and thread.get("state") == "active")
                 ):
-                    updated_payload = {**payload, "wait_thread": True}
+                    updated_payload = {
+                        **payload, "wait_thread": True, "watch_run_reserved": True
+                    }
                     await asyncio.to_thread(
                         self.intents.update_thread,
                         row["intent_id"],
@@ -1114,9 +1159,6 @@ class Pulse:
                 thread.get("result")
                 if isinstance(thread, dict) and isinstance(thread.get("result"), dict)
                 else {}
-            )
-            await asyncio.to_thread(
-                self._record_bg_usage_sync, source="watch", target=target, runs=1
             )
             if result_obj.get("error"):
                 now_ts = self.intents.clock()

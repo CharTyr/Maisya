@@ -1382,22 +1382,51 @@ class Intents:
         r_inc = max(0, int(runs))
         t_inc = max(0, int(tokens))
         d_inc = max(0, int(duration_ms))
+        with self.store.connect() as db, db:
+            self._add_bg_usage(db, day_key, source, target, r_inc, t_inc, d_inc, cur)
+
+    @staticmethod
+    def _bg_usage_scopes(source: str, target: str) -> list[str]:
         scopes = ["__global__"]
         if source:
             scopes.append(f"source:{source}")
         if target:
             scopes.append(f"target:{target}")
+        return scopes
+
+    def _add_bg_usage(self, db, day_key, source, target, runs, tokens, duration_ms, now):
+        for scope_key in self._bg_usage_scopes(source, target):
+            db.execute(
+                "INSERT INTO bg_budget_usage (day_key, scope_key, runs_used, tokens_used, duration_ms, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(day_key, scope_key) DO UPDATE SET "
+                "runs_used=bg_budget_usage.runs_used+excluded.runs_used, "
+                "tokens_used=bg_budget_usage.tokens_used+excluded.tokens_used, "
+                "duration_ms=bg_budget_usage.duration_ms+excluded.duration_ms, "
+                "updated_at=excluded.updated_at",
+                (day_key, scope_key, runs, tokens, duration_ms, now),
+            )
+
+    def reserve_bg_run(self, *, source: str, target: str) -> tuple[str, str]:
+        """查预算并扣减一次运行额度，返回用于撤回的日期或耗尽原因。"""
         with self.store.connect() as db, db:
-            for scope_key in scopes:
+            db.execute("BEGIN IMMEDIATE")
+            now = self.clock()
+            state = self.bg_budget_state(now=now, db=db)
+            if state["exhausted"]:
+                return "", state["exhausted_reason"]
+            day_key = state["day_key"]
+            self._add_bg_usage(db, day_key, source, target, 1, 0, 0, now)
+            return day_key, ""
+
+    def refund_bg_run(self, day_key: str, *, source: str, target: str) -> None:
+        with self.store.connect() as db, db:
+            now = self.clock()
+            for scope_key in self._bg_usage_scopes(source, target):
                 db.execute(
-                    "INSERT INTO bg_budget_usage (day_key, scope_key, runs_used, tokens_used, duration_ms, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(day_key, scope_key) DO UPDATE SET "
-                    "runs_used=bg_budget_usage.runs_used+excluded.runs_used, "
-                    "tokens_used=bg_budget_usage.tokens_used+excluded.tokens_used, "
-                    "duration_ms=bg_budget_usage.duration_ms+excluded.duration_ms, "
-                    "updated_at=excluded.updated_at",
-                    (day_key, scope_key, r_inc, t_inc, d_inc, cur),
+                    "UPDATE bg_budget_usage SET runs_used=MAX(0, runs_used-1), updated_at=? "
+                    "WHERE day_key=? AND scope_key=?",
+                    (now, day_key, scope_key),
                 )
 
     def bg_budget_state(
@@ -1453,7 +1482,7 @@ class Intents:
         )
         if not is_ephemeral:
             return str(row["thread_id"] or ""), encode(payload)
-        for key in ("wait_thread", "already_started", "return_routed_queued"):
+        for key in ("wait_thread", "watch_run_reserved", "already_started", "return_routed_queued"):
             payload.pop(key, None)
         return "", encode(payload)
 

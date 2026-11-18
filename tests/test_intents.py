@@ -87,6 +87,103 @@ class _Harness:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["proactive", "return"])
+async def test_watch_reserves_run_budget_before_dispatch(tmp_path, kind):
+    h = _Harness(tmp_path)
+    now = 20_000.0
+    h.intents.clock = lambda: now
+    h.pulse.daily_bg_runs_limit = 1
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def model(name, **kwargs):
+        assert name == "llm.generate_with_tools"
+        calls.append(name)
+        started.set()
+        await release.wait()
+        return {"success": True, "response": "[WATCH:NO_CHANGE]", "total_tokens": 50}
+
+    h.ctx.call_capability = model
+    first, second = [
+        h.intents.schedule(
+            kind=kind,
+            source="watch",
+            target="chat:chat",
+            due_at=now - 2 + index,
+            reason=f"检查 {index}",
+            mode="watch",
+            payload={"profile": "scout", "platform": "qq"},
+        )["intent_id"]
+        for index in range(2)
+    ]
+    try:
+        await h.pulse._intents()
+        await asyncio.wait_for(started.wait(), 3)
+        await h.pulse._intents()
+        assert h.intents.get(second)["status"] == "budget_paused"
+        assert h.intents.bg_budget_state()["runs_used"] == 1
+
+        release.set()
+        await h.engine.drain()
+        now += 3
+        await h.pulse._intents()
+        assert h.intents.get(first)["status"] == "done"
+        assert len(calls) == 1
+        state = h.intents.bg_budget_state()
+        assert (state["runs_used"], state["tokens_used"]) == (1, 50)
+
+        now = h.intents.get(second)["due_at"]
+        await h.pulse._intents()
+        await h.engine.drain()
+        now += 3
+        await h.pulse._intents()
+        assert h.intents.get(second)["status"] == "done"
+        assert len(calls) == 2
+        assert h.intents.bg_budget_state()["runs_used"] == 1
+    finally:
+        release.set()
+        await h.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_watch_refunds_budget_when_thread_submission_fails(tmp_path, monkeypatch):
+    h = _Harness(tmp_path)
+    h.pulse.daily_bg_runs_limit = 1
+    now = h.intents.clock()
+    first, second = [
+        h.intents.schedule(
+            kind="return",
+            source="watch",
+            target="chat:chat",
+            due_at=now - 2 + index,
+            reason=f"检查 {index}",
+            mode="watch",
+            payload={"profile": "scout", "platform": "qq"},
+        )["intent_id"]
+        for index in range(2)
+    ]
+    start = h.pulse._start_workflow_thread
+    observed_runs = []
+
+    async def fail_first(*args, **kwargs):
+        observed_runs.append(h.intents.bg_budget_state()["runs_used"])
+        if len(observed_runs) == 1:
+            raise RuntimeError("工作区正在运行中")
+        return await start(*args, **kwargs)
+
+    monkeypatch.setattr(h.pulse, "_start_workflow_thread", fail_first)
+    try:
+        await h.pulse._intents()
+        assert h.intents.get(first)["status"] == "pending"
+        assert observed_runs == [1, 1]
+        assert h.intents.get(second)["status"] in {"pending", "done"}
+        assert h.intents.bg_budget_state()["runs_used"] == 1
+    finally:
+        await h.on_unload()
+
+
+@pytest.mark.asyncio
 async def test_later_schedules_reminder_and_pulse_wakes_original_chat(tmp_path):
     h = _Harness(tmp_path)
     sent = []
