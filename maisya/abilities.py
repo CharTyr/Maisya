@@ -173,6 +173,7 @@ _ALLOWED_PROFILE_TOML_KEYS = frozenset(
         "context_tokens",
         "temperature",
         "max_steps",
+        "timeout_seconds",
         "web_provider",
         "environment",
         "execution_mode",
@@ -255,7 +256,7 @@ def _normalize_access(value: object) -> str:
 def _normalize_session_mode(value: object) -> str:
     if value == "task":
         return "ephemeral"
-    if value not in {"persistent", "ephemeral"}:
+    if value not in {"persistent", "workspace", "ephemeral"}:
         raise ValueError("线程会话模式无效")
     return str(value)
 
@@ -490,6 +491,7 @@ class Profile:
     context_tokens: int | None = None
     temperature: float | None = None
     max_steps: int | None = None
+    timeout_seconds: int = 0
     web_provider: str = ""
     sandbox_targets: tuple[str, ...] = ()
     fish_seed: str = ""
@@ -555,6 +557,10 @@ class Profile:
         if type(cw) is not int or not 0 <= cw <= 8000:
             raise ValueError("coalesce_window_ms 必须在 0 到 8000 之间")
         object.__setattr__(self, "coalesce_window_ms", cw)
+        ts = 0 if self.timeout_seconds is None else self.timeout_seconds
+        if type(ts) is not int or (ts != 0 and not 15 <= ts <= 900):
+            raise ValueError("timeout_seconds 必须为 0 或在 15 到 900 之间")
+        object.__setattr__(self, "timeout_seconds", ts)
 
         merged_mcp = self.mcp_servers or self.mcp
         object.__setattr__(self, "mcp", merged_mcp)
@@ -709,6 +715,8 @@ def _serialize_profile_dict(config: dict) -> str:
             continue
         if key == "coalesce_window_ms" and value == 0:
             continue
+        if key == "timeout_seconds" and value == 0:
+            continue
         lines.append(f"{key} = {_format_profile_toml_value(value)}")
     return "\n".join(lines) + "\n"
 
@@ -717,6 +725,7 @@ _HISTORICAL_PROFILE_TOML_HASHES: dict[str, frozenset[str]] = {
     "default": frozenset(
         {
             "c449168d2d4ae3863e807a410aab56488b924216505cd5e0fc290454270f0833",
+            "1efa4bb2dcab73dc3cef0511f9037bdb551388b97beaae19f72d7c28d047bf2a",
         }
     ),
 }
@@ -877,7 +886,7 @@ class Profiles:
             environment = "readonly"
 
         permission_mode = _normalize_permission_mode(config.get("permission_mode", "ask_risky"))
-        default_session = "ephemeral" if resolved_id in BUILTIN_PROFILES else "persistent"
+        default_session = "ephemeral" if resolved_id in BUILTIN_PROFILES else "workspace"
         session_mode = _normalize_session_mode(config.get("session_mode", default_session))
 
         icon_shape = config.get("icon_shape", "compass")
@@ -1027,6 +1036,13 @@ class Profiles:
             type(max_steps) is not int or not 1 <= max_steps <= 128
         ):
             raise ValueError("max_steps 必须在 1 到 128 之间")
+        timeout_seconds = config.get("timeout_seconds", 0)
+        if timeout_seconds is None:
+            timeout_seconds = 0
+        if type(timeout_seconds) is not int or (
+            timeout_seconds != 0 and not 15 <= timeout_seconds <= 900
+        ):
+            raise ValueError("timeout_seconds 必须为 0 或在 15 到 900 之间")
         web_provider = config.get("web_provider", "")
         if not isinstance(web_provider, str) or (
             web_provider and not WEB_PROVIDER_RE.fullmatch(web_provider)
@@ -1110,6 +1126,7 @@ class Profiles:
             context_tokens=context_tokens,
             temperature=temperature,
             max_steps=max_steps,
+            timeout_seconds=timeout_seconds,
             web_provider=web_provider,
             sandbox_targets=tuple(sandbox_targets),
             fish_seed=fish_seed,
@@ -1141,7 +1158,7 @@ class Profiles:
         shared_secrets: bool = True,
         execution_mode: str = "host",
         permission_mode: str = "ask_risky",
-        session_mode: str = "persistent",
+        session_mode: str = "workspace",
         enabled_chats: list[str] | tuple[str, ...] | None = None,
         allow_chats: list[str] | tuple[str, ...] | None = None,
         allow_users: list[str] | tuple[str, ...] = (),
@@ -1155,6 +1172,7 @@ class Profiles:
         context_tokens: int | None = None,
         temperature: float | None = None,
         max_steps: int | None = None,
+        timeout_seconds: int = 0,
         fish_seed: str = "",
         template: str = "",
         sandbox_targets: list[str] | tuple[str, ...] = (),
@@ -1259,6 +1277,10 @@ class Profiles:
             config["temperature"] = temperature
         if max_steps is not None:
             config["max_steps"] = max_steps
+        if timeout_seconds:
+            if type(timeout_seconds) is not int or not 15 <= timeout_seconds <= 900:
+                raise ValueError("timeout_seconds 必须为 0 或在 15 到 900 之间")
+            config["timeout_seconds"] = timeout_seconds
         if coalesce_window_ms:
             if type(coalesce_window_ms) is not int or not 0 <= coalesce_window_ms <= 8000:
                 raise ValueError("coalesce_window_ms 必须在 0 到 8000 之间")
@@ -1424,7 +1446,7 @@ class Profiles:
         elif shared_secrets is True:
             clone_updates["shared_secrets"] = True
         if source.id in BUILTIN_PROFILES:
-            clone_updates["session_mode"] = "persistent"
+            clone_updates["session_mode"] = "workspace"
         return self.update(target_id, **clone_updates)
 
     def export(self, profile_id: str, *, sanitize: bool = False) -> bytes:

@@ -17,7 +17,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import xml.parsers.expat
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -3921,6 +3922,7 @@ class DigestWorkspace:
             self._save_history(history)
             if clean_selected or peeled_sources:
                 self._save_sources(sources)
+            self._write_state_note(clean_selected, stage="已筛选", sources=sources)
             self.work.commit()
 
         clean_rejected = [
@@ -4102,8 +4104,51 @@ class DigestWorkspace:
                     hist["unrendered_at"] = 0.0
                     hist["unrendered_run"] = ""
                     self._save_history(hist)
+        self._write_state_note(
+            picked, stage="已出卡", tz_offset_minutes=resolved_tz
+        )
         self.work.commit()
         return {"path": output_path, "bytes": res["bytes"], "count": len(picked)}
+
+    def _write_state_note(
+        self,
+        selected: list[dict[str, Any]],
+        *,
+        stage: str,
+        sources: dict[str, Any] | None = None,
+        tz_offset_minutes: int | None = None,
+    ) -> None:
+        """程序化维护 <=250 字的 project/STATE.md 进展摘要（零额外 LLM 成本）。"""
+        try:
+            tz_min = self._tz_offset(tz_offset_minutes)
+            now_dt = datetime.fromtimestamp(
+                self.clock(), tz=timezone(timedelta(minutes=tz_min))
+            )
+            stamp = now_dt.strftime("%Y-%m-%d %H:%M")
+            src = sources if isinstance(sources, dict) else self._load_sources()
+            feeds = src.get("feeds") if isinstance(src, dict) else []
+            active_feeds = sum(
+                1
+                for f in (feeds or [])
+                if isinstance(f, dict) and str(f.get("status") or "active") == "active"
+            )
+            topic_counts = Counter(
+                str(it.get("topic") or "综合").strip()
+                for it in (selected or [])
+                if isinstance(it, dict)
+            )
+            topic_str = (
+                "、".join(f"{t}({n})" for t, n in topic_counts.most_common(4))
+                if topic_counts
+                else "无"
+            )
+            note = (
+                f"简报进展（{stamp} {stage}）：入选 {len(selected or [])} 条；"
+                f"主题：{topic_str}；活跃订阅源 {active_feeds} 个。\n"
+            )
+            self.work.write("project/STATE.md", note[:248])
+        except Exception:
+            pass
 
 
 async def run_digest_tool(

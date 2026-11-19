@@ -543,6 +543,7 @@ async def test_start_omitted_profile_adopts_workspace_binding_or_matching_profil
         assert started_mix["profile"] == "digest"
 
         # Sub-case A: omitted profile on existing workspace "digest_mix" adopts bound "digest"
+        # and shares the same workspace_id under a fresh clean thread_id (session_mode="workspace")
         continued = await plugin.agent_tool(
             action="start",
             profile="",
@@ -553,8 +554,11 @@ async def test_start_omitted_profile_adopts_workspace_binding_or_matching_profil
             wait_seconds=10,
         )
         assert continued["success"] is True, continued
-        assert continued["thread_id"] == started_mix["thread_id"]
         assert continued["profile"] == "digest"
+        assert continued["thread_id"] != started_mix["thread_id"]
+        ws_started = plugin.threads.get(started_mix["thread_id"], TEST_GROUP_SID)["workspace_id"]
+        ws_continued = plugin.threads.get(continued["thread_id"], TEST_GROUP_SID)["workspace_id"]
+        assert ws_continued == ws_started and ws_started.startswith("ws_")
 
         # Sub-case C: explicit wrong profile yields clear error naming bound profile
         mismatch = await plugin.agent_tool(

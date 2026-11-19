@@ -1476,7 +1476,7 @@
         pState.scopeTouched = false;
       }
       pState.creating = isNew;
-      const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "auto", session_mode: "persistent", fish_seed: "" };
+      const obj = p || { id: "", name: "", description: "", access: "everyone", enabled: true, toolsets: [...ALL_TOOLSETS], skills: [], mcp: [], apis: [], shared_secrets: true, execution_mode: "auto", session_mode: "workspace", fish_seed: "" };
       $("#pr-head-title").textContent = isNew ? "新建能力档案" : `编辑档案 · ${obj.name || obj.title || obj.id}`;
       $("#pr-id").value = obj.id || "";
       $("#pr-id").readOnly = !isNew;
@@ -1554,7 +1554,7 @@
       renderProfileModelChain();
 
       $("#pr-exec-mode").value = obj.execution_mode || (obj.environment === "sandbox" ? "sandbox" : "auto");
-      const rawSess = obj.session_mode || "persistent";
+      const rawSess = obj.session_mode || "workspace";
       $("#pr-session-mode").value = rawSess === "thread" ? "persistent" : rawSess === "task" ? "ephemeral" : rawSess;
       $("#pr-shared-secrets").checked = obj.shared_secrets !== false && obj.share_credentials !== false;
       if (!asyncDetail || !pState.mdTouched) {
@@ -2362,7 +2362,7 @@
           model_name: primaryModel,
           fallback_models: pState.modelChain.slice(1),
           execution_mode: $("#pr-exec-mode")?.value || "auto",
-          session_mode: $("#pr-session-mode")?.value || "persistent",
+          session_mode: $("#pr-session-mode")?.value || "workspace",
           shared_secrets: Boolean($("#pr-shared-secrets")?.checked),
           instructions: md,
           profile_md: md,

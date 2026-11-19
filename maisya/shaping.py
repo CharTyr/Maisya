@@ -14,18 +14,13 @@ from .abilities import BUILTIN_PROFILES
 from .config import Settings, apply_heartbeat_compat
 from .pathsafe import path_is_link_like
 from .shaping_setup import (
-    export_profile_bundle,
-    format_toml as _format_toml,
-    handle_digest_sources,
-    handle_services,
-    handle_setup,
-    handle_skill_proposal,
-    heartbeat_overview,
-    import_profile_bundle,
-    planner_manual_check,
-    profile_summary as _profile_summary,
-    companion_file_op as _companion_file_op,
-    resolve_file_route as _resolve_file_route,
+    export_profile_bundle, format_missing_version_error as _format_missing_version_error,
+    format_toml as _format_toml, format_unknown_shape_action as _format_unknown_shape_action,
+    format_unknown_shape_op as _format_unknown_shape_op, handle_digest_sources,
+    handle_services, handle_setup, handle_skill_proposal, heartbeat_overview,
+    import_profile_bundle, narrow_canonical_session_hits as _narrow_canonical_session_hits,
+    planner_manual_check, profile_summary as _profile_summary,
+    companion_file_op as _companion_file_op, resolve_file_route as _resolve_file_route,
     tools_file_op as _tools_file_op,
 )
 from .trust import clean_display_name, format_stream_spec, parse_stream_spec, session_rank_key
@@ -42,7 +37,7 @@ _PROFILE_TOML_KEYS = {
     "title", "description", "enabled", "base", "session_mode", "access", "allow_chats", "allow_users",
     "share_credentials", "model", "model_name", "fallback_models", "task", "toolsets", "tools", "skills",
     "connectors", "mcp", "apis", "secrets", "sandbox_targets", "network", "environment", "max_tokens",
-    "context_tokens", "temperature", "max_steps", "web_provider", "bound", "fish_seed", "coalesce_window_ms",
+    "context_tokens", "temperature", "max_steps", "timeout_seconds", "web_provider", "bound", "fish_seed", "coalesce_window_ms",
 }
 DEFAULT_DIGEST_SCHEDULE_PROMPT = (
     "结合 <memory_context> 中记录的关注主题、已订阅资讯源与读者反馈，先调用 chat_read(limit=80, hours=168) 与宽泛 memory_read 校对近期真实多元兴趣比例（不因旧标签锁死单一品类），"
@@ -50,7 +45,7 @@ DEFAULT_DIGEST_SCHEDULE_PROMPT = (
     "向 digest_feed(action='score_select', max_items=5) 一次提交 5~7 条高分候选以精选出 4~5 条丰富内容（quote 必须从 source_text 原语言逐字复制，严禁跨语言翻译；无需重复粘贴长段 source_text），"
     "每条生成纯正中文标题、2~4 句扎实口语化中文摘要（110~180 字）与 1 句入选看点（仅在无封面配图且有 >= 2 项可对比数据时附带含 unit/display 的 viz 图解）后，"
     "用会话名或中性抬头（如「近期关注简报」）调用 digest_feed(action='render_card_html', group_title=..., max_items=5, output_path='out/digest-card.html') 输出卡片 HTML，"
-    "再用 html_render(html_path='out/digest-card.html', output_path='out/digest-card.png', width=600, selector='.card') 渲染出图并 result_attach 交付。"
+    "再用 html_render(html_path='out/digest-card.html', output_path='out/digest-card.jpg', width=600, selector='.card') 渲染出图并 result_attach 交付。"
 )
 
 
@@ -158,6 +153,7 @@ def _pick_match(hits: list[dict], raw: str, cur_plat: str, *, preferred_account_
         def _lkey(m: dict) -> tuple[str, str, str] | None:
             p, g, u = str(m.get("platform") or "").lower(), str(m.get("group_id") or ""), str(m.get("user_id") or "")
             return (p, "group" if g else "private", g or u) if p and (g or u) else None
+        dedup = _narrow_canonical_session_hits(dedup, raw, _lkey)
         if len({_lkey(h) for h in dedup if _lkey(h)}) > 1:
             names = ", ".join(f"{h.get('name') or h['session_id']}({h.get('stream_spec') or h['session_id']})" for h in dedup[:5])
             raise ValueError(f"「{raw}」匹配到多个会话：{names}，请改用 平台:类型:id 精确指定")
@@ -466,7 +462,7 @@ async def _handle_profile(plugin, *, op: str, target: str, base: str, patch: dic
             md_cur = await completed_thread(plugin.memory.read, "profile", target=target, document="PROFILE.md", allow_custom=True)
             wr = await completed_thread(plugin.memory.write, "profile", md_text, expected_version=md_cur["version"], target=target, document="PROFILE.md", author=author, allow_custom=True)
         return {"kind": "profile", "target": target, "version": wr["version"], "profile": await completed_thread(_profile_summary, plugin, target), "rollback_hint": f"maisya_shape(action='file', op='rollback', target='{target}', document='PROFILE.md', version={wr['version'] - 1})"}
-    raise ValueError(f"profile 不支持 op={op}")
+    raise ValueError(_format_unknown_shape_op("profile", op, ("list", "read", "create", "patch", "write", "export", "import")))
 
 
 async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: str, document: str, content: str, patch: dict | None, version: int | None, expected_version: int | None, current_chat_id: str, current_platform: str, author: str) -> dict:
@@ -515,7 +511,8 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
         return {**res, "previous_version": cur_ver, "rollback_hint": f"maisya_shape(action='{f_kind}', op='rollback', target='{f_target}', version={cur_ver}, expected_version={res['version']})"}
     if op == "write":
         if expected_version is None:
-            raise ValueError("覆写文档必须提供 expected_version")
+            cur = await completed_thread(plugin.memory.read, f_kind, target=f_target, chat_id=chat_id, document=f_doc, allow_custom=True)
+            raise ValueError(_format_missing_version_error(int(cur["version"]), document or f_doc or f_kind))
         _assert_no_secret(plugin, content, f_doc or f_kind)
         res = await completed_thread(plugin.memory.write, f_kind, content, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, author=author, allow_custom=allow_raw)
         return {**res, "previous_version": int(expected_version), "rollback_hint": f"maisya_shape(action='file', op='rollback', document='{document or f_doc}', version={expected_version}, expected_version={res['version']})"}
@@ -523,7 +520,7 @@ async def _handle_file(plugin, *, kind: str, op: str, target: str, target_chat: 
         if version is None or expected_version is None:
             raise ValueError("回滚文档需要提供 version 与 expected_version")
         return await completed_thread(plugin.memory.rollback, f_kind, version, expected_version=expected_version, target=f_target, chat_id=chat_id, document=f_doc, allow_custom=True)
-    raise ValueError(f"file 不支持 op={op}")
+    raise ValueError(_format_unknown_shape_op("file", op, ("read", "patch", "write", "rollback", "list", "history")))
 
 
 async def build_overview(plugin, *, current_chat_id: str = "", current_platform: str = "", target_chat: str = "") -> dict:
@@ -587,9 +584,9 @@ async def execute_shape(
             if version is None:
                 raise ValueError("回滚设置需要提供 version")
             return _redact(plugin, await rollback_settings(plugin, int(version), expected_version=expected_version, author=author, caller_ident=caller_ident))
-        raise ValueError(f"settings 不支持 op={resolved_op}")
+        raise ValueError(_format_unknown_shape_op("settings", resolved_op, ("read", "patch", "write", "history", "rollback")))
     if area == "profile":
         return _redact(plugin, await _handle_profile(plugin, op=resolved_op, target=target, base=base, patch=patch, content=content, author=author))
     if area in file_areas:
         return _redact(plugin, await _handle_file(plugin, kind=area, op=resolved_op, target=target, target_chat=target_chat, document=document, content=content, patch=patch, version=version, expected_version=expected_version, current_chat_id=current_chat_id, current_platform=current_platform, author=author))
-    raise ValueError(f"不支持的自管理类型：{area}")
+    raise ValueError(_format_unknown_shape_action(area))

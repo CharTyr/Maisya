@@ -476,6 +476,15 @@ class Sandbox:
                     "请先在插件目录执行 ./sandbox/build_image.sh --execute 构建，"
                     "或把 config.toml 的 [sandbox] image 改为已有镜像"
                 )
+            if self.settings.network_mode == "bridge":
+                bridge_check = await self.docker(
+                    "network", "inspect", "bridge", checked=False
+                )
+                if bridge_check.code:
+                    raise RuntimeError(
+                        "Docker bridge 网络（docker0）不可用，容器无法以 network_mode='bridge' 启动；"
+                        "请检查宿主机 docker0 网桥配置，或将 config.toml 的 [sandbox] network_mode 改为 'none'"
+                    )
             self.ready, self.error = True, ""
         except (RuntimeError, OSError, ValueError) as error:
             self.ready, self.error = False, str(error)

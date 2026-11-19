@@ -1268,7 +1268,12 @@ async def test_reused_workspace_thread_admin_direct_preview_wake_and_isolation(
             op="create",
             target="digest",
             base="default",
-            patch={"enabled": True, "network": "public", "max_steps": 20},
+            patch={
+                "enabled": True,
+                "network": "public",
+                "max_steps": 20,
+                "session_mode": "persistent",
+            },
             source_msg_id="m-enable-digest",
             chat_id="priv_admin_md5",
             platform="qq",

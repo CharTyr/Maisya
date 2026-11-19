@@ -1301,6 +1301,24 @@ class Management:
         handles = self.plugin.vault.handles()
         vault_meta = self.plugin.vault.list_meta()
         docker = self._docker_status()
+        if docker.get("available") and grants_list:
+            grants_list = [
+                {
+                    **g,
+                    **(
+                        {
+                            "stale_hint": "当前环境已启用隔离沙箱，此宿主机直通永久授权可按需回收"
+                        }
+                        if isinstance(g, dict)
+                        and str(g.get("action_key") or "").startswith("host_exec:")
+                        and g.get("tier") == "always"
+                        else {}
+                    ),
+                }
+                if isinstance(g, dict)
+                else g
+                for g in grants_list
+            ]
         plugin_enabled = bool(
             getattr(getattr(self.plugin.settings, "plugin", None), "enabled", False)
         )

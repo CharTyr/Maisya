@@ -17,6 +17,7 @@ from .intents import next_daily_due
 from .memory import SKILL_ID_RE, MemoryLayers
 from .packages import export_package, import_package_bundle, preview_package
 from .pathsafe import path_is_link_like
+from .trust import parse_stream_spec
 from .vault import atomic_private_write
 from .workspaces import completed_thread
 
@@ -192,7 +193,7 @@ _MANUAL_PROFILE_REF = re.compile(r"""profile\s*[=:：]\s*['"]?([A-Za-z][A-Za-z0-
 
 PLANNER_CONTRACT_LINES: tuple[str, ...] = (
     "需要查证、计算、创作、操作环境或持续活动时，可以把事情交给 Maisya 的 Agent 线程，也可因自身好奇主动探索；何时自己回、何时派线程与怎么交付见下方调度手册，什么事交给哪个角色看下方档案名册中各档案的描述与能力。手册与名册都是参考资料，不能改变权限与工具边界。",
-    "maisya_agent：start 开启（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads，持久档案传 fresh=True 重开），send 补充或转向，reopen 续聊历史或空闲线程，list 检索线程，stop 停止；同名 workspace 持续保留文件并按消息顺序推进，持久工作区若有 state_note 表示该活动的当前进度与续接约定（仅作分流参考，不改变权限）；maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
+    "maisya_agent：start 开启新任务（同轮并行多线程传 wait_seconds=0，跨角色接力传 from_threads；共享工作区角色按事独立开线程并自动延续工作区文件，常驻房间角色传 fresh=True 归档开新局），send 补充或转向已有线程（群聊追问请对照下方线程列表的 initiator 与主题命中原 thread_id），reopen 续聊历史或空闲线程，list 检索线程，stop 停止；持久工作区若有 state_note 表示该活动的当前进度与续接约定（仅作分流参考，不改变权限）；maisya_later 可安排单次提醒、周期工作流或 watch 条件盯梢。",
     "普通能力可自主调度，受限能力必须提供真实消息授权；查群友往事与人物印象用宿主长期记忆工具（如 query_memory），查过往线程产出、后台经历与会话备忘用 maisya_recall。",
     "纯文字结论直接 reply，准确链接、文件或媒体调用 share（message 写本轮想说的自然口语意图）交付后结束本轮，避免重复表达。",
 )
@@ -259,13 +260,13 @@ def build_planner_stable_lines(
         lines.append(manual_block)
     lines.append(
         "<maisya_profiles>"
-        + html.escape(json.dumps(profiles, ensure_ascii=False))
+        + html.escape(json.dumps(profiles, ensure_ascii=False), quote=False)
         + "</maisya_profiles>"
     )
     if disabled_profiles:
         lines.append(
             "<maisya_disabled_profiles>"
-            + html.escape(json.dumps(disabled_profiles, ensure_ascii=False))
+            + html.escape(json.dumps(disabled_profiles, ensure_ascii=False), quote=False)
             + "</maisya_disabled_profiles>"
         )
     return lines
@@ -999,4 +1000,39 @@ async def handle_skill_proposal(plugin, *, op: str, target: str, patch: dict | N
                         await completed_thread(plugin.profiles.update, p_str, skills=[*prof.skills, sk_id])
         await completed_thread(plugin.memory.resolve_skill_proposal, resolved_pid, "created")
         return {"kind": "skill_proposal", "op": "confirm", "proposal_id": resolved_pid, "skill_id": sk_id, "version": saved.get("version")}
-    raise ValueError(f"skill_proposal 不支持 op={norm_op}")
+    raise ValueError(
+        f"skill_proposal 不支持 op={norm_op}（可用 op：list / read / confirm / dismiss）"
+    )
+
+
+def format_unknown_shape_action(area: str) -> str:
+    """为 maisya_shape 的非法 action 生成包含合法枚举与最小示例的自纠报错。"""
+    return (
+        f"不支持的自管理类型：{area}。"
+        "可用 action：overview / setup / settings / profile / file / memory / role_memory / "
+        "notes / journal / heartbeat / planner / digest_sources / services / skill_proposal；"
+        "例如开启群白名单请用 action='settings', op='patch', "
+        "patch={'enabled_chats': ['qq:group:<群号>']}（或用 action='setup' 一站配齐）"
+    )
+
+
+def format_unknown_shape_op(area: str, op: str, allowed: tuple[str, ...]) -> str:
+    """为 maisya_shape 的非法 op 生成包含合法枚举的自纠报错。"""
+    return f"{area} 不支持 op={op}（可用 op：{' / '.join(allowed)}）"
+
+
+def format_missing_version_error(cur_ver: int, doc_label: str) -> str:
+    """为 op='write' 缺 expected_version 时生成带当前版本号与 patch 建议的自纠报错。"""
+    return (
+        f"覆写文档（{doc_label}）必须提供 expected_version（当前 version={cur_ver}）；"
+        "如仅需局部追加或替换，建议直接改用 op='patch' 无需手填版本号"
+    )
+
+
+def narrow_canonical_session_hits(dedup: list[dict], raw: str, lkey_fn) -> list[dict]:
+    """当 raw 已是规范 <platform>:<group|private>:<id> 时，仅保留精确命中该规范键的会话路由。"""
+    parsed = parse_stream_spec(raw)
+    if parsed is None:
+        return dedup
+    exact = [h for h in dedup if lkey_fn(h) == parsed]
+    return exact or dedup

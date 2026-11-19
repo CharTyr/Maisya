@@ -6,7 +6,7 @@
 
 **以 MaiBot 自身决策模型为唯一调度中枢，通过全能默认能力与可渐进定制的 Agent 档案，为 MaiBot 提供可信赖的探索、创作、执行与条件盯梢能力**
 
-[![Version](https://img.shields.io/badge/version-v0.3.1-5ec4b8.svg)](https://github.com/CharTyr/Maisya)
+[![Version](https://img.shields.io/badge/version-v0.3.2-5ec4b8.svg)](https://github.com/CharTyr/Maisya)
 [![MaiBot](https://img.shields.io/badge/MaiBot-1.0.0--1.4.99-green.svg)](https://github.com/Mai-with-u/MaiBot)
 [![SDK](https://img.shields.io/badge/插件%20SDK-2.8.1--2.23.99-green.svg)](https://github.com/Mai-with-u/MaiBot)
 [![License](https://img.shields.io/badge/license-GPL--3.0-orange.svg)](LICENSE)

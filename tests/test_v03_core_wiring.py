@@ -579,6 +579,7 @@ async def test_thread_reuse_fresh_stop_idle_reopen_and_list(tmp_path: Path) -> N
                     "name": "Research Bot",
                     "description": "Long-lived researcher",
                     "instructions": "Keep track of research notes carefully.",
+                    "session_mode": "persistent",
                     "toolsets": ["workspace"],
                 }
             ),

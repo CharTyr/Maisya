@@ -174,6 +174,7 @@ class Pulse:
         self._heartbeat_cached_parts = ("", "")
         self._heartbeat_interval_used = heartbeat_interval
         self._queued_heartbeat_tid = ""
+        self._chat_disabled_notified: dict[str, float] = {}
         self.rng = random.random
         self._tick_lock = None
         self._tick_lock_loop = None
@@ -243,6 +244,46 @@ class Pulse:
         is_queued = isinstance(started, dict) and started.get("state") == "active"
         return False, is_queued, None
 
+    async def _handle_chat_disabled(self, row: dict, chat_id: str) -> None:
+        """目标会话未在 enabled_chats 时显式记录 wake_status='chat_disabled' 并对管理员计划去重私聊提醒。"""
+        iid = str(row.get("intent_id") or "")
+        await asyncio.to_thread(
+            self.intents.finish, iid, "deferred", "chat_disabled", delay=60
+        )
+        payload = dict(row.get("payload") or {})
+        if not payload.get("scheduled_admin"):
+            return
+        now = float(self.intents.clock()) if self.intents is not None else time.time()
+        last_sent = float(self._chat_disabled_notified.get(iid) or 0.0)
+        if last_sent > 0 and now - last_sent < 43200:
+            return
+        notify_chat = await self._resolve_approval_notify_chat(
+            source_chat_id=str(payload.get("source_chat_id") or ""),
+            issuer_admin=str(payload.get("issuer_admin") or ""),
+            fallback_chat_id="",
+        )
+        if not notify_chat:
+            return
+        self._chat_disabled_notified[iid] = now
+        target_label = str(row.get("target") or chat_id or "")
+        reason_text = html.escape(self.redact(str(row.get("reason") or iid)), quote=False)
+        msg = (
+            "你安排的定时工作流因目标会话当前未启用 Maisya 白名单（chat_disabled）而暂停等待，"
+            "请简短提醒管理员确认是否需要重新开启该会话（可用 maisya_shape(action='settings', op='patch', "
+            "patch={'enabled_chats': [...]}) 开启）。"
+            f"\n<maisya_intent>intent_id={html.escape(iid, quote=False)} target={html.escape(target_label, quote=False)} "
+            f"status=chat_disabled reason={reason_text}</maisya_intent>"
+        )
+        try:
+            await self._wake(
+                notify_chat,
+                msg,
+                reason="scheduled_chat_disabled",
+                metadata={"intent_id": iid, "target": target_label, "wake_status": "chat_disabled"},
+            )
+        except Exception:
+            logger.debug("chat_disabled 管理员私聊通知发送失败 intent=%s", iid)
+
     async def _start_workflow_thread(
         self,
         ability,
@@ -254,6 +295,7 @@ class Pulse:
         workspace: str,
         grant: dict | None = None,
         return_route=None,
+        rollover_cycle: bool = False,
     ):
         clean_ws = str(workspace or "").strip()
         store = getattr(self.bridge, "store", None) if self.bridge is not None else None
@@ -284,6 +326,7 @@ class Pulse:
             "grant": grant,
             "background": True,
             "defer_if_full": True,
+            "rollover_cycle": bool(rollover_cycle),
             **({"return_route": return_route} if return_route is not None else {}),
         }
         try:
@@ -940,7 +983,7 @@ class Pulse:
             self.enabled(chat_id, platform)
             or (plugin_ok and bool(payload.get("admin_direct")))
         ):
-            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+            await self._handle_chat_disabled(row, chat_id)
             return
         condition = str(
             row.get("condition") or payload.get("condition") or row.get("reason") or ""
@@ -1347,7 +1390,7 @@ class Pulse:
             self.enabled(chat_id, platform)
             or (plugin_ok and bool((row.get("payload") or {}).get("admin_direct")))
         ):
-            await asyncio.to_thread(self.intents.finish, row["intent_id"], "deferred")
+            await self._handle_chat_disabled(row, chat_id)
             return
         if row["kind"] == "proactive":
             allowed, reason = self._proactive_gate(row)
@@ -1455,6 +1498,10 @@ class Pulse:
                 if raw_thread_chat
                 else chat_id
             ) or chat_id
+            is_recurring_cycle = bool(
+                row["payload"].get("every_seconds") or row["payload"].get("daily_at")
+            )
+            bg_exempt = row.get("kind") == "return"
             if bool(row["payload"].get("admin_direct")) and thread_chat_id != chat_id:
                 source_msg_id = str(row["payload"].get("source_msg_id") or "admin-preview")
                 route = await self.bridge.route(chat_id, source_msg_id, 0)
@@ -1476,9 +1523,11 @@ class Pulse:
                                 "source_msg_id": source_msg_id,
                                 "bg_source": str(row.get("source") or "workflow"),
                                 "bg_target": target,
+                                "bg_budget_exempt": bg_exempt,
                             },
                         ),
                         return_route=route,
+                        rollover_cycle=is_recurring_cycle,
                     )
                 finally:
                     await self.bridge.submitted(route)
@@ -1524,8 +1573,10 @@ class Pulse:
                     base={
                         "bg_source": str(row.get("source") or "workflow"),
                         "bg_target": target,
+                        "bg_budget_exempt": bg_exempt,
                     },
                 ),
+                rollover_cycle=is_recurring_cycle,
             )
             updated_payload = {**row["payload"], "wait_thread": True}
             row = {**row, "thread_id": started["thread_id"], "payload": updated_payload}
@@ -1981,9 +2032,7 @@ class Pulse:
             if not platform and parse_stream_spec(raw_target_chat):
                 platform = parse_stream_spec(raw_target_chat)[0]
             if target_chat != "self" and not self.enabled(target_chat, platform):
-                await asyncio.to_thread(
-                    self.intents.finish, row["intent_id"], "deferred"
-                )
+                await self._handle_chat_disabled(row, target_chat)
                 return
             try:
                 ability = await asyncio.to_thread(
@@ -2033,6 +2082,9 @@ class Pulse:
                         "bg_source": str(row.get("source") or "workflow"),
                         "bg_target": row["target"],
                     },
+                ),
+                rollover_cycle=bool(
+                    row["payload"].get("every_seconds") or row["payload"].get("daily_at")
                 ),
             )
             started_tid = str((started or {}).get("thread_id") or "")

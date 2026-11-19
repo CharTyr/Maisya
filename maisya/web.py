@@ -9,6 +9,7 @@ import random
 import re
 import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1415,6 +1416,12 @@ class WebRouter:
         self.services = services
         self.runtime = runtime
         self._http_request = http_request or _default_http_request
+        self._host_disabled_until: dict[str, float] = {}
+        self._host_disabled_ttl: float = 300.0
+
+    def invalidate_host_cache(self) -> None:
+        """清空宿主联网未启用的负缓存（如配置热更新后立即重新探测）。"""
+        self._host_disabled_until.clear()
 
     def current_provider(self) -> str:
         value = self._provider() if callable(self._provider) else self._provider
@@ -1434,7 +1441,20 @@ class WebRouter:
             return None
         return _unwrap_plugin_config(raw)
 
-    async def _call_host_web(self, capability: str, **kwargs):
+    async def _call_host_web(
+        self, capability: str, *, use_cache: bool = True, **kwargs
+    ):
+        now = time.monotonic()
+        if use_cache and self._host_disabled_until.get(capability, 0.0) > now:
+            raise _HostWebDisabledError("宿主统一联网未启用（负缓存命中）")
+
+        def _mark_disabled(msg: str) -> None:
+            expire = time.monotonic() + self._host_disabled_ttl
+            self._host_disabled_until[capability] = expire
+            if "统一联网" in msg:
+                self._host_disabled_until["web.search"] = expire
+                self._host_disabled_until["web.fetch"] = expire
+
         try:
             result = await call_capability(
                 self.host, capability, timeout_ms=70000, **kwargs
@@ -1442,6 +1462,7 @@ class WebRouter:
         except Exception as exc:
             message = str(self.redact(str(exc) or "宿主只读能力调用失败"))
             if any(marker in message for marker in HOST_DISABLED_MARKERS):
+                _mark_disabled(message)
                 raise _HostWebDisabledError(message) from None
             raise RuntimeError(message) from None
         if result is None:
@@ -1451,8 +1472,10 @@ class WebRouter:
                 self.redact(str(result.get("error") or "宿主只读能力调用失败，请检查该能力配置"))
             )
             if any(marker in message for marker in HOST_DISABLED_MARKERS):
+                _mark_disabled(message)
                 raise _HostWebDisabledError(message)
             raise RuntimeError(message)
+        self._host_disabled_until.pop(capability, None)
         if isinstance(result, dict) and "result" in result:
             return self.redact(result["result"])
         return self.redact(result)
@@ -1648,7 +1671,7 @@ class WebRouter:
         if pkind == "host":
             cap = "web.search" if kind == "search" else "web.fetch"
             mapped = self.services.apply_web_mapping(arguments, spec)
-            return await self._call_host_web(cap, **mapped)
+            return await self._call_host_web(cap, use_cache=False, **mapped)
         if pkind == "google_search_plugin":
             return await self._call_third_party(kind, arguments)
         if pkind == "mcp":
@@ -1699,7 +1722,7 @@ class WebRouter:
         if mode == "host":
             try:
                 cap = "web.search" if kind == "search" else "web.fetch"
-                return await self._call_host_web(cap, **arguments)
+                return await self._call_host_web(cap, use_cache=False, **arguments)
             except _HostWebDisabledError as exc:
                 raise RuntimeError(str(exc)) from None
         if mode == "google_search_plugin":

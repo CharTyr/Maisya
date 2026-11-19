@@ -8,7 +8,9 @@ from test_foundation import loaded
 from maisya.abilities import Profiles
 
 
-def _seed_maker_profile(profiles, *, name="maker", permission_mode="autonomous"):
+def _seed_maker_profile(
+    profiles, *, name="maker", permission_mode="autonomous", session_mode="persistent"
+):
     if name not in profiles.list():
         profiles.clone("default", name)
     (profiles.path / name / "profile.toml").write_text(
@@ -16,6 +18,7 @@ def _seed_maker_profile(profiles, *, name="maker", permission_mode="autonomous")
         'enabled = true\n'
         'bound = true\n'
         'access = "everyone"\n'
+        f'session_mode = "{session_mode}"\n'
         'environment = "sandbox"\n'
         'execution_mode = "sandbox"\n'
         f'permission_mode = "{permission_mode}"\n'

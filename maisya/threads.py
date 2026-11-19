@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .abilities import Profile
 from .bridge import record_return
+from .trust import format_stream_spec, parse_stream_spec
 from .data_scope import (
     STEP_METHODS_CONTEXT,
     can_read_scope,
@@ -161,6 +162,12 @@ _HOST_ABS_PATH_RE = re.compile(
 
 def _safe_tool_error_message(error: Exception, redact=None) -> str:
     """保留安全的工具业务报错，对系统底层 OS 路径与隐蔽凭据做兜底收敛。"""
+    if isinstance(error, FileNotFoundError):
+        return "目标文件不存在；请先用 workspace_file(action='list') 查看工作区已有文件，或核对相对路径。"
+    if isinstance(error, IsADirectoryError):
+        return "目标路径是目录而非文件；请指定具体文件路径。"
+    if isinstance(error, NotADirectoryError):
+        return "路径中的父级不是目录；请核对相对路径。"
     if isinstance(error, OSError) and not isinstance(error, PermissionError):
         if (
             getattr(error, "errno", None) is not None
@@ -393,7 +400,20 @@ class ThreadStore:
                     db.execute(
                         f"ALTER TABLE {tbl} ADD COLUMN state_note TEXT NOT NULL DEFAULT ''"
                     )
+                if tbl == "agent_workspaces" and "last_runs" not in cols:
+                    db.execute(
+                        "ALTER TABLE agent_workspaces ADD COLUMN last_runs TEXT NOT NULL DEFAULT '[]'"
+                    )
             ensure_scope_tables(db)
+            has_legacy_incoming = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='incoming_events'"
+            ).fetchone()
+            if has_legacy_incoming is not None:
+                legacy_cnt = db.execute(
+                    "SELECT COUNT(*) FROM incoming_events"
+                ).fetchone()[0]
+                if int(legacy_cnt or 0) == 0:
+                    db.execute("DROP TABLE incoming_events")
         safe_chmod(path, 0o600)
 
     def update_state_note(
@@ -423,6 +443,95 @@ class ThreadStore:
         else:
             with self.connect() as conn, conn:
                 _apply(conn)
+
+    def record_workspace_run(
+        self,
+        db,
+        workspace_id: str,
+        *,
+        thread_id: str,
+        user_id: str,
+        summary: str,
+        files: list[str] | tuple[str, ...] = (),
+        at: float | None = None,
+        redact=None,
+    ) -> None:
+        ws_id = str(workspace_id or "").strip()
+        if not ws_id:
+            return
+        row = db.execute(
+            "SELECT last_runs FROM agent_workspaces WHERE workspace_id=?",
+            (ws_id,),
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            existing = json.loads(row["last_runs"] or "[]")
+            if not isinstance(existing, list):
+                existing = []
+        except (TypeError, ValueError):
+            existing = []
+        clean_sum = str(summary or "").strip()
+        if callable(redact):
+            clean_sum = str(redact(clean_sum))
+        clean_sum = clean_sum[:160]
+        clean_files: list[str] = []
+        for f in files or ():
+            s = str(f or "").strip()
+            if callable(redact):
+                s = str(redact(s))
+            if s and s not in clean_files:
+                clean_files.append(s[:80])
+            if len(clean_files) >= 5:
+                break
+        if not clean_sum and not clean_files:
+            return
+        entry = {
+            "thread_id": str(thread_id or ""),
+            **({"user_id": str(user_id)} if str(user_id or "").strip() else {}),
+            "at": round(float(time.time() if at is None else at), 1),
+            **({"summary": clean_sum} if clean_sum else {}),
+            **({"files": clean_files} if clean_files else {}),
+        }
+        updated = [
+            item
+            for item in existing
+            if isinstance(item, dict) and item.get("thread_id") != entry["thread_id"]
+        ]
+        updated.append(entry)
+        updated = updated[-3:]
+        encoded = encode(updated)
+        while len(encoded) > 1200 and len(updated) > 1:
+            updated.pop(0)
+            encoded = encode(updated)
+        db.execute(
+            "UPDATE agent_workspaces SET last_runs=? WHERE workspace_id=?",
+            (encoded, ws_id),
+        )
+
+    def workspace_brief(self, workspace_id: str) -> dict:
+        ws_id = str(workspace_id or "").strip()
+        if not ws_id:
+            return {"name": "", "state_note": "", "recent_runs": []}
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT name, COALESCE(state_note, '') AS state_note, COALESCE(last_runs, '[]') AS last_runs "
+                "FROM agent_workspaces WHERE workspace_id=?",
+                (ws_id,),
+            ).fetchone()
+        if row is None:
+            return {"name": "", "state_note": "", "recent_runs": []}
+        try:
+            runs = json.loads(row["last_runs"] or "[]")
+            if not isinstance(runs, list):
+                runs = []
+        except (TypeError, ValueError):
+            runs = []
+        return {
+            "name": str(row["name"] or ""),
+            "state_note": str(row["state_note"] or "").strip()[:600],
+            "recent_runs": [r for r in runs if isinstance(r, dict)][-3:],
+        }
 
     def narrow_scope(self, thread_id: str, *extra_scopes: str) -> str:
         clean = [str(s or "").strip() for s in extra_scopes if str(s or "").strip()]
@@ -464,22 +573,101 @@ class ThreadStore:
     def record_publication_grant(
         self, thread_id: str, revision: int, target_chat: str, *, actor: str = ""
     ) -> None:
-        targets = {str(target_chat or "").strip()}
-        if target_chat and callable(getattr(self, "chat_aliases", None)):
+        raw_target = str(target_chat or "").strip()
+        if not raw_target:
+            return
+        targets = {raw_target}
+        if callable(getattr(self, "chat_aliases", None)):
             try:
                 targets.update(
-                    str(a).strip() for a in self.chat_aliases(target_chat, "") if a
+                    str(a).strip() for a in self.chat_aliases(raw_target, "") if a
                 )
             except (TypeError, ValueError):
                 pass
-        for cand in sorted(t for t in targets if t):
-            _record_publication_grant_db(
-                self,
-                thread_id=thread_id,
-                revision=int(revision or 0),
-                target_chat=cand,
-                actor=actor,
-            )
+        canon = ""
+        for cand in sorted(targets):
+            parsed = parse_stream_spec(cand)
+            if parsed is not None:
+                canon = format_stream_spec(*parsed)
+                break
+        chosen = canon or raw_target
+        _record_publication_grant_db(
+            self,
+            thread_id=thread_id,
+            revision=int(revision or 0),
+            target_chat=chosen,
+            actor=actor,
+        )
+
+    def compact_aged_events(
+        self,
+        *,
+        max_age_days: int = 14,
+        max_payload_bytes: int = 8192,
+        now: float | None = None,
+    ) -> dict:
+        """压缩超过留存窗口的非活跃线程超大事件载荷（保留最近全量细节与 FTS 检索）。"""
+        now_ts = time.time() if now is None else float(now)
+        cutoff = now_ts - max(1, int(max_age_days)) * 86400.0
+        min_bytes = max(256, int(max_payload_bytes))
+        compacted = 0
+        reclaimed = 0
+        with self.connect() as db, db:
+            rows = db.execute(
+                "SELECT e.seq, e.kind, e.payload FROM thread_events e "
+                "JOIN agent_threads t ON t.thread_id = e.thread_id "
+                "WHERE t.state NOT IN ('active', 'waiting') "
+                "AND e.kind IN ('tools', 'context_archive') "
+                "AND e.at < ? AND LENGTH(CAST(e.payload AS BLOB)) > ?",
+                (cutoff, min_bytes),
+            ).fetchall()
+            for r in rows:
+                raw_payload = str(r["payload"] or "")
+                orig_bytes = len(raw_payload.encode("utf-8"))
+                kind = str(r["kind"] or "")
+                try:
+                    parsed = json.loads(raw_payload)
+                except ValueError:
+                    parsed = None
+                if isinstance(parsed, dict) and parsed.get("compacted") is True:
+                    continue
+                summary_obj: dict = {
+                    "compacted": True,
+                    "kind": kind,
+                    "original_bytes": orig_bytes,
+                }
+                if kind == "tools" and isinstance(parsed, dict):
+                    call_names = []
+                    for c in (parsed.get("calls") or [])[:16]:
+                        if isinstance(c, dict):
+                            fn = (c.get("function") or {}).get("name") or c.get("name") or ""
+                            if fn:
+                                call_names.append(str(fn)[:48])
+                    summary_obj["tools"] = call_names
+                    summary_obj["result_count"] = len(parsed.get("results") or [])
+                elif kind == "context_archive" and isinstance(parsed, dict):
+                    handoff = str(parsed.get("handoff") or parsed.get("summary") or "")
+                    summary_obj["handoff"] = handoff[:240]
+                    summary_obj["message_count"] = len(parsed.get("messages") or [])
+                else:
+                    summary_obj["preview"] = raw_payload[:160]
+                compact_json = json.dumps(summary_obj, ensure_ascii=False, separators=(",", ":"))
+                new_bytes = len(compact_json.encode("utf-8"))
+                if new_bytes >= orig_bytes:
+                    continue
+                db.execute(
+                    "UPDATE thread_events SET payload=? WHERE seq=?",
+                    (compact_json, int(r["seq"])),
+                )
+                compacted += 1
+                reclaimed += orig_bytes - new_bytes
+        if compacted > 0:
+            try:
+                with self.connect() as db:
+                    db.execute("PRAGMA incremental_vacuum(64)")
+            except sqlite3.Error:
+                pass
+        return {"compacted_events": compacted, "reclaimed_bytes": reclaimed}
 
     def has_publication_grant(
         self, thread_id: str, revision: int, target_chat: str
@@ -663,6 +851,7 @@ class ThreadStore:
         workspace="",
         grant=None,
         fresh_workspace: bool = False,
+        share_workspace: bool = False,
     ):
         if owner not in {"chat", "self"}:
             raise ValueError("线程归属无效")
@@ -756,8 +945,12 @@ class ThreadStore:
                         binding = None
                         ws_name_to_bind = f"{workspace}_clean_{uuid.uuid4().hex[:6]}"
                 if binding:
-                    if previous and not _was_stopped_or_terminal(
-                        db, binding["thread_id"], str(previous["state"] or "")
+                    if (
+                        not share_workspace
+                        and previous
+                        and not _was_stopped_or_terminal(
+                            db, binding["thread_id"], str(previous["state"] or "")
+                        )
                     ):
                         updated = json.loads(encode(asdict(profile)))
                         prev_vis = str(
@@ -1158,8 +1351,33 @@ class ThreadStore:
         *,
         waiting=False,
         state=None,
+        redact=None,
     ):
         row = self.get(thread_id, chat_id)
+        now_ts = time.time()
+
+        def _record_ws_settlement(conn) -> None:
+            ws_id = str(row.get("workspace_id") or "").strip()
+            if not ws_id or waiting or not isinstance(result, dict):
+                return
+            if str(result.get("error") or "").strip():
+                return
+            att_files = [
+                str(att.get("name") or "")
+                for att in (result.get("attachments") or [])
+                if isinstance(att, dict) and str(att.get("name") or "").strip()
+            ]
+            self.record_workspace_run(
+                conn,
+                ws_id,
+                thread_id=thread_id,
+                user_id=str(row.get("user_id") or ""),
+                summary=str(result.get("text") or ""),
+                files=att_files,
+                at=now_ts,
+                redact=redact,
+            )
+
         if state == "done":
             with self.connect() as db, db:
                 cursor = db.execute(
@@ -1170,7 +1388,7 @@ class ThreadStore:
                         encode(history),
                         processed,
                         processed,
-                        time.time(),
+                        now_ts,
                         thread_id,
                     ),
                 )
@@ -1178,6 +1396,7 @@ class ThreadStore:
                     return False
                 event_seq = self.event(db, thread_id, "result", processed, result)
                 record_return(db, thread_id, processed, event_seq)
+                _record_ws_settlement(db)
                 records = db.execute(
                     'SELECT payload FROM thread_events WHERE thread_id=? AND kind IN ("input", "result", "question") ORDER BY seq',
                     (thread_id,),
@@ -1202,7 +1421,7 @@ class ThreadStore:
                     processed,
                     target_state,
                     int(waiting),
-                    time.time(),
+                    now_ts,
                     thread_id,
                     processed,
                 ),
@@ -1213,6 +1432,7 @@ class ThreadStore:
                 db, thread_id, "question" if waiting else "result", processed, result
             )
             record_return(db, thread_id, processed, event_seq)
+            _record_ws_settlement(db)
             records = db.execute(
                 'SELECT payload FROM thread_events WHERE thread_id=? AND kind IN ("input", "result", "question") ORDER BY seq',
                 (thread_id,),
@@ -1767,6 +1987,113 @@ class ThreadStore:
             db.execute(
                 'UPDATE agent_threads SET history=? WHERE thread_id=? AND state NOT IN ("closed", "archived")',
                 (encode(final_history), thread_id),
+            )
+        return True
+
+    def archive_cycle_history(
+        self, thread_id: str, chat_id: str, *, redact=None
+    ) -> bool:
+        """周期工作流新一轮开始前，将上一已完成周期的原始 history 归档进 context_archive 并收敛为交班摘要。"""
+        row = self.get(thread_id, chat_id, allow_self=(chat_id == "self"))
+        if row.get("state") != "idle":
+            return False
+        history = row.get("history") or []
+        if not history:
+            return False
+        if len(history) <= 2 and len(encode(history)) <= 4000:
+            return False
+        blocks = self._group_history_blocks(history)
+        with self.connect() as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute(
+                "SELECT state, history, summary, processed_revision, result "
+                "FROM agent_threads WHERE thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            if cur is None or cur["state"] != "idle":
+                return False
+            cur_history = json.loads(cur["history"] or "[]")
+            if not cur_history:
+                return False
+            archive_seq = self.event(
+                db,
+                thread_id,
+                "context_archive",
+                cur["processed_revision"],
+                {
+                    "history": cur_history,
+                    "previous_index": cur["summary"] or "",
+                    "reason": "recurring_cycle_rollover",
+                },
+            )
+            (
+                prior_events,
+                prior_runs,
+                prior_handoff,
+                prior_anchors,
+                prior_user_msgs,
+            ) = self._parse_prior_summary(cur["summary"])
+            goals, tools, highlights = self._collect_run_digest(
+                blocks, skip_indices=set()
+            )
+            try:
+                last_res = json.loads(cur["result"] or "{}")
+            except ValueError:
+                last_res = {}
+            res_text = (
+                str(last_res.get("text") or "").strip()
+                if isinstance(last_res, dict)
+                else ""
+            )
+            if res_text:
+                res_snip = str(redact(res_text) if redact else res_text)[:360]
+                if res_snip and res_snip not in highlights:
+                    highlights = [*highlights[-1:], res_snip]
+            merged_anchors = extract_exact_anchors(
+                cur_history, prior_anchors=prior_anchors, redact=redact
+            )
+            merged_user_msgs = extract_verbatim_user_messages(
+                cur_history, prior_messages=prior_user_msgs, redact=redact
+            )
+            final_handoff = build_static_handoff(
+                cur_history,
+                previous_handoff=prior_handoff,
+                anchors=merged_anchors,
+                user_messages=merged_user_msgs,
+                tools=tools,
+                highlights=highlights,
+                redact=redact,
+            )
+            run_entry = {
+                "archive_event": archive_seq,
+                "revision": cur["processed_revision"],
+                "goals": goals,
+                "tools": tools,
+                "highlights": highlights,
+            }
+            archive_events = [x for x in prior_events if x != archive_seq] + [
+                archive_seq
+            ]
+            archive_events = archive_events[-20:]
+            archived_runs = [
+                r for r in prior_runs if r.get("archive_event") != archive_seq
+            ] + [run_entry]
+            summary_obj = {
+                "mode": "token_v2",
+                "archive_event": archive_seq,
+                "archive_events": archive_events,
+                "read_tool": "thread_read",
+                "handoff": final_handoff,
+                "anchors": merged_anchors,
+                "user_messages": merged_user_msgs,
+                "note": "这是上一周期的交班摘要与精确锚点；完整历史已归档在本线程，核对细节时用 thread_read。",
+                "archived_runs": archived_runs,
+            }
+            while len(encode(summary_obj)) > 5600 and len(summary_obj["archived_runs"]) > 0:
+                summary_obj["archived_runs"].pop(0)
+            db.execute(
+                'UPDATE agent_threads SET summary=?, history="[]" WHERE thread_id=? AND state="idle"',
+                (encode(summary_obj), thread_id),
             )
         return True
 
@@ -2690,6 +3017,8 @@ class ThreadEngine:
         self.background_tasks: set[str] = set()
         self.chats = {}
         self.locks = {}
+        self._workspace_locks: dict[str, asyncio.Lock] = {}
+        self._workspace_lock_refs: dict[str, int] = {}
         self.waiters = {}
         self._coalesced_into: dict[str, dict[int, int]] = {}
         self._finishing: set[str] = set()
@@ -2896,13 +3225,16 @@ class ThreadEngine:
         auto_drain: bool = False,
         fresh: bool = False,
         reuse_primary: bool | None = None,
+        rollover_cycle: bool = False,
     ):
         self._validate_input(message, wait_seconds)
+        session_mode = getattr(profile, "session_mode", "ephemeral")
         is_persistent = (
             bool(reuse_primary)
             if reuse_primary is not None
-            else getattr(profile, "session_mode", "ephemeral") == "persistent"
+            else session_mode == "persistent"
         )
+        is_shared_workspace = (not is_persistent) and session_mode == "workspace"
         grant_dict = grant if isinstance(grant, dict) else {}
         is_admin_caller = bool(
             grant_dict.get("admin_verified")
@@ -3003,6 +3335,13 @@ class ThreadEngine:
                     )
                 try:
                     async with self.locks.setdefault(tid, asyncio.Lock()):
+                        if rollover_cycle and row.get("state") == "idle":
+                            await asyncio.to_thread(
+                                self.store.archive_cycle_history,
+                                tid,
+                                row["chat_id"],
+                                redact=self.redact,
+                            )
                         result, future = await self._send_locked(
                             tid,
                             message,
@@ -3024,7 +3363,9 @@ class ThreadEngine:
                 if not defer_if_full and not self._has_capacity(background=background):
                     raise ValueError("当前 Agent 线程已满，请稍后再试")
                 target_workspace = workspace or (
-                    f"profile_{profile.id}" if is_persistent else ""
+                    f"profile_{profile.id}"
+                    if (is_persistent or is_shared_workspace)
+                    else ""
                 )
                 row = await asyncio.to_thread(
                     self.store.create,
@@ -3037,8 +3378,10 @@ class ThreadEngine:
                     workspace=target_workspace,
                     grant=effective_grant,
                     fresh_workspace=bool(is_persistent and fresh),
+                    share_workspace=bool(is_shared_workspace),
                 )
                 tid = row["thread_id"]
+                reused_workspace_thread = int(row.get("revision") or 0) > 0
                 if is_persistent:
                     await asyncio.to_thread(
                         self.store.bind_primary_thread,
@@ -3049,6 +3392,17 @@ class ThreadEngine:
                     )
                 try:
                     async with self.locks.setdefault(tid, asyncio.Lock()):
+                        if (
+                            rollover_cycle
+                            and reused_workspace_thread
+                            and row.get("state") == "idle"
+                        ):
+                            await asyncio.to_thread(
+                                self.store.archive_cycle_history,
+                                tid,
+                                row["chat_id"],
+                                redact=self.redact,
+                            )
                         result, future = await self._send_locked(
                             tid,
                             message,
@@ -3066,7 +3420,7 @@ class ThreadEngine:
                         )
                 except BaseException:
                     self._prune_idle_state_locked(tid)
-                    if not reused_existing:
+                    if not reused_existing and not reused_workspace_thread:
                         try:
                             await asyncio.to_thread(self.store.delete_thread, tid)
                         except Exception:
@@ -3262,9 +3616,18 @@ class ThreadEngine:
         return self.model_catalog() if callable(self.model_catalog) else self.model_catalog
 
     async def _record_bg_tokens(
-        self, thread_id: str, row: dict | None, grant: dict | None, tokens: int
+        self,
+        thread_id: str,
+        row: dict | None,
+        grant: dict | None,
+        tokens: int,
+        *,
+        duration_ms: int = 0,
     ) -> None:
-        if tokens <= 0 or thread_id not in self.background_tasks:
+        if (tokens <= 0 and duration_ms <= 0) or thread_id not in self.background_tasks:
+            return
+        g = grant if isinstance(grant, dict) else {}
+        if g.get("bg_budget_exempt"):
             return
         rec_fn = (
             getattr(self.intents, "record_bg_usage", None)
@@ -3273,7 +3636,6 @@ class ThreadEngine:
         )
         if not callable(rec_fn):
             return
-        g = grant if isinstance(grant, dict) else {}
         src = str(g.get("bg_source") or "").strip()
         if not src:
             src = "heartbeat" if (row and row.get("owner") == "self") else "workflow"
@@ -3284,7 +3646,14 @@ class ThreadEngine:
                 if (not row or row.get("owner") == "self")
                 else f"chat:{row.get('chat_id') or ''}"
             )
-        await asyncio.to_thread(rec_fn, source=src, target=tgt, runs=0, tokens=int(tokens))
+        await asyncio.to_thread(
+            rec_fn,
+            source=src,
+            target=tgt,
+            runs=0,
+            tokens=max(0, int(tokens)),
+            duration_ms=max(0, int(duration_ms)),
+        )
 
     async def _run_tier2_compact(
         self,
@@ -3393,6 +3762,7 @@ class ThreadEngine:
         *,
         context_index="",
         memory_context="",
+        workspace_context="",
         legacy_escape=False,
     ):
         req = list(history)
@@ -3403,6 +3773,16 @@ class ThreadEngine:
                 else format_thread_history_prompt(context_index)
             )
             req = [{"role": "user", "content": block_text}, *req]
+        if workspace_context:
+            req = [
+                {
+                    "role": "user",
+                    "content": "<workspace_context>"
+                    + html.escape(workspace_context, quote=False)
+                    + "</workspace_context>",
+                },
+                *req,
+            ]
         if memory_context:
             req = [
                 {
@@ -3414,6 +3794,64 @@ class ThreadEngine:
                 *req,
             ]
         return req
+
+    async def _build_workspace_context(self, row: dict) -> str:
+        ws_id = str(row.get("workspace_id") or "").strip()
+        if not ws_id:
+            return ""
+        brief = await asyncio.to_thread(self.store.workspace_brief, ws_id)
+        snap = {"state_note": "", "files": [], "total_files": 0}
+        files_mgr = getattr(self.runtime, "files", None)
+        if files_mgr is not None and callable(
+            getattr(files_mgr, "read_workspace_snapshot", None)
+        ):
+            try:
+                snap = await completed_thread(
+                    files_mgr.read_workspace_snapshot, row, max_files=20
+                )
+            except (OSError, ValueError, RuntimeError):
+                snap = {"state_note": "", "files": [], "total_files": 0}
+        state_note = str(
+            snap.get("state_note") or brief.get("state_note") or ""
+        ).strip()
+        if state_note:
+            state_note = str(self.redact(state_note))[:600]
+        listed_files = [
+            f
+            for f in (snap.get("files") or [])
+            if isinstance(f, dict) and str(f.get("path") or "").strip()
+        ]
+        recent_runs = []
+        for entry in brief.get("recent_runs") or []:
+            if not isinstance(entry, dict):
+                continue
+            item = dict(entry)
+            if item.get("summary"):
+                item["summary"] = str(self.redact(str(item["summary"])))[:160]
+            if isinstance(item.get("files"), list):
+                item["files"] = [
+                    str(self.redact(str(f)))[:80]
+                    for f in item["files"][:5]
+                    if str(f or "").strip()
+                ]
+            recent_runs.append(item)
+        if not state_note and not listed_files and not recent_runs:
+            return ""
+        payload = {
+            "note": "以下是当前共享工作区的最新静态快照（独立干净会话起步，按需读写工作区文件即可）。",
+            **({"workspace": brief["name"]} if brief.get("name") else {}),
+            **({"state_note": state_note} if state_note else {}),
+            **(
+                {
+                    "files": listed_files[:20],
+                    "total_files": int(snap.get("total_files") or len(listed_files)),
+                }
+                if listed_files
+                else {}
+            ),
+            **({"recent_runs": recent_runs[-3:]} if recent_runs else {}),
+        }
+        return str(self.redact(encode(payload)))[:2400]
 
     @staticmethod
     def _effective_tool_schemas(profile: Profile) -> list[dict]:
@@ -3441,6 +3879,7 @@ class ThreadEngine:
         context_index: str,
         *,
         memory_context="",
+        workspace_context="",
         methods_text="",
     ) -> int:
         instructions = getattr(profile, "instructions", "") or ""
@@ -3456,6 +3895,17 @@ class ThreadEngine:
             + estimate_tokens(context_index or "")
             + estimate_tools_tokens(ThreadEngine._effective_tool_schemas(profile))
         )
+        if workspace_context:
+            tokens += estimate_messages_tokens(
+                [
+                    {
+                        "role": "user",
+                        "content": "<workspace_context>"
+                        + html.escape(workspace_context, quote=False)
+                        + "</workspace_context>",
+                    }
+                ]
+            )
         if memory_context:
             tokens += estimate_messages_tokens(
                 [
@@ -3488,6 +3938,10 @@ class ThreadEngine:
         history = []
         processed = 0
         had_error = False
+        ws_id = ""
+        ws_lock = None
+        ws_lock_registered = False
+        ws_lock_acquired = False
         try:
             row = await asyncio.to_thread(
                 self.store.get, thread_id, chat_id, allow_self=(chat_id == "self")
@@ -3503,9 +3957,31 @@ class ThreadEngine:
             in_flight_assistant = None
             in_flight_tools = []
             context_index = row["summary"]
-            deadline = asyncio.get_running_loop().time() + self.timeout
+            prof_timeout = int(getattr(profile, "timeout_seconds", 0) or 0)
+            effective_timeout = (
+                self.timeout
+                if self.timeout < 10
+                else (prof_timeout or self.timeout)
+            )
+            ws_id = str(row.get("workspace_id") or "").strip()
+            if ws_id:
+                ws_lock = self._workspace_locks.setdefault(ws_id, asyncio.Lock())
+                self._workspace_lock_refs[ws_id] = (
+                    self._workspace_lock_refs.get(ws_id, 0) + 1
+                )
+                ws_lock_registered = True
+                await asyncio.wait_for(
+                    ws_lock.acquire(), timeout=max(1.0, float(effective_timeout))
+                )
+                ws_lock_acquired = True
+            workspace_context = (
+                await self._build_workspace_context(row)
+                if (ws_id and not history and not context_index)
+                else ""
+            )
+            deadline = asyncio.get_running_loop().time() + effective_timeout
             overflow_retried = False
-            async with asyncio.timeout(self.timeout):
+            async with asyncio.timeout(effective_timeout):
                 for step_index in range(profile.max_steps or self.max_steps):
                     metadata = None
                     pending_full = await self._pending_inputs(thread_id, processed)
@@ -3726,6 +4202,7 @@ class ThreadEngine:
                             profile,
                             context_index,
                             memory_context=memory_context,
+                            workspace_context=workspace_context,
                             methods_text=methods_text,
                         )
                         prompt_tokens = overhead_tokens + estimate_messages_tokens(
@@ -3778,6 +4255,7 @@ class ThreadEngine:
                         history,
                         context_index=context_index,
                         memory_context=memory_context,
+                        workspace_context=workspace_context,
                         legacy_escape=(self._legacy_char_budget is not None),
                     )
                     step_grant_cur = (
@@ -3794,6 +4272,7 @@ class ThreadEngine:
                     }
                     tok_step = STEP_METHODS_CONTEXT.set(step_meta)
                     response = None
+                    step_t0 = time.monotonic()
                     try:
                         try:
                             response = await self.runtime.step(profile, request_history)
@@ -3854,8 +4333,13 @@ class ThreadEngine:
                             if raw_step_toks is not None
                             else extract_llm_tokens(response)
                         )
+                        step_dur_ms = max(0, int((time.monotonic() - step_t0) * 1000))
                         await self._record_bg_tokens(
-                            thread_id, row, step_grant_cur, step_toks
+                            thread_id,
+                            row,
+                            step_grant_cur,
+                            step_toks,
+                            duration_ms=step_dur_ms,
                         )
                     alive, changed = await self._boundary(
                         thread_id, processed, deadline
@@ -4092,6 +4576,7 @@ class ThreadEngine:
                         result,
                         history,
                         processed,
+                        redact=self.redact,
                     ):
                         if hasattr(self.runtime, "finished"):
                             finished = await completed_thread(
@@ -4199,6 +4684,7 @@ class ThreadEngine:
             self._finishing.add(thread_id)
 
             async def _finalize():
+                nonlocal ws_lock_acquired, ws_lock_registered
                 try:
                     if hasattr(self.runtime, "end"):
                         try:
@@ -4206,6 +4692,25 @@ class ThreadEngine:
                         except Exception:
                             pass
                 finally:
+                    if ws_lock_acquired and ws_lock is not None:
+                        try:
+                            ws_lock.release()
+                        except RuntimeError:
+                            pass
+                        ws_lock_acquired = False
+                    if ws_lock_registered and ws_id:
+                        rem = self._workspace_lock_refs.get(ws_id, 1) - 1
+                        ws_lock_registered = False
+                        if rem <= 0:
+                            self._workspace_lock_refs.pop(ws_id, None)
+                            if (
+                                ws_lock is not None
+                                and not ws_lock.locked()
+                                and self._workspace_locks.get(ws_id) is ws_lock
+                            ):
+                                self._workspace_locks.pop(ws_id, None)
+                        else:
+                            self._workspace_lock_refs[ws_id] = rem
                     async with self._submission_lock:
                         try:
                             thread_lock = self.locks.setdefault(

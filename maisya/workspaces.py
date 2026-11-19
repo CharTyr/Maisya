@@ -469,6 +469,57 @@ class Workspaces:
                     total_out += len(data)
             return items
 
+    def read_workspace_snapshot(self, row, *, max_files: int = 20) -> dict:
+        """只读提取工作区最新已提交检查点的 STATE.md 与 project/out 文件清单（零写锁、零 LLM 成本）。"""
+        workspace_id = str(row.get("workspace_id") or "").strip()
+        if not workspace_id or not workspace_id.startswith("ws_") or not workspace_id[3:].isalnum():
+            return {"state_note": "", "files": [], "total_files": 0}
+        durable = self.root / workspace_id
+        with self.capacity_lock():
+            pointer = durable / "current.json"
+            if not pointer.is_file() or path_is_link_like(pointer):
+                return {"state_note": "", "files": [], "total_files": 0}
+            try:
+                version = json.loads(pointer.read_text(encoding="utf-8")).get("version", "")
+            except (OSError, ValueError):
+                return {"state_note": "", "files": [], "total_files": 0}
+            if not re.fullmatch(r"v_[a-f0-9]{32}", version):
+                return {"state_note": "", "files": [], "total_files": 0}
+            source = durable / version
+            if not source.is_dir() or path_is_link_like(source):
+                return {"state_note": "", "files": [], "total_files": 0}
+            try:
+                all_files, _size = inventory(
+                    source,
+                    roots=("project", "out"),
+                    max_bytes=self.max_bytes,
+                    max_files=self.max_files,
+                )
+            except (OSError, ValueError):
+                return {"state_note": "", "files": [], "total_files": 0}
+            state_note = ""
+            state_path = source / "project" / "STATE.md"
+            if state_path.is_file() and not path_is_link_like(state_path):
+                try:
+                    with regular_open(source, "project/STATE.md") as handle:
+                        raw_state = handle.read(4096)
+                    if b"\x00" not in raw_state:
+                        state_note = str(
+                            self.redact(raw_state.decode("utf-8", errors="ignore").strip())
+                        )[:600]
+                except (OSError, ValueError):
+                    state_note = ""
+            cap = max(1, min(int(max_files or 20), 40))
+            listed = [
+                {"path": str(self.redact(rel)), "bytes": int(sz)}
+                for rel, sz in sorted(all_files)[:cap]
+            ]
+            return {
+                "state_note": state_note,
+                "files": listed,
+                "total_files": len(all_files),
+            }
+
     def usage(self):
         total = 0
         for path in self.root.rglob("*"):
@@ -481,6 +532,175 @@ class Workspaces:
             except FileNotFoundError:
                 continue
         return total
+
+    def storage_stats(self) -> dict:
+        """统计附件与工作区磁盘占用。"""
+        att_count = 0
+        att_bytes = 0
+        if self.artifacts.is_dir():
+            for p in self.artifacts.iterdir():
+                try:
+                    if not path_is_link_like(p) and p.is_file():
+                        att_count += 1
+                        att_bytes += p.lstat().st_size
+                except OSError:
+                    continue
+        ws_count = 0
+        ws_bytes = 0
+        for entry in self.root.iterdir():
+            if not entry.name.startswith("ws_") or path_is_link_like(entry) or not entry.is_dir():
+                continue
+            ws_count += 1
+            for sub in entry.rglob("*"):
+                try:
+                    if not path_is_link_like(sub) and sub.is_file():
+                        ws_bytes += sub.lstat().st_size
+                except OSError:
+                    continue
+        return {
+            "attachments_count": att_count,
+            "attachments_bytes": att_bytes,
+            "workspaces_count": ws_count,
+            "workspaces_bytes": ws_bytes,
+            "total_bytes": att_bytes + ws_bytes,
+        }
+
+    def prune_storage(
+        self,
+        *,
+        max_age_days: int = 30,
+        keep_recent_attachments: int = 50,
+        prune_orphan_dirs: bool = True,
+        min_orphan_age_seconds: float = 3600.0,
+        now: float | None = None,
+    ) -> dict:
+        """按留存窗口清理无引用的过期附件、孤儿附件文件与孤儿 ws_* 目录。"""
+        now_ts = time.time() if now is None else float(now)
+        cutoff = now_ts - max(1, int(max_age_days)) * 86400.0
+        keep_n = max(0, int(keep_recent_attachments))
+        min_orphan_age = max(0.0, float(min_orphan_age_seconds))
+        pruned_attachments = 0
+        pruned_orphan_files = 0
+        pruned_orphan_dirs = 0
+        reclaimed_bytes = 0
+
+        with self.capacity_lock():
+            with self.store.connect() as db, db:
+                active_tids = {
+                    str(r["thread_id"])
+                    for r in db.execute(
+                        "SELECT thread_id FROM agent_threads WHERE state IN ('queued', 'active', 'waiting')"
+                    ).fetchall()
+                }
+                att_rows = db.execute(
+                    "SELECT handle, thread_id, size, created FROM attachments ORDER BY created DESC, rowid DESC"
+                ).fetchall()
+                kept_handles: set[str] = set()
+                delete_handles: list[str] = []
+                for idx, row in enumerate(att_rows):
+                    handle = str(row["handle"] or "")
+                    tid = str(row["thread_id"] or "")
+                    created = float(row["created"] or 0.0)
+                    if idx < keep_n or created >= cutoff or tid in active_tids:
+                        kept_handles.add(handle)
+                        continue
+                    delete_handles.append(handle)
+                    fpath = self.artifacts / handle
+                    try:
+                        if fpath.is_file() and not path_is_link_like(fpath):
+                            reclaimed_bytes += fpath.lstat().st_size
+                            fpath.unlink()
+                    except OSError:
+                        pass
+                if delete_handles:
+                    for i in range(0, len(delete_handles), 200):
+                        chunk = delete_handles[i : i + 200]
+                        ph = ",".join("?" for _ in chunk)
+                        db.execute(
+                            f"DELETE FROM attachments WHERE handle IN ({ph})",
+                            chunk,
+                        )
+                    pruned_attachments = len(delete_handles)
+
+                known_ws: set[str] = set(self.quarantines.keys())
+                for tbl_sql in (
+                    "SELECT workspace_id FROM agent_workspaces WHERE workspace_id IS NOT NULL",
+                    "SELECT workspace_id FROM thread_context WHERE workspace_id IS NOT NULL",
+                ):
+                    for r in db.execute(tbl_sql).fetchall():
+                        ws_id = str(r["workspace_id"] or "").strip()
+                        if ws_id:
+                            known_ws.add(ws_id)
+                for r in db.execute("SELECT thread_id FROM agent_threads").fetchall():
+                    tid = str(r["thread_id"] or "").strip()
+                    if tid:
+                        known_ws.add(
+                            "ws_" + hashlib.sha256(tid.encode("utf-8")).hexdigest()[:24]
+                        )
+
+            # 清理磁盘上数据库无记录的孤儿附件文件
+            if self.artifacts.is_dir():
+                for fpath in self.artifacts.iterdir():
+                    name = fpath.name
+                    if not name.startswith("att_") or name in kept_handles:
+                        continue
+                    try:
+                        if path_is_link_like(fpath) or not fpath.is_file():
+                            continue
+                        st = fpath.lstat()
+                        if min_orphan_age > 0 and (now_ts - st.st_mtime) < min_orphan_age:
+                            continue
+                        reclaimed_bytes += st.st_size
+                        fpath.unlink()
+                        pruned_orphan_files += 1
+                    except OSError:
+                        continue
+
+            # 清理数据库已无引用的孤儿 ws_* 目录
+            if prune_orphan_dirs:
+                for entry in self.root.iterdir():
+                    name = entry.name
+                    if (
+                        not re.fullmatch(r"ws_[A-Za-z0-9]+", name)
+                        or name in known_ws
+                        or path_is_link_like(entry)
+                        or not entry.is_dir()
+                    ):
+                        continue
+                    try:
+                        st = entry.lstat()
+                        if min_orphan_age > 0 and (now_ts - st.st_mtime) < min_orphan_age:
+                            continue
+                    except OSError:
+                        continue
+                    lock_handle = None
+                    try:
+                        lock_handle = acquire_lock_handle(
+                            entry / ".write.lock", nonblocking=True
+                        )
+                    except (BlockingIOError, OSError):
+                        continue
+                    try:
+                        for sub in entry.rglob("*"):
+                            try:
+                                if not path_is_link_like(sub) and sub.is_file():
+                                    reclaimed_bytes += sub.lstat().st_size
+                            except OSError:
+                                continue
+                    finally:
+                        release_lock_handle(lock_handle)
+                    try:
+                        rmtree_safe(entry)
+                        pruned_orphan_dirs += 1
+                    except OSError:
+                        continue
+
+        return {
+            "pruned_attachments": pruned_attachments,
+            "pruned_orphan_files": pruned_orphan_files,
+            "pruned_orphan_dirs": pruned_orphan_dirs,
+            "reclaimed_bytes": reclaimed_bytes,
+        }
 
     @contextmanager
     def capacity_lock(self):
@@ -593,6 +813,29 @@ class Workspaces:
                                     hits.append(ref_compact[-200:])
                                     if any(chunk in compact for chunk in hits):
                                         raise ValueError("附件包含角色内部参考资料（references/），禁止直接外发原文件")
+                digest = hashlib.sha256(raw_bytes).hexdigest()
+                name = PurePosixPath(path).name
+                revision = row.get("revision", row.get("latest_revision", 0))
+                existing_att = None
+                with self.store.connect() as db:
+                    existing_att = db.execute(
+                        "SELECT handle, name, kind, size FROM attachments "
+                        "WHERE chat_id=? AND thread_id=? AND revision=? AND name=? AND digest=? "
+                        "ORDER BY created DESC LIMIT 1",
+                        (row["chat_id"], row["thread_id"], revision, name, digest),
+                    ).fetchone()
+                if existing_att is not None:
+                    ex_path = self.artifacts / str(existing_att["handle"])
+                    if ex_path.is_file() and not path_is_link_like(ex_path):
+                        result.append(
+                            {
+                                "handle": str(existing_att["handle"]),
+                                "name": str(existing_att["name"]),
+                                "kind": str(existing_att["kind"]),
+                                "bytes": int(existing_att["size"]),
+                            }
+                        )
+                        continue
                 source.seek(0)
                 with destination.open("xb") as output:
                     shutil.copyfileobj(source, output, 65536)
@@ -600,7 +843,6 @@ class Workspaces:
                     os.fsync(output.fileno())
                 safe_chmod(destination, 0o600)
                 digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-                name = PurePosixPath(path).name
                 kind = (
                     "image"
                     if destination.stat().st_size
@@ -616,7 +858,7 @@ class Workspaces:
                                 handle,
                                 row["chat_id"],
                                 row["thread_id"],
-                                row.get("revision", row.get("latest_revision", 0)),
+                                revision,
                                 name,
                                 kind,
                                 size,

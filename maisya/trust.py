@@ -514,6 +514,30 @@ class MessageStore:
             sender_name=str(sender_name or ""),
         )
 
+    def latest_sender_names(
+        self, session_ids: list[str] | tuple[str, ...] | set[str], user_ids: list[str] | tuple[str, ...] | set[str]
+    ) -> dict[str, str]:
+        sids = sorted({str(s).strip() for s in (session_ids or ()) if str(s or "").strip()})
+        uids = sorted({str(u).strip() for u in (user_ids or ()) if str(u or "").strip()})
+        if not sids or not uids:
+            return {}
+        out: dict[str, str] = {}
+        with closing(sqlite3.connect(self.path)) as db:
+            s_marks = ",".join("?" for _ in sids)
+            u_marks = ",".join("?" for _ in uids)
+            rows = db.execute(
+                f"SELECT user_id, sender_name FROM trusted_sources "
+                f"WHERE session_id IN ({s_marks}) AND user_id IN ({u_marks}) "
+                f"AND sender_name != '' ORDER BY received DESC",
+                [*sids, *uids],
+            ).fetchall()
+            for suid, sname in rows:
+                uid_s = str(suid or "").strip()
+                name_s = str(sname or "").strip()
+                if uid_s and name_s and uid_s not in out:
+                    out[uid_s] = name_s[:40]
+        return out
+
     def platform_for(self, session_id: str) -> str:
         route = self.route_for(session_id)
         if route and route.get("platform"):

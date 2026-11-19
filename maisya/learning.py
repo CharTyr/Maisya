@@ -1,6 +1,7 @@
 """工具恢复后的短方法笔记；与用户结果交付独立。"""
 
 import asyncio
+from collections import Counter
 import json
 import logging
 import re
@@ -34,6 +35,16 @@ class Learning:
         self.tasks = {}
         self.slot = asyncio.Semaphore(1)
         self.closed = False
+        self.skip_stats: Counter[str] = Counter()
+        self.scheduled_count: int = 0
+
+    def diagnostics(self) -> dict:
+        """返回自动经验提炼的调度与跳过原因计数，用于诊断触发阈值是否过严。"""
+        return {
+            "scheduled": self.scheduled_count,
+            "active": len(self.tasks),
+            "skipped": dict(self.skip_stats),
+        }
 
     async def _record_llm_tokens(self, response: object) -> None:
         toks = extract_llm_tokens(response)
@@ -125,18 +136,29 @@ class Learning:
 
     async def schedule(self, row):
         profile = row["profile_snapshot"]
-        if (
-            self.closed
-            or len(self.tasks) >= 8
-            or not is_autonomous_snapshot(profile)
-            or not row.get("result", {}).get("text")
-        ):
+        if self.closed:
+            self.skip_stats["closed"] += 1
+            return
+        if len(self.tasks) >= 8:
+            self.skip_stats["queue_full"] += 1
+            return
+        if not is_autonomous_snapshot(profile):
+            self.skip_stats["not_autonomous"] += 1
+            logger.debug("learning skipped (not_autonomous): %s", row.get("thread_id"))
+            return
+        if not row.get("result", {}).get("text"):
+            self.skip_stats["empty_text"] += 1
+            logger.debug("learning skipped (empty_text): %s", row.get("thread_id"))
             return
         trace = await completed_thread(self._trace, row)
-        if not trace or not await completed_thread(
-            self._receipt, row, "pending", reserve=True
-        ):
+        if not trace:
+            self.skip_stats["no_recovery_trace"] += 1
+            logger.debug("learning skipped (no_recovery_trace): %s", row.get("thread_id"))
             return
+        if not await completed_thread(self._receipt, row, "pending", reserve=True):
+            self.skip_stats["already_processed"] += 1
+            return
+        self.scheduled_count += 1
         key = row["thread_id"], row["completed_revision"]
         task = asyncio.create_task(self._learn(row, trace))
         self.tasks[key] = task
@@ -324,7 +346,7 @@ class Learning:
                             "role": "system",
                             "content": (
                                 "从工具执行与恢复轨迹提炼通用程序性经验。仅可使用给定的角色名、工具轨迹与已有技能公开摘要，严禁推测或包含人物、会话、主机、路径、资产、具体数值或凭据。\n"
-                                "严禁把单一会话或特定用户的题材偏好、兴趣领域或内容口味写入全局 note（NOTES.md）或 skill（SKILL.md）；全局笔记与技能只保留跨领域通用的工具用法与排障步骤。\n"
+                                "严禁把单一会话、群聊中特定群友的一次性业务上下文、题材偏好、兴趣领域或内容口味写入全局 note（NOTES.md）或 skill（SKILL.md）；全局笔记与技能只保留跨群、跨领域通用的工具用法与排障步骤。\n"
                                 '1) 若 existing_skills 或 bound_skills 中已有同领域技能可承接新经验，优先返回 {"op":"patch","skill_id":"已有技能ID","lesson":"一句祈使句避坑规则","note":"通用方法"}；\n'
                                 '2) 若确无覆盖技能且属全新可复用多步工作流，返回 {"op":"create","skill_id":"英文短横线ID","title":"类级中文名","description":"适用时机：...","rules":["规则1","规则2"],"pitfalls":["避坑1"],"rationale":"一句话说明为何新建"}（也可直接给 content）；\n'
                                 '3) 若仅适合写角色短笔记，返回 {"note":"通用方法"}；无可提炼内容返回 {"note":""}。'

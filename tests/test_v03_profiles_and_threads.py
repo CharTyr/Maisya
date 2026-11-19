@@ -108,7 +108,7 @@ def test_toolsets_definition_and_validation(tmp_path):
 def test_hermes_profile_crud_autogen_and_150_line_limit(tmp_path):
     profiles = Profiles(tmp_path / "profiles")
 
-    # Custom profile defaults to persistent session_mode and auto-generates PROFILE.md
+    # Custom profile defaults to workspace session_mode and auto-generates PROFILE.md
     keeper = profiles.create(
         "coc-keeper",
         name="克苏鲁守秘人",
@@ -129,7 +129,7 @@ def test_hermes_profile_crud_autogen_and_150_line_limit(tmp_path):
     )
     assert keeper.id == "coc-keeper"
     assert keeper.name == "克苏鲁守秘人"
-    assert keeper.session_mode == "persistent"
+    assert keeper.session_mode == "workspace"
     assert keeper.execution_mode == "host"
     assert keeper.permission_mode == "ask_risky"
     assert keeper.icon_shape == "shield"

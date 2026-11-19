@@ -554,7 +554,7 @@ def test_desktop_4_pages_onboarding_race_guard_and_interactions(reduced_motion: 
         create_payload = json.loads(create_call["arg"]["payload"])
         assert "connectors" not in create_payload
         assert create_payload["access"] == "everyone"
-        assert create_payload["session_mode"] == "persistent"
+        assert create_payload["session_mode"] == "workspace"
         assert isinstance(create_payload["mcp_servers"], list)
         assert isinstance(create_payload["apis"], list)
 

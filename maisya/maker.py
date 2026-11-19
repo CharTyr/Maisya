@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import inspect
+import io
 import json
 import os
 import re
@@ -105,6 +106,69 @@ def _playwright_render_hint(message: str) -> str:
             "playwright install chromium，或先改用纯文字/网页文件交付）"
         )
     return ""
+
+
+def _encode_rendered_image(
+    png_bytes: bytes,
+    output_path: str,
+    *,
+    default_mime: str = "image/png",
+    quality: int = 88,
+) -> tuple[bytes, str]:
+    """按目标后缀转换/压缩渲染产物，显著降低超长图卡体积。"""
+    suffix = Path(output_path).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".webp", ".png"}:
+        return png_bytes, default_mime
+    if suffix == ".png" and len(png_bytes) <= 600_000:
+        return png_bytes, default_mime
+    try:
+        from PIL import Image
+    except ImportError:
+        return png_bytes, default_mime
+    try:
+        with Image.open(io.BytesIO(png_bytes)) as img:
+            if suffix in {".jpg", ".jpeg"}:
+                if img.mode in ("RGBA", "LA") or (
+                    img.mode == "P" and "transparency" in img.info
+                ):
+                    rgba = img.convert("RGBA")
+                    bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                    bg.paste(rgba, mask=rgba.split()[3])
+                    rgb = bg
+                else:
+                    rgb = img.convert("RGB")
+                buf = io.BytesIO()
+                rgb.save(
+                    buf,
+                    format="JPEG",
+                    quality=max(60, min(int(quality), 95)),
+                    optimize=True,
+                    progressive=True,
+                )
+                return buf.getvalue(), "image/jpeg"
+            if suffix == ".webp":
+                buf = io.BytesIO()
+                img.save(
+                    buf,
+                    format="WEBP",
+                    quality=max(60, min(int(quality), 90)),
+                    method=4,
+                )
+                return buf.getvalue(), "image/webp"
+            # PNG > 600KB：先做无损压缩（不透明 RGBA 去 alpha 通道），仅当体积变小时替换
+            target = img
+            if target.mode == "RGBA":
+                alpha_extrema = target.getchannel("A").getextrema()
+                if alpha_extrema == (255, 255):
+                    target = target.convert("RGB")
+            buf = io.BytesIO()
+            target.save(buf, format="PNG", optimize=True, compress_level=9)
+            optimized = buf.getvalue()
+            if optimized and len(optimized) < len(png_bytes):
+                return optimized, "image/png"
+    except Exception:
+        pass
+    return png_bytes, default_mime
 
 
 class AgentRuntime(Scout):
@@ -482,10 +546,13 @@ class AgentRuntime(Scout):
         self.attachment_attempts.pop(thread_id, None)
 
     def effective_mode(self, profile):
-        if getattr(profile, "execution_mode", "host") == "sandbox" or profile.environment == "sandbox":
+        exec_mode = getattr(profile, "execution_mode", "host")
+        if exec_mode == "sandbox" or profile.environment == "sandbox":
             if self.docker_available():
                 return "sandbox"
             return "sandbox" if profile.requires_container else "light_workspace"
+        if exec_mode == "auto":
+            return "sandbox" if self.docker_available() else "host"
         if getattr(profile, "uses_workspace", False) or "exec" in getattr(profile, "toolsets", ()):
             return "host"
         return "readonly"
@@ -1314,13 +1381,19 @@ class AgentRuntime(Scout):
                 if not isinstance(image_b64, str) or len(image_b64) > 12 * 1024**2:
                     raise RuntimeError("宿主渲染未返回有效图片数据")
                 png_bytes = base64.b64decode(image_b64, validate=True)
+                out_bytes, out_mime = await completed_thread(
+                    _encode_rendered_image,
+                    png_bytes,
+                    output_path,
+                    default_mime=str(rendered.get("mime_type") or "image/png"),
+                )
                 write_res = await completed_thread(
-                    work.write_bytes, output_path, png_bytes
+                    work.write_bytes, output_path, out_bytes
                 )
                 await completed_thread(work.commit)
                 return {
                     **write_res,
-                    "mime_type": rendered.get("mime_type", "image/png"),
+                    "mime_type": out_mime,
                     "width": rendered.get("width"),
                     "height": rendered.get("height"),
                 }

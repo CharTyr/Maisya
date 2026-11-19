@@ -32,6 +32,7 @@ _ERROR_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:Error|Exception|Timeout)\b")
 _INTERNAL_USER_PREFIXES = (
     "<thread_inputs>",
     "<thread_history>",
+    "<workspace_context>",
     "<memory_context>",
     "<activity_interrupted>",
     "<previous_runs>",

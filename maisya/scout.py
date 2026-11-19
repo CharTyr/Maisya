@@ -148,7 +148,7 @@ TOOL_DEFINITIONS = {
     ),
     "html_render": definition(
         "html_render",
-        "离线把 HTML 卡片渲染为 PNG 图片保存到 out/ 目录（禁止外网访问，无需容器）。",
+        "离线把 HTML 卡片渲染为图片保存到 out/ 目录（支持 .png/.jpg/.webp，长图卡片推荐 .jpg 控体积；禁止外网访问，无需容器）。",
         {
             "html": {"type": "string", "minLength": 0, "maxLength": 524288},
             "html_path": STRING,
@@ -1051,6 +1051,7 @@ class Scout:
                 redact=self.redact,
             )
             cutoff = time.time() - hours * 3600 if hours is not None else None
+            tz_offset = self._resolve_tz_offset_minutes(None)
             scoped = []
             for item in messages:
                 if item.get("session_id") != chat_id:
@@ -1059,7 +1060,7 @@ class Scout:
                     ts_val = _numeric_ts(item.get("timestamp"))
                     if ts_val is not None and ts_val < cutoff:
                         continue
-                scoped.append(self._message_text(item))
+                scoped.append(self._message_text(item, tz_offset_minutes=tz_offset))
             if len(scoped) > 1 and all(
                 _numeric_ts(m.get("timestamp")) is not None for m in scoped
             ):
@@ -1135,7 +1136,9 @@ class Scout:
                                 ts_val = _numeric_ts(item.get("timestamp"))
                                 if ts_val is not None and ts_val < cutoff:
                                     continue
-                                enriched = self._message_text(item)
+                                enriched = self._message_text(
+                                    item, tz_offset_minutes=tz_offset
+                                )
                                 mid = str(enriched.get("message_id") or "")
                                 if mid:
                                     if mid in seen_ids:
@@ -1232,7 +1235,9 @@ class Scout:
                     redact=self.redact,
                 ).get("response", "")
             else:
-                result = self._message_text(raw)
+                result = self._message_text(
+                    raw, tz_offset_minutes=self._resolve_tz_offset_minutes(None)
+                )
         elif name == "memory_read":
             search_kwargs = {
                 "query": arguments["query"],
@@ -1312,7 +1317,7 @@ class Scout:
         )
 
     @staticmethod
-    def _message_text(raw):
+    def _message_text(raw, *, tz_offset_minutes: int = 480):
         info = raw.get("message_info") if isinstance(raw.get("message_info"), dict) else {}
         user_info = info.get("user_info") if isinstance(info.get("user_info"), dict) else {}
         additional = (
@@ -1320,11 +1325,22 @@ class Scout:
             if isinstance(info.get("additional_config"), dict)
             else {}
         )
+        raw_ts = raw.get("timestamp")
+        ts_val = _numeric_ts(raw_ts)
+        time_local = ""
+        if ts_val is not None:
+            try:
+                time_local = datetime.fromtimestamp(
+                    ts_val, tz=timezone(timedelta(minutes=int(tz_offset_minutes)))
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            except (OSError, OverflowError, ValueError):
+                time_local = ""
         return {
             "message_id": raw.get("message_id"),
             "sender_name": raw.get("sender_name") or user_info.get("user_nickname", ""),
             "user_id": raw.get("user_id") or user_info.get("user_id", ""),
-            "timestamp": raw.get("timestamp"),
+            "timestamp": raw_ts,
+            "time_local": time_local,
             "relayed": bool(additional.get("relayed_by_plugin")),
             "text": raw.get("processed_plain_text", ""),
             "attachments": [

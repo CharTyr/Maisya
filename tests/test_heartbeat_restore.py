@@ -445,7 +445,13 @@ async def test_admin_guidance_maps_phrases_to_mode(tmp_path):
         plugin.authorize_admin_source = lambda *a, **k: True
         plugin._pending_sources["chat"] = ["m-admin"]
         hook = await plugin.before_planner(
-            session_id="chat", tool_definitions=[{"name": "reply"}, {"name": "maisya_agent"}], items=[]
+            session_id="chat",
+            tool_definitions=[
+                {"name": "reply"},
+                {"name": "maisya_agent"},
+                {"name": "maisya_shape"},
+            ],
+            items=[],
         )
         text = hook["modified_kwargs"]["items"][-1]["parts"][0]["text"]
         assert "heartbeat_mode" in text and "per_chat_daily_proactive_limit" in text

@@ -948,9 +948,9 @@ class Intents:
         with self.store.connect() as db, db:
             if status == "deferred":
                 db.execute(
-                    "UPDATE intents SET status='pending', due_at=? "
+                    "UPDATE intents SET status='pending', wake_status=?, due_at=? "
                     "WHERE intent_id=? AND status='claimed'",
-                    (self.clock() + delay, intent_id),
+                    (wake_status, self.clock() + delay, intent_id),
                 )
             elif status == "done":
                 db.execute(
@@ -1021,16 +1021,43 @@ class Intents:
                     queue.append(spec)
         return seen
 
+    @staticmethod
+    def _canonical_social_key(chat_id: str, alias_ids: list[str]) -> str:
+        """为 social_state 写入挑选唯一规范键（优先 <platform>:<group|private>:<id>），避免按别名写 7 行。"""
+        for cand in (chat_id, *alias_ids):
+            parsed = parse_stream_spec(str(cand or "").strip())
+            if parsed is not None:
+                return format_stream_spec(*parsed)
+        return str(chat_id or "").strip()
+
     def note_received(self, chat_id, *, engaged: bool = True, aliases=()):
         if not engaged:
             return
         with self.store.connect() as db, db:
             alias_ids = self._social_aliases(db, chat_id, aliases)
-            for alias in alias_ids:
+            canon = self._canonical_social_key(chat_id, alias_ids)
+            prev_last = 0.0
+            if alias_ids:
+                all_ph = ",".join("?" for _ in alias_ids)
+                lp_row = db.execute(
+                    f"SELECT MAX(last_proactive) AS lp FROM social_state WHERE chat_id IN ({all_ph})",
+                    alias_ids,
+                ).fetchone()
+                if lp_row and lp_row["lp"]:
+                    prev_last = float(lp_row["lp"])
+            others = [a for a in alias_ids if a and a != canon]
+            if others:
+                ph = ",".join("?" for _ in others)
                 db.execute(
-                    "INSERT INTO social_state (chat_id, locked) VALUES (?, 0) "
-                    "ON CONFLICT(chat_id) DO UPDATE SET locked=0",
-                    (alias,),
+                    f"DELETE FROM social_state WHERE chat_id IN ({ph})",
+                    others,
+                )
+            if canon:
+                db.execute(
+                    "INSERT INTO social_state (chat_id, locked, last_proactive) VALUES (?, 0, ?) "
+                    "ON CONFLICT(chat_id) DO UPDATE SET locked=0, "
+                    "last_proactive=MAX(social_state.last_proactive, excluded.last_proactive)",
+                    (canon, prev_last),
                 )
 
     def in_sleep_window(self, sleep_window="", *, now=None, tz_offset_minutes=None):
@@ -1347,12 +1374,20 @@ class Intents:
         now = self.clock()
         with self.store.connect() as db, db:
             alias_ids = self._social_aliases(db, chat_id, aliases)
-            for alias in alias_ids:
+            canon = self._canonical_social_key(chat_id, alias_ids)
+            others = [a for a in alias_ids if a and a != canon]
+            if others:
+                ph = ",".join("?" for _ in others)
+                db.execute(
+                    f"DELETE FROM social_state WHERE chat_id IN ({ph})",
+                    others,
+                )
+            if canon:
                 db.execute(
                     "INSERT INTO social_state (chat_id, locked, last_proactive) "
                     "VALUES (?, 1, ?) ON CONFLICT(chat_id) DO UPDATE SET "
                     "locked=1, last_proactive=excluded.last_proactive",
-                    (alias, now),
+                    (canon, now),
                 )
 
     def _day_bounds(self, now, *, tz_offset_minutes=None):
