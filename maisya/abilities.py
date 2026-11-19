@@ -886,7 +886,11 @@ class Profiles:
             environment = "readonly"
 
         permission_mode = _normalize_permission_mode(config.get("permission_mode", "ask_risky"))
-        default_session = "ephemeral" if resolved_id in BUILTIN_PROFILES else "workspace"
+        default_session = (
+            "ephemeral"
+            if resolved_id in BUILTIN_PROFILES and resolved_id != "digest"
+            else "workspace"
+        )
         session_mode = _normalize_session_mode(config.get("session_mode", default_session))
 
         icon_shape = config.get("icon_shape", "compass")

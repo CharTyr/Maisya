@@ -627,3 +627,22 @@ async def test_planner_admin_two_tier_slimming_and_memory_soft_cap(tmp_path: Pat
         assert len(expanded_text) > len(casual_text) + 300
     finally:
         await plugin.on_unload()
+
+
+def test_legacy_digest_profile_without_session_mode_defaults_to_workspace(
+    tmp_path: Path,
+):
+    profiles = Profiles(tmp_path / "profiles")
+    # 模拟存量升级场景：旧版 profile.toml 中未写入 session_mode 字段
+    for pid in ("default", "scout", "digest"):
+        toml_path = profiles.path / pid / "profile.toml"
+        lines = [
+            ln
+            for ln in toml_path.read_text(encoding="utf-8").splitlines()
+            if not ln.strip().startswith("session_mode")
+        ]
+        toml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert profiles.get("default").session_mode == "ephemeral"
+    assert profiles.get("scout").session_mode == "ephemeral"
+    assert profiles.get("digest").session_mode == "workspace"
