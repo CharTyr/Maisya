@@ -168,7 +168,7 @@ async def test_p0_1_on_config_update_three_way_merge_and_chat_disabled_notice(tm
         await plugin.persist_settings(runtime_custom)
         assert plugin.settings.enabled_chats == [f"qq:group:{TEST_GROUP_ID}"]
 
-        # 2. 模拟宿主机只改了 config.toml 的 [sandbox] 字段，宿主推送全量 config.toml（其余字段仍为初始默认）
+        # 2. 模拟宿主机只改了 config.toml 的 [sandbox] 字段，宿主推送全量 config.toml（且真实宿主 1.4.6 传 version=""）
         updated_toml = {
             "plugin": {"enabled": True, "config_version": "0.1.0"},
             "enabled_chats": [],
@@ -181,7 +181,7 @@ async def test_p0_1_on_config_update_three_way_merge_and_chat_disabled_notice(tm
             "sleep_window": "",
             "sandbox": {"enabled": True, "image": "maisya-sandbox:latest", "runtime": ""},
         }
-        await plugin.on_config_update("self", updated_toml, 2)
+        await plugin.on_config_update("self", updated_toml, "")
 
         # sandbox 改动生效，但运行期自定义的 7 项配置必须完整保留！
         assert plugin.settings.sandbox.enabled is True
@@ -192,6 +192,11 @@ async def test_p0_1_on_config_update_three_way_merge_and_chat_disabled_notice(tm
         assert plugin.settings.agent_timeout == 300
         assert plugin.settings.web_provider == "google_search_plugin"
         assert plugin.settings.ui_style == "auto"
+        assert plugin.settings.sleep_window == "01-08"
+
+        # 2b. 宿主热更新传 version=None 时同样走三路合并，不得清空运行期设置
+        await plugin.on_config_update("self", updated_toml, None)
+        assert plugin.settings.enabled_chats == [f"qq:group:{TEST_GROUP_ID}"]
         assert plugin.settings.sleep_window == "01-08"
 
         # 3. 再次在 config.toml 显式改动 agent_timeout=240（相对上次 base=180 有变），应采纳 240 且保留 enabled_chats

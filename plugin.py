@@ -1512,7 +1512,8 @@ class MaisyaPlugin(MaiBotPlugin):
             file_settings = Settings.model_validate(config_data)
             file_dump = file_settings.model_dump()
             settings = file_settings
-            if version not in (0, "", None) and self.data_root:
+            is_internal_persist = type(version) is int and version == 0
+            if not is_internal_persist and self.data_root:
                 saved_raw = await asyncio.to_thread(
                     MemoryLayers._bytes, self.data_root / "settings.json"
                 )
@@ -1610,7 +1611,7 @@ class MaisyaPlugin(MaiBotPlugin):
                         self.data_root / "settings.json",
                         encoded,
                     )
-                if version not in (0, "", None):
+                if not is_internal_persist:
                     base_encoded = json.dumps(file_dump, ensure_ascii=False).encode()
                     await asyncio.to_thread(
                         atomic_private_write,
