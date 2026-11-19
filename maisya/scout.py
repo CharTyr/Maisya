@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from .abilities import Profile
 from .context_budget import is_context_overflow_error
 from .intents import extract_llm_tokens
+from .tool_guard import is_transient_llm_error
 
 
 BG_COMPACTION_TOKENS: ContextVar[list[int] | None] = ContextVar(
@@ -718,6 +719,48 @@ class Scout:
         self.tz_offset_minutes = tz_offset_minutes
         self._model_cooldown: dict[str, float] = {}
         self._no_temperature_models: dict[str, float] = {}
+        self._model_health: dict[str, dict] = {}
+
+    def _record_model_health(
+        self,
+        model: str,
+        *,
+        ok: bool,
+        timeout: bool = False,
+        error: str = "",
+        latency_ms: int = 0,
+    ) -> None:
+        key = str(model or "").strip() or "(default_slot)"
+        rec = self._model_health.get(key)
+        if rec is None:
+            if len(self._model_health) >= 64:
+                self._model_health.pop(next(iter(self._model_health)), None)
+            rec = {
+                "ok": 0,
+                "errors": 0,
+                "timeouts": 0,
+                "consecutive_failures": 0,
+                "last_error": "",
+                "last_latency_ms": 0,
+                "updated_at": 0.0,
+            }
+            self._model_health[key] = rec
+        rec["updated_at"] = round(time.time(), 3)
+        rec["last_latency_ms"] = max(0, int(latency_ms))
+        if ok:
+            rec["ok"] += 1
+            rec["consecutive_failures"] = 0
+        else:
+            rec["errors"] += 1
+            if timeout:
+                rec["timeouts"] += 1
+            rec["consecutive_failures"] += 1
+            if error:
+                rec["last_error"] = str(self.redact(error))[:180]
+
+    def model_health_snapshot(self) -> dict[str, dict]:
+        """返回各模型（含默认槽位）最近调用成功率、超时次数与最近延迟快照。"""
+        return {k: dict(v) for k, v in self._model_health.items()}
 
     def _resolve_tz_offset_minutes(self, tz_offset_minutes: int | None = None) -> int:
         if tz_offset_minutes is not None:
@@ -942,7 +985,10 @@ class Scout:
             return result
 
         last_error: Exception | None = None
-        for model in candidates:
+        auto_default_tried = "" in candidates
+
+        async def _try_model(model: str) -> dict | None:
+            nonlocal last_error
             step_now = time.monotonic()
             self._prune_no_temperature_models(step_now)
             skip_temp = bool(
@@ -953,6 +999,7 @@ class Scout:
                 if profile.temperature is not None and not skip_temp
                 else {}
             )
+            call_t0 = time.monotonic()
             try:
                 try:
                     result = await _invoke_once(model, model_extra)
@@ -972,14 +1019,46 @@ class Scout:
                         redacted = {**redacted, "_maisya_step_tokens": step_tokens}
                 if model:
                     self._model_cooldown.pop(model, None)
+                self._record_model_health(
+                    model,
+                    ok=True,
+                    latency_ms=int((time.monotonic() - call_t0) * 1000),
+                )
                 return redacted
             except (RuntimeError, ValueError, OSError, TimeoutError) as exc:
                 if is_context_overflow_error(exc):
                     raise
                 last_error = exc
+                err_low = str(exc or "").lower()
+                is_timeout = isinstance(exc, TimeoutError) or (
+                    "timeout" in err_low or "timed out" in err_low
+                )
+                self._record_model_health(
+                    model,
+                    ok=False,
+                    timeout=is_timeout,
+                    error=str(exc),
+                    latency_ms=int((time.monotonic() - call_t0) * 1000),
+                )
                 if model and _is_model_unavailable_error(exc):
                     self._mark_model_cooldown(model, time.monotonic())
-                continue
+                return None
+
+        for model in candidates:
+            outcome = await _try_model(model)
+            if outcome is not None:
+                return outcome
+        if (
+            not auto_default_tried
+            and last_error is not None
+            and (
+                is_transient_llm_error(last_error)
+                or _is_model_unavailable_error(last_error)
+            )
+        ):
+            outcome = await _try_model("")
+            if outcome is not None:
+                return outcome
         detail = str(self.redact(str(last_error))) if last_error is not None else ""
         raise RuntimeError(
             f"当前角色的模型均未返回可用结果：{detail}"

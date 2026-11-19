@@ -589,4 +589,4 @@ async def execute_shape(
         return _redact(plugin, await _handle_profile(plugin, op=resolved_op, target=target, base=base, patch=patch, content=content, author=author))
     if area in file_areas:
         return _redact(plugin, await _handle_file(plugin, kind=area, op=resolved_op, target=target, target_chat=target_chat, document=document, content=content, patch=patch, version=version, expected_version=expected_version, current_chat_id=current_chat_id, current_platform=current_platform, author=author))
-    raise ValueError(_format_unknown_shape_action(area))
+    raise ValueError(_format_unknown_shape_action(area, target_chat=target_chat, source_msg_id=source_msg_id))

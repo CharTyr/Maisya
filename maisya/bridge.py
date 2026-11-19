@@ -766,36 +766,67 @@ class Bridge:
 
     def pending_admin_direct_attachments(self, chat_id: str) -> list[dict]:
         """Return un-delivered offered admin_direct attachment rows for a session."""
-        ids = set(self._offered.get(chat_id) or ())
-        if not chat_id or not ids:
+        return [
+            item
+            for item in self.pending_offered_attachments(chat_id)
+            if item.get("admin_direct")
+        ]
+
+    def pending_offered_attachments(self, chat_id: str) -> list[dict]:
+        """Return un-delivered offered attachment rows (any route) for a session."""
+        if not chat_id:
             return []
+        ids = set(self._offered.get(chat_id) or ())
+        manual_rows = list((self._manual.get(chat_id) or {}).values())
+        if not ids and not manual_rows:
+            return []
+        pending: list[dict] = []
+        seen: set[tuple[str, int]] = set()
         with self.store.connect() as db:
-            rows = self._rows(db, chat_id, ids)
-            pending = []
-            for row in rows:
-                if row.get("return_chat_id") != chat_id or not _grant_admin_direct(
-                    row.get("raw_grant")
-                ):
+            db_rows = self._rows(db, chat_id, ids) if ids else []
+            for row in [*db_rows, *manual_rows]:
+                if row.get("archived"):
+                    continue
+                ret_chat = str(row.get("return_chat_id") or row.get("chat_id") or "")
+                if ret_chat and ret_chat != chat_id:
                     continue
                 attachments = (row.get("result") or {}).get("attachments") or []
-                if not any(
-                    isinstance(item, dict)
-                    and str(item.get("handle") or "").startswith("att_")
+                handles = [
+                    str(item.get("handle") or "")
                     for item in attachments
-                ):
+                    if isinstance(item, dict)
+                    and str(item.get("handle") or "").startswith("att_")
+                ]
+                if not handles:
+                    continue
+                tid = str(row.get("thread_id") or "")
+                rev = int(row.get("revision") or 0)
+                if not tid or (tid, rev) in seen:
                     continue
                 delivered = db.execute(
                     "SELECT 1 FROM result_deliveries WHERE thread_id=? AND revision=? AND destination=?",
-                    (row["thread_id"], row["revision"], chat_id),
+                    (tid, rev, chat_id),
                 ).fetchone()
                 if delivered is not None:
                     continue
                 inp = db.execute(
                     "SELECT at FROM thread_events WHERE thread_id=? AND kind='input' AND revision=? ORDER BY seq DESC LIMIT 1",
-                    (row["thread_id"], row["revision"]),
+                    (tid, rev),
                 ).fetchone()
-                row["input_at"] = float(inp["at"] or 0.0) if inp else 0.0
-                pending.append(row)
+                seen.add((tid, rev))
+                enriched = dict(row)
+                enriched["thread_id"] = tid
+                enriched["revision"] = rev
+                enriched["handles"] = handles
+                enriched["input_at"] = float(inp["at"] or 0.0) if inp else 0.0
+                enriched["admin_direct"] = bool(
+                    row.get("return_chat_id") == chat_id
+                    and (
+                        row.get("admin_direct")
+                        or _grant_admin_direct(row.get("raw_grant"))
+                    )
+                )
+                pending.append(enriched)
         return pending
 
     async def end_turn(self, chat_id):

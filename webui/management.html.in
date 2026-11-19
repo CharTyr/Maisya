@@ -2489,6 +2489,71 @@
         return;
       }
 
+      if (ev.target.closest("#pr-btn-templates")) {
+        const scrim = $("#pr-tpl-scrim");
+        const listEl = $("#pr-tpl-list");
+        const fbEl = $("#pr-tpl-fb");
+        if (scrim) scrim.hidden = false;
+        if (fbEl) { fbEl.textContent = ""; fbEl.className = "mil-feedback"; }
+        if (listEl) listEl.innerHTML = `<div class="mil-hint">正在读取场景模板…</div>`;
+        const res = await hostRpc("read", "templates", {});
+        if (disposed || sig?.aborted) return;
+        if (!res?.success) {
+          if (fbEl) { fbEl.textContent = res?.error || "模板读取失败"; fbEl.className = "mil-feedback mil-feedback--err"; }
+          if (listEl) listEl.innerHTML = "";
+          return;
+        }
+        const modeMap = { workspace: "共享工作区", persistent: "常驻房间", ephemeral: "单次任务" };
+        const items = Array.isArray(res.templates) ? res.templates : [];
+        if (listEl) {
+          listEl.innerHTML = items.map((t) => {
+            const mTxt = modeMap[t.session_mode] || t.session_mode || "共享工作区";
+            const btnTxt = t.installed ? "已存在 · 启用并同步" : "+ 一键套用";
+            return `<div class="ms-entry-row" style="align-items:flex-start;gap:10px">
+              <div class="ms-entry-meta" style="min-width:0;flex:1 1 auto">
+                <div class="mil-row" style="gap:6px;align-items:center;flex-wrap:wrap">
+                  <strong class="ms-entry-title">${esc(t.name)}</strong>
+                  <span class="mil-tag">${esc(mTxt)}</span>
+                  ${t.installed ? `<span class="mil-tag mil-tag--ok">已安装</span>` : ""}
+                </div>
+                <span class="ms-entry-code" style="white-space:normal">${esc(t.tagline)}</span>
+                <span class="mil-hint" style="white-space:normal">试试这样说：${esc(t.try_prompt || "")}</span>
+              </div>
+              <button type="button" class="mil-key mil-key--sm mil-key--hot" style="flex-shrink:0" data-tpl-apply="${esc(t.id)}" data-tpl-name="${esc(t.name)}">${esc(btnTxt)}</button>
+            </div>`;
+          }).join("") || `<div class="mil-hint">暂无可用场景模板。</div>`;
+        }
+        return;
+      }
+
+      if (ev.target.closest("#pr-tpl-close") || ev.target === $("#pr-tpl-scrim")) {
+        const scrim = $("#pr-tpl-scrim");
+        if (scrim) scrim.hidden = true;
+        return;
+      }
+
+      const tplApplyBtn = ev.target.closest("[data-tpl-apply]");
+      if (tplApplyBtn) {
+        const tid = tplApplyBtn.dataset.tplApply || "";
+        const tname = tplApplyBtn.dataset.tplName || tid;
+        const fbEl = $("#pr-tpl-fb");
+        tplApplyBtn.disabled = true;
+        const res = await hostRpc("write", "template_apply", { template_id: tid });
+        tplApplyBtn.disabled = false;
+        if (disposed || sig?.aborted) return;
+        if (!res?.success) {
+          if (fbEl) { fbEl.textContent = res?.error || "套用模板失败"; fbEl.className = "mil-feedback mil-feedback--err"; }
+          return;
+        }
+        const scrim = $("#pr-tpl-scrim");
+        if (scrim) scrim.hidden = true;
+        pState.creating = false;
+        pState.selectedId = res.profile_id || pState.selectedId;
+        await loadProfiles();
+        say(`已套用「${tname}」（${res.profile_id}）${res.try_prompt ? ` · 试着在群里说：${res.try_prompt}` : ""}`);
+        return;
+      }
+
       if (ev.target.closest("#pkg-close") || ev.target === $("#pkg-scrim")) {
         closePkgModal();
         return;
@@ -2667,6 +2732,7 @@
     document.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape" || activePage !== "abilities" || abCtrl?.getSub?.() !== "profiles") return;
       if (window.MaisyaUI?.isConfirmOpen?.() || ev.target?.closest?.("#ms-confirm-dialog")) return;
+      if (!$("#pr-tpl-scrim")?.hidden) { $("#pr-tpl-scrim").hidden = true; $("#pr-btn-templates")?.focus(); return; }
       if (!$("#pkg-scrim")?.hidden) { closePkgModal(); return; }
       const drop = $("#pr-model-dropdown");
       if (drop && !drop.hidden) {
@@ -3731,8 +3797,13 @@
           const nm = typeof a === "string" ? a : (a?.name || a?.api_name || a?.api || "");
           const pid = typeof a === "object" && a?.plugin_id ? `${a.plugin_id}.${nm}` : nm;
           const desc = typeof a === "object" && a?.description ? a.description : "宿主发现的跨插件接口";
+          const safeRo = typeof a === "object" ? (a?.safe_readonly !== false) : true;
+          const unsafeHint = typeof a === "object" && a?.unsafe_reason ? a.unsafe_reason : "含写操作词，禁止快捷按只读挂载";
           if (nm && !String(nm).startsWith("maisya_") && !regApiNames.has(nm) && !regApiNames.has(pid)) {
-            rows.push(`<div class="ms-entry-row"><div class="ms-entry-meta"><strong class="ms-entry-title mono">${esc(nm)}</strong><span class="ms-entry-code">${esc(desc)}</span></div><button type="button" class="mil-key mil-key--sm" data-conn-reg-api="${esc(nm)}" data-conn-reg-desc="${esc(desc)}">+ 登记给角色使用</button></div>`);
+            const actionHtml = safeRo
+              ? `<div class="mil-row" style="gap:6px;flex-shrink:0;flex-wrap:wrap"><button type="button" class="mil-key mil-key--sm mil-key--hot" data-conn-mount-api="${esc(nm)}" data-conn-mount-desc="${esc(desc)}">+ 挂载到默认角色</button><button type="button" class="mil-key mil-key--sm" data-conn-reg-api="${esc(nm)}" data-conn-reg-desc="${esc(desc)}">仅登记</button></div>`
+              : `<span class="mil-tag mil-tag--warn" title="${esc(unsafeHint)}">写操作接口 · 禁用快捷挂载</span>`;
+            rows.push(`<div class="ms-entry-row"><div class="ms-entry-meta"><strong class="ms-entry-title mono">${esc(nm)}</strong><span class="ms-entry-code" style="white-space:normal">${esc(desc)}</span></div>${actionHtml}</div>`);
           }
         });
         discEl.innerHTML = rows.length
@@ -3894,6 +3965,23 @@
         if (!r?.success) { sayConn(r?.error || "移除外部连接失败", true); return; }
         if (cState.editingOrigName === name) resetConnForm();
         sayConn(`已移除连接 ${name}`);
+        abCtrl?.markProfilesStale?.();
+        await loadConnectors();
+        return;
+      }
+      const mountApiBtn = ev.target.closest("[data-conn-mount-api]");
+      if (mountApiBtn) {
+        const rawApi = mountApiBtn.dataset.connMountApi || "";
+        const desc = mountApiBtn.dataset.connMountDesc || "";
+        mountApiBtn.disabled = true;
+        const r = await hostRpc("write", "mount_readonly_api", {
+          api_name: rawApi,
+          profile_id: "default",
+          description: desc,
+        });
+        mountApiBtn.disabled = false;
+        if (!r?.success) { sayConn(r?.error || "挂载只读插件接口失败", true); return; }
+        sayConn(`已将只读接口 ${rawApi} 登记为 ${r.handle || rawApi} 并挂载到默认角色`);
         abCtrl?.markProfilesStale?.();
         await loadConnectors();
         return;
@@ -5447,6 +5535,45 @@
         const nextT = themeChoice.dataset.themeChoice;
         $$("#set-theme-seg [data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b === themeChoice)));
         await setUiStylePreference(nextT);
+        return;
+      }
+      if (ev.target.closest("#set-btn-doctor")) {
+        const btn = $("#set-btn-doctor");
+        const sumEl = $("#set-doctor-summary");
+        const listEl = $("#set-doctor-results");
+        if (btn) btn.disabled = true;
+        if (sumEl) sumEl.textContent = "正在运行 6 项系统体检…";
+        const r = await hostRpc("read", "doctor", {});
+        if (btn) btn.disabled = false;
+        if (disposed || sig?.aborted) return;
+        if (!r?.success) {
+          if (sumEl) sumEl.textContent = r?.error || "系统体检失败";
+          saySet(r?.error || "系统体检失败", true);
+          return;
+        }
+        if (sumEl) sumEl.textContent = r.summary || "体检完成";
+        const tagMap = {
+          ok: ["mil-tag--ok", "正常"],
+          info: ["", "提示"],
+          warn: ["mil-tag--warn", "建议关注"],
+          error: ["mil-tag--err", "异常"],
+        };
+        const items = Array.isArray(r.checks) ? r.checks : [];
+        if (listEl) {
+          listEl.hidden = items.length === 0;
+          listEl.innerHTML = items.map((c) => {
+            const [cls, lbl] = tagMap[c.status] || ["", c.status || "状态"];
+            const fixLine = c.fix ? `<span class="mil-hint" style="white-space:normal">建议：${esc(c.fix)}</span>` : "";
+            return `<div class="ms-entry-row" style="align-items:flex-start;gap:10px">
+              <div class="ms-entry-meta" style="min-width:0;flex:1 1 auto">
+                <strong class="ms-entry-title">${esc(c.title || c.id)}</strong>
+                <span class="ms-entry-code" style="white-space:normal">${esc(c.summary || "")}</span>
+                ${fixLine}
+              </div>
+              <span class="mil-tag ${cls}" style="flex-shrink:0">${esc(lbl)}</span>
+            </div>`;
+          }).join("");
+        }
         return;
       }
     }, { signal: sig });

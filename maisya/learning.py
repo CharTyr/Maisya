@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 
 from .abilities import is_autonomous_snapshot
 from .intents import extract_llm_tokens
@@ -37,6 +38,7 @@ class Learning:
         self.closed = False
         self.skip_stats: Counter[str] = Counter()
         self.scheduled_count: int = 0
+        self._soft_signal_cooldown: dict[tuple[str, str], float] = {}
 
     def diagnostics(self) -> dict:
         """返回自动经验提炼的调度与跳过原因计数，用于诊断触发阈值是否过严。"""
@@ -112,7 +114,41 @@ class Learning:
         ):
             trace.append({"signal": "multiple_redirects", "count": min(redirects, 8)})
             recovered = True
-        return trace if recovered else []
+        if recovered:
+            return trace
+        # 扩展低噪自省信号 B：多步多工具成功产出交付（不含错误，至少 3 步且 >= 2 种不同工具且有产出附件或渲染）
+        result_obj = row.get("result") if isinstance(row.get("result"), dict) else {}
+        has_attachments = bool(
+            isinstance(result_obj.get("attachments"), list)
+            and len(result_obj.get("attachments")) > 0
+        )
+        distinct_ok_tools = set(success_tools)
+        has_deliverable_tool = bool(
+            distinct_ok_tools & {"result_attach", "render_report", "html_render", "digest_feed"}
+        )
+        if (
+            len(success_tools) >= 3
+            and len(distinct_ok_tools) >= 2
+            and (has_attachments or has_deliverable_tool)
+        ):
+            trace.append(
+                {
+                    "signal": "multi_step_delivery",
+                    "steps": len(success_tools),
+                    "distinct_tools": len(distinct_ok_tools),
+                }
+            )
+            return trace
+        # 扩展低噪自省信号 C：同线程收到后续追问纠偏并带工具执行顺利结案（revision >= 2）
+        if int(row.get("completed_revision") or 0) >= 2 and success_tools:
+            trace.append(
+                {
+                    "signal": "followup_refinement",
+                    "revision": int(row.get("completed_revision") or 0),
+                }
+            )
+            return trace
+        return []
 
     def _receipt(self, row, status, *, reserve=False):
         with self.memory.store.connect() as db, db:
@@ -155,9 +191,28 @@ class Learning:
             self.skip_stats["no_recovery_trace"] += 1
             logger.debug("learning skipped (no_recovery_trace): %s", row.get("thread_id"))
             return
+        soft_signal = ""
+        if isinstance(trace[-1], dict):
+            sig = str(trace[-1].get("signal") or "")
+            if sig in {"multi_step_delivery", "followup_refinement"}:
+                soft_signal = sig
+        cd_key = None
+        now_mono = time.monotonic()
+        if soft_signal:
+            prof_id = str(row.get("profile") or "default")
+            cd_key = (prof_id, soft_signal)
+            if self._soft_signal_cooldown.get(cd_key, 0.0) > now_mono:
+                self.skip_stats["soft_signal_cooldown"] += 1
+                return
         if not await completed_thread(self._receipt, row, "pending", reserve=True):
             self.skip_stats["already_processed"] += 1
             return
+        if cd_key is not None:
+            if len(self._soft_signal_cooldown) >= 64:
+                self._soft_signal_cooldown = {
+                    k: v for k, v in self._soft_signal_cooldown.items() if v > now_mono
+                }
+            self._soft_signal_cooldown[cd_key] = now_mono + 1800.0
         self.scheduled_count += 1
         key = row["thread_id"], row["completed_revision"]
         task = asyncio.create_task(self._learn(row, trace))

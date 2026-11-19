@@ -47,6 +47,7 @@ from .context_budget import (
 from .intents import extract_llm_tokens
 from .pathsafe import rmtree_safe, safe_chmod
 from .scout import BG_COMPACTION_TOKENS, TOOL_DEFINITIONS, validate_arguments
+from .tool_guard import format_human_thread_failure, is_transient_llm_error
 from .workspaces import completed_thread, file_lock
 
 
@@ -3981,6 +3982,7 @@ class ThreadEngine:
             )
             deadline = asyncio.get_running_loop().time() + effective_timeout
             overflow_retried = False
+            transient_retried = False
             async with asyncio.timeout(effective_timeout):
                 for step_index in range(profile.max_steps or self.max_steps):
                     metadata = None
@@ -4322,6 +4324,33 @@ class ThreadEngine:
                                 response = await self.runtime.step(
                                     profile, request_history
                                 )
+                            elif (
+                                not transient_retried
+                                and step_index >= 1
+                                and is_transient_llm_error(step_exc)
+                                and not is_context_overflow_error(step_exc)
+                                and (deadline - asyncio.get_running_loop().time()) > 8.0
+                            ):
+                                transient_retried = True
+                                await asyncio.to_thread(
+                                    self.store.checkpoint,
+                                    thread_id,
+                                    history,
+                                    processed,
+                                    "transient_retry",
+                                    {"step": step_index},
+                                )
+                                await asyncio.sleep(0.35)
+                                alive, changed = await self._boundary(
+                                    thread_id, processed, deadline
+                                )
+                                if not alive:
+                                    return
+                                if changed:
+                                    continue
+                                response = await self.runtime.step(
+                                    profile, request_history
+                                )
                             else:
                                 raise
                     finally:
@@ -4640,21 +4669,12 @@ class ThreadEngine:
             raise
         except Exception as error:
             had_error = True
-            safe_errors = {
-                "当前角色的模型均未返回可用结果",
-                "线程达到本轮探索步数上限",
-                "模型没有给出结果",
-            }
-            reason = (
-                "本轮探索超过运行时限"
-                if isinstance(error, TimeoutError)
-                else (
-                    self.redact(str(error))
-                    if str(error) in safe_errors or isinstance(error, PermissionError)
-                    else "本轮 Agent 活动中断，请检查模型、能力配置与执行环境"
-                )
-            )
-            error_text = reason + "。可给原线程补充消息后继续。"
+            if isinstance(error, TimeoutError):
+                error_text = "本轮探索超过运行时限。可给原线程补充消息后继续。"
+            elif str(error) == "当前角色的模型均未返回可用结果":
+                error_text = "当前角色的模型均未返回可用结果。可给原线程补充消息后继续。"
+            else:
+                error_text = format_human_thread_failure(error, redact=self.redact)
             if row is None:
                 try:
                     latest = await asyncio.to_thread(

@@ -216,9 +216,7 @@ def profile_capabilities(profile: Profile, mode: str) -> list[str]:
         caps.append("web")
     if profile.uses_workspace:
         caps.append("workspace")
-    if "exec_command" in active_tools or "sandbox_exec" in active_tools or "calc" in active_tools:
-        caps.append("exec")
-    for key in ("html_render", "render_report", "calc", "sandbox_exec", "exec_command", "result_attach"):
+    for key in ("html_render", "render_report", "calc", "sandbox_exec", "exec_command"):
         if key in active_tools:
             caps.append(key)
     if profile.mcp:
@@ -234,16 +232,21 @@ def build_planner_roster_entry(plugin, profile: Profile, mode: str) -> dict:
         if getattr(plugin, "memory", None) and profile.skills
         else []
     )
-    return {
+    desc = (profile.description or profile_summary_text(profile.instructions) or "").strip()
+    if len(desc) > 80:
+        desc = desc[:79] + "…"
+    entry = {
         "id": profile.id,
         "title": profile.title,
-        "environment": profile.environment,
         "mode": mode,
-        "autonomous": profile.autonomous,
         "capabilities": profile_capabilities(profile, mode),
-        "skills": skills_info,
-        "description": profile.description or profile_summary_text(profile.instructions),
+        "description": desc,
     }
+    if skills_info:
+        entry["skills"] = skills_info
+    if profile.autonomous:
+        entry["autonomous"] = True
+    return entry
 
 
 def build_planner_stable_lines(
@@ -1005,14 +1008,14 @@ async def handle_skill_proposal(plugin, *, op: str, target: str, patch: dict | N
     )
 
 
-def format_unknown_shape_action(area: str) -> str:
+def format_unknown_shape_action(
+    area: str, *, target_chat: str = "", source_msg_id: str = ""
+) -> str:
     """为 maisya_shape 的非法 action 生成包含合法枚举与最小示例的自纠报错。"""
-    return (
-        f"不支持的自管理类型：{area}。"
-        "可用 action：overview / setup / settings / profile / file / memory / role_memory / "
-        "notes / journal / heartbeat / planner / digest_sources / services / skill_proposal；"
-        "例如开启群白名单请用 action='settings', op='patch', "
-        "patch={'enabled_chats': ['qq:group:<群号>']}（或用 action='setup' 一站配齐）"
+    from .tool_guard import format_actionable_shape_error
+
+    return format_actionable_shape_error(
+        area, target_chat=target_chat, source_msg_id=source_msg_id
     )
 
 

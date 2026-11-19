@@ -64,7 +64,8 @@
             <search>
               <input type="search" class="mil-input" id="pr-search" placeholder="筛选角色标识、名称或描述…" aria-label="筛选角色" autocorrect="off" autocapitalize="none" spellcheck="false" />
             </search>
-            <div class="mil-row">
+            <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+              <button type="button" class="mil-key mil-key--sm" id="pr-btn-templates">场景模板</button>
               <button type="button" class="mil-key mil-key--sm" id="pr-btn-import">导入档案包</button>
               <input type="file" id="pr-import-file" accept=".zip,application/zip" hidden />
             </div>
@@ -766,6 +767,26 @@
       <div class="mil-row" style="justify-content:flex-end;gap:8px;margin-top:8px">
         <button type="button" class="mil-key mil-key--sm mil-key--hot" id="sk-pkg-confirm" disabled>确认导入</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 场景模板一键套用弹窗 -->
+  <div class="mil-scrim" id="pr-tpl-scrim" hidden>
+    <div class="mil-modal" role="dialog" aria-modal="true" aria-labelledby="pr-tpl-title">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="roles"></span>
+          <div class="mil-row" style="gap:6px;align-items:center">
+            <div class="mil-silk" id="pr-tpl-title">场景模板</div>
+            <button type="button" class="mil-help" data-help="按常见群聊与个人玩法一键创建或启用对应能力档案；套用后可随时自定义修改。" aria-label="场景模板说明">?</button>
+          </div>
+        </div>
+        <div class="mil-head-r">
+          <button type="button" class="mil-key mil-key--sm" id="pr-tpl-close">关闭</button>
+        </div>
+      </div>
+      <div class="mil-feedback" id="pr-tpl-fb" role="status" aria-live="polite"></div>
+      <div class="ms-entry-list" id="pr-tpl-list"></div>
     </div>
   </div>
 </div>

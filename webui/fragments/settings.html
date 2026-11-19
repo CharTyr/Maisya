@@ -274,5 +274,21 @@
         </div>
       </div>
     </section>
+
+    <!-- 5. 一键系统体检 -->
+    <section class="mil-panel set-block" id="set-block-doctor">
+      <div class="mil-head">
+        <div class="mil-head-l">
+          <span data-icon-slot="cpu"></span>
+          <div class="mil-row" style="gap:6px;align-items:center">
+            <div class="mil-silk">系统体检</div>
+            <button type="button" class="mil-help" data-help="一次性核查基础白名单、模型可用性与超时统计、公网检索、离线出图渲染、容器沙箱与能力档案绑定，绝不暴露任何密钥。" aria-label="系统体检说明">?</button>
+          </div>
+        </div>
+        <button type="button" class="mil-key mil-key--sm mil-key--hot" id="set-btn-doctor">运行体检</button>
+      </div>
+      <div class="mil-hint" id="set-doctor-summary">点击右侧「运行体检」实时核查 6 项核心运行状态。</div>
+      <div class="ms-entry-list" id="set-doctor-results" hidden></div>
+    </section>
   </div>
 </div>

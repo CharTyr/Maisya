@@ -57,6 +57,14 @@ if __package__:
     )
     from .maisya.share import Share
     from .maisya.threads import ThreadEngine, ThreadStore
+    from .maisya.tool_guard import (
+        SHAPE_READONLY_OVERVIEW_ALIASES,
+        coerce_bool,
+        coerce_dict,
+        coerce_int,
+        coerce_str_list,
+        format_actionable_agent_error,
+    )
     from .maisya.tx_recovery import recover_pending_transactions
     from .maisya.trust import (
         PRIVATE_KEY,
@@ -116,6 +124,14 @@ else:
     )
     from maisya.share import Share
     from maisya.threads import ThreadEngine, ThreadStore
+    from maisya.tool_guard import (
+        SHAPE_READONLY_OVERVIEW_ALIASES,
+        coerce_bool,
+        coerce_dict,
+        coerce_int,
+        coerce_str_list,
+        format_actionable_agent_error,
+    )
     from maisya.tx_recovery import recover_pending_transactions
     from maisya.trust import (
         PRIVATE_KEY,
@@ -288,6 +304,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self._continuing_turn_chats: set[str] = set()
         self._reply_sources: dict[str, tuple[float, list[str]]] = {}
         self._turn_ops_receipts: dict[str, dict] = {}
+        self._attachment_guard_reminded: dict[tuple[str, str, int], float] = {}
         self._bootstrap_lock = threading.RLock()
         self._bootstrap_messages = {}
         self._bootstrap_platforms = {}
@@ -533,6 +550,8 @@ class MaisyaPlugin(MaiBotPlugin):
         }
         if isinstance(getattr(self, "_chat_titles", None), dict):
             self._chat_titles.clear()
+        if isinstance(getattr(self, "_attachment_guard_reminded", None), dict):
+            self._attachment_guard_reminded.clear()
         self._avatar_sem = None
         close_timeout = float(getattr(self, "_unload_component_timeout", 2.5) or 2.5)
         ctx_logger = getattr(getattr(self, "_ctx", None), "logger", None)
@@ -638,7 +657,7 @@ class MaisyaPlugin(MaiBotPlugin):
             return ""
         if self.vault:
             text = self.vault.redact(text)
-        return "<maisya_planner_manual>" + html.escape(text) + "</maisya_planner_manual>"
+        return "<maisya_planner_manual>" + html.escape(text, quote=False) + "</maisya_planner_manual>"
 
     def _resolve_heartbeat_profile(self) -> str:
         configured = str(getattr(self.settings, "heartbeat_profile", "") or "").strip()
@@ -3075,6 +3094,12 @@ class MaisyaPlugin(MaiBotPlugin):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
         source_msg_id = self._clean_source_msg_id(source_msg_id)
+        fresh = coerce_bool(fresh)
+        steer = coerce_bool(steer)
+        wait_seconds = coerce_int(wait_seconds)
+        ref_msg_ids = coerce_str_list(ref_msg_ids)
+        from_threads = coerce_str_list(from_threads)
+        attachment_handles = coerce_str_list(attachment_handles)
         route = None
         planned_source = str(source_msg_id or "")
         raw_deliver_to = str(deliver_to or "auto").strip()
@@ -3215,7 +3240,11 @@ class MaisyaPlugin(MaiBotPlugin):
                     self.enabled_for, effective_chat_id, effective_platform
                 ):
                     raise PermissionError(
-                        "目标会话尚未加入 enabled_chats；可先用 maisya_shape 开启白名单，或传 deliver_to='current' 先回传当前私聊预览"
+                        format_actionable_agent_error(
+                            "目标会话尚未加入 enabled_chats",
+                            target_chat=raw_target_chat or effective_chat_id,
+                            source_msg_id=source_msg_id,
+                        )
                     )
             elif not (
                 await asyncio.to_thread(
@@ -4283,6 +4312,7 @@ class MaisyaPlugin(MaiBotPlugin):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
         source_msg_id = self._clean_source_msg_id(source_msg_id)
+        limit = coerce_int(limit)
         try:
             if not self.threads or not self.settings.plugin.enabled:
                 raise PermissionError("Maisya 尚未就绪或已停用")
@@ -4892,6 +4922,23 @@ class MaisyaPlugin(MaiBotPlugin):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
         source_msg_id = self._clean_source_msg_id(source_msg_id)
+        patch = coerce_dict(patch)
+        topics = coerce_str_list(topics)
+        urls = coerce_str_list(urls)
+        every_seconds = coerce_int(every_seconds)
+        run_now = coerce_bool(run_now)
+        overwrite = coerce_bool(overwrite)
+        version = coerce_int(version)
+        expected_version = coerce_int(expected_version)
+        if (
+            str(action or "").strip().lower() in SHAPE_READONLY_OVERVIEW_ALIASES
+            and not op
+            and not patch
+            and not content
+            and not topics
+            and not urls
+        ):
+            action = "overview"
         try:
             if not self.memory or not await asyncio.to_thread(
                 self.authorize_admin_source, source_msg_id, chat_id, platform
@@ -5111,6 +5158,10 @@ class MaisyaPlugin(MaiBotPlugin):
         chat_id = str(kwargs.get("chat_id") or kwargs.get("stream_id") or "")
         platform = str(kwargs.get("platform") or "").lower()
         source_msg_id = self._clean_source_msg_id(source_msg_id)
+        in_seconds = coerce_int(in_seconds)
+        every_seconds = coerce_int(every_seconds)
+        tz_offset_minutes = coerce_int(tz_offset_minutes)
+        replace = coerce_bool(replace)
         try:
             if not self.intents or not self.settings.plugin.enabled:
                 raise PermissionError("Maisya 尚未就绪或已停用")
@@ -5414,7 +5465,11 @@ class MaisyaPlugin(MaiBotPlugin):
             if cross_chat:
                 if not effective_enabled and not target_is_admin_dm:
                     raise PermissionError(
-                        "目标会话尚未加入 enabled_chats，请先通过 maisya_shape 开启白名单后再安排计划"
+                        format_actionable_agent_error(
+                            "目标会话尚未加入 enabled_chats",
+                            target_chat=raw_target_chat or effective_chat_id,
+                            source_msg_id=source_msg_id,
+                        )
                     )
             elif not (effective_enabled or is_admin_caller or is_admin_dm):
                 hint_mid = await asyncio.to_thread(
@@ -6056,27 +6111,6 @@ class MaisyaPlugin(MaiBotPlugin):
                 return f"{int(secs // 3600)}小时前"
             return f"{int(secs // 86400)}天前"
 
-        def _cap_planner_memory(mem_dict: dict[str, str]) -> dict[str, str]:
-            capped: dict[str, str] = {}
-            mem_txt = str(mem_dict.get("memory") or "")
-            if mem_txt:
-                if len(mem_txt) > 2400:
-                    mem_txt = (
-                        mem_txt[:800].rstrip()
-                        + "\n…[会话备忘较长已精简，查阅全量或久远条目请用 maisya_recall]…\n"
-                        + mem_txt[-1500:].lstrip()
-                    )
-                capped["memory"] = mem_txt
-            jour_txt = str(mem_dict.get("journal") or "")
-            if jour_txt:
-                if len(jour_txt) > 1600:
-                    jour_txt = (
-                        "[近期手账已精简，查阅更早记录请用 maisya_recall]\n"
-                        + jour_txt[-1500:].lstrip()
-                    )
-                capped["journal"] = jour_txt
-            return capped
-
         def _build_visible_threads() -> list[dict]:
             raw_index = self.threads.search("", chat_id, limit=8)
             viewer_aliases = set(self.chat_aliases_for(chat_id, platform))
@@ -6174,7 +6208,7 @@ class MaisyaPlugin(MaiBotPlugin):
         index = self.vault.redact(visible) if self.vault else visible
         returned = await self.bridge.offer(chat_id)
         memory = await asyncio.to_thread(self.memory.context, chat_id)
-        active_memory = _cap_planner_memory(
+        active_memory = self._cap_planner_memory(
             {
                 key: memory[key]
                 for key in ("memory", "journal")
@@ -6455,6 +6489,28 @@ class MaisyaPlugin(MaiBotPlugin):
             await asyncio.to_thread(self._unlock_unreplied_aliases, chat_id, platform)
         return {"action": "continue"}
 
+    @staticmethod
+    def _cap_planner_memory(mem_dict: dict[str, str]) -> dict[str, str]:
+        capped: dict[str, str] = {}
+        mem_txt = str(mem_dict.get("memory") or "")
+        if mem_txt:
+            if len(mem_txt) > 2400:
+                mem_txt = (
+                    mem_txt[:800].rstrip()
+                    + "\n…[会话备忘较长已精简，查阅全量或久远条目请用 maisya_recall]…\n"
+                    + mem_txt[-1500:].lstrip()
+                )
+            capped["memory"] = mem_txt
+        jour_txt = str(mem_dict.get("journal") or "")
+        if jour_txt:
+            if len(jour_txt) > 1600:
+                jour_txt = (
+                    "[近期手账已精简，查阅更早记录请用 maisya_recall]\n"
+                    + jour_txt[-1500:].lstrip()
+                )
+            capped["journal"] = jour_txt
+        return capped
+
     @HookHandler(
         "maisaka.replyer.before_request",
         name="maisya_replyer",
@@ -6498,6 +6554,56 @@ class MaisyaPlugin(MaiBotPlugin):
                 "reason": abort_reason,
                 "custom_result": {"reason": abort_reason},
             }
+        if not ops_active and (type(attempt) is not int or attempt <= 1):
+            pending_atts = await asyncio.to_thread(
+                self.bridge.pending_offered_attachments, chat_id
+            )
+            if pending_atts:
+                now_mono = time.monotonic()
+                reminded = self._attachment_guard_reminded
+                if len(reminded) > 128:
+                    for old_k, old_ts in list(reminded.items()):
+                        if now_mono - old_ts > 300.0:
+                            reminded.pop(old_k, None)
+                unreminded = [
+                    item
+                    for item in pending_atts
+                    if (
+                        (
+                            prev := reminded.get(
+                                (
+                                    chat_id,
+                                    str(item.get("thread_id") or ""),
+                                    int(item.get("revision") or 0),
+                                )
+                            )
+                        )
+                        is None
+                        or (now_mono - prev) > 300.0
+                    )
+                ]
+                if unreminded:
+                    for item in unreminded:
+                        reminded[
+                            (
+                                chat_id,
+                                str(item.get("thread_id") or ""),
+                                int(item.get("revision") or 0),
+                            )
+                        ] = now_mono
+                    first = unreminded[0]
+                    tid = str(first.get("thread_id") or "")
+                    handles = ", ".join(first.get("handles") or [])
+                    abort_reason = (
+                        f"线程 {tid} 有待发图片或文件附件（{handles}）尚未发出，原生 reply 无法发图。"
+                        f'请立即改调 maisya_agent(action="share", thread_id="{tid}", message="<简短附言>") 一次连文带图发出；'
+                        "若确认只需纯文字不发附件，可再次调用 reply。"
+                    )
+                    return {
+                        "action": "abort",
+                        "reason": abort_reason,
+                        "custom_result": {"reason": abort_reason},
+                    }
         ops_entry = self._match_ops_receipt(
             chat_id,
             attempt=attempt,
@@ -6512,12 +6618,19 @@ class MaisyaPlugin(MaiBotPlugin):
             facts = f"{facts}\n{ops_tag}" if facts else ops_tag
         if enabled:
             layers = await asyncio.to_thread(self.memory.context, chat_id)
-            context = {key: layers[key] for key in ("memory", "journal") if layers[key]}
+            context = self._cap_planner_memory(
+                {
+                    key: layers[key]
+                    for key in ("memory", "journal")
+                    if str(layers.get(key) or "").strip()
+                }
+            )
             if context:
                 facts += (
                     "\n<maisya_memory>"
                     + html.escape(
-                        json.dumps(self.vault.redact(context), ensure_ascii=False)
+                        json.dumps(self.vault.redact(context), ensure_ascii=False),
+                        quote=False,
                     )
                     + "</maisya_memory>"
                 )

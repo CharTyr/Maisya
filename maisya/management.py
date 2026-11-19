@@ -33,6 +33,7 @@ from .authz import approved_envelope, record_delegation
 from .config import Settings, apply_heartbeat_compat, canonical_ui_style
 from .console import snapshot
 from .digest import DigestWorkspace
+from .doctor import run_doctor
 from .memory import PRESETS_DIR, SKILL_ID_RE, MemoryLayers, parse_skill_meta
 from .tx_recovery import TxJournal, tx_lock
 from .packages import (
@@ -58,6 +59,12 @@ from .services import (
     validate_api_entry,
     validate_mcp_http_url,
     validate_web_bindings,
+)
+from .templates import (
+    apply_scene_template,
+    derive_api_handle,
+    is_safe_readonly_api,
+    list_scene_templates,
 )
 from .trust import (
     clean_display_name,
@@ -892,6 +899,76 @@ class Management:
             "kind": kind,
             "name": name,
             "deleted": True,
+            "configuration": next_config,
+            "version": self._version(next_config),
+        }
+
+    def _mount_readonly_api_sync(self, options: dict) -> dict:
+        api_name = str(
+            options.get("api_name") or options.get("name") or ""
+        ).strip()
+        profile_id = str(
+            options.get("profile_id") or options.get("profile") or ""
+        ).strip()
+        description = str(options.get("description") or "").strip()
+        version = str(options.get("version") or "").strip()
+        req_handle = str(options.get("handle") or "").strip()
+
+        safe_ok, unsafe_reason = is_safe_readonly_api(api_name, description)
+        if not safe_ok:
+            raise ValueError(unsafe_reason)
+        if profile_id:
+            self.plugin.profiles.get(profile_id)
+
+        current = self.plugin.runtime.services.load()
+        next_config = copy.deepcopy(current)
+        next_config.setdefault("servers", {})
+        apis = next_config.setdefault("apis", {})
+        next_config.pop("templates", None)
+
+        handle = ""
+        for existing_h, existing_spec in apis.items():
+            if (
+                isinstance(existing_spec, dict)
+                and str(existing_spec.get("api_name") or "").strip() == api_name
+            ):
+                if existing_spec.get("readonly", True) is False:
+                    raise ValueError("该接口已按非只读登记，无法通过快捷入口覆盖")
+                handle = str(existing_h)
+                break
+        if not handle:
+            base = req_handle or derive_api_handle(api_name)
+            cand = base[:64]
+            idx = 2
+            while cand in apis:
+                suffix = f"_{idx}"
+                cand = base[: 64 - len(suffix)] + suffix
+                idx += 1
+            handle = cand
+            spec: dict = {
+                "api_name": api_name,
+                "readonly": True,
+                "access": "everyone",
+            }
+            if description:
+                spec["description"] = description[:500]
+            if version:
+                spec["version"] = version[:32]
+            apis[handle] = spec
+            self._validate_services(next_config)
+            content = json.dumps(next_config, ensure_ascii=False).encode("utf-8")
+            atomic_private_write(self.plugin.runtime.services.path, content)
+
+        bound_apis: list[str] = []
+        if profile_id:
+            prof = self.plugin.profiles.get(profile_id)
+            bound_apis = list(dict.fromkeys([*prof.apis, handle]))
+            self.plugin.profiles.update(profile_id, apis=bound_apis)
+        return {
+            "handle": handle,
+            "api_name": api_name,
+            "profile_id": profile_id,
+            "apis": bound_apis,
             "configuration": next_config,
             "version": self._version(next_config),
         }
@@ -3394,14 +3471,41 @@ class Management:
             if isinstance(raw_plugins, dict)
             else raw_plugins
         )
-        apis = raw_apis.get("apis") or [] if isinstance(raw_apis, dict) else raw_apis
+        apis_raw = raw_apis.get("apis") or [] if isinstance(raw_apis, dict) else raw_apis
+        reg_by_name: dict[str, str] = {}
+        try:
+            svc_apis = (
+                await completed_thread(self.plugin.runtime.services.load)
+            ).get("apis") or {}
+            if isinstance(svc_apis, dict):
+                for h_name, h_spec in svc_apis.items():
+                    if isinstance(h_spec, dict) and h_spec.get("api_name"):
+                        reg_by_name[str(h_spec["api_name"])] = str(h_name)
+        except Exception:
+            pass
+        apis = []
+        for item in apis_raw if isinstance(apis_raw, list) else []:
+            if isinstance(item, dict):
+                aname = str(item.get("name") or item.get("api_name") or "").strip()
+                adesc = str(item.get("description") or "").strip()
+                safe_ok, unsafe_reason = is_safe_readonly_api(aname, adesc)
+                apis.append(
+                    {
+                        **item,
+                        "safe_readonly": safe_ok,
+                        "unsafe_reason": unsafe_reason,
+                        "registered_handle": reg_by_name.get(aname, ""),
+                    }
+                )
+            else:
+                apis.append(item)
         return {
             "streams": streams,
             "models": host_models["tasks"],
             "available_models": host_models["names"],
             "model_catalog": host_models["models"],
             "plugins": plugins if isinstance(plugins, list) else [],
-            "apis": apis if isinstance(apis, list) else [],
+            "apis": apis,
         }
 
     async def read(self, section, payload):
@@ -3714,6 +3818,12 @@ class Management:
                 "bytes": await completed_thread(self.plugin.runtime.files.usage),
                 "limit": self.plugin.runtime.files.total_bytes,
                 "web": await self.plugin.runtime.web.status(),
+            }
+        elif section == "doctor":
+            result = await run_doctor(self.plugin, mgmt=self)
+        elif section == "templates":
+            result = {
+                "templates": await completed_thread(list_scene_templates, self.plugin)
             }
         elif section in {"skill_file", "profile_file"}:
             mem = self.plugin.memory
@@ -5729,6 +5839,19 @@ class Management:
             await plugin.runtime.services.close_sessions()
         elif action == "delete_service_item":
             result = await completed_thread(self._delete_service_item_sync, options)
+            await plugin.runtime.services.close_sessions()
+        elif action == "template_apply":
+            result = await completed_thread(
+                apply_scene_template,
+                plugin,
+                str(options.get("template_id") or options.get("id") or "").strip(),
+                profile_id=str(
+                    options.get("profile_id") or options.get("profile") or ""
+                ).strip(),
+                overwrite=bool(options.get("overwrite")),
+            )
+        elif action == "mount_readonly_api":
+            result = await completed_thread(self._mount_readonly_api_sync, options)
             await plugin.runtime.services.close_sessions()
         elif action == "undo_learning_note":
             result = await completed_thread(self._undo_learning_note, options)

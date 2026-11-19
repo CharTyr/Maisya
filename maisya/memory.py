@@ -1094,7 +1094,7 @@ class MemoryLayers:
                 "description": "",
             }
             summary = self.vault.redact(
-                (meta.get("description") or meta.get("title") or skill_id)[:72]
+                (meta.get("description") or meta.get("title") or skill_id)[:32]
             )
             briefs.append({"id": skill_id, "summary": summary})
         return briefs
