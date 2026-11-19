@@ -419,6 +419,7 @@ def _make_mock_maibot_init_script(*, onboarding_show: bool = True, empty_host_ad
             else if (typeof p.settings?.plugin?.enabled === "boolean") state.plugin_enabled = p.settings.plugin.enabled;
             if (p.settings?.admins) state.plugin_admins = p.settings.admins;
             if (p.settings?.enabled_chats) state.enabled_chats = p.settings.enabled_chats;
+            if (typeof p.settings?.default_model === "string") state.default_model = p.settings.default_model;
             return {{ success: true, version: 2 }};
           }}
           if (act === "vault_set") {{

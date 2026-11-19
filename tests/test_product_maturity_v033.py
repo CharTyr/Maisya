@@ -626,3 +626,109 @@ async def test_v033_learning_cooldown_doctor_redaction_and_webui_wiring(tmp_path
             assert token in now_html, f"missing {token} in compiled webui/now.html"
     finally:
         await plugin.on_unload()
+
+
+@pytest.mark.asyncio
+async def test_doctor_detects_third_party_search_plugins_when_host_web_disabled(
+    tmp_path: Path,
+):
+    secret_exa_key = "exa-live-secret-key-99887766"
+
+    async def third_party_cap(name: str, **kwargs):
+        if name == "web.search":
+            return {"success": False, "error": "统一联网功能未启用"}
+        if name == "config.get_plugin" and kwargs.get("plugin_name") == "xxxxx7258.google-search-plugin":
+            return {
+                "success": True,
+                "value": {
+                    "plugin": {"enabled": True},
+                    "search_backend": {"default_engine": "exa"},
+                    "engines": {
+                        "exa_enabled": True,
+                        "exa_api_keys": [secret_exa_key],
+                        "duckduckgo_enabled": True,
+                    },
+                },
+            }
+        return await _default_cap()(name, **kwargs)
+
+    plugin = await _boot_plugin(tmp_path / "case_gsp", cap_fn=third_party_cap)
+    try:
+        doc = await plugin.manage_read("doctor", "{}")
+        assert secret_exa_key not in json.dumps(doc, ensure_ascii=False)
+        web_chk = next(c for c in doc["checks"] if c["id"] == "web_search")
+        assert web_chk["status"] == "ok", web_chk
+        assert "exa" in web_chk["summary"]
+    finally:
+        await plugin.on_unload()
+
+    # 若未装 google-search-plugin，但宿主加载了其他第三方搜索插件，也应识别并提示
+    async def generic_search_plugin_cap(name: str, **kwargs):
+        if name == "web.search":
+            return {"success": False, "error": "统一联网功能未启用"}
+        if name == "config.get_plugin":
+            return {"success": False, "error": "plugin not found"}
+        if name == "component.list_loaded_plugins":
+            return {
+                "success": True,
+                "plugins": [
+                    {"id": "community.tavily-search", "name": "Tavily 联网搜索"},
+                ],
+            }
+        return await _default_cap()(name, **kwargs)
+
+    plugin2 = await _boot_plugin(
+        tmp_path / "case_other", cap_fn=generic_search_plugin_cap
+    )
+    try:
+        doc2 = await plugin2.manage_read("doctor", "{}")
+        web_chk2 = next(c for c in doc2["checks"] if c["id"] == "web_search")
+        assert web_chk2["status"] == "info", web_chk2
+        assert "tavily-search" in web_chk2["summary"] or "Tavily" in web_chk2["summary"]
+    finally:
+        await plugin2.on_unload()
+
+
+def test_settings_default_model_selection_persists_across_context_event_and_save():
+    from playwright.sync_api import sync_playwright
+    from test_v03_webui_smoke import NOW_HTML, _make_mock_maibot_init_script
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.add_init_script(_make_mock_maibot_init_script(onboarding_show=False))
+            page.goto(NOW_HTML.as_uri(), wait_until="domcontentloaded")
+            page.click('[data-nav="settings"]')
+            page.wait_for_function(
+                "() => document.querySelector('#set-model-label')?.textContent?.trim() === 'gpt-main'"
+            )
+
+            # 打开下拉选 claude-aux
+            page.click("#set-model-trigger")
+            page.click('#set-model-list [data-pick-model="claude-aux"]')
+            assert page.locator("#set-model-label").inner_text().strip() == "claude-aux"
+
+            # 模拟宿主派发 maibot:context 触发主题与运行区重绘，绝不能跳回旧模型 gpt-main
+            page.evaluate(
+                "() => window.dispatchEvent(new CustomEvent('maibot:context', { detail: { theme: 'dark' } }))"
+            )
+            assert page.locator("#set-model-label").inner_text().strip() == "claude-aux"
+            assert page.locator("#set-default-model").input_value() == "claude-aux"
+
+            # 再点一次「保存运行设置」也不应把旧模型写回去
+            page.click("#set-save-runtime")
+            page.wait_for_timeout(80)
+            assert page.locator("#set-model-label").inner_text().strip() == "claude-aux"
+            saved_model = page.evaluate(
+                """() => {
+                  const writes = window.__maibotCalls.filter(
+                    (c) => c.type === 'action' && c.name === 'write' && c.arg?.action === 'settings_update'
+                  );
+                  const last = JSON.parse(writes[writes.length - 1].arg.payload);
+                  return last.settings.default_model;
+                }"""
+            )
+            assert saved_model == "claude-aux"
+        finally:
+            browser.close()

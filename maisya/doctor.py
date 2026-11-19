@@ -176,7 +176,7 @@ async def run_doctor(plugin, *, mgmt=None) -> dict[str, Any]:
             }
         )
 
-    # 3. 联网搜索能力
+    # 3. 公网检索能力（覆盖宿主统一联网、已接管第三方 google-search-plugin、已绑定 MCP/API 与其他宿主搜索插件）
     web_status: dict[str, Any] = {}
     web_err = ""
     try:
@@ -188,44 +188,117 @@ async def run_doctor(plugin, *, mgmt=None) -> dict[str, Any]:
             )
     except Exception as exc:
         web_err = str(redact(str(exc)))[:120]
-    providers = web_status.get("providers") if isinstance(web_status, dict) else None
-    ready_providers = []
-    if isinstance(providers, list):
-        ready_providers = [
-            str(p.get("id") or p.get("name") or "")
-            for p in providers
-            if isinstance(p, dict) and p.get("available", p.get("ready", True))
-        ]
-    elif isinstance(providers, dict):
-        ready_providers = [
-            str(k)
-            for k, v in providers.items()
-            if isinstance(v, dict) and v.get("available", v.get("ready", True))
-        ]
-    default_provider = str(
-        (web_status.get("default") if isinstance(web_status, dict) else "")
-        or (ready_providers[0] if ready_providers else "")
-    )
-    if web_err:
+
+    ready_channels: list[str] = []
+    # 通道 A：宿主内置统一联网（传空 query 仅触发配置校验，不消耗外部额度）
+    try:
+        raw_web_probe = await call_capability(
+            plugin.ctx, "web.search", timeout_ms=2500, query=""
+        )
+        if isinstance(raw_web_probe, dict):
+            if raw_web_probe.get("success") is not False:
+                ready_channels.append("宿主统一联网（web.search）")
+            else:
+                probe_err_txt = str(raw_web_probe.get("error") or "")
+                if "query 必须是非空字符串" in probe_err_txt:
+                    ready_channels.append("宿主统一联网（web.search）")
+    except Exception as exc:
+        if "query 必须是非空字符串" in str(exc):
+            ready_channels.append("宿主统一联网（web.search）")
+
+    # 通道 B：Maisya 原生直通接管的第三方插件（xxxxx7258.google-search-plugin）
+    tp_enabled = bool(web_status.get("third_party_enabled")) if isinstance(web_status, dict) else False
+    tp_engines = list(web_status.get("third_party_engines") or []) if isinstance(web_status, dict) else []
+    tp_default = str(web_status.get("third_party_default") or "").strip() if isinstance(web_status, dict) else ""
+    if tp_enabled and (tp_engines or tp_default):
+        eng_desc = f"默认：{tp_default or tp_engines[0]}"
+        if tp_engines:
+            eng_desc += f"，已启用 {', '.join(str(e) for e in tp_engines[:4])}"
+        ready_channels.append(f"第三方插件 google-search-plugin（{eng_desc}）")
+
+    # 通道 C：Maisya 外部服务登记的检索通道（MCP / 跨插件 API / 自定义 provider）
+    services_bound = list(web_status.get("services_bound") or []) if isinstance(web_status, dict) else []
+    custom_providers = list(web_status.get("custom_providers") or []) if isinstance(web_status, dict) else []
+    if "search" in services_bound or custom_providers:
+        bound_label = ", ".join(custom_providers[:3]) if custom_providers else "services.web.search"
+        ready_channels.append(f"外部检索服务（{bound_label}）")
+
+    # 通道 D：兼容旧结构或扫描宿主已加载的其他第三方搜索插件
+    other_search_plugins: list[str] = []
+    if not ready_channels:
+        try:
+            raw_loaded = await call_capability(
+                plugin.ctx, "component.list_loaded_plugins", timeout_ms=2500
+            )
+            loaded_items = (
+                raw_loaded.get("plugins") or []
+                if isinstance(raw_loaded, dict)
+                else (raw_loaded if isinstance(raw_loaded, list) else [])
+            )
+            search_kw = (
+                "search",
+                "tavily",
+                "exa",
+                "bocha",
+                "serp",
+                "brave",
+                "searx",
+                "duckduckgo",
+                "搜索",
+                "联网",
+            )
+            ignore_kw = ("eh-search", "history-search", "soutubot")
+            for item in loaded_items:
+                if not isinstance(item, dict):
+                    continue
+                pid = str(item.get("id") or "").strip()
+                pname = str(item.get("name") or "").strip()
+                hay = f"{pid} {pname}".lower()
+                if (
+                    not pid
+                    or pid in {"chartyr.maisya", "xxxxx7258.google-search-plugin"}
+                    or any(ig in hay for ig in ignore_kw)
+                ):
+                    continue
+                if any(kw in hay for kw in search_kw):
+                    other_search_plugins.append(f"{pname}({pid})" if pname and pname != pid else pid)
+        except Exception:
+            other_search_plugins = []
+
+    if ready_channels:
+        checks.append(
+            {
+                "id": "web_search",
+                "title": "公网检索能力",
+                "status": "ok",
+                "summary": f"公网检索可用：{'；'.join(ready_channels)}。",
+                "fix": "",
+                "metrics": {
+                    "ready_count": len(ready_channels),
+                    "third_party_engines": tp_engines[:6],
+                },
+            }
+        )
+    elif other_search_plugins:
+        checks.append(
+            {
+                "id": "web_search",
+                "title": "公网检索能力",
+                "status": "info",
+                "summary": f"检测到宿主已加载第三方搜索插件（{', '.join(other_search_plugins[:3])}）：主脑对话可直接调用其工具；后台 Agent 线程尚未绑定专属检索源。",
+                "fix": "若需让 Maisya 后台线程 web_search 也复用外部检索，可在「能力 -> 外部连接」登记对应接口，或使用 google-search-plugin / 宿主统一联网。",
+                "metrics": {"ready_count": 0, "other_plugins": other_search_plugins[:4]},
+            }
+        )
+    elif web_err:
         checks.append(
             {
                 "id": "web_search",
                 "title": "公网检索能力",
                 "status": "warn",
                 "summary": f"检索通道状态检查失败：{web_err}",
-                "fix": "在「能力 -> 外部服务」核对搜索通道配置或联网权限。",
-                "metrics": {},
-            }
-        )
-    elif ready_providers or default_provider:
-        checks.append(
-            {
-                "id": "web_search",
-                "title": "公网检索能力",
-                "status": "ok",
-                "summary": f"公网检索可用（默认通道：{default_provider or ready_providers[0]}，共 {max(1, len(ready_providers))} 个就绪通道）。",
-                "fix": "",
-                "metrics": {"default": default_provider, "ready_count": len(ready_providers)},
+                "fix": "在「能力 -> 外部连接」核对搜索通道配置或联网权限。",
+                "metrics": {"ready_count": 0},
             }
         )
     else:
@@ -234,8 +307,8 @@ async def run_doctor(plugin, *, mgmt=None) -> dict[str, Any]:
                 "id": "web_search",
                 "title": "公网检索能力",
                 "status": "warn",
-                "summary": "尚未检测到可用的联网搜索通道。",
-                "fix": "确认宿主自带搜索插件已启用，或在「能力 -> 外部服务」接入检索通道。",
+                "summary": "尚未检测到可用的联网搜索通道（宿主统一联网与第三方检索插件均未就绪）。",
+                "fix": "可启用宿主统一联网、启用并配置 google-search-plugin，或在「能力 -> 外部连接」接入 MCP 检索服务。",
                 "metrics": {"ready_count": 0},
             }
         )

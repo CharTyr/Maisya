@@ -11832,6 +11832,7 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       candQuery: "",
       candSourcesLoaded: false,
       modelQuery: "",
+      pendingModel: "",
       dirtyInputs: new Set(),
       initLoadPromise: null,
       saveChain: Promise.resolve(),
@@ -12028,8 +12029,8 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
 
     function renderRuntime() {
       const set = sState.data?.settings || sState.data || {};
-      const curModel = $("#set-default-model")?.value || set.default_model || sState.models[0]?.name || "utils";
-      syncSetModelDisplay(set.default_model || curModel);
+      const targetModel = sState.pendingModel || set.default_model || sState.data?.default_model || $("#set-default-model")?.value || sState.models[0]?.name || "utils";
+      syncSetModelDisplay(targetModel);
       $("#set-perm-mode").value = sState.data?.permission_mode || set.permission_mode || "ask_risky";
       const hbMode = String(set.heartbeat_mode || sState.data?.heartbeat_mode || (set.heartbeat_enabled ? "gentle" : "off"));
       const hbHasPlan = Boolean(sState.data?.heartbeat_has_plan);
@@ -12075,6 +12076,10 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (disposed || sig?.aborted) return;
       if (!res?.success) { saySet(res?.error || "设置读取失败", true); return; }
       sState.data = res;
+      if (sState.pendingModel) {
+        sState.data.default_model = sState.pendingModel;
+        if (sState.data.settings) sState.data.settings.default_model = sState.pendingModel;
+      }
       sState.version = res.version ?? null;
       const set = res.settings || res;
       sState.enabledChats = [...(set.enabled_chats || res.enabled_chats || [])];
@@ -12113,7 +12118,14 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         if (sState.version === null && sState.initLoadPromise) {
           try { await sState.initLoadPromise; } catch (_) {}
         }
-        const res = await hostRpc("write", "settings_update", { settings: patch, expected_version: sState.version });
+        let res = await hostRpc("write", "settings_update", { settings: patch, expected_version: sState.version });
+        if (!disposed && !sig?.aborted && !res?.success && String(res?.error || "").includes("设置已变化")) {
+          const fresh = await hostRpc("read", "settings", {});
+          if (!disposed && !sig?.aborted && fresh?.success && fresh.version != null) {
+            sState.version = fresh.version;
+            res = await hostRpc("write", "settings_update", { settings: patch, expected_version: sState.version });
+          }
+        }
         if (disposed || sig?.aborted) return res;
         if (!res?.success) {
           const msg = res?.error || "配置保存失败";
@@ -12123,6 +12135,15 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
         }
         sayAdminErr("");
         sState.version = res.version ?? sState.version;
+        const prevSet = sState.data?.settings || {};
+        const nextSet = { ...prevSet, ...patch, ...(res.settings || {}) };
+        sState.data = {
+          ...(sState.data || {}),
+          ...res,
+          default_model: nextSet.default_model ?? sState.data?.default_model ?? "",
+          permission_mode: nextSet.permission_mode ?? res.permission_mode ?? sState.data?.permission_mode,
+          settings: nextSet,
+        };
         saySet("设置已保存");
         return res;
       };
@@ -12234,11 +12255,25 @@ function roleFishHtml(roleId, seed = "", size = 32, opts = {}, extraCls = "") {
       if (pickSetModel) {
         const chosen = pickSetModel.dataset.pickModel || "";
         if (chosen) {
+          const prevModel = sState.data?.settings?.default_model || sState.data?.default_model || "";
+          sState.pendingModel = chosen;
+          if (sState.data) {
+            sState.data.default_model = chosen;
+            if (sState.data.settings) sState.data.settings.default_model = chosen;
+          }
           syncSetModelDisplay(chosen);
           const drop = $("#set-model-drop");
           if (drop) drop.hidden = true;
           $("#set-model-trigger")?.setAttribute("aria-expanded", "false");
-          await savePartialSettings({ default_model: chosen });
+          const r = await savePartialSettings({ default_model: chosen });
+          if (sState.pendingModel === chosen) sState.pendingModel = "";
+          if (!r?.success) {
+            if (sState.data) {
+              sState.data.default_model = prevModel;
+              if (sState.data.settings) sState.data.settings.default_model = prevModel;
+            }
+            await loadSettings();
+          }
         }
         return;
       }
