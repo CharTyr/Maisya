@@ -1588,7 +1588,7 @@ async def test_replyer_ops_and_delivery_steering_away_from_mai_replier(
         )
         assert rep_next == {"action": "continue"}
 
-        # 只读调用（overview / later list）不记录 ops 回执；schedule / cancel 才记录
+        # 只读总览使用任务模型，保留普通回复风格。
         read_res = await plugin.shape_tool(
             action="read",
             kind="overview",
@@ -1598,16 +1598,18 @@ async def test_replyer_ops_and_delivery_steering_away_from_mai_replier(
             platform="qq",
         )
         assert read_res["success"] is True
-        assert (
-            await plugin.before_replyer(
-                session_id="priv_admin_md5",
-                request_type="maisaka.replyer",
-                attempt=1,
-                model_name="mai_replier_today",
-                reply_tool_args={},
-            )
-            == {"action": "continue"}
+        read_reply = await plugin.before_replyer(
+            session_id="priv_admin_md5",
+            request_type="maisaka.replyer",
+            attempt=1,
+            model_name="mai_replier_today",
+            reply_tool_args={},
         )
+        assert read_reply["action"] == "continue"
+        read_kwargs = read_reply["modified_kwargs"]
+        assert read_kwargs["model_name"] == "gemini-3.8-flash"
+        assert "extra_prompt" not in read_kwargs
+        assert set(read_kwargs["reply_tool_args"]) == {"_maisya_task_token"}
 
         later_res = await plugin.later_tool(
             action="schedule",

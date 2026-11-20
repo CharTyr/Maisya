@@ -452,7 +452,11 @@ async def test_stopped_thread_cannot_reappear_in_replyer_retry(tmp_path):
         attempt=2,
         reply_tool_args=first["modified_kwargs"]["reply_tool_args"],
     )
-    assert "modified_kwargs" not in retry
+    assert retry["action"] == "continue"
+    assert "extra_prompt" not in retry["modified_kwargs"]
+    assert retry["modified_kwargs"]["reply_tool_args"]["_maisya_task_token"] == (
+        first["modified_kwargs"]["reply_tool_args"]["_maisya_task_token"]
+    )
     await plugin.on_unload()
 
 
