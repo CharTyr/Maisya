@@ -1436,6 +1436,11 @@ class Management:
                 and callable(getattr(self.plugin.intents, "bg_budget_state", None))
                 else {}
             ),
+            "update": (
+                self.plugin.updater.status()
+                if getattr(self.plugin, "updater", None) is not None
+                else {}
+            ),
         }
 
     def _memory(self, options):
@@ -3821,6 +3826,14 @@ class Management:
             }
         elif section == "doctor":
             result = await run_doctor(self.plugin, mgmt=self)
+        elif section == "update_status":
+            updater = getattr(self.plugin, "updater", None)
+            if updater is None:
+                result = {"has_update": False, "last_error": "更新检查器尚未就绪"}
+            elif options.get("force"):
+                result = await updater.check(force=True)
+            else:
+                result = updater.status()
         elif section == "templates":
             result = {
                 "templates": await completed_thread(list_scene_templates, self.plugin)
@@ -5547,6 +5560,22 @@ class Management:
                 "ui_style": settings.ui_style,
                 "version": self._settings()["version"],
             }
+        elif action == "update_check":
+            updater = getattr(plugin, "updater", None)
+            if updater is None:
+                raise RuntimeError("更新检查器尚未就绪")
+            result = {"update": await updater.check(force=True)}
+        elif action == "update_dismiss":
+            updater = getattr(plugin, "updater", None)
+            if updater is None:
+                raise RuntimeError("更新检查器尚未就绪")
+            ver = str(options.get("version") or "").strip()
+            result = {"update": await completed_thread(updater.dismiss, ver)}
+        elif action == "update_undismiss":
+            updater = getattr(plugin, "updater", None)
+            if updater is None:
+                raise RuntimeError("更新检查器尚未就绪")
+            result = {"update": await completed_thread(updater.undismiss)}
         elif action == "services":
             current = await completed_thread(plugin.runtime.services.load)
             if isinstance(current, dict):

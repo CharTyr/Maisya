@@ -241,8 +241,159 @@
 .ms-view[hidden],
 .mil-led-pill[hidden],
 .mil-key[hidden],
-.ms-mob-dock[hidden] {
+.ms-mob-dock[hidden],
+.ms-upd-pop[hidden],
+.ms-upd-dot[hidden] {
   display: none;
+}
+
+.ms-upd-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.ms-upd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ms-upd-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+:root[data-ui-style="millennium"] .ms-upd-dot {
+  border-radius: 0;
+}
+.ms-upd-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 95;
+  width: min(312px, calc(100vw - 24px));
+  padding: 12px 13px;
+  border: 1px solid var(--mil-line);
+  border-radius: 14px;
+  background: var(--mil-panel);
+  color: var(--mil-ink);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+.ms-upd-pop::before,
+.ms-upd-pop::after {
+  content: "";
+  position: absolute;
+  right: 20px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.ms-upd-pop::before {
+  top: -6px;
+  background: var(--mil-line);
+}
+.ms-upd-pop::after {
+  top: -4.5px;
+  background: var(--mil-panel);
+}
+:root[data-ui-style="millennium"] .ms-upd-pop {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: 0 5px 0 var(--mil-drop);
+}
+:root[data-ui-style="millennium"] .ms-upd-pop::before {
+  top: -7px;
+}
+:root[data-ui-style="millennium"] .ms-upd-pop::after {
+  top: -4px;
+}
+.ms-upd-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ms-upd-pop-head-l {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.ms-upd-rel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  border: 1px solid var(--mil-rule);
+  border-radius: 10px;
+  background: var(--mil-screen);
+}
+:root[data-ui-style="millennium"] .ms-upd-rel {
+  border: 2px solid var(--mil-line);
+  border-radius: 0;
+}
+.ms-upd-rel[hidden] {
+  display: none;
+}
+.ms-upd-notes {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--mil-font-sans, inherit);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mil-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 112px;
+  overflow-y: auto;
+}
+.ms-upd-notes[hidden] {
+  display: none;
+}
+.ms-upd-pop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 7px;
+  border-top: 1px dashed var(--mil-rule);
+  font-size: 12px;
+  color: var(--mil-muted);
+}
+.ms-upd-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+.ms-upd-opt input {
+  margin: 0;
+  accent-color: var(--mil-accent);
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .ms-upd-pop {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: 64px;
+    width: auto;
+  }
+  .ms-upd-pop::before,
+  .ms-upd-pop::after {
+    display: none;
+  }
 }
 </style>
 </head>
@@ -266,6 +417,39 @@
       </nav>
     </div>
     <div class="mil-top-right">
+      <div class="ms-upd-anchor" id="ms-upd-anchor">
+        <button type="button" class="mil-key mil-key--sm ms-upd-chip" id="ms-upd-chip" aria-haspopup="dialog" aria-expanded="false" aria-controls="ms-upd-pop" title="版本与更新提醒">
+          <span class="ms-upd-dot" id="ms-upd-dot" aria-hidden="true" hidden></span>
+          <span class="mono" id="ms-upd-chip-txt">版本</span>
+        </button>
+        <div class="ms-upd-pop" id="ms-upd-pop" role="dialog" aria-label="版本与更新" hidden>
+          <div class="ms-upd-pop-head">
+            <div class="ms-upd-pop-head-l">
+              <strong class="mono" id="ms-upd-pop-ver">—</strong>
+              <span class="mil-tag" id="ms-upd-pop-tag">未检查</span>
+            </div>
+            <button type="button" class="mil-key mil-key--sm" id="ms-upd-check-btn">检查</button>
+          </div>
+          <div class="mil-hint" id="ms-upd-pop-meta" style="font-size:12px;overflow-wrap:anywhere">点击「检查」检测 GitHub 新版本</div>
+          <div class="ms-upd-rel" id="ms-upd-rel-box" hidden>
+            <div class="mil-row" style="justify-content:space-between;align-items:center;gap:6px">
+              <strong id="ms-upd-rel-title" style="font-size:12.5px"></strong>
+              <span class="mil-hint mono" id="ms-upd-rel-date" style="font-size:11px"></span>
+            </div>
+            <pre class="ms-upd-notes" id="ms-upd-notes" hidden></pre>
+            <div class="mil-hint" style="font-size:11.5px;overflow-wrap:anywhere">在 MaiBot 插件管理点更新，或目录 <code class="mono">git pull</code> 后重载。</div>
+            <div class="mil-row" style="gap:6px;flex-wrap:wrap">
+              <button type="button" class="mil-key mil-key--sm mil-key--hot" id="ms-upd-copy-url">复制链接</button>
+              <a class="mil-key mil-key--sm" id="ms-upd-open-url" href="#" target="_blank" rel="noopener noreferrer" style="text-decoration:none">发布页</a>
+              <button type="button" class="mil-key mil-key--sm" id="ms-upd-toggle-dismiss">忽略此版</button>
+            </div>
+          </div>
+          <div class="ms-upd-pop-foot">
+            <label class="ms-upd-opt"><input type="checkbox" id="ms-upd-auto" checked /><span>自动检查 (12h)</span></label>
+            <label class="ms-upd-opt"><input type="checkbox" id="ms-upd-notify" checked /><span>私聊提醒管理员</span></label>
+          </div>
+        </div>
+      </div>
       <button type="button" class="mil-key mil-key--sm" id="ui-style-toggle" aria-pressed="true" title="切换界面主题（千禧机械 / 现代极简 / 自动）">千禧机械</button>
       <button type="button" class="mil-key mil-key--sm" id="open-onboarding-btn" title="打开五步初始化引导">引导</button>
       <div class="mil-led-pill" id="top-led-pill"{{NOW_HIDDEN}}>
@@ -1492,6 +1676,113 @@
     }).join("");
   }
 
+  let latestUpdateInfo = {};
+  function closeUpdatePopover(returnFocus = false) {
+    const pop = $("#ms-upd-pop");
+    const chip = $("#ms-upd-chip");
+    if (pop && !pop.hidden) pop.hidden = true;
+    if (chip) {
+      chip.setAttribute("aria-expanded", "false");
+      if (returnFocus) chip.focus();
+    }
+  }
+  function renderUpdateBar(upd, feedbackMsg = "") {
+    const info = upd && typeof upd === "object" ? upd : latestUpdateInfo;
+    latestUpdateInfo = { ...latestUpdateInfo, ...info };
+    const curVer = String(latestUpdateInfo.current_version || "").trim();
+    const latestVer = String(latestUpdateInfo.latest_version || "").trim();
+    const hasUpd = Boolean(latestUpdateInfo.has_update && latestVer);
+    const dismissed = Boolean(latestUpdateInfo.dismissed);
+    const showHot = Boolean(latestUpdateInfo.show_banner && hasUpd && !dismissed);
+    const checkedAt = Number(latestUpdateInfo.checked_at || 0);
+    const lastErr = String(latestUpdateInfo.last_error || "").trim();
+    const relUrl = String(latestUpdateInfo.release_url || latestUpdateInfo.repository_url || "").trim();
+
+    const chip = $("#ms-upd-chip");
+    const dot = $("#ms-upd-dot");
+    const chipTxt = $("#ms-upd-chip-txt");
+    if (chip) {
+      chip.classList.toggle("mil-key--hot", showHot);
+      chip.title = showHot ? `发现新版本 v${latestVer}，点击查看` : `当前版本 ${curVer ? "v" + curVer : "—"}，点击检查更新`;
+    }
+    if (dot) dot.hidden = !showHot;
+    if (chipTxt) {
+      chipTxt.textContent = showHot ? `新版 v${latestVer}` : (curVer ? `v${curVer}` : "版本");
+    }
+
+    const verEl = $("#ms-upd-pop-ver");
+    const tagEl = $("#ms-upd-pop-tag");
+    const metaEl = $("#ms-upd-pop-meta");
+    const relBox = $("#ms-upd-rel-box");
+    const titleEl = $("#ms-upd-rel-title");
+    const dateEl = $("#ms-upd-rel-date");
+    const notesEl = $("#ms-upd-notes");
+    const openLink = $("#ms-upd-open-url");
+    const copyBtn = $("#ms-upd-copy-url");
+    const disBtn = $("#ms-upd-toggle-dismiss");
+
+    if (verEl) verEl.textContent = curVer ? `v${curVer}` : "—";
+    if (tagEl) {
+      if (lastErr && !hasUpd) {
+        tagEl.className = "mil-tag mil-tag--warn";
+        tagEl.textContent = "检查失败";
+      } else if (hasUpd && dismissed) {
+        tagEl.className = "mil-tag mil-tag--off";
+        tagEl.textContent = `已忽略 v${latestVer}`;
+      } else if (hasUpd) {
+        tagEl.className = "mil-tag mil-tag--hot";
+        tagEl.textContent = `可更新 v${latestVer}`;
+      } else if (checkedAt > 0) {
+        tagEl.className = "mil-tag mil-tag--ok";
+        tagEl.textContent = "已是最新";
+      } else {
+        tagEl.className = "mil-tag";
+        tagEl.textContent = "未检查";
+      }
+    }
+    if (metaEl) {
+      if (feedbackMsg) {
+        metaEl.textContent = feedbackMsg;
+      } else if (lastErr) {
+        metaEl.textContent = lastErr;
+      } else if (hasUpd) {
+        metaEl.textContent = `${checkedAt > 0 ? "检查于 " + fmtTime(checkedAt) + " · " : ""}${dismissed ? "已忽略气泡红点，点下方可恢复" : "检测到新正式版本"}`;
+      } else if (checkedAt > 0) {
+        metaEl.textContent = `检查于 ${fmtTime(checkedAt)} · 当前已是最新版本`;
+      } else {
+        metaEl.textContent = "每 12 小时静默检查，也可随时点右上角手动检测";
+      }
+    }
+    if (relBox) {
+      relBox.hidden = !hasUpd;
+      if (hasUpd) {
+        if (titleEl) titleEl.textContent = latestUpdateInfo.release_name || `Maisya v${latestVer}`;
+        if (dateEl) dateEl.textContent = latestUpdateInfo.published_at ? String(latestUpdateInfo.published_at).slice(0, 10) : "";
+        const notes = String(latestUpdateInfo.notes || latestUpdateInfo.summary || "").trim();
+        if (notesEl) {
+          notesEl.hidden = !notes;
+          notesEl.textContent = notes;
+        }
+        if (openLink) {
+          openLink.hidden = !relUrl;
+          if (relUrl) openLink.href = relUrl;
+        }
+        if (copyBtn) copyBtn.hidden = !relUrl;
+        if (disBtn) {
+          disBtn.textContent = dismissed ? "恢复提醒" : "忽略此版";
+          disBtn.dataset.updAction = dismissed ? "undismiss" : "dismiss";
+          disBtn.dataset.updVersion = latestVer;
+        }
+        relBox.dataset.releaseUrl = relUrl;
+      }
+    }
+    const autoEl = $("#ms-upd-auto");
+    if (autoEl && typeof latestUpdateInfo.check_enabled === "boolean") autoEl.checked = latestUpdateInfo.check_enabled;
+    const notifyEl = $("#ms-upd-notify");
+    if (notifyEl && typeof latestUpdateInfo.notify_admin === "boolean") notifyEl.checked = latestUpdateInfo.notify_admin;
+  }
+  window.MaisyaUpdateBar = { render: renderUpdateBar, close: closeUpdatePopover };
+
   function renderPendingProposalBar(snap) {
     const props = Array.isArray(snap?.pending_skill_proposals) ? snap.pending_skill_proposals : [];
     const cnt = Number(snap?.pending_skill_proposals_count ?? props.length);
@@ -1855,6 +2146,7 @@
       state.selectedDetail = snap.selected;
     }
 
+    renderUpdateBar(snap.update);
     renderPendingProposalBar(snap);
     renderHeartbeatTicks(snap);
     renderIntents(snap);
@@ -2482,6 +2774,63 @@
       return;
     }
 
+    if (ev.target.closest("#ms-upd-chip")) {
+      const pop = $("#ms-upd-pop");
+      const chip = $("#ms-upd-chip");
+      if (pop && chip) {
+        const nextOpen = pop.hidden;
+        pop.hidden = !nextOpen;
+        chip.setAttribute("aria-expanded", String(nextOpen));
+        if (nextOpen) renderUpdateBar(latestUpdateInfo);
+      }
+      return;
+    }
+    if (ev.target.closest("#ms-upd-check-btn")) {
+      const btn = $("#ms-upd-check-btn");
+      const metaEl = $("#ms-upd-pop-meta");
+      if (btn) btn.disabled = true;
+      if (metaEl) metaEl.textContent = "正在连接 GitHub 检查…";
+      try {
+        const r = await hostRpc("write", "update_check", {});
+        if (r?.update) {
+          if (state.lastSnap) state.lastSnap.update = r.update;
+          renderUpdateBar(r.update);
+        } else if (r?.error) {
+          renderUpdateBar(latestUpdateInfo, r.error);
+        }
+      } catch (err) {
+        renderUpdateBar(latestUpdateInfo, err?.message || "检查更新失败");
+      }
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (ev.target.closest("#ms-upd-copy-url")) {
+      const url = $("#ms-upd-rel-box")?.dataset.releaseUrl || latestUpdateInfo.release_url || "";
+      if (url) {
+        try { await navigator.clipboard?.writeText?.(url); renderUpdateBar(latestUpdateInfo, "已复制发布页链接"); }
+        catch (_) { renderUpdateBar(latestUpdateInfo, url); }
+      }
+      return;
+    }
+    const updToggleBtn = ev.target.closest("#ms-upd-toggle-dismiss");
+    if (updToggleBtn) {
+      const isUndo = updToggleBtn.dataset.updAction === "undismiss";
+      const ver = updToggleBtn.dataset.updVersion || latestUpdateInfo.latest_version || "";
+      updToggleBtn.disabled = true;
+      try {
+        const res = await hostRpc("write", isUndo ? "update_undismiss" : "update_dismiss", isUndo ? {} : { version: ver });
+        if (res?.update) {
+          if (state.lastSnap) state.lastSnap.update = res.update;
+          renderUpdateBar(res.update, isUndo ? "已恢复此版本提醒" : `已忽略 v${ver}，下一版本再提醒`);
+        }
+      } catch (_) {}
+      updToggleBtn.disabled = false;
+      return;
+    }
+    if (!$("#ms-upd-pop")?.hidden && !ev.target.closest("#ms-upd-anchor")) {
+      closeUpdatePopover(false);
+    }
+
     if (activePage !== "now") return;
 
     if (ev.target.closest("#now-goto-proposals")) {
@@ -2799,7 +3148,25 @@
     refresh(true);
   }, { signal: shellSig });
 
-  document.addEventListener("change", (ev) => {
+  document.addEventListener("change", async (ev) => {
+    if (ev.target.id === "ms-upd-auto" || ev.target.id === "ms-upd-notify") {
+      const key = ev.target.id === "ms-upd-auto" ? "update_check_enabled" : "update_notify_admin";
+      const val = Boolean(ev.target.checked);
+      try {
+        const res = await hostRpc("write", "settings_update", { settings: { [key]: val } });
+        if (res?.success) {
+          const nextUpd = res.update || { ...latestUpdateInfo, [key === "update_check_enabled" ? "check_enabled" : "notify_admin"]: val };
+          if (state.lastSnap) state.lastSnap.update = nextUpd;
+          renderUpdateBar(nextUpd, "已保存更新偏好");
+        } else {
+          ev.target.checked = !val;
+          renderUpdateBar(latestUpdateInfo, res?.error || "保存失败");
+        }
+      } catch (_) {
+        ev.target.checked = !val;
+      }
+      return;
+    }
     if (ev.target.id === "now-thread-chat") {
       state.thChat = ev.target.value || "";
       if (state.lastSnap) renderThreads(state.lastSnap);
@@ -2872,6 +3239,7 @@
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {
       if (isConfirmOpen() || ev.target?.closest?.("#ms-confirm-dialog")) return;
+      if (!$("#ms-upd-pop")?.hidden) { closeUpdatePopover(true); return; }
       if (!$("#ctx-scrim")?.hidden) { closeCtxModal(); return; }
       const mDrop = $("#onb-model-drop");
       if (mDrop && !mDrop.hidden) {
@@ -2970,6 +3338,7 @@
     if (topLedPill) topLedPill.hidden = !isNow;
 
     closeHelpPop?.();
+    closeUpdatePopover(false);
     hideCtxTip();
     if ($("#ms-confirm-dialog")?.open) closeConfirmDialog("cancel");
     if (!isNow && !$("#ctx-scrim")?.hidden) closeCtxModal();

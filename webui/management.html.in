@@ -5269,6 +5269,7 @@
       renderGrants();
       renderVault();
       renderRuntime();
+      if (res.update && window.MaisyaUpdateBar?.render) window.MaisyaUpdateBar.render(res.update);
     }
 
     function savePartialSettings(patch, adminErrSlot = false) {

@@ -111,9 +111,12 @@ class Pulse:
         daily_bg_runs_limit=None,
         daily_bg_tokens_limit=None,
         bg_max_consecutive_failures=None,
+        updater=None,
     ):
         self.bridge, self.host, self.enabled = bridge, host, enabled
         self.intents, self.engine = intents, engine
+        self.updater = updater
+        self._update_notify_retry_at = 0.0
         self.watch_evaluator = watch_evaluator
         self.authority_check = authority_check
         if daily_bg_runs_limit is None:
@@ -584,6 +587,101 @@ class Pulse:
             if self.intents is not None:
                 await self._intents()
             await self._heartbeat()
+            await self._check_updates()
+
+    async def _check_updates(self) -> None:
+        """定期后台检查 Maisya 新版本，并在允许时向管理员私聊温柔提醒一次。"""
+        if self.closing or self.updater is None:
+            return
+        try:
+            if self.updater.due_for_background_check():
+                await self.updater.check(force=False)
+        except Exception as exc:
+            logger.debug("后台更新检查跳过: %s", exc)
+            return
+
+        if self.closing:
+            return
+        plugin_ok = self.plugin_enabled() if callable(self.plugin_enabled) else True
+        if not plugin_ok or not self.updater.should_notify_admin():
+            return
+        if (
+            self.intents is not None
+            and self.sleep_window
+            and hasattr(self.intents, "in_sleep_window")
+            and self.intents.in_sleep_window(self.sleep_window)
+        ):
+            return
+
+        clock_fn = getattr(self.updater, "_clock", time.time)
+        now = float(clock_fn()) if callable(clock_fn) else time.time()
+        if now < self._update_notify_retry_at:
+            return
+
+        admin_entries = sorted(self.admins() if callable(self.admins) else ())
+        if not admin_entries:
+            return
+
+        st = self.updater.status()
+        latest = str(st.get("latest_version") or "").strip()
+        current = str(st.get("current_version") or "").strip()
+        rel_url = str(st.get("release_url") or "").strip()
+        summary = str(st.get("summary") or "").strip()
+        if not latest:
+            return
+
+        safe_summary = html.escape(self.redact(summary), quote=False)
+        safe_url = html.escape(rel_url, quote=False)
+        summary_part = f" summary={safe_summary}" if safe_summary else ""
+        msg = (
+            f"检测到 Maisya 插件发布了新版本（v{current} → v{latest}）。"
+            "请用你平时的口吻简短、自然地提醒管理员有新版本可更新"
+            "（可在 MaiBot WebUI 插件管理点更新，或在插件目录 git pull 后重载），"
+            "顺手附上更新要点和发布页链接即可，不要过度打扰。"
+            f"\n<maisya_update>current=v{html.escape(current, quote=False)} "
+            f"latest=v{html.escape(latest, quote=False)} url={safe_url}{summary_part}</maisya_update>"
+        )
+
+        notified_chats: set[str] = set()
+        accepted_any = False
+        for admin_id in admin_entries:
+            entry = str(admin_id or "").strip()
+            if not entry or ":" not in entry:
+                continue
+            plat, uid = entry.split(":", 1)
+            plat_l = plat.strip().lower()
+            uid_s = uid.strip()
+            if not plat_l or not uid_s or plat_l in {"bot_console", "console", "admin"}:
+                continue
+            spec = f"{plat_l}:private:{uid_s}"
+            try:
+                notify_chat = await self._ensure_runtime_chat_id(spec)
+            except Exception:
+                notify_chat = ""
+            if not notify_chat or notify_chat in notified_chats:
+                continue
+            notified_chats.add(notify_chat)
+            try:
+                outcome = await self._wake(
+                    notify_chat,
+                    msg,
+                    reason="maisya_update_available",
+                    metadata={
+                        "current_version": current,
+                        "latest_version": latest,
+                        "release_url": rel_url,
+                    },
+                )
+                if outcome == "accepted":
+                    accepted_any = True
+            except Exception:
+                logger.debug("更新提醒发送给管理员 %s 失败", entry)
+
+        if accepted_any:
+            await asyncio.to_thread(self.updater.mark_notified, latest)
+            self._update_notify_retry_at = 0.0
+        else:
+            self._update_notify_retry_at = now + 3600.0
 
     async def _returns(self):
         params = inspect.signature(self.bridge.claim_ready).parameters

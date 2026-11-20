@@ -163,6 +163,8 @@ class Settings(PluginConfigBase):
     acquaintance_users: list[str] = Field(default_factory=list)
     longing_quiet_hours: int = Field(default=0, ge=0, le=720)
     tz_offset_minutes: int = Field(default=480, ge=-720, le=840)
+    update_check_enabled: bool = True
+    update_notify_admin: bool = True
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
 
     @model_validator(mode="before")

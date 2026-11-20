@@ -85,6 +85,7 @@ if __package__:
         strip_mention_all,
         verify_admin_message,
     )
+    from .maisya.updater import UpdateChecker
     from .maisya.vault import (
         Vault,
         VaultError,
@@ -152,6 +153,7 @@ else:
         strip_mention_all,
         verify_admin_message,
     )
+    from maisya.updater import UpdateChecker
     from maisya.vault import (
         Vault,
         VaultError,
@@ -299,6 +301,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self.host_runner = None
         self.docker_runner = None
         self.onboarding = None
+        self.updater = None
         self._pending_sources = {}
         self._turn_sources = {}
         self._continuing_turn_chats: set[str] = set()
@@ -463,6 +466,18 @@ class MaisyaPlugin(MaiBotPlugin):
         )
         await self.engine.recover()
         await asyncio.to_thread(self.intents.requeue)
+        self.updater = await asyncio.to_thread(
+            UpdateChecker,
+            self.data_root / "update_state.json",
+            plugin_root=Path(__file__).resolve().parent,
+            check_enabled=lambda: bool(
+                getattr(self.settings, "update_check_enabled", True)
+            ),
+            notify_admin=lambda: bool(
+                getattr(self.settings, "update_notify_admin", True)
+            ),
+            redact=self.vault.redact,
+        )
         self.pulse = Pulse(
             self.bridge,
             self.ctx,
@@ -501,6 +516,7 @@ class MaisyaPlugin(MaiBotPlugin):
             daily_bg_runs_limit=self.settings.daily_bg_runs_limit,
             daily_bg_tokens_limit=self.settings.daily_bg_tokens_limit,
             bg_max_consecutive_failures=self.settings.bg_max_consecutive_failures,
+            updater=self.updater,
             **self._tz_init_kwargs(Pulse, tz_offset),
         )
         self._sync_tz_offset(tz_offset)
@@ -599,6 +615,7 @@ class MaisyaPlugin(MaiBotPlugin):
         self.host_runner = None
         self.docker_runner = None
         self.onboarding = None
+        self.updater = None
         self._pending_sources.clear()
         self._turn_sources.clear()
         self._continuing_turn_chats.clear()
@@ -7679,6 +7696,9 @@ class MaisyaPlugin(MaiBotPlugin):
             result["known_chats"] = list(ob_view.get("known_chats") or [])
             result["recent_dms"] = list(ob_view.get("recent_dms") or [])
             result["available_models"] = list(ob_view.get("available_models") or [])
+            result["update"] = (
+                self.updater.status() if self.updater is not None else {}
+            )
             return self.vault.redact(result)
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as error:
             return {

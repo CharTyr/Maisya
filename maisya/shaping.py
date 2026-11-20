@@ -390,6 +390,11 @@ async def patch_settings(plugin, patch: dict | None, *, current_chat_id: str = "
         if int_field in patch and int_field in Settings.model_fields:
             cand[int_field] = int(patch[int_field])
             changes.append(int_field)
+    for bool_field in ("update_check_enabled", "update_notify_admin"):
+        if bool_field in patch and bool_field in Settings.model_fields:
+            v = patch[bool_field]
+            cand[bool_field] = v.strip().lower() in {"true", "1", "yes", "on"} if isinstance(v, str) else bool(v)
+            changes.append(bool_field)
     if "chat_proactive_levels" in patch and "chat_proactive_levels" in Settings.model_fields:
         raw_lv = patch["chat_proactive_levels"]
         if raw_lv is not None and not isinstance(raw_lv, dict):
@@ -538,6 +543,7 @@ async def build_overview(plugin, *, current_chat_id: str = "", current_platform:
         "profiles": [await completed_thread(_profile_summary, plugin, pid) for pid in pids],
         "pending_skill_proposals": [{"proposal_id": p["proposal_id"], "skill_id": p["skill_id"], "title": p["title"]} for p in (await completed_thread(plugin.memory.list_skill_proposals, status="pending", limit=10) if getattr(plugin, "memory", None) is not None else [])],
         "intents": [{"intent_id": r["intent_id"], "mode": r.get("mode", "schedule"), "condition": r.get("condition", ""), "due_at": r["due_at"], "last_checked_at": r.get("last_checked_at"), "last_triggered_at": r.get("last_triggered_at")} for r in pending],
+        "update": plugin.updater.status() if getattr(plugin, "updater", None) is not None else {},
     }
 
 
