@@ -2383,6 +2383,25 @@ class DigestWorkspace:
                                 feed["candidate_urls_14d"] = pruned_url_map
                                 changed_local = True
                         kept_total = int(feed.get("kept_total", 0) or 0)
+                        net_neg = int(feed.get("down", 0) or 0) - (
+                            int(feed.get("up", 0) or 0) + int(feed.get("reply", 0) or 0)
+                        )
+                        if (
+                            kept_total >= 3
+                            and int(feed.get("fail_count", 0) or 0) == 0
+                            and net_neg <= 0
+                        ):
+                            feed["status"] = "active"
+                            feed["trial_until"] = 0.0
+                            graduated.append(
+                                {
+                                    "feed_id": feed["id"],
+                                    "url": feed["url"],
+                                    "title": feed.get("title", ""),
+                                }
+                            )
+                            changed_local = True
+                            continue
                         if kept_total == 0 and len(recent_cands) >= TRIAL_CAND_MIN:
                             unsubscribed.append(
                                 self._retire_feed(
@@ -3226,8 +3245,21 @@ class DigestWorkspace:
                     discovered_feeds.append(str((add_res.get("feed") or {}).get("url") or feed_url))
                     break
 
+        recent_pushed_titles: list[str] = []
+        hist_items = history.get("items") if isinstance(history, dict) else []
+        if isinstance(hist_items, list):
+            for it in reversed(hist_items):
+                if not isinstance(it, dict):
+                    continue
+                t = str(it.get("title") or "").strip()
+                if t and t not in recent_pushed_titles:
+                    recent_pushed_titles.append(t[:60])
+                    if len(recent_pushed_titles) >= 10:
+                        break
+
         return {
             "candidates": final_candidates,
+            "recent_pushed_titles": recent_pushed_titles,
             "stats": {
                 "seeded_feeds": seeded_urls,
                 "feeds_total": int(poll_res.get("feeds_count", 0) or 0),
@@ -4132,6 +4164,16 @@ class DigestWorkspace:
                 for f in (feeds or [])
                 if isinstance(f, dict) and str(f.get("status") or "active") == "active"
             )
+            trial_feeds = sum(
+                1
+                for f in (feeds or [])
+                if isinstance(f, dict) and str(f.get("status") or "") == "trial"
+            )
+            feed_str = (
+                f"活跃订阅源 {active_feeds} 个（试用 {trial_feeds} 个）"
+                if trial_feeds > 0
+                else f"活跃订阅源 {active_feeds} 个"
+            )
             topic_counts = Counter(
                 str(it.get("topic") or "综合").strip()
                 for it in (selected or [])
@@ -4144,7 +4186,7 @@ class DigestWorkspace:
             )
             note = (
                 f"简报进展（{stamp} {stage}）：入选 {len(selected or [])} 条；"
-                f"主题：{topic_str}；活跃订阅源 {active_feeds} 个。\n"
+                f"主题：{topic_str}；{feed_str}。\n"
             )
             self.work.write("project/STATE.md", note[:248])
         except Exception:
@@ -4232,12 +4274,15 @@ async def run_digest_tool(
         cand_list = list(arguments.get("candidates") or [])
         if cand_list and web is not None:
             await dw.backfill_uncached_candidates(cand_list, web=web, context=context)
-        return await asyncio.to_thread(
+        selected_res = await asyncio.to_thread(
             dw.score_select,
             cand_list,
             max_items=int(arguments.get("max_items", 5) or 5),
             run_key=run_key,
         )
+        if isinstance(selected_res, dict) and selected_res.get("selected"):
+            return {**selected_res, "_maisya_fold_prior_tools": ["digest_feed"]}
+        return selected_res
     if action == "render_card_html":
         raw_max = arguments.get("max_items")
         max_items = max(1, min(int(raw_max if raw_max is not None else 5), 8))

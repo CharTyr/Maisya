@@ -421,18 +421,29 @@ class Learning:
                 response = checked(raw_resp)
                 candidate = _parse_json_object(response["response"])
                 did_work = False
+                guard_rejected: ValueError | None = None
                 op = str(candidate.get("op") or "").strip().lower()
                 cand_skill = str(candidate.get("skill_id") or "").strip()
                 lesson = str(candidate.get("lesson") or "").strip()
                 prov = f"thread:{row['thread_id']}@r{int(row.get('completed_revision') or 0)}"
                 trace_signals = [prov]
+                seen_err_tools: set[str] = set()
+                has_tool_recovery = False
                 for item in trace:
-                    if isinstance(item, dict) and item.get("signal"):
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("signal"):
                         sig = str(item["signal"])
                         if sig not in trace_signals:
                             trace_signals.append(sig)
-                    elif isinstance(item, dict) and item.get("tool") and "tool_recovery" not in trace_signals:
-                        trace_signals.append("tool_recovery")
+                    tname = str(item.get("tool") or "").strip()
+                    tstatus = str(item.get("status") or "").strip()
+                    if tname and tstatus == "error":
+                        seen_err_tools.add(tname)
+                    elif tname and tstatus == "success" and tname in seen_err_tools:
+                        has_tool_recovery = True
+                if has_tool_recovery and "tool_recovery" not in trace_signals:
+                    trace_signals.append("tool_recovery")
 
                 if (
                     op == "patch" or (cand_skill and cand_skill in existing_skills and lesson)
@@ -451,27 +462,45 @@ class Learning:
                                 next_sk = f"{base_txt}\n{bullet}\n"
                             else:
                                 next_sk = f"{base_txt}\n\n## 实战补充与避坑\n{bullet}\n"
-                            await completed_thread(
-                                self.memory._guard,
-                                "skill",
-                                next_sk,
-                                row["chat_id"],
-                                allow_custom=True,
-                            )
-                            await completed_thread(
-                                lambda: self.memory.save_skill_proposal(
-                                    thread_id=row["thread_id"],
-                                    revision=int(row.get("completed_revision") or 0),
-                                    profile_id=str(row.get("profile") or "default"),
-                                    skill_id=target_sk,
-                                    title=f"补充技能：{target_sk}",
-                                    description=lesson[:180],
-                                    content=next_sk,
-                                    signals=trace_signals[:6],
-                                    rationale=f"来自 {prov} 的实战避坑补充，确认后合并入技能",
+                            try:
+                                await completed_thread(
+                                    self.memory._guard,
+                                    "skill",
+                                    bullet,
+                                    row["chat_id"],
+                                    allow_custom=False,
                                 )
-                            )
-                        did_work = True
+                                await completed_thread(
+                                    self.memory._guard,
+                                    "skill",
+                                    next_sk,
+                                    row["chat_id"],
+                                    allow_custom=True,
+                                )
+                                await completed_thread(
+                                    lambda: self.memory.save_skill_proposal(
+                                        thread_id=row["thread_id"],
+                                        revision=int(row.get("completed_revision") or 0),
+                                        profile_id=str(row.get("profile") or "default"),
+                                        skill_id=target_sk,
+                                        title=f"补充技能：{target_sk}",
+                                        description=lesson[:180],
+                                        content=next_sk,
+                                        signals=trace_signals[:6],
+                                        rationale=f"来自 {prov} 的实战避坑补充，确认后合并入技能",
+                                    )
+                                )
+                                did_work = True
+                            except ValueError as exc:
+                                guard_rejected = exc
+                                logger.warning(
+                                    "学习提炼技能草稿被拒绝 thread=%s rev=%s: %s",
+                                    row["thread_id"],
+                                    row["completed_revision"],
+                                    exc,
+                                )
+                        else:
+                            did_work = True
                 elif op == "create" and cand_skill and cand_skill not in existing_skills:
                     raw_md = str(candidate.get("content") or "").strip()
                     title = str(candidate.get("title") or cand_skill).strip()
@@ -514,45 +543,71 @@ class Learning:
                                 lines.append("")
                             raw_md = "\n".join(lines).strip() + "\n"
                     if raw_md:
-                        await completed_thread(
-                            self.memory._guard, "skill", raw_md, row["chat_id"]
-                        )
-                        await completed_thread(
-                            lambda: self.memory.save_skill_proposal(
-                                thread_id=row["thread_id"],
-                                revision=int(row.get("completed_revision") or 0),
-                                profile_id=str(row.get("profile") or "default"),
-                                skill_id=cand_skill,
-                                title=title,
-                                description=desc,
-                                content=raw_md,
-                                signals=[prov, f"{len(trace)} 步恢复轨迹"],
-                                rationale=rationale,
+                        try:
+                            await completed_thread(
+                                self.memory._guard, "skill", raw_md, row["chat_id"]
                             )
-                        )
-                        did_work = True
+                            await completed_thread(
+                                lambda: self.memory.save_skill_proposal(
+                                    thread_id=row["thread_id"],
+                                    revision=int(row.get("completed_revision") or 0),
+                                    profile_id=str(row.get("profile") or "default"),
+                                    skill_id=cand_skill,
+                                    title=title,
+                                    description=desc,
+                                    content=raw_md,
+                                    signals=[prov, f"{len(trace)} 步轨迹"],
+                                    rationale=rationale,
+                                )
+                            )
+                            did_work = True
+                        except ValueError as exc:
+                            guard_rejected = exc
+                            logger.warning(
+                                "学习提炼新建技能草稿被拒绝 thread=%s rev=%s: %s",
+                                row["thread_id"],
+                                row["completed_revision"],
+                                exc,
+                            )
 
                 note = candidate.get("note")
                 if isinstance(note, str) and 1 <= len(note) <= 500:
                     if len(old["content"]) < 1800:
                         if note not in old["content"]:
                             content = (old["content"] + "\n\n" + note).strip()
-                            await completed_thread(
-                                self.memory.write,
-                                "notes",
-                                content,
-                                target=row["profile"],
-                                chat_id=row["chat_id"],
-                                expected_version=old["version"],
-                                author=prov,
-                            )
-                        did_work = True
+                            try:
+                                await completed_thread(
+                                    self.memory.write,
+                                    "notes",
+                                    content,
+                                    target=row["profile"],
+                                    chat_id=row["chat_id"],
+                                    expected_version=old["version"],
+                                    author=prov,
+                                )
+                                did_work = True
+                            except ValueError as exc:
+                                if "版本" in str(exc):
+                                    raise
+                                guard_rejected = exc
+                                logger.warning(
+                                    "学习提炼短笔记被拒绝 thread=%s rev=%s: %s",
+                                    row["thread_id"],
+                                    row["completed_revision"],
+                                    exc,
+                                )
+                        else:
+                            did_work = True
                     elif not did_work:
                         await completed_thread(self._receipt, row, "full")
                         return
 
                 if not did_work:
-                    await completed_thread(self._receipt, row, "empty")
+                    await completed_thread(
+                        self._receipt,
+                        row,
+                        "rejected" if guard_rejected is not None else "empty",
+                    )
                     return
                 await completed_thread(self._receipt, row, "applied")
         except asyncio.CancelledError:

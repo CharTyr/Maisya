@@ -368,12 +368,20 @@ def prune_tool_outputs(
     min_prune_chars: int = DEFAULT_MIN_PRUNE_CHARS,
     min_dup_chars: int = DEFAULT_MIN_DUP_CHARS,
     event_seq: int | str = "{event_seq}",
+    only_tools: set[str] | tuple[str, ...] | list[str] | None = None,
+    protect_last_turn: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Tier-1 零成本旧工具输出去重与折叠，绝不改动 user 消息和 assistant.tool_calls 参数。"""
     if not history:
         return [], {"reclaimed_tokens": 0, "pruned_entries": [], "protect_from": 0}
 
     protect_from = _find_protect_start(history, tail_tokens)
+    if protect_last_turn:
+        last_assistant = next(
+            (i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "assistant"),
+            0,
+        )
+        protect_from = min(protect_from, last_assistant) if protect_from > 0 else last_assistant
     if protect_from <= 0:
         return [dict(m) for m in history], {
             "reclaimed_tokens": 0,
@@ -381,6 +389,11 @@ def prune_tool_outputs(
             "protect_from": 0,
         }
 
+    only_set = (
+        {str(t).strip() for t in only_tools if str(t).strip()}
+        if only_tools is not None
+        else None
+    )
     tool_names = _map_tool_names(history)
     last_seen: dict[tuple[str, str], int] = {}
     for idx, msg in enumerate(history):
@@ -392,6 +405,8 @@ def prune_tool_outputs(
         if "event_seq=" in raw and ("[已折叠" in raw):
             continue
         tname = str(msg.get("name") or tool_names.get(str(msg.get("tool_call_id") or ""), "") or "")
+        if only_set is not None and tname not in only_set:
+            continue
         digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
         last_seen[(tname, digest)] = idx
 
@@ -405,6 +420,9 @@ def prune_tool_outputs(
                 tname = str(
                     copied.get("name") or tool_names.get(str(copied.get("tool_call_id") or ""), "") or ""
                 )
+                if only_set is not None and tname not in only_set:
+                    new_history.append(copied)
+                    continue
                 digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
                 is_dup = len(raw) >= min_dup_chars and last_seen.get((tname, digest), -1) > idx
                 reason = "duplicate" if is_dup else ("oversize" if len(raw) > min_prune_chars else "")

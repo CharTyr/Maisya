@@ -435,7 +435,8 @@ class ThreadStore:
                 )
                 conn.execute(
                     "UPDATE agent_threads SET state_note=? "
-                    "WHERE thread_id IN (SELECT thread_id FROM thread_context WHERE workspace_id=?)",
+                    "WHERE state NOT IN ('closed', 'archived') "
+                    "AND thread_id IN (SELECT thread_id FROM thread_context WHERE workspace_id=?)",
                     (clean_note, workspace_id),
                 )
 
@@ -1933,6 +1934,8 @@ class ThreadStore:
         tail_tokens=DEFAULT_TAIL_TOKENS,
         min_prune_chars=DEFAULT_MIN_PRUNE_CHARS,
         min_reclaim_tokens=PRUNE_MIN_RECLAIM_TOKENS,
+        only_tools=None,
+        protect_last_turn: bool = False,
     ) -> bool:
         """Tier-1 零成本裁剪：归档并折叠保护区之前的重复或超大旧工具输出。"""
         row = self.get(thread_id, chat_id)
@@ -1942,6 +1945,8 @@ class ThreadStore:
             tail_tokens=tail_tokens,
             min_prune_chars=min_prune_chars,
             event_seq="__EVENT_SEQ__",
+            only_tools=only_tools,
+            protect_last_turn=protect_last_turn,
         )
         if (
             not stats["pruned_entries"]
@@ -1962,6 +1967,8 @@ class ThreadStore:
                 tail_tokens=tail_tokens,
                 min_prune_chars=min_prune_chars,
                 event_seq="__EVENT_SEQ__",
+                only_tools=only_tools,
+                protect_last_turn=protect_last_turn,
             )
             if (
                 not cur_stats["pruned_entries"]
@@ -1984,6 +1991,8 @@ class ThreadStore:
                 tail_tokens=tail_tokens,
                 min_prune_chars=min_prune_chars,
                 event_seq=archive_seq,
+                only_tools=only_tools,
+                protect_last_turn=protect_last_turn,
             )
             db.execute(
                 'UPDATE agent_threads SET history=? WHERE thread_id=? AND state NOT IN ("closed", "archived")',
@@ -3628,14 +3637,16 @@ class ThreadEngine:
         if (tokens <= 0 and duration_ms <= 0) or thread_id not in self.background_tasks:
             return
         g = grant if isinstance(grant, dict) else {}
-        if g.get("bg_budget_exempt"):
-            return
+        is_exempt = bool(g.get("bg_budget_exempt"))
         rec_fn = (
             getattr(self.intents, "record_bg_usage", None)
             if self.intents is not None
             else None
         )
         if not callable(rec_fn):
+            return
+        supports_exempt = "exempt" in inspect.signature(rec_fn).parameters
+        if is_exempt and not supports_exempt:
             return
         src = str(g.get("bg_source") or "").strip()
         if not src:
@@ -3647,14 +3658,16 @@ class ThreadEngine:
                 if (not row or row.get("owner") == "self")
                 else f"chat:{row.get('chat_id') or ''}"
             )
-        await asyncio.to_thread(
-            rec_fn,
-            source=src,
-            target=tgt,
-            runs=0,
-            tokens=max(0, int(tokens)),
-            duration_ms=max(0, int(duration_ms)),
-        )
+        kwargs = {
+            "source": src,
+            "target": tgt,
+            "runs": 0,
+            "tokens": max(0, int(tokens)),
+            "duration_ms": max(0, int(duration_ms)),
+        }
+        if supports_exempt and is_exempt:
+            kwargs["exempt"] = True
+        await asyncio.to_thread(rec_fn, **kwargs)
 
     async def _run_tier2_compact(
         self,
@@ -4396,6 +4409,7 @@ class ThreadEngine:
                         in_flight_tools = []
                         tool_messages = []
                         tool_results = []
+                        stage_fold_tools: set[str] = set()
                         redirecting = False
                         question = None
                         approval_pending = None
@@ -4533,6 +4547,18 @@ class ThreadEngine:
                                 result = {
                                     "error": _safe_tool_error_message(error, self.redact)
                                 }
+                            if isinstance(result, dict) and "_maisya_fold_prior_tools" in result:
+                                fold_hint = result.get("_maisya_fold_prior_tools")
+                                result = {
+                                    k: v
+                                    for k, v in result.items()
+                                    if k != "_maisya_fold_prior_tools"
+                                }
+                                if isinstance(fold_hint, (list, tuple, set)):
+                                    for fname in fold_hint:
+                                        cleaned_fname = str(fname or "").strip()
+                                        if cleaned_fname:
+                                            stage_fold_tools.add(cleaned_fname)
                             result = self.redact(result)
                             tool_results.append(
                                 {"call_id": call["id"], "value": result}
@@ -4562,6 +4588,22 @@ class ThreadEngine:
                             "tools",
                             {"calls": calls, "results": tool_results},
                         )
+                        if stage_fold_tools and self._legacy_char_budget is None:
+                            pruned_stage = await asyncio.to_thread(
+                                self.store.prune_history,
+                                thread_id,
+                                store_chat,
+                                tail_tokens=0,
+                                min_prune_chars=4000,
+                                min_reclaim_tokens=500,
+                                only_tools=stage_fold_tools,
+                                protect_last_turn=True,
+                            )
+                            if pruned_stage:
+                                refreshed_stage = await asyncio.to_thread(
+                                    self.store.get, thread_id, store_chat
+                                )
+                                history = refreshed_stage["history"]
                         if question and await asyncio.to_thread(
                             self.store.finish,
                             thread_id,

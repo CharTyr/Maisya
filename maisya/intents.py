@@ -942,7 +942,7 @@ class Intents:
                     (thread_id, encode(payload), intent_id),
                 )
 
-    def finish(self, intent_id, status, wake_status="", *, delay=900):
+    def finish(self, intent_id, status, wake_status="", *, delay=900, last_error=None):
         if status not in {"done", "deferred", "failed"}:
             raise ValueError("意图处理结果无效")
         with self.store.connect() as db, db:
@@ -959,10 +959,14 @@ class Intents:
                     (status, wake_status, self.clock(), intent_id),
                 )
             else:
+                err_text = str(
+                    last_error if last_error is not None else (wake_status or "")
+                ).strip()[:500]
                 db.execute(
-                    "UPDATE intents SET status=?, wake_status=?, handled=? "
+                    "UPDATE intents SET status=?, wake_status=?, handled=?, "
+                    "last_error=CASE WHEN ?!='' THEN ? ELSE last_error END "
                     "WHERE intent_id=? AND status='claimed'",
-                    (status, wake_status, self.clock(), intent_id),
+                    (status, wake_status, self.clock(), err_text, err_text, intent_id),
                 )
 
     def requeue(self):
@@ -1410,6 +1414,7 @@ class Intents:
         runs: int = 1,
         tokens: int = 0,
         duration_ms: int = 0,
+        exempt: bool = False,
         now=None,
     ) -> None:
         cur = self.clock() if now is None else float(now)
@@ -1418,10 +1423,19 @@ class Intents:
         t_inc = max(0, int(tokens))
         d_inc = max(0, int(duration_ms))
         with self.store.connect() as db, db:
-            self._add_bg_usage(db, day_key, source, target, r_inc, t_inc, d_inc, cur)
+            self._add_bg_usage(
+                db, day_key, source, target, r_inc, t_inc, d_inc, cur, exempt=exempt
+            )
 
     @staticmethod
-    def _bg_usage_scopes(source: str, target: str) -> list[str]:
+    def _bg_usage_scopes(source: str, target: str, *, exempt: bool = False) -> list[str]:
+        if exempt:
+            scopes = ["__exempt__"]
+            if source:
+                scopes.append(f"exempt_source:{source}")
+            if target:
+                scopes.append(f"exempt_target:{target}")
+            return scopes
         scopes = ["__global__"]
         if source:
             scopes.append(f"source:{source}")
@@ -1429,8 +1443,10 @@ class Intents:
             scopes.append(f"target:{target}")
         return scopes
 
-    def _add_bg_usage(self, db, day_key, source, target, runs, tokens, duration_ms, now):
-        for scope_key in self._bg_usage_scopes(source, target):
+    def _add_bg_usage(
+        self, db, day_key, source, target, runs, tokens, duration_ms, now, *, exempt: bool = False
+    ):
+        for scope_key in self._bg_usage_scopes(source, target, exempt=exempt):
             db.execute(
                 "INSERT INTO bg_budget_usage (day_key, scope_key, runs_used, tokens_used, duration_ms, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?) "
@@ -1477,17 +1493,23 @@ class Intents:
         r_lim = max(0, int(self.daily_bg_runs_limit if runs_limit is None else runs_limit))
         t_lim = max(0, int(self.daily_bg_tokens_limit if tokens_limit is None else tokens_limit))
         sql = (
-            "SELECT runs_used, tokens_used, duration_ms FROM bg_budget_usage "
-            "WHERE day_key=? AND scope_key='__global__'"
+            "SELECT scope_key, runs_used, tokens_used, duration_ms FROM bg_budget_usage "
+            "WHERE day_key=? AND scope_key IN ('__global__', '__exempt__')"
         )
         if db is not None:
-            row = db.execute(sql, (day_key,)).fetchone()
+            rows = db.execute(sql, (day_key,)).fetchall()
         else:
             with self.store.connect() as conn:
-                row = conn.execute(sql, (day_key,)).fetchone()
+                rows = conn.execute(sql, (day_key,)).fetchall()
+        by_scope = {str(r["scope_key"]): r for r in rows}
+        row = by_scope.get("__global__")
+        exempt_row = by_scope.get("__exempt__")
         runs_used = int(row["runs_used"] or 0) if row else 0
         tokens_used = int(row["tokens_used"] or 0) if row else 0
         duration_ms = int(row["duration_ms"] or 0) if row else 0
+        exempt_runs_used = int(exempt_row["runs_used"] or 0) if exempt_row else 0
+        exempt_tokens_used = int(exempt_row["tokens_used"] or 0) if exempt_row else 0
+        exempt_duration_ms = int(exempt_row["duration_ms"] or 0) if exempt_row else 0
         if runs_used >= r_lim:
             reason = "daily_bg_runs_limit"
         elif tokens_used >= t_lim:
@@ -1503,6 +1525,9 @@ class Intents:
             "tokens_limit": t_lim,
             "tokens_remaining": max(0, t_lim - tokens_used),
             "duration_ms": duration_ms,
+            "exempt_runs_used": exempt_runs_used,
+            "exempt_tokens_used": exempt_tokens_used,
+            "exempt_duration_ms": exempt_duration_ms,
             "exhausted": bool(reason),
             "exhausted_reason": reason,
         }

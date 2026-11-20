@@ -936,18 +936,33 @@ class Pulse:
         return bool(state.get("exhausted")), str(state.get("exhausted_reason") or "")
 
     def _record_bg_usage_sync(
-        self, *, source: str, target: str = "", runs: int = 1, tokens: int = 0, duration_ms: int = 0, now=None
+        self,
+        *,
+        source: str,
+        target: str = "",
+        runs: int = 1,
+        tokens: int = 0,
+        duration_ms: int = 0,
+        exempt: bool = False,
+        now=None,
     ) -> None:
         fn = getattr(self.intents, "record_bg_usage", None)
-        if callable(fn):
-            fn(
-                source=source,
-                target=target,
-                runs=runs,
-                tokens=tokens,
-                duration_ms=duration_ms,
-                now=now,
-            )
+        if not callable(fn):
+            return
+        supports_exempt = "exempt" in inspect.signature(fn).parameters
+        if exempt and not supports_exempt:
+            return
+        kwargs = {
+            "source": source,
+            "target": target,
+            "runs": runs,
+            "tokens": tokens,
+            "duration_ms": duration_ms,
+            "now": now,
+        }
+        if supports_exempt and exempt:
+            kwargs["exempt"] = True
+        fn(**kwargs)
 
     async def _reserve_watch_run(self, row) -> str:
         self._sync_bg_limits()
@@ -1655,7 +1670,7 @@ class Pulse:
                 or t_grant.get("issuer_admin")
                 or ""
             ).strip()
-            if row.get("kind") != "return" and (
+            if (
                 row.get("source") == "workflow"
                 or row["payload"].get("profile")
                 or row["payload"].get("every_seconds")
@@ -1666,6 +1681,7 @@ class Pulse:
                     source=row["source"],
                     target=target,
                     runs=1,
+                    exempt=(row.get("kind") == "return"),
                 )
             if result_obj.get("error"):
                 err_text = str(result_obj.get("error") or "thread_error")
@@ -1675,9 +1691,20 @@ class Pulse:
                     thread.get("thread_id"),
                     result_obj.get("error"),
                 )
-                await asyncio.to_thread(
-                    self.intents.finish, row["intent_id"], "failed", "thread_error"
-                )
+                fin_fn = self.intents.finish
+                if "last_error" in inspect.signature(fin_fn).parameters:
+                    await asyncio.to_thread(
+                        lambda: fin_fn(
+                            row["intent_id"],
+                            "failed",
+                            "thread_error",
+                            last_error=err_text,
+                        )
+                    )
+                else:
+                    await asyncio.to_thread(
+                        fin_fn, row["intent_id"], "failed", "thread_error"
+                    )
                 await self._reschedule_recurring(
                     row,
                     thread=thread,
@@ -1898,20 +1925,28 @@ class Pulse:
                     chat_id,
                     archived=thread.get("owner") == "self",
                 )
+                handles = [
+                    str(item.get("handle"))
+                    for item in attachments
+                    if isinstance(item, dict) and item.get("handle")
+                ]
+                if is_workflow and has_att and row.get("kind") == "return":
+                    tid_str = str(thread["thread_id"])
+                    handle_str = ", ".join(handles)
+                    intent = (
+                        f"已排定发往当前会话的后台工作流已完成，并挂载待发图片/文件附件（thread_id={tid_str}，附件={handle_str}）。"
+                        f"目标就是当前会话，请勿再去查旧预览约定、不要调用 reply 或额外搜索绕路（原生 reply 无法发图/文件）。"
+                        f'请在本轮第一步直接调用 maisya_agent(action="share", thread_id="{tid_str}", message="<一句自然附言>") 一次连文带图发出，发完即静默结束本轮。'
+                        "\n<maisya_workflow>" + text + "</maisya_workflow>"
+                    )
                 intent += (
                     "\n<maisya_thread_result>"
                     + html.escape(self.redact(result_text))
                     + "</maisya_thread_result>"
                 )
                 hint_info = {"thread_id": str(thread["thread_id"])}
-                if attachments:
-                    handles = [
-                        str(item.get("handle"))
-                        for item in attachments
-                        if isinstance(item, dict) and item.get("handle")
-                    ]
-                    if handles:
-                        hint_info["attachment_handles"] = handles
+                if handles:
+                    hint_info["attachment_handles"] = handles
                 if result_links:
                     hint_info["links"] = result_links[:12]
                 if attachments or result_links:

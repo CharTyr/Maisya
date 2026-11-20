@@ -838,11 +838,22 @@ class MemoryLayers:
                     for row in db.execute(
                         "SELECT name FROM agent_workspaces WHERE chat_id=?", (chat_id,)
                     )
+                    if str(row[0] or "").strip().lower() not in {"default", "scout", "digest"}
                 ]
+            def _contains_ident(ident: str) -> bool:
+                if not isinstance(ident, str) or len(ident) < 3:
+                    return False
+                if re.fullmatch(r"[A-Za-z0-9_-]+", ident):
+                    return bool(
+                        re.search(
+                            rf"(?<![A-Za-z0-9_]){re.escape(ident)}(?![A-Za-z0-9_])",
+                            content,
+                        )
+                    )
+                return ident in content
+
             if any(
-                isinstance(identifier, str)
-                and len(identifier) >= 3
-                and identifier in content
+                _contains_ident(identifier)
                 for identifier in [chat_id, *identifiers]
             ):
                 raise ValueError("内容包含会话、发言人或工作区标识")
