@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2.5 -5.5 36 36" width="96" height="96" fill="none"><defs><linearGradient id="ki-kyphaj-loS-i12" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#95B8D9"></stop><stop offset="1" stop-color="#81AAD2"></stop></linearGradient><linearGradient id="ki-kyphaj-upS-i12" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CDDEED"></stop><stop offset="1" stop-color="#AEC9E2"></stop></linearGradient>
+  <filter id="ki-kyphaj-sh-i12" x="-40%" y="-40%" width="180%" height="190%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="2"></feGaussianBlur><feOffset dy="2" result="o"></feOffset>
+    <feColorMatrix in="o" type="matrix" values="0 0 0 0 0.549 0 0 0 0 0.702 0 0 0 0 0.839 0 0 0 0.21 0"></feColorMatrix>
+    <feMerge><feMergeNode></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+  </filter>
+  <filter id="ki-kyphaj-hi-i12" x="-10%" y="-10%" width="120%" height="130%" color-interpolation-filters="sRGB">
+    <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="a"></feColorMatrix>
+    <feOffset in="a" dy="0.7"></feOffset><feGaussianBlur stdDeviation="0.35"></feGaussianBlur>
+    <feComposite in2="a" operator="arithmetic" k2="-1" k3="1"></feComposite>
+    <feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0"></feColorMatrix>
+    <feBlend in2="SourceGraphic" mode="overlay"></feBlend>
+  </filter><mask id="ki-kyphaj-ol-i12-0" maskUnits="userSpaceOnUse" x="-40" y="-40" width="111" height="109"><rect x="-40" y="-40" width="111" height="109" fill="#fff"></rect><path fill="#000" fill-rule="nonzero" d="M7.4 6.6Q7.4 4.4 9.6 4.4L21.4 4.4Q23.6 4.4 23.6 6.6L23.6 18.4Q23.6 20.6 21.4 20.6L9.6 20.6Q7.4 20.6 7.4 18.4Z"></path></mask><mask id="ki-kyphaj-ol-i12-1" maskUnits="userSpaceOnUse" x="-40" y="-40" width="111" height="109"><rect x="-40" y="-40" width="111" height="109" fill="#fff"></rect><path fill="#000" fill-rule="nonzero" d="M12.7 10.9Q12.7 9.7 13.9 9.7L17.1 9.7Q18.3 9.7 18.3 10.9L18.3 14.1Q18.3 15.3 17.1 15.3L13.9 15.3Q12.7 15.3 12.7 14.1Z"></path></mask></defs>
+      <path fill="none" stroke-width="2.2" stroke-linecap="round" d="M12.3 2.4V4.4M12.3 20.6V22.6M18.7 2.4V4.4M18.7 20.6V22.6M5.4 9.3H7.4M23.6 9.3H25.6M5.4 15.7H7.4M23.6 15.7H25.6" stroke="#3E3133"></path>
+      <g filter="url(#ki-kyphaj-sh-i12)"><g filter="url(#ki-kyphaj-hi-i12)"><path d="M7.4 6.6Q7.4 4.4 9.6 4.4L21.4 4.4Q23.6 4.4 23.6 6.6L23.6 18.4Q23.6 20.6 21.4 20.6L9.6 20.6Q7.4 20.6 7.4 18.4Z" fill="url(#ki-kyphaj-loS-i12)"></path></g></g>
+      <path d="M7.4 6.6Q7.4 4.4 9.6 4.4L21.4 4.4Q23.6 4.4 23.6 6.6L23.6 18.4Q23.6 20.6 21.4 20.6L9.6 20.6Q7.4 20.6 7.4 18.4Z" mask="url(#ki-kyphaj-ol-i12-0)" stroke="#4F4940" fill="none" stroke-width="2"></path>
+      <path d="M9.8 8Q9.8 6.8 11 6.8L20 6.8Q21.2 6.8 21.2 8L21.2 17Q21.2 18.2 20 18.2L11 18.2Q9.8 18.2 9.8 17Z" fill="#fff"></path>
+      <g filter="url(#ki-kyphaj-hi-i12)"><g transform="rotate(0 15.5 12.5)"><path d="M12.7 10.9Q12.7 9.7 13.9 9.7L17.1 9.7Q18.3 9.7 18.3 10.9L18.3 14.1Q18.3 15.3 17.1 15.3L13.9 15.3Q12.7 15.3 12.7 14.1Z" fill="url(#ki-kyphaj-upS-i12)"></path></g></g>
+      <g transform="rotate(0 15.5 12.5)"><path d="M12.7 10.9Q12.7 9.7 13.9 9.7L17.1 9.7Q18.3 9.7 18.3 10.9L18.3 14.1Q18.3 15.3 17.1 15.3L13.9 15.3Q12.7 15.3 12.7 14.1Z" mask="url(#ki-kyphaj-ol-i12-1)" stroke="#4F4940" fill="none" stroke-width="2"></path></g></svg>

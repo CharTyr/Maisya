@@ -1943,6 +1943,40 @@ dialog.mil-confirm-dialog::backdrop {
   vertical-align: middle;
 }
 
+.m-ic-kubai {
+  overflow: visible;
+}
+
+.m-ic-kubai .ol {
+  fill: none;
+  stroke-width: 2;
+}
+
+.m-ic-kubai .ln {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+:root[data-ui-style="millennium"] .m-ic-mil.m-ic-kubai {
+  box-sizing: content-box;
+  padding: 2px;
+  background: var(--mil-key);
+  border: 1.5px solid var(--mil-line);
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 var(--mil-key-hi), inset -1px -1px 0 var(--mil-key-side), 0 1px 0 var(--mil-drop);
+  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+:root[data-ui-style="millennium"] .m-ic-mil.m-ic-kubai:hover,
+:root[data-ui-style="millennium"] .mil-head-l:hover .m-ic-mil.m-ic-kubai,
+:root[data-ui-style="millennium"] .m-mob-row:hover .m-ic-mil.m-ic-kubai,
+:root[data-ui-style="millennium"] .onb-item:hover .m-ic-mil.m-ic-kubai {
+  background: var(--mil-screen);
+  transform: translateY(1px);
+  box-shadow: inset 1px 1px 0 var(--mil-key-side), inset -1px -1px 0 var(--mil-key-hi);
+}
+
 .m-card {
   min-width: 0;
   padding: 16px 18px;
