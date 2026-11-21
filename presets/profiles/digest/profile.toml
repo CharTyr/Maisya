@@ -11,7 +11,6 @@ execution_mode = "host"
 permission_mode = "ask_risky"
 shared_secrets = false
 task = "planner"
-max_tokens = 4500
 temperature = 0.2
 max_steps = 20
 timeout_seconds = 300

@@ -338,7 +338,7 @@ async def test_recovery_learning_and_self_journal_are_connected_to_real_thread_l
                 return {"success": False}
             return {"success": True, "result": {"text": "verified"}}
         assert name == "llm.generate_with_tools"
-        if arguments["max_tokens"] == 500:
+        if arguments.get("max_tokens") == 500:
             extraction.append(arguments)
             return {
                 "response": json.dumps({"note": "工具失败后先核对参数结构，再重试。"})

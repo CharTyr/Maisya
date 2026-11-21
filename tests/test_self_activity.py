@@ -133,7 +133,7 @@ async def test_multiple_explicit_revisions_trigger_one_bounded_generic_note(tmp_
         nonlocal turns
         if name == "web.search":
             return {"success": True, "result": {"text": "verified"}}
-        if arguments["max_tokens"] == 500:
+        if arguments.get("max_tokens") == 500:
             if "调度手册" in str(arguments.get("prompt", "")):
                 return {"response": '{"title":"","lesson":"","rationale":""}'}
             extracted.append(arguments)

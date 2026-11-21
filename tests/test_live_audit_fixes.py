@@ -672,3 +672,28 @@ async def test_fix6_failed_intent_records_last_error(tmp_path: Path):
     assert saved["status"] == "failed"
     assert saved["wake_status"] == "thread_error"
     assert "超过运行时限" in saved["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_fix7_scout_omits_max_tokens_by_default_and_digest_preset_has_no_cap(tmp_path: Path):
+    from maisya.scout import Scout
+
+    profiles = Profiles(tmp_path / "profs")
+    digest_prof = profiles.get("digest")
+    assert digest_prof.max_tokens is None
+
+    calls: list[dict] = []
+
+    class FakeHost:
+        async def call_capability(self, cap, **kwargs):
+            calls.append({"cap": cap, **kwargs})
+            return {"success": True, "response": "ok", "tool_calls": []}
+
+    scout = Scout(FakeHost())
+    await scout.step(digest_prof, [{"role": "user", "content": "hi"}])
+    assert len(calls) == 1
+    assert "max_tokens" not in calls[0]
+
+    capped_prof = Profile(id="capped", max_tokens=2048)
+    await scout.step(capped_prof, [{"role": "user", "content": "hi"}])
+    assert calls[1]["max_tokens"] == 2048

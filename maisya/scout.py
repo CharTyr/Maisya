@@ -946,7 +946,7 @@ class Scout:
             ] + [
                 m for m in candidates if self._model_cooldown.get(m, 0.0) > now
             ]
-        max_tokens = profile.max_tokens if profile.max_tokens is not None else 4096
+        max_tokens = profile.max_tokens
         tools = [
             TOOL_DEFINITIONS[name]
             for name in dict.fromkeys(
@@ -964,6 +964,9 @@ class Scout:
 
         async def _invoke_once(model_name: str, extra_kwargs: dict) -> dict:
             nonlocal step_tokens
+            call_kwargs = dict(extra_kwargs)
+            if max_tokens is not None:
+                call_kwargs["max_tokens"] = max_tokens
             result = await call_capability(
                 self.host,
                 "llm.generate_with_tools",
@@ -972,8 +975,7 @@ class Scout:
                 tools=tools,
                 task_name=profile.task,
                 model_name=model_name,
-                max_tokens=max_tokens,
-                **extra_kwargs,
+                **call_kwargs,
             )
             if isinstance(result, dict):
                 step_tokens += extract_llm_tokens(result)
